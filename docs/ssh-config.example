@@ -1,0 +1,13 @@
+# One block per VM, in ~/.ssh/config on the Mac. This file is never versioned.
+#
+# The alias on the Host line is the name install.sh asks for when it runs on that VM, and the name
+# `wt -H <vm> …`, the ⌃⌥⌘T picker and VS Code Remote-SSH all use. Keep it short, lower-case and
+# free of dots if you can: it ends up in row descriptions as @<vm>.
+
+Host vm-a
+    HostName 203.0.113.10        # the VM's public IP or DNS name
+    User ubuntu                  # the account you created on the VM
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes           # use only this key, not every key in the agent
+    ServerAliveInterval 30       # keepalive, so a sleeping laptop does not silently drop the session
+    ServerAliveCountMax 6        # give up after ~3 minutes of silence; cmux then reconnects the row

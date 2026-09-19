@@ -1,0 +1,72 @@
+# Set up a new VM
+
+For an Ubuntu 24.04 VM that already exists and that your Mac can already reach with `ssh <vm>`. About 20
+minutes, and the last block prints how long it actually took.
+
+`<vm>` is the alias you gave the machine in the Mac's `~/.ssh/config`. Add that block first, from
+[ssh-config.example](ssh-config.example); `install.sh` asks for exactly this name, and `wt -H <vm> …` and the
+task picker use it. Two vCPUs and 8 GB of memory are comfortable.
+
+Open a shell on the VM (`ssh <vm>`) and paste the blocks in order. Replace the UPPERCASE placeholders first.
+Nothing prompts except `install.sh` and the logins in block 3.
+
+```bash
+# 1. packages   (the first line starts this page's clock)
+date +%s > /tmp/workstation-setup-start
+sudo apt-get update && sudo apt-get install -y git zsh tmux python3 jq curl rsync build-essential
+(type -p wget >/dev/null || sudo apt-get install -y wget) && sudo mkdir -p -m 755 /etc/apt/keyrings \
+  && wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null \
+  && sudo apt-get update && sudo apt-get install -y gh
+sudo update-locale LANG=C.UTF-8
+```
+
+```bash
+# 2. shell, identity, repo   (edit GIT_NAME / GIT_EMAIL first)
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+git config --file ~/.gitconfig.local user.name  'GIT_NAME'
+git config --file ~/.gitconfig.local user.email 'GIT_EMAIL'
+mkdir -p ~/repos && [ -d ~/repos/workstation ] || git clone https://github.com/mal84emma/workstation ~/repos/workstation
+bash ~/repos/workstation/install.sh          # asks once for this VM's alias, no default
+sudo chsh -s "$(command -v zsh)" "$USER" && exec zsh -l
+```
+
+```bash
+# 3. agents and logins (interactive)
+curl -fsSL https://claude.ai/install.sh | bash        # -> ~/.local/bin/claude
+curl -fsSL https://chatgpt.com/codex/install.sh | sh  # -> ~/.local/bin/codex (static musl build)
+gh auth login --web --git-protocol https              # device code, opened in the Mac's browser
+claude                                                # /login -> paste the code from the Mac browser, then exit
+codex login --device-auth                             # if device auth is blocked: on the Mac, ssh -L 1455:localhost:1455 <vm>, then codex login
+codex                                                 # /hooks -> trust the two portable hooks, then exit
+gh auth status && claude --version && codex login status && claude doctor
+cd ~/Documents/Repositories && gh repo clone OWNER/REPO
+echo "setup took $(( ($(date +%s) - $(cat /tmp/workstation-setup-start)) / 60 )) min"
+```
+
+## Then, on the Mac
+
+⌃⌥⌘T → `<vm>` → `vm-shell` gives you a row titled `shell` with `@<vm>` on its second line. From there, or from
+the driver row, start tasks with `wt -H <vm> new -r <repo> -p "…"`.
+
+Inside tmux, Claude takes Ctrl+J for a newline; Shift+Enter submits, because tmux strips the modifier.
+
+Check the VM answers:
+
+```bash
+ssh <vm> '~/.local/bin/wt help'
+ssh <vm> 'zsh -c "echo \$WT_HOST"'
+```
+
+The second must print the alias you typed during `install.sh`. If it is empty, `wt` on the VM cannot ask the
+Mac for rows; fix `~/.zshenv.local` on the VM.
+
+## Notes
+
+- **Do not run `cmux hooks codex install` on a VM.** That is a Mac-only step. The VM keeps only the portable
+  hooks, which relay over the cmux socket; cmux's generated handlers hold Mac-local paths and a state protocol
+  that cannot travel.
+- No extra network rule is needed. cmux's `mosh-tmux` runs tmux over plain ssh when mosh is absent.
+- Give the VM a regular OS disk, not an ephemeral one: an ephemeral disk loses its contents when the machine
+  is stopped, and the point of the tmux sessions is that they survive.
+- Restrict the VM's inbound ssh rule to your own IP address.

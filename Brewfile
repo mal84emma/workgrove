@@ -1,4 +1,4 @@
-# workstation essentials only. Personal tools stay out; .zshrc guards them.
+# workstation essentials only. Personal tools stay out; .zshrc guards whatever you add yourself.
 brew "fzf"
 brew "gh"
 brew "jq"
