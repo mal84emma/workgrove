@@ -159,6 +159,7 @@ row_tag()    { printf '@%s' "${1:-$(where_am_i)}"; }                        # ro
 wt_session() { printf 'wt-%s-%s' "$(repo_id "$2")" "$1"; }                  # wt_session <name> <repo>
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 need_name()  { valid_name "$1" || die "invalid name '$1' (lowercase letters, digits, _ and -, max 63, no '.')"; }
+tidy_name()  { printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/-/g'; }  # "Fix Auth" -> fix-auth; anything else must already be valid
 valid_agent() { case "$1" in claude|codex|none) ;; *) die "unknown agent '$1' (use claude, codex or none)" ;; esac; }
 
 slugify() {
@@ -346,6 +347,7 @@ cmd_new() {
   done
   if [[ $stdin_prompt -eq 1 ]]; then IFS= read -r -d '' prompt || true; fi
   resolve_repo "$repo"
+  name=$(tidy_name "$name")
   [[ -n "$name" ]] || name=$(slugify "$prompt")
   [[ -n "$name" ]] || name="task-$(date +%Y%m%d-%H%M%S)"
   need_name "$name"
@@ -819,7 +821,7 @@ cmd_task() {
   fi
   if [[ "$kind" == claude || "$kind" == codex ]]; then       # the name is never known from the options
     read -r -p 'name (blank = from brief)> ' name || true
-    [[ -z "$name" ]] || need_name "$name"                     # a '-…' name would otherwise reach cmd_new as an option
+    name=$(tidy_name "$name"); [[ -z "$name" ]] || need_name "$name"   # a '-…' name would otherwise reach cmd_new as an option
     if [[ $asked -eq 1 ]]; then read -r -p 'brief> ' brief || true; fi
   fi
 
