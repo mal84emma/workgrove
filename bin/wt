@@ -21,7 +21,7 @@
 #   wt prune [--dry-run]                                      remove worktrees whose branch is merged and tree is clean
 #   wt repos                                                  basenames of the git repos under $WT_REPOS_DIR
 #   wt task [--where local|<host>] [-a claude|codex|repo-shell|vm-shell] [-r REPO] [-p TEXT]
-#                                                             pick where/kind/repo/brief, then start it (Mac, needs fzf)
+#                                                             pick where/kind/repo/name/brief, then start it (Mac, needs fzf)
 #   wt driver                                                 open (or select) the driver row (@local)
 #   wt update [--refresh-config]                              git pull this repo and re-run install.sh
 #   wt path <name> [-r PATH] | wt current | wt help
@@ -158,6 +158,7 @@ row_title()  { printf '%s:%s' "$(repo_id "$2")" "$1"; }                     # ro
 row_tag()    { printf '@%s' "${1:-$(where_am_i)}"; }                        # row_tag [host] — the row description
 wt_session() { printf 'wt-%s-%s' "$(repo_id "$2")" "$1"; }                  # wt_session <name> <repo>
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
+need_name()  { valid_name "$1" || die "invalid name '$1' (lowercase letters, digits, _ and -, max 63, no '.')"; }
 valid_agent() { case "$1" in claude|codex|none) ;; *) die "unknown agent '$1' (use claude, codex or none)" ;; esac; }
 
 slugify() {
@@ -347,7 +348,7 @@ cmd_new() {
   resolve_repo "$repo"
   [[ -n "$name" ]] || name=$(slugify "$prompt")
   [[ -n "$name" ]] || name="task-$(date +%Y%m%d-%H%M%S)"
-  valid_name "$name" || die "invalid name '$name' (lowercase letters, digits, _ and -, max 63, no '.')"
+  need_name "$name"
   valid_agent "$agent"
   local p b; p=$(wt_path "$name"); b=$(wt_branch "$name")
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
@@ -778,7 +779,8 @@ pick() { # pick <prompt> — a line of stdin, or whatever was typed (fzf --print
 
 cmd_task() {
   mac_only task
-  local where="" kind="" repo="" brief="" asked=1 id out
+  local where="" kind="" repo="" name="" brief="" asked=1 id out
+  local args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --where) where="$2"; shift 2 ;;
@@ -815,12 +817,18 @@ cmd_task() {
     repo=$(printf '%s\n' "$list" | pick repo) || die "task: cancelled"
     [[ -n "$repo" ]] || die "task: no repo picked"
   fi
-  if [[ "$kind" == claude || "$kind" == codex ]] && [[ $asked -eq 1 ]]; then read -r -p 'brief> ' brief || true; fi
+  if [[ "$kind" == claude || "$kind" == codex ]]; then       # the name is never known from the options
+    read -r -p 'name (blank = from brief)> ' name || true
+    [[ -z "$name" ]] || need_name "$name"                     # a '-…' name would otherwise reach cmd_new as an option
+    if [[ $asked -eq 1 ]]; then read -r -p 'brief> ' brief || true; fi
+  fi
 
   case "$kind" in
     claude|codex)
-      if [[ "$where" == local ]]; then cmd_new -r "$repo" -a "$kind" -p "$brief"
-      else host_new "$where" -r "$repo" -a "$kind" -p "$brief"; fi ;;
+      args=(-r "$repo" -a "$kind" -p "$brief")                # cmd_new validates the name and slugifies a blank one
+      if [[ -n "$name" ]]; then args+=("$name"); fi
+      if [[ "$where" == local ]]; then cmd_new "${args[@]}"
+      else host_new "$where" "${args[@]}"; fi ;;
     repo-shell)
       if [[ "$where" == local ]]; then
         resolve_repo "$repo"; id=$(repo_id "$REPO")
