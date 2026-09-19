@@ -9,7 +9,8 @@ Each unit of work that changes code is a **task** and lives in its own git workt
 - **Starting work the user describes as a task, feature, fix, or experiment** → create a worktree first (`wt new <name> -p "<brief>"`), or, if you are already inside a worktree, work there. See the `worktree-create` skill.
 - **Several independent things at once** → one worktree per thing, each with its own agent session in cmux (`wt new ... -p ...`). Only split work that will not touch the same files. Driving several tasks, or tasks on a VM, from one session: see the `task-driver` skill.
 - **Inside a worktree** (cwd under `.worktrees/<name>`) → stay inside it, commit on its `wt/<name>` branch, never touch the main checkout or sibling worktrees. See the `worktree-work` skill.
-- **The user wants to see progress or changes** → `wt list`, `wt show <name>`; open VS Code (`wt open`) only when asked. See the `worktree-show` skill.
+- **The user wants to look at the code** ("show me the code", "open the worktree", "let me see it") → `wt open`, which opens the worktree in VS Code. Do not print files instead.
+- **The user wants status or changes** ("what changed", "how far is it") → `wt list`, `wt show <name>` and a short summary; never open VS Code for that. In a task session "the worktree" means this task's worktree, not the `wt` tool. See the `worktree-show` skill.
 - **Finishing or cleaning up** → report the branch. Remove worktrees only through `wt rm` / `wt prune`, and only when the user asks; never `--force` without the user saying so in this conversation. See the `worktree-teardown` skill.
 
 These are conventions, not a sandbox: a session launched with its cwd inside `.worktrees/<name>` is not isolated by Claude's own worktree isolation. Staying inside the worktree is your responsibility.

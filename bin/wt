@@ -10,7 +10,7 @@
 #                                                             create a worktree (+ a cmux row running `wt run`)
 #   wt run  <name> [-r PATH]                                  run the worktree's agent with its brief (cmux runs this)
 #   wt list [--json] [--all] [-r PATH]                        list worktrees (--all: every repo under $WT_REPOS_DIR)
-#   wt show <name> [--code] [--diff] [--json] [-r PATH]       status summary; --code opens VS Code; --diff a cmux diff pane
+#   wt show <name> [--diff] [--json] [-r PATH]                status summary; --diff also opens a cmux diff pane
 #   wt open [name] [-r PATH]                                  open a worktree in VS Code (default: the one you are in)
 #   wt diff <name>                                            = wt show <name> --diff
 #   wt attach <name> [-a AGENT] [-p TEXT] [--focus] [-r PATH] open a cmux row for an existing worktree
@@ -452,9 +452,9 @@ cmd_list() {
 }
 
 cmd_show() {
-  local name="" code=0 diff=0 json=0 repo=""
+  local name="" diff=0 json=0 repo=""
   while [[ $# -gt 0 ]]; do
-    case "$1" in --code) code=1;; --diff) diff=1;; --json) json=1;; -r|--repo) repo="$2"; shift;; -*) die "show: unknown option $1";; *) name="$1";; esac; shift
+    case "$1" in --diff) diff=1;; --json) json=1;; -r|--repo) repo="$2"; shift;; -*) die "show: unknown option $1";; *) name="$1";; esac; shift
   done
   [[ -n "$name" ]] || die "show: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
@@ -471,7 +471,6 @@ cmd_show() {
     printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$P" diff --stat "$base...HEAD" 2>/dev/null | tail -15
     printf '\n--- working tree\n'; git -C "$P" status --short 2>/dev/null | head -20
   fi
-  if [[ $code -eq 1 ]]; then printf '\n'; open_worktree "$name"; fi
   if [[ $diff -eq 1 ]]; then
     cmux_ok || die "cmux is not running"
     CMUX_QUIET=1 "$(cmux_bin)" diff --branch --repo "$P" --base "$base" --layout split --title "$name vs $base" --focus true >/dev/null && printf 'opened cmux diff pane\n'
