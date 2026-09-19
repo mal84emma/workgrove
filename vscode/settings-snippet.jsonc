@@ -1,0 +1,7 @@
+// Paste these keys into VS Code: Settings (JSON) — Settings Sync then propagates them to your other machines.
+"git.detectWorktrees": true,
+"window.title": "${dirty}${activeRepositoryBranchName}${separator}${rootName}${separator}${remoteName}",
+"remote.SSH.defaultExtensions": ["anthropic.claude-code", "eamodio.gitlens"],
+"remote.SSH.reconnectionGraceTime": 3600,
+"remote.SSH.remotePlatform": {"<vm>": "linux"},   // one entry per VM alias
+"remote.defaultExtensionsIfInstalledLocally": []
