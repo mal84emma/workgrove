@@ -20,9 +20,20 @@
 #                                                             edited .worktreeinclude copy, unless --force
 #   wt prune [--dry-run]                                      remove worktrees whose branch is merged and tree is clean
 #   wt repos                                                  basenames of the git repos under $WT_REPOS_DIR
+#   wt task [--where local|<host>] [-a claude|codex|repo-shell|vm-shell] [-r REPO] [-p TEXT]
+#                                                             pick where/kind/repo/brief, then start it (Mac, needs fzf)
+#   wt driver                                                 open (or select) the "driver @local" row
+#   wt update [--refresh-config]                              git pull this repo and re-run install.sh
 #   wt path <name> [-r PATH] | wt current | wt help
 #
-# Identity: cmux row "<repo>:<name> @local", tmux session "wt-<repo>-<name>", <repo> = repo basename
+#   wt -H <host> <new|attach|list|show|rm|path|open|repos|update|help> …
+#                                                             run wt on that VM over ssh and keep the cmux row local;
+#                                                             show/rm/path/open/attach need -r; attach [--restart-agent]
+#
+# Where it runs: on a Mac wt drives cmux directly; on a VM (see is_remote) it only prepares worktrees and
+# asks the Mac for rows and VS Code windows through `cmux notify` over the relay socket.
+#
+# Identity: cmux row "<repo>:<name> @local|@<host>", tmux session "wt-<repo>-<name>", <repo> = repo basename
 # with anything outside [A-Za-z0-9-] replaced by '-'. Task names: ^[a-z0-9][a-z0-9_-]{0,62}$ (no '.').
 #
 # Task files (never committed): <repo>/.git/wt/<name>.json    base, created, agent, title, session, includes
@@ -31,6 +42,7 @@
 #
 # Environment / git config:
 #   WT_REPOS_DIR        where `wt list --all`, `wt repos` and `wt new -r <name>` look for repos (default ~/Documents/Repositories)
+#   WT_HOST             on a VM: this machine's alias in the Mac's ~/.ssh/config (set by install.sh in ~/.zshenv.local)
 #   WT_AGENT            default agent for `wt new`                                              (default claude)
 #   WT_AGENT_ARGS       extra args for the agent command (e.g. "--model opus")
 #   git config wt.dir   per-repo override of the worktree folder name                           (default .worktrees)
@@ -54,10 +66,59 @@ shell_join() { local out="" a; for a in "$@"; do printf -v a '%q' "$a"; out="${o
 cmux_bin() {
   local c="${CMUX_BUNDLED_CLI_PATH:-}"
   [[ -x "$c" ]] || c=$(command -v cmux 2>/dev/null || true)
+  [[ -x "$c" ]] || c="$HOME/.cmux/bin/cmux"                        # cmux uploads its CLI here on a VM
   [[ -x "$c" ]] || c=/Applications/cmux.app/Contents/Resources/bin/cmux
   [[ -x "$c" ]] && printf '%s' "$c"
 }
 cmux_ok() { local c; c=$(cmux_bin) || return 1; CMUX_QUIET=1 "$c" ping >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------- which side of the ssh we are on
+# A cmux remote pane, a cmux relay socket, or simply not a Mac: then this machine hosts worktrees and the
+# Mac drives cmux. CMUX_SURFACE_ID is cleared inside remote tmux panes by design — never test it.
+is_remote() { [[ -n ${CMUX_SSH_ATTEMPT_ID:-} ]] || [[ ${CMUX_SOCKET_PATH:-} == *:[0-9]* ]] || [[ $(uname -s) != Darwin ]]; }
+mac_only()  { if is_remote; then die "wt $1: run this on the Mac"; fi; }
+
+valid_host() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
+wt_host() { # this VM's alias in the Mac's ~/.ssh/config
+  [[ -n "${WT_HOST:-}" ]] || die "WT_HOST is not set; on this VM: echo 'export WT_HOST=<alias>' >> ~/.zshenv.local"
+  valid_host "$WT_HOST" || die "invalid WT_HOST '$WT_HOST'; fix it in ~/.zshenv.local"
+  printf '%s' "$WT_HOST"
+}
+
+# How to reach the Mac's cmux: socket and workspace id from this pane, overridden by the tmux session
+# environment (cmux rebinds it there on every attach). bin/agent-notify uses the same precedence.
+RELAY_SOCKET=""; RELAY_WS=""
+relay_env() { # sets RELAY_SOCKET and RELAY_WS; non-zero when this session has no relay socket
+  local s v
+  RELAY_SOCKET="${CMUX_SOCKET_PATH:-}"; RELAY_WS="${CMUX_WORKSPACE_ID:-}"
+  if [[ -n "${TMUX:-}" ]] && have tmux; then
+    s=$(tmux display-message -p '#S' 2>/dev/null || true)
+    v=$(tmux show-environment -t "=$s" CMUX_SOCKET_PATH 2>/dev/null || true)
+    if [[ "$v" == *=* ]]; then RELAY_SOCKET="${v#*=}"; fi
+    v=$(tmux show-environment -t "=$s" CMUX_WORKSPACE_ID 2>/dev/null || true)
+    if [[ "$v" == *=* ]]; then RELAY_WS="${v#*=}"; fi
+  fi
+  [[ "$RELAY_SOCKET" == *:[0-9]* ]]
+}
+
+# Mirrors safe_path in bin/cmux-hook: the Mac hook drops anything else, so never relay such a path.
+hook_safe_path() { [[ "$1" == /* && "$1" != *$'\n'* && "$1" != *//* && "$1" != */ && "$1" != *'/../'* && "$1" != */.. && "$1" != *[\'\"\`\$\\\;]* ]]; }
+hook_ok_repo() { # both relayed bodies carry $REPO (wt-open sends a path inside it)
+  hook_safe_path "$REPO" && return 0
+  warn "the Mac hook rejects this repo path ($REPO); run the printed command by hand"; return 1
+}
+
+notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths with spaces survive
+  local title="$1" args=() ws=() c body; shift
+  while [[ $# -gt 1 ]]; do args+=(--arg "$1" "$2"); shift 2; done
+  have jq || die "jq not found (sudo apt-get install -y jq)"
+  body=$(jq -cn "${args[@]+"${args[@]}"}" '$ARGS.named')
+  relay_env || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
+  c=$(cmux_bin) || { warn "cmux CLI not found here; run the line below on the Mac"; return 1; }
+  if [[ -n "$RELAY_WS" ]]; then ws=(--workspace "$RELAY_WS"); fi
+  CMUX_SOCKET_PATH="$RELAY_SOCKET" env -u CMUX_SOCKET "$c" notify "${ws[@]+"${ws[@]}"}" --title "$title" --body "$body" >/dev/null 2>&1 \
+    || { warn "cmux notify failed; run the line below on the Mac"; return 1; }
+}
 
 # Resolve the MAIN checkout root for a path (follows linked worktrees back to the primary).
 main_root_of() {
@@ -88,10 +149,11 @@ wt_prompt() { printf '%s/.git/wt/%s.prompt' "$REPO" "$1"; }
 wt_started(){ printf '%s/.git/wt/%s.started' "$REPO" "$1"; }
 wt_branch() { printf 'wt/%s' "$1"; }
 
-# Identity — bin/cmux-hook mirrors these three; keep them byte-compatible.
+# Identity — bin/cmux-hook mirrors these formats; keep them byte-compatible.
 repo_id()    { printf '%s' "${1##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'; }
-row_title()  { printf '%s:%s @local' "$(repo_id "$REPO")" "$1"; }   # remote rows: "@<host>"
-wt_session() { printf 'wt-%s-%s' "$(repo_id "$REPO")" "$1"; }
+where_am_i() { if is_remote; then printf '%s' "${WT_HOST:-remote}"; else printf 'local'; fi; }
+row_title()  { printf '%s:%s @%s' "$(repo_id "$2")" "$1" "${3:-$(where_am_i)}"; }   # row_title <name> <repo> [host]
+wt_session() { printf 'wt-%s-%s' "$(repo_id "$2")" "$1"; }                  # wt_session <name> <repo>
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 valid_agent() { case "$1" in claude|codex|none) ;; *) die "unknown agent '$1' (use claude, codex or none)" ;; esac; }
 
@@ -138,20 +200,26 @@ require_wt() { # require_wt <name>  -> sets P (path), B (branch)
   git -C "$REPO" worktree list --porcelain | grep -qx "worktree $P" || die "$P exists but is not a registered worktree (try: git -C $REPO worktree prune)"
 }
 
-cmux_row_field() { # cmux_row_field <title> <field> -> that field of the local row with that title
+cmux_row_field() { # cmux_row_field title|session <value> <field> -> that field of the matching local row
   local c; c=$(cmux_bin) || return 0
   CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null | python3 -c '
 import json,sys
-t,k=sys.argv[1],sys.argv[2]
+how,val,k=sys.argv[1],sys.argv[2],sys.argv[3]
 ws=json.load(sys.stdin); ws=ws.get("workspaces",ws) if isinstance(ws,dict) else ws
 for w in ws:
-    if w.get("title")==t: print(w.get(k) or ""); break' "$1" "$2" 2>/dev/null || true
+    got=w.get("title") if how=="title" else (w.get("remote") or {}).get("terminal_tmux_session")
+    if got==val: print(w.get(k) or ""); break' "$1" "$2" "$3" 2>/dev/null || true
 }
 
 check_identity() { # refuse a name whose row title is already taken by another repo
-  local n="$1" title other
+  local n="$1" title other s
+  if is_remote; then                  # this repo has no such worktree, so a live session belongs to another repo
+    s=$(wt_session "$n" "$REPO")
+    if tmux has-session -t "=$s" 2>/dev/null; then die "tmux session $s is already in use here; pick another name (or: tmux kill-session -t '=$s')"; fi
+    return 0
+  fi
   cmux_ok || return 0
-  title=$(row_title "$n"); other=$(cmux_row_field "$title" current_directory)
+  title=$(row_title "$n" "$REPO"); other=$(cmux_row_field title "$title" current_directory)
   [[ -n "$other" ]] || return 0
   other=$(main_root_of "$other" 2>/dev/null || printf '%s' "$other")   # resolved like $REPO; raw if the dir is gone
   [[ "$other" == "$REPO" || "$other" == "$REPO/"* ]] && return 0
@@ -162,7 +230,7 @@ open_workspace() { # open_workspace <name> <focus>
   local n="$1" focus="$2" c out title
   cmux_ok || { warn "cmux is not running; skipped workspace creation (cd $(wt_path "$n"))"; return 0; }
   c=$(cmux_bin)
-  title=$(meta_get "$n" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$n")
+  title=$(meta_get "$n" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$n" "$REPO")
   out=$(CMUX_QUIET=1 "$c" workspace create --name "$title" --cwd "$(wt_path "$n")" --focus "$focus" \
         --command "$(shell_join "$HOME/.local/bin/wt" run "$n" -r "$REPO")" 2>&1) || die "cmux workspace create failed: $out"
   local ref; ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1 || true)
@@ -171,12 +239,14 @@ open_workspace() { # open_workspace <name> <focus>
 }
 
 close_workspace() { # close_workspace <name> — the row is found by its title
-  local id title
+  local title
   cmux_ok || return 0
-  title=$(meta_get "$1" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$1")
-  id=$(cmux_row_field "$title" id)
-  [[ -n "$id" ]] || return 0
-  CMUX_QUIET=1 "$(cmux_bin)" workspace close "$id" >/dev/null 2>&1 || true
+  title=$(meta_get "$1" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$1" "$REPO")
+  close_row "$(cmux_row_field title "$title" id)"
+}
+close_row() { # close_row <row id> — silent when the row is already gone
+  [[ -n "$1" ]] || return 0
+  CMUX_QUIET=1 "$(cmux_bin)" workspace close "$1" >/dev/null 2>&1 || true
 }
 
 copy_includes() { # copy gitignored files listed in .worktreeinclude into the new worktree; prints their paths
@@ -205,10 +275,32 @@ changed_includes() { # changed_includes <name> <path> -> copies that differ from
   done <<<"$(meta_get "$n" includes 2>/dev/null || true)"
 }
 
-open_code() { # open_code <path>   (remote worktrees: vscode-remote://ssh-remote+<host><path>/)
+open_code() { # open_code <folder uri> <label>   (no --new-window: a repeat call focuses the window)
   have code || die "VS Code CLI 'code' not found (install it from VS Code: Shell Command: Install 'code' command in PATH)"
-  code --folder-uri "file://$1" >/dev/null 2>&1
-  printf 'opened in VS Code: %s\n' "$1"
+  code --folder-uri "$1" >/dev/null 2>&1
+  printf 'opened in VS Code: %s\n' "$2"
+}
+
+open_worktree() { # open_worktree <name> — VS Code here; from a VM ask the Mac to do it
+  if ! is_remote; then open_code "file://$P" "$P"; return 0; fi
+  local h; h=$(wt_host)
+  if hook_ok_repo; then notify_mac wt-open host "$h" path "$P" || true; fi
+  printf 'on the Mac: wt -H %s open -r %s %s\n' "$h" "$(shell_join "$REPO")" "$1"
+}
+
+request_row() { # request_row <name> — VM side: ask the Mac for a cmux row, and always print the recovery line
+  local h; h=$(wt_host)
+  if hook_ok_repo; then notify_mac wt-attach host "$h" repo "$REPO" task "$1" || true; fi
+  printf 'on the Mac: wt -H %s attach -r %s %s\n' "$h" "$(shell_join "$REPO")" "$1"
+}
+
+session_state() { # session_state <name> — what the VM's tmux holds for this task
+  local s state=none; s=$(wt_session "$1" "$REPO")
+  if tmux has-session -t "=$s" 2>/dev/null; then
+    state='shell only'
+    if tmux list-panes -s -t "=$s" -F '#{pane_current_command}' 2>/dev/null | grep -qE '^(claude|codex)$'; then state='agent running'; fi
+  fi
+  printf '%s (%s)' "$s" "$state"
 }
 
 # ---------------------------------------------------------------- status
@@ -257,6 +349,9 @@ cmd_new() {
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (wt rm $name --keep-branch was used?); delete it or pick another name"
   check_identity "$name"
+  if [[ $workspace -eq 1 ]] && is_remote; then   # the row request needs both; fail before anything exists
+    wt_host >/dev/null; have jq || die "jq not found (sudo apt-get install -y jq)"
+  fi
 
   if [[ $from_head -eq 1 ]]; then base=$(git -C "$PWD" rev-parse --abbrev-ref HEAD 2>/dev/null || git -C "$REPO" rev-parse --abbrev-ref HEAD); fi
   [[ -n "$base" ]] || base=$(default_base)
@@ -274,11 +369,12 @@ cmd_new() {
   mkdir -p "$REPO/.git/wt"
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; fi
   meta_set "$name" "base=$base" "created=$(date -u +%FT%TZ)" "agent=$agent" \
-    "title=$(row_title "$name")" "session=$(wt_session "$name")" "includes=$includes"
+    "title=$(row_title "$name" "$REPO")" "session=$(wt_session "$name" "$REPO")" "includes=$includes"
 
   printf 'created %s\n  path:   %s\n  branch: %s (from %s)\n  repo:   %s\n  session: %s\n' \
-    "$name" "$p" "$b" "$base" "$REPO" "$(wt_session "$name")"
-  if [[ $workspace -eq 1 ]]; then open_workspace "$name" "$focus"; fi
+    "$name" "$p" "$b" "$base" "$REPO" "$(wt_session "$name" "$REPO")"
+  [[ $workspace -eq 1 ]] || return 0
+  if is_remote; then request_row "$name"; else open_workspace "$name" "$focus"; fi   # a VM never starts an agent
   return 0
 }
 
@@ -360,13 +456,15 @@ cmd_show() {
     printf '{"name":%s,"path":%s,"branch":%s,"base":%s,"ahead":%s,"behind":%s,"dirty":%s,"last_commit":%s,"task":%s}\n' \
       "$(json_escape "$nn")" "$(json_escape "$P")" "$(json_escape "$br")" "$(json_escape "$base")" "${ah/\?/null}" "${be/\?/null}" "$di" "$(json_escape "$last")" "$(json_escape "$(prompt_line "$name")")"
   else
-    printf '%s\n  path:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
-      "$nn" "$P" "$br" "$ah" "$be" "$base" "$(prompt_line "$name")" "$di" "$last"
+    local title; title=$(meta_get "$name" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$name" "$REPO")
+    printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
+      "$nn" "$P" "$REPO" "$br" "$ah" "$be" "$base" "$title" "$(prompt_line "$name")" "$di" "$last"
+    if is_remote; then printf '  session: %s\n' "$(session_state "$name")"; fi   # `wt -H … attach` reads this line
     printf '\n--- commits vs %s\n' "$base"; git -C "$P" log --oneline "$base..HEAD" 2>/dev/null | head -20
     printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$P" diff --stat "$base...HEAD" 2>/dev/null | tail -15
     printf '\n--- working tree\n'; git -C "$P" status --short 2>/dev/null | head -20
   fi
-  if [[ $code -eq 1 ]]; then printf '\n'; open_code "$P"; fi
+  if [[ $code -eq 1 ]]; then printf '\n'; open_worktree "$name"; fi
   if [[ $diff -eq 1 ]]; then
     cmux_ok || die "cmux is not running"
     CMUX_QUIET=1 "$(cmux_bin)" diff --branch --repo "$P" --base "$base" --layout split --title "$name vs $base" --focus true >/dev/null && printf 'opened cmux diff pane\n'
@@ -386,7 +484,7 @@ cmd_open() { # wt open [name] [-r PATH] — no name: the worktree holding $PWD
     name=${root#"$(wt_root)/"}
   fi
   require_wt "$name"
-  open_code "$P"
+  open_worktree "$name"
 }
 
 cmd_attach() {
@@ -396,7 +494,7 @@ cmd_attach() {
   resolve_repo "$repo"; require_wt "$name"
   if [[ -n "$agent" ]]; then valid_agent "$agent"; meta_set "$name" "agent=$agent"; fi
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; rm -f "$(wt_started "$name")"; fi
-  open_workspace "$name" "$focus"
+  if is_remote; then request_row "$name"; else open_workspace "$name" "$focus"; fi
 }
 
 cmd_sync() {
@@ -460,7 +558,8 @@ cmd_rm() {
   fi
   rm -f "$(wt_meta "$name")" "$(wt_prompt "$name")" "$(wt_started "$name")"
   git -C "$REPO" worktree prune
-  close_workspace "$name"
+  if is_remote; then tmux kill-session -t "=$(wt_session "$name" "$REPO")" 2>/dev/null || true   # the Mac owns the row
+  else close_workspace "$name"; fi
   printf 'removed %s%s\n' "$name" "$([[ $keep -eq 1 ]] && echo " (branch $B kept)")"
 }
 
@@ -498,7 +597,236 @@ cmd_current() {
   else printf 'worktree: %s\n  branch: %s\n  main:   %s\n' "$root" "$(git branch --show-current)" "$common"; fi
 }
 
+# ---------------------------------------------------------------- driver and self-update
+cmd_driver() { # the session that spawns tasks; its cwd is $REPOS_DIR, so `wt new` there needs -r
+  mac_only driver
+  cmux_ok || die "cmux is not running; start cmux, then: wt driver"
+  local c id out; c=$(cmux_bin)
+  id=$(cmux_row_field title "driver @local" id)
+  if [[ -n "$id" ]]; then
+    CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
+    printf 'driver @local (selected)\n'
+    return 0
+  fi
+  need_repos_dir
+  out=$(CMUX_QUIET=1 "$c" workspace create --name "driver @local" --cwd "$REPOS_DIR" --command claude --focus true 2>&1) \
+    || die "cmux workspace create failed: $out"
+  printf 'driver @local (created)\n'
+}
+
+cmd_update() { # pull this repo and re-run its installer
+  local refresh=()
+  while [[ $# -gt 0 ]]; do case "$1" in --refresh-config) refresh=(--refresh-config);; *) die "update: unknown option $1";; esac; shift; done
+  local s="$0" dir
+  if [[ -L "$s" ]]; then s=$(readlink "$s"); fi            # ~/.local/bin/wt -> <repo>/bin/wt
+  [[ "$s" == /* ]] || s="$(dirname "$0")/$s"
+  dir=$(cd "$(dirname "$s")/.." && pwd -P)
+  [[ -d "$dir/.git" ]] || die "$dir is not a git clone; replace the seed: mv $dir $dir.seed && git clone https://github.com/mal84emma/workstation $dir"
+  git -C "$dir" pull --ff-only
+  bash "$dir/install.sh" "${refresh[@]+"${refresh[@]}"}"
+}
+
+# ---------------------------------------------------------------- wt -H <host> …
+remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means we never reached the VM
+  local host="$1" cmd="$2" rc=0
+  ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "$cmd" || rc=$?
+  if [[ $rc -eq 255 ]]; then die "host unreachable: is the VM running? (ssh $host)"; fi
+  return $rc
+}
+remote_wt() { local host="$1"; shift; remote_sh "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+# shellcheck disable=SC2016   # $HOME must reach the VM unexpanded
+remote_run_cmd() { printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"; }
+
+remote_row() { # remote_row <host> <session> <title> [cmux flags…] — the local cmux row for a VM tmux session
+  local host="$1" session="$2" title="$3" c out; shift 3
+  cmux_ok || die "cmux is not running; start cmux, then re-run this command"
+  c=$(cmux_bin)
+  out=$(CMUX_QUIET=1 "$c" mosh-tmux "$host" --session "$session" --name "$title" "$@" 2>&1) || die "cmux mosh-tmux failed: $out"
+  printf 'row: %s\n' "$title"
+}
+
+need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer the repo from
+  local host="$1" sub="$2" a; shift 2
+  for a in "$@"; do if [[ "$a" == -r || "$a" == --repo ]]; then return 0; fi; done
+  die "$sub: -r <repo> is required with -H (wt -H $host repos lists them)"
+}
+
+host_new() { # create the worktree on the VM, then the cmux row here
+  local host="$1" prompt="" args=(); shift
+  while [[ $# -gt 0 ]]; do case "$1" in -p|--prompt) prompt="$2"; shift 2;; *) args+=("$1"); shift;; esac; done
+  local out name repo session
+  out=$(printf '%s' "$prompt" | remote_wt "$host" new "${args[@]+"${args[@]}"}" --no-workspace --prompt-stdin)
+  printf '%s\n' "$out"
+  name=$(printf '%s\n' "$out" | sed -n 's/^created //p' | head -1)
+  repo=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
+  session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
+  [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session (try: wt -H $host list)"
+  valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$repo")" ]] || die "unexpected output from $host"
+  remote_row "$host" "$session" "$(row_title "$name" "$repo" "$host")" --no-focus --command "$(remote_run_cmd "$name" "$repo")"
+}
+
+host_attach() { # re-attach to the VM's session; starting an agent again is never implicit
+  local host="$1" restart=0 name="" repo=""; shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --restart-agent) restart=1; shift ;;
+      -r|--repo) repo="$2"; shift 2 ;;
+      -*) die "attach: unknown option $1" ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+  [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
+  [[ -n "$repo" ]] || die "attach: -r <repo> is required with -H (wt -H $host repos lists them)"
+  local out session state title id path
+  out=$(remote_wt "$host" show "$name" -r "$repo")
+  session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
+  path=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
+  [[ -n "$session" && -n "$path" ]] || die "$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))"
+  state="${session#*(}"; state="${state%)}"; session="${session%% *}"
+  valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$path")" ]] || die "unexpected output from $host"
+  title=$(row_title "$name" "$path" "$host")
+  if [[ $restart -eq 1 ]]; then
+    remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
+    close_row "$(cmux_row_field session "$session" id)"
+    remote_row "$host" "$session" "$title" --no-focus --command "$(remote_run_cmd "$name" "$path")"
+    return 0
+  fi
+  [[ "$state" == "agent running" ]] \
+    || die "$name on $host has no agent pane ($state); restart it: wt -H $host attach --restart-agent -r $(shell_join "$repo") $name"
+  id=$(cmux_row_field session "$session" id)
+  if [[ -n "$id" ]]; then
+    CMUX_QUIET=1 "$(cmux_bin)" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
+    printf 'row: %s (selected)\n' "$title"
+  else
+    remote_row "$host" "$session" "$title"
+  fi
+}
+
+host_open() { # VS Code Remote-SSH on a VM worktree
+  local host="$1" name="" repo=""; shift
+  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) repo="$2"; shift 2;; -*) die "open: unknown option $1";; *) name="$1"; shift;; esac; done
+  [[ -n "$name" ]] || die "open: worktree name required (wt -H $host open -r <repo> <name>)"
+  [[ -n "$repo" ]] || die "open: -r <repo> is required with -H (wt -H $host repos lists them)"
+  local p; p=$(remote_wt "$host" path "$name" -r "$repo")
+  open_code "vscode-remote://ssh-remote+$host$p/" "$host:$p"
+}
+
+host_rm() { # remove on the VM, close the row, then kill the session (closing first stops cmux recreating it)
+  local host="$1" name="" repo="" args=(); shift
+  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) repo="$2"; shift 2;; -*) args+=("$1"); shift;; *) name="$1"; shift;; esac; done
+  [[ -n "$name" ]] || die "rm: worktree name required (wt -H $host rm -r <repo> <name>)"
+  [[ -n "$repo" ]] || die "rm: -r <repo> is required with -H (wt -H $host repos lists them)"
+  local session; session=$(wt_session "$name" "$repo")
+  remote_wt "$host" rm "$name" -r "$repo" "${args[@]+"${args[@]}"}"
+  close_row "$(cmux_row_field session "$session" id)"
+  remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
+}
+
+cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac caches nothing about VMs
+  local host="$1" sub="${2:-}" args=() v; shift 2
+  valid_host "$host" || die "invalid host '$host' (an ssh alias: letters, digits, '.', '_' and '-')"
+  while [[ $# -gt 0 ]]; do   # normalise -r once: a trailing '/' would change repo_id, and so the identity
+    case "$1" in
+      -r|--repo) v="$2"; while [[ "$v" == */ && "$v" != / ]]; do v="${v%/}"; done; args+=("$1" "$v"); shift 2 ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]+"${args[@]}"}"
+  case "$sub" in
+    new)       host_new "$host" "$@" ;;
+    attach)    host_attach "$host" "$@" ;;
+    open)      host_open "$host" "$@" ;;
+    rm)        host_rm "$host" "$@" ;;
+    list)      remote_wt "$host" list --all "$@" ;;
+    show|path) need_r "$host" "$sub" "$@"; remote_wt "$host" "$sub" "$@" ;;
+    repos|update|help) remote_wt "$host" "$sub" "$@" ;;
+    *) die "wt -H: '$sub' does not run remotely (new attach list show rm path open repos update help)" ;;
+  esac
+}
+
+# ---------------------------------------------------------------- wt task
+task_exit() { # the launcher row closes on exit, so let a message be read first
+  local rc=$?
+  if [[ $rc -ne 0 && -t 0 ]]; then read -r -p 'press return' _ || true; fi
+}
+ssh_hosts() { # non-wildcard Host aliases, read as bin/cmux-hook reads them
+  { awk '$1=="Host"{for(i=2;i<=NF;i++){if($i ~ /^#/)break; if($i !~ /[*?]/) print $i}}' "$HOME/.ssh/config" 2>/dev/null || true; } | sort -u
+}
+pick() { # pick <prompt> — a line of stdin, or whatever was typed (fzf --print-query: query line, then selection)
+  local out rc=0 q s
+  out=$(fzf --print-query --prompt "$1> " --height 40% --reverse) || rc=$?
+  [[ $rc -le 1 ]] || return 1                                   # 130: aborted
+  q=$(printf '%s\n' "$out" | sed -n '1p'); s=$(printf '%s\n' "$out" | sed -n '2p')
+  printf '%s' "${s:-$q}"
+}
+
+cmd_task() {
+  mac_only task
+  local where="" kind="" repo="" brief="" asked=1 id out
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --where) where="$2"; shift 2 ;;
+      -a|--agent) kind="$2"; shift 2 ;;
+      -r|--repo) repo="$2"; shift 2 ;;
+      -p|--prompt) brief="$2"; asked=0; shift 2 ;;
+      *) die "task: unknown option $1" ;;
+    esac
+  done
+  trap task_exit EXIT
+  have fzf || die "fzf not found (brew install fzf)"
+
+  if [[ -z "$where" ]]; then where=$({ printf 'local\n'; ssh_hosts; } | pick where) || die "task: cancelled"; fi
+  [[ -n "$where" ]] || die "task: no host picked"
+  if [[ "$where" != local ]]; then
+    valid_host "$where" || die "task: invalid host '$where' (an ssh alias: letters, digits, '.', '_' and '-')"
+    if ! ssh_hosts | grep -qxF "$where"; then
+      warn "cmux will try '$where'; make sure 'ssh $where' works first. Requests from inside that VM (VS Code, new rows) need a Host entry."
+    fi
+  fi
+
+  if [[ -z "$kind" ]]; then
+    kind=$({ printf 'claude\ncodex\nrepo-shell\n'; [[ "$where" == local ]] || printf 'vm-shell\n'; } | pick kind) || die "task: cancelled"
+  fi
+  case "$kind" in
+    claude|codex|repo-shell) ;;
+    vm-shell) [[ "$where" != local ]] || die "task: vm-shell needs a VM; for a local shell pick repo-shell" ;;
+    *) die "task: unknown kind '$kind' (claude, codex, repo-shell, vm-shell)" ;;
+  esac
+
+  if [[ "$kind" != vm-shell && -z "$repo" ]]; then
+    local list
+    if [[ "$where" == local ]]; then list=$(cmd_repos); else list=$(remote_wt "$where" repos); fi
+    repo=$(printf '%s\n' "$list" | pick repo) || die "task: cancelled"
+    [[ -n "$repo" ]] || die "task: no repo picked"
+  fi
+  if [[ "$kind" == claude || "$kind" == codex ]] && [[ $asked -eq 1 ]]; then read -r -p 'brief> ' brief || true; fi
+
+  case "$kind" in
+    claude|codex)
+      if [[ "$where" == local ]]; then cmd_new -r "$repo" -a "$kind" -p "$brief"
+      else host_new "$where" -r "$repo" -a "$kind" -p "$brief"; fi ;;
+    repo-shell)
+      if [[ "$where" == local ]]; then
+        resolve_repo "$repo"; id=$(repo_id "$REPO")
+        cmux_ok || die "cmux is not running; start cmux, then: wt task"
+        out=$(CMUX_QUIET=1 "$(cmux_bin)" workspace create --name "$id shell @local" --cwd "$REPO" 2>&1) \
+          || die "cmux workspace create failed: $out"
+        printf 'row: %s shell @local\n' "$id"
+      else
+        id=$(repo_id "$repo")   # the VM's shell expands its own repos dir
+        remote_row "$where" "shell-$id" "$id shell @$where" --command "cd \"\${WT_REPOS_DIR:-\$HOME/Documents/Repositories}/$repo\""
+      fi ;;
+    vm-shell) remote_row "$where" main "shell @$where" ;;
+  esac
+}
+
 # ---------------------------------------------------------------- dispatch
+if [[ "${1:-}" == -H || "${1:-}" == --host ]]; then
+  [[ $# -ge 3 ]] || die "usage: wt -H <host> <command> [args] (wt help)"
+  host="$2"; shift 2
+  cmd_host "$host" "$@"
+  exit
+fi
 sub="${1:-help}"; shift || true
 case "$sub" in
   new)      cmd_new "$@" ;;
@@ -514,6 +842,9 @@ case "$sub" in
   prune)    cmd_prune "$@" ;;
   path)     cmd_path "$@" ;;
   repos)    cmd_repos ;;
+  task)     cmd_task "$@" ;;
+  driver)   cmd_driver ;;
+  update)   cmd_update "$@" ;;
   current|cur) cmd_current ;;
   help|-h|--help) usage ;;
   *) die "unknown command '$sub' (wt help)" ;;

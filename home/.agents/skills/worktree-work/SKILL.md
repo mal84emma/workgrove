@@ -1,15 +1,11 @@
 ---
 name: worktree-work
-description: How to behave when working inside a task worktree — staying isolated, committing, syncing with the base branch, and handing work back via a PR. Use whenever the session's cwd is under a `.worktrees/` directory, or the user asks to update/rebase/push a worktree or open a PR from it.
+description: How to behave when working inside a task worktree — staying isolated, committing, syncing with the base branch, and handing work back. Use whenever the session's cwd is under a `.worktrees/` directory, or the user asks to update/rebase/push a worktree or hand it back.
 ---
 
 # Working inside a task worktree
 
-Check where you are first:
-
-```bash
-wt current        # "worktree: <path> / branch wt/<name> / main: <main checkout>"  or  "main checkout: ..."
-```
+You are inside one when the cwd is `<repo>/.worktrees/<name>` and `git rev-parse --abbrev-ref HEAD` prints `wt/<name>`. This is a convention, not a sandbox: nothing isolates the session for you, so the rules below are yours to keep.
 
 ## Rules while in a worktree
 
@@ -18,16 +14,21 @@ wt current        # "worktree: <path> / branch wt/<name> / main: <main checkout>
 3. **Do not switch branches** or run `git checkout <other-branch>` inside a worktree; the branch is the task's identity. Do not create nested worktrees.
 4. **Dependencies and env** live per worktree. If something is missing, install it here (or suggest a `.wt-setup` script for the repo) rather than pointing at the main checkout.
 5. **Do not remove the worktree yourself** when done. Report completion; the user (or `worktree-teardown`) decides.
+6. **No interactive `wt attach`, `wt task` or `wt driver` from here.** Those belong to the user's own session on the Mac.
 
-## Syncing and handing back
+## Syncing with the base
+
+The base branch is recorded in the sidecar and printed by `wt show <name>`. From a clean tree:
 
 ```bash
-wt sync <name>              # rebase this branch onto its base (origin/main by default); requires a clean tree
-wt sync <name> --merge      # merge instead of rebase
-wt pr <name> [--draft]      # push wt/<name> and open a GitHub PR against the base with gh
+git fetch origin && git rebase origin/main      # or the recorded base
 ```
 
-Resolve conflicts inside the worktree, then `git rebase --continue` or `git merge --continue`.
+Resolve conflicts inside the worktree, then `git rebase --continue`.
+
+## Handing back
+
+Report the branch `wt/<name>` and what is on it. Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish unless the user explicitly asked for that action in this conversation; `wt pr <name>` only then.
 
 ## Finishing a task
 

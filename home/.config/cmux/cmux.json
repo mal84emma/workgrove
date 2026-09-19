@@ -22,6 +22,26 @@
       "title": "Diff: this worktree vs base",
       "type": "command"
     },
+    "wt-driver": {
+      "shortcut": "cmd+ctrl+d",
+      "title": "Open the driver session",
+      "type": "workspace",
+      "workspace": {
+        "cwd": "~",
+        "layout": {
+          "pane": {
+            "surfaces": [
+              {
+                "command": "wt driver; exit",
+                "focus": true,
+                "type": "terminal"
+              }
+            ]
+          }
+        },
+        "name": "driver launcher @local"
+      }
+    },
     "wt-list": {
       "command": "wt list",
       "icon": {
@@ -55,6 +75,26 @@
       "target": "currentTerminal",
       "title": "New task worktree (Claude)",
       "type": "command"
+    },
+    "wt-task": {
+      "shortcut": "cmd+ctrl+t",
+      "title": "New task or shell (local or VM)",
+      "type": "workspace",
+      "workspace": {
+        "cwd": "~",
+        "layout": {
+          "pane": {
+            "surfaces": [
+              {
+                "command": "wt task; exit",
+                "focus": true,
+                "type": "terminal"
+              }
+            ]
+          }
+        },
+        "name": "task picker @local"
+      }
     }
   },
   "activePaneBorderColor": "#A3C1AD",
@@ -85,6 +125,11 @@
         "command": "jq -c 'if .context.appFocused then {effects:{desktop:false}} else {} end'",
         "id": "quiet-when-focused",
         "timeoutSeconds": 5
+      },
+      {
+        "command": "~/.local/bin/cmux-hook",
+        "id": "wt",
+        "timeoutSeconds": 10
       }
     ],
     "paneFlash": true,
@@ -134,6 +179,7 @@
     "showNotificationMessage": true,
     "showProgress": true,
     "showPullRequests": true,
+    "showSSH": true,
     "watchGitStatus": true
   },
   "sidebarAppearance": {
