@@ -23,7 +23,7 @@
       "type": "command"
     },
     "wt-driver": {
-      "shortcut": "cmd+ctrl+alt+a",
+      "shortcut": "cmd+ctrl+alt+d",
       "title": "Open the driver session",
       "type": "workspace",
       "workspace": {
@@ -276,5 +276,10 @@
     "indicatorStyle": "leftRail",
     "notificationBadgeColor": "#A3C1AD",
     "selectionColor": "#597F68"
+  },
+  "shortcuts": {
+    "bindings": {
+      "toggleBrowserDesignMode": null
+    }
   }
 }

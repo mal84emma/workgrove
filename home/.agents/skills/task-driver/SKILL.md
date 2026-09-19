@@ -5,7 +5,7 @@ description: Spawn and supervise task sessions from a driver session; use when t
 
 # Driving tasks from a driver session
 
-The driver session (row `driver`, second line `@local`, ⌃⌥⌘A) starts and watches other sessions. Its cwd is `$WT_REPOS_DIR`, which is not a repo, so every `wt new` needs `-r <repo>`. `wt` hides local/remote: `wt <sub> …` for this Mac, `wt -H <vm> <sub> …` for a VM.
+The driver session (row `driver`, second line `@local`, ⌃⌥⌘D) starts and watches other sessions. Its cwd is `$WT_REPOS_DIR`, which is not a repo, so every `wt new` needs `-r <repo>`. `wt` hides local/remote: `wt <sub> …` for this Mac, `wt -H <vm> <sub> …` for a VM.
 
 1. **Write the brief.** Turn the request into a self-contained brief: goal, relevant files/areas, done criteria, constraints, base branch if not main. The new session has no memory of this conversation.
 2. **Start the task.** Pick a short kebab slug (no dots). `wt new <slug> -r <repo> -a <agent> -p "<brief>"`, or `wt -H <vm> new -r <repo> -a <agent> -p "<brief>"` when the user names a VM. One task per independent unit of work; do not split work that touches the same files.
