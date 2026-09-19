@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# cmux notification hook. Acts only on wt-open / wt-attach relayed from a VM; otherwise prints nothing (= unchanged).
+set -u
+in=$(cat)
+t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; o=${CMUX_NOTIFICATION_ORIGIN:-}
+[[ $o == ssh-relay:* ]] || exit 0
+known_host() { awk -v w="$1" '$1=="Host"{for(i=2;i<=NF;i++){if($i~/^#/)break; if($i==w && $i!~/[*?]/)f=1}} END{exit(f?0:1)}' "$HOME/.ssh/config" 2>/dev/null; }
+quiet() { printf '%s' "$in" | jq -c '.effects.desktop=false | .effects.sound=false | .effects.markUnread=false | .effects.paneFlash=false' 2>/dev/null || true; }
+CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
+CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
+valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
+safe_path() { [[ $1 == /* && $1 != *$'\n'* && $1 != *//* && $1 != */ && $1 != *'/../'* && $1 != */.. && $1 != *[\'\"\`\$\\]* ]]; }
+field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
+case $t in
+  wt-open)   # body: {"host":…,"path":…}
+    h=$(field host || true); p=$(field path || true)
+    if valid_host "$h" && known_host "$h" && safe_path "$p"; then
+      "$CODE" --folder-uri "vscode-remote://ssh-remote+$h$p/" >/dev/null 2>&1 & quiet; fi ;;
+  wt-attach) # body: {"host":…,"repo":…,"task":…}
+    h=$(field host || true); r=$(field repo || true); n=$(field task || true)
+    if valid_host "$h" && known_host "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+      id=$(printf '%s' "${r##*/}" | tr -c 'A-Za-z0-9-' '-'); printf -v q '%q' "$r"   # mirrors repo_id / wt_session in wt
+      "$CMUX" mosh-tmux "$h" --session "wt-$id-$n" --name "$id:$n @$h" --no-focus \
+        --command "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1 & quiet; fi ;;
+esac
+exit 0

@@ -1,0 +1,234 @@
+{
+  "$schema": "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux.schema.json",
+  "actions": {
+    "open-in-vscode": {
+      "command": "code --new-window .",
+      "icon": {
+        "name": "chevron.left.forwardslash.chevron.right",
+        "type": "symbol"
+      },
+      "target": "currentTerminal",
+      "title": "Open this directory in VS Code",
+      "type": "command"
+    },
+    "wt-diff": {
+      "command": "cmux diff --branch --layout split",
+      "icon": {
+        "name": "plus.forwardslash.minus",
+        "type": "symbol"
+      },
+      "subtitle": "cmux split-diff of the current branch against its merge base",
+      "target": "currentTerminal",
+      "title": "Diff: this worktree vs base",
+      "type": "command"
+    },
+    "wt-list": {
+      "command": "wt list",
+      "icon": {
+        "name": "list.bullet.rectangle",
+        "type": "symbol"
+      },
+      "keywords": [
+        "worktree",
+        "tasks",
+        "wt"
+      ],
+      "target": "currentTerminal",
+      "title": "List task worktrees",
+      "type": "command"
+    },
+    "wt-new": {
+      "command": "wt new",
+      "icon": {
+        "name": "arrow.triangle.branch",
+        "type": "symbol"
+      },
+      "keywords": [
+        "task",
+        "worktree",
+        "claude",
+        "parallel",
+        "wt"
+      ],
+      "shortcut": "cmd+ctrl+n",
+      "subtitle": "wt new: worktree + cmux workspace running Claude; use the TextBox to pass a prompt",
+      "target": "currentTerminal",
+      "title": "New task worktree (Claude)",
+      "type": "command"
+    }
+  },
+  "activePaneBorderColor": "#A3C1AD",
+  "app": {
+    "commandPaletteSearchesAllSurfaces": true,
+    "preferredEditor": "code",
+    "reorderOnNotification": false,
+    "workspaceInheritWorkingDirectory": true
+  },
+  "automation": {
+    "claudeCodeIntegration": true,
+    "suppressSubagentNotifications": true,
+    "workspaceAutoNaming": true
+  },
+  "diffViewer": {
+    "defaultLayout": "split"
+  },
+  "fileExplorer": {
+    "doubleClickAction": "preferredEditor"
+  },
+  "notifications": {
+    "agentIdleReminder": true,
+    "agentPermissionPrompt": true,
+    "agentTurnComplete": "whenIdle",
+    "dockBadge": true,
+    "hooks": [
+      {
+        "command": "jq -c 'if .context.appFocused then {effects:{desktop:false}} else {} end'",
+        "id": "quiet-when-focused",
+        "timeoutSeconds": 5
+      }
+    ],
+    "paneFlash": true,
+    "paneFlashColor": "#A3C1AD",
+    "showInMenuBar": true,
+    "sound": "Pop",
+    "soundOverrides": {
+      "claude": {
+        "errorStalled": {
+          "sound": "Basso"
+        },
+        "needsInput": {
+          "sound": "Submarine"
+        },
+        "turnDone": {
+          "sound": "Pop"
+        }
+      },
+      "codex": {
+        "errorStalled": {
+          "sound": "Basso"
+        },
+        "needsInput": {
+          "sound": "Submarine"
+        },
+        "turnDone": {
+          "sound": "Pop"
+        }
+      }
+    },
+    "suppressOnlyFocusedSurface": true,
+    "unreadPaneRing": true
+  },
+  "paneBorderColor": "#597F68",
+  "schemaVersion": 1,
+  "sidebar": {
+    "branchLayout": "inline",
+    "loadingSpinnerPosition": "leading",
+    "makePullRequestsClickable": true,
+    "notificationBadgePosition": "trailing",
+    "notificationMessageLineLimit": 2,
+    "openPullRequestLinksInCmuxBrowser": true,
+    "showAgentActivity": true,
+    "showBranchDirectory": true,
+    "showCustomMetadata": true,
+    "showLog": true,
+    "showNotificationMessage": true,
+    "showProgress": true,
+    "showPullRequests": true,
+    "watchGitStatus": true
+  },
+  "sidebarAppearance": {
+    "matchTerminalBackground": true,
+    "tintColor": "#A3C1AD",
+    "tintOpacity": 0.18
+  },
+  "terminal": {
+    "agentHibernation": {
+      "enabled": false,
+      "idleSeconds": 5,
+      "maxLiveTerminals": 12
+    },
+    "autoResumeAgentSessions": true,
+    "focusTextBoxOnNewTerminals": false,
+    "showTextBoxOnNewTerminals": true,
+    "textBoxDefaultSubmitAction": "claude-worktree",
+    "textBoxSubmitActions": [
+      {
+        "assetName": "AgentIcons/Claude",
+        "backgroundColorHex": "#F6D5C8",
+        "commandTemplate": "wt new -p {{prompt}}",
+        "id": "claude-worktree",
+        "kind": "commandTemplate",
+        "systemImage": "arrow.triangle.branch",
+        "title": "New task (worktree + Claude)"
+      },
+      {
+        "assetName": "AgentIcons/Claude",
+        "backgroundColorHex": "#F6D5C8",
+        "commandTemplate": "claude -- {{prompt}}",
+        "id": "claude-here",
+        "kind": "commandTemplate",
+        "systemImage": "sparkle",
+        "title": "Claude (this checkout)"
+      }
+    ]
+  },
+  "ui": {
+    "newWorkspace": {
+      "contextMenu": [
+        {
+          "action": "wt-new",
+          "title": "New task worktree (Claude)"
+        },
+        {
+          "action": "cmux.newWorkspace",
+          "title": "New Workspace (blank terminal)"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "action": "cmux.newTerminal",
+          "title": "New Terminal Tab"
+        },
+        {
+          "action": "cmux.newBrowser",
+          "title": "New Browser"
+        }
+      ]
+    },
+    "surfaceTabBar": {
+      "buttons": [
+        "cmux.newTerminal",
+        "cmux.newBrowser",
+        "cmux.splitRight",
+        "cmux.splitDown",
+        "wt-diff",
+        "open-in-vscode"
+      ]
+    }
+  },
+  "workspaceColors": {
+    "colors": {
+      "Amber": "#7D6608",
+      "Aqua": "#0E6B8C",
+      "Blue": "#1565C0",
+      "Brown": "#7B3F00",
+      "Charcoal": "#3E4B5E",
+      "Crimson": "#922B21",
+      "Green": "#196F3D",
+      "Indigo": "#283593",
+      "Magenta": "#AD1457",
+      "Navy": "#1A5276",
+      "Olive": "#4A5C18",
+      "Orange": "#A04000",
+      "Purple": "#6A1B9A",
+      "Red": "#C0392B",
+      "Rose": "#880E4F",
+      "Sage": "#A3C1AD",
+      "Teal": "#006B6B"
+    },
+    "indicatorStyle": "leftRail",
+    "notificationBadgeColor": "#A3C1AD",
+    "selectionColor": "#597F68"
+  }
+}

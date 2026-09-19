@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Agent lifecycle hook → notification. Remote cmux pane: relay to the Mac. Local cmux pane: no-op. Elsewhere on a Mac: banner.
+set -u
+[[ -t 0 ]] && payload= || payload=$(cat)
+title=${AGENT_NOTIFY_SOURCE:-Claude Code}
+event=$(printf '%s' "$payload" | jq -r '.hook_event_name // empty' 2>/dev/null || true)
+case $event in
+  Stop) body="finished" ;;
+  PermissionRequest) body="needs approval" ;;
+  Notification) body=$(printf '%s' "$payload" | jq -r '.message // "needs input"' 2>/dev/null || echo "needs input") ;;
+  *) body="needs attention" ;;
+esac
+socket=${CMUX_SOCKET_PATH:-}; ws=${CMUX_WORKSPACE_ID:-}
+if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null; then          # prefer the session env: cmux rebinds it on reattach
+  s=$(tmux display-message -p '#S' 2>/dev/null || true)
+  v=$(tmux show-environment -t "=$s" CMUX_SOCKET_PATH 2>/dev/null || true); [[ $v == *=* ]] && socket=${v#*=}
+  v=$(tmux show-environment -t "=$s" CMUX_WORKSPACE_ID 2>/dev/null || true); [[ $v == *=* ]] && ws=${v#*=}
+fi
+if [[ $socket == *:[0-9]* ]]; then
+  CMUX_SOCKET_PATH=$socket env -u CMUX_SOCKET "${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}" notify \
+    ${ws:+--workspace "$ws"} --title "$title" --body "$body" >/dev/null 2>&1 ||
+    echo 'agent-notify: relay failed; close and reopen this cmux row (wt -H <host> attach …)' >&2
+elif [[ -z ${CMUX_SURFACE_ID:-} && $(uname -s) == Darwin ]]; then
+  /usr/bin/osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' -e 'end run' -- "$title" "$body" >/dev/null 2>&1
+fi
+exit 0

@@ -1,0 +1,61 @@
+{
+  "env": {
+    "CLAUDE_CODE_DISABLE_MOUSE_CLICKS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(ls *)",
+      "Bash(cd *)",
+      "Bash(git *)",
+      "Bash(gh pr *)",
+      "Bash(cmux *)"
+    ]
+  },
+  "model": "fable",
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "sh ~/.claude/statusline-command.sh"
+  },
+  "effortLevel": "high",
+  "tui": "fullscreen",
+  "voice": {
+    "enabled": true,
+    "mode": "hold"
+  },
+  "theme": "dark"
+}

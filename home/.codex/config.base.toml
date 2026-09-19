@@ -1,0 +1,42 @@
+# Security baseline: keep local writes inside the selected workspace and ask
+# before crossing the sandbox boundary.
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+sandbox_mode = "workspace-write"
+allow_login_shell = false
+
+# Keep command-line network access off. Hosted search remains available through
+# the lower-exposure cached search index.
+web_search = "cached"
+
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+service_tier = "default"
+
+[sandbox_workspace_write]
+network_access = false
+
+# Pass a reduced environment to spawned commands and automatically remove
+# common secret-bearing variable names.
+[shell_environment_policy]
+inherit = "all"
+ignore_default_excludes = false
+
+[shell_environment_policy.filters]
+"AWS_*" = "exclude"
+"AZURE_*" = "exclude"
+"GITHUB_*" = "exclude"
+"*TOKEN*" = "exclude"
+"*SECRET*" = "exclude"
+"*KEY*" = "exclude"
+
+# Do not persist new CLI transcript history locally. Existing history is left
+# untouched so that deleting it remains an explicit user decision.
+[history]
+persistence = "none"
+
+# Do not export local telemetry, and never include prompt text if telemetry is
+# enabled later.
+[otel]
+exporter = "none"
+log_user_prompt = false

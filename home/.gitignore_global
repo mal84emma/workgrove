@@ -1,0 +1,4 @@
+# Claude Code worktrees live inside each repo; never commit them.
+.claude/worktrees/
+# wt task worktrees (see wt)
+.worktrees/

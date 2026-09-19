@@ -1,0 +1,419 @@
+#!/usr/bin/env bash
+# wt — task worktrees for coding agents (git worktree + cmux workspace + VS Code on demand).
+#
+# One task = one worktree at <repo>/.worktrees/<name> on branch wt/<name>.
+# Every command is safe to run from the main checkout or from inside any worktree.
+#
+# Usage:
+#   wt new  [name] [-p|--prompt TEXT] [-b|--base REF] [--head] [-a|--agent claude|codex|none]
+#           [--no-workspace] [--focus] [-r|--repo PATH]       create a worktree (+ cmux workspace running the agent)
+#   wt list [--json] [--all] [-r PATH]                        list worktrees (--all: every repo under $WT_REPOS_DIR)
+#   wt show <name> [--code] [--diff] [--json] [-r PATH]       status summary; --code opens VS Code; --diff opens a cmux diff pane
+#   wt open <name>                                            = wt show <name> --code
+#   wt diff <name>                                            = wt show <name> --diff
+#   wt attach <name> [-a AGENT] [-p TEXT] [--focus]           open a cmux workspace for an existing worktree
+#   wt sync <name> [--merge]                                  rebase (default) or merge the worktree branch onto its base
+#   wt pr <name> [--draft]                                    push the branch and open a GitHub PR (gh)
+#   wt rm <name> [--force] [--keep-branch]                    remove a worktree (refuses to destroy work unless --force)
+#   wt prune [--dry-run]                                      remove worktrees whose branch is merged and tree is clean
+#   wt path <name> | wt current | wt help
+#
+# Environment / git config:
+#   WT_REPOS_DIR        where `wt list --all` and `wt new -r` (no cwd repo) look for repos  (default ~/Documents/Repositories)
+#   WT_AGENT            default agent for `wt new`/`wt attach`                              (default claude)
+#   WT_AGENT_ARGS       extra args for the agent command (e.g. "--model opus")
+#   git config wt.dir   per-repo override of the worktree folder name                     (default .worktrees)
+#
+# Per-repo hooks:
+#   .worktreeinclude    gitignore-style patterns of *ignored* files to copy into each new worktree (.env etc.)
+#   .wt-setup           executable run inside each new worktree after creation (install deps, etc.)
+set -euo pipefail
+
+REPOS_DIR="${WT_REPOS_DIR:-$HOME/Documents/Repositories}"
+DEFAULT_AGENT="${WT_AGENT:-claude}"
+
+# ---------------------------------------------------------------- helpers
+die()  { printf 'wt: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'wt: %s\n' "$*" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+json_escape() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+
+cmux_bin() {
+  local c="${CMUX_BUNDLED_CLI_PATH:-}"
+  [[ -x "$c" ]] || c=$(command -v cmux 2>/dev/null || true)
+  [[ -x "$c" ]] || c=/Applications/cmux.app/Contents/Resources/bin/cmux
+  [[ -x "$c" ]] && printf '%s' "$c"
+}
+cmux_ok() { local c; c=$(cmux_bin) || return 1; CMUX_QUIET=1 "$c" ping >/dev/null 2>&1; }
+
+# Resolve the MAIN checkout root for a path (follows linked worktrees back to the primary).
+main_root_of() {
+  local p="$1" common
+  common=$(git -C "$p" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  [[ "$common" == */.git ]] || return 1          # bare repos are not supported
+  printf '%s' "${common%/.git}"
+}
+
+REPO=""      # main checkout root
+WT_DIRNAME=""
+resolve_repo() {
+  local want="${1:-}"
+  if [[ -n "$want" ]]; then
+    [[ -d "$want" ]] || [[ -d "$REPOS_DIR/$want" ]] || die "repo not found: $want"
+    [[ -d "$want" ]] || want="$REPOS_DIR/$want"
+    REPO=$(main_root_of "$want") || die "not a git repo: $want"
+  else
+    REPO=$(main_root_of "$PWD") || die "not inside a git repo; pass -r <repo> (name under $REPOS_DIR or a path)"
+  fi
+  WT_DIRNAME=$(git -C "$REPO" config --get wt.dir 2>/dev/null || echo .worktrees)
+  git -C "$REPO" rev-parse HEAD >/dev/null 2>&1 || die "$REPO has no commits yet"
+}
+wt_root()  { printf '%s/%s' "$REPO" "$WT_DIRNAME"; }
+wt_path()  { printf '%s/%s/%s' "$REPO" "$WT_DIRNAME" "$1"; }
+wt_meta()  { printf '%s/.git/wt/%s.json' "$REPO" "$1"; }
+wt_branch(){ printf 'wt/%s' "$1"; }
+
+valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9._-]{0,62}$ ]] && [[ "$1" != *..* ]]; }
+slugify() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
+    | sed 's/^-//; s/-$//' | cut -d- -f1-5 | cut -c1-48 | sed 's/-$//'
+}
+
+default_base() {
+  local ref
+  if ref=$(git -C "$REPO" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null); then
+    printf '%s' "$ref"; return
+  fi
+  for b in main master; do
+    git -C "$REPO" show-ref -q --verify "refs/remotes/origin/$b" && { printf 'origin/%s' "$b"; return; }
+    git -C "$REPO" show-ref -q --verify "refs/heads/$b" && { printf '%s' "$b"; return; }
+  done
+  git -C "$REPO" rev-parse --abbrev-ref HEAD
+}
+
+meta_get() { # meta_get <name> <key>
+  local f; f=$(wt_meta "$1"); [[ -f "$f" ]] || return 1
+  python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2],""); print(v if v is not None else "")' "$f" "$2"
+}
+meta_set() { # meta_set <name> key=value ...
+  local f; f=$(wt_meta "$1"); shift; mkdir -p "$(dirname "$f")"
+  python3 - "$f" "$@" <<'EOF'
+import json,sys,os
+f=sys.argv[1]; d=json.load(open(f)) if os.path.exists(f) else {}
+for kv in sys.argv[2:]:
+    k,_,v=kv.partition('='); d[k]=v
+json.dump(d,open(f,'w'),indent=1)
+EOF
+}
+
+require_wt() { # require_wt <name>  -> sets P (path), B (branch)
+  local n="$1"; valid_name "$n" || die "invalid worktree name: $n"
+  P=$(wt_path "$n"); B=$(wt_branch "$n")
+  [[ -d "$P" ]] || die "no worktree named '$n' in $REPO (see: wt list)"
+  git -C "$REPO" worktree list --porcelain | grep -qx "worktree $P" || die "$P exists but is not a registered worktree (try: git -C $REPO worktree prune)"
+}
+
+agent_cmd() { # agent_cmd <agent> <prompt>
+  local a="$1" prompt="$2" cmd
+  case "$a" in
+    claude) cmd="claude${WT_AGENT_ARGS:+ $WT_AGENT_ARGS}"; [[ -n "$prompt" ]] && cmd+=" -- $(printf '%q' "$prompt")" ;;
+    codex)  cmd="codex${WT_AGENT_ARGS:+ $WT_AGENT_ARGS}";  [[ -n "$prompt" ]] && cmd+=" $(printf '%q' "$prompt")" ;;
+    none|shell|"") cmd="" ;;
+    *) cmd="$a"; [[ -n "$prompt" ]] && cmd+=" $(printf '%q' "$prompt")" ;;
+  esac
+  printf '%s' "$cmd"
+}
+
+open_workspace() { # open_workspace <name> <agent> <prompt> <focus>
+  local n="$1" a="$2" prompt="$3" focus="$4" c out uuid cmd
+  cmux_ok || { warn "cmux is not running; skipped workspace creation (cd $(wt_path "$n"))"; return 0; }
+  c=$(cmux_bin); cmd=$(agent_cmd "$a" "$prompt")
+  local args=(workspace create --name "$n" --cwd "$(wt_path "$n")" --focus "$focus")
+  [[ -n "$cmd" ]] && args+=(--command "$cmd")
+  [[ -n "$prompt" ]] && args+=(--description "${prompt:0:80}")
+  out=$(CMUX_QUIET=1 "$c" "${args[@]}" 2>&1) || die "cmux workspace create failed: $out"
+  local ref; ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1 || true)
+  uuid=$(CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null | python3 -c '
+import json,sys
+ref=sys.argv[1]
+d=json.load(sys.stdin); d=d.get("workspaces",d) if isinstance(d,dict) else d
+for w in d:
+    if w.get("ref")==ref: print(w.get("id","")); break' "$ref" 2>/dev/null || true)
+  meta_set "$n" "cmux_workspace=${uuid}" "agent=$a"
+  printf 'workspace: %s%s\n' "${ref:-$out}" "${uuid:+ ($uuid)}"
+}
+
+close_workspace() { # close_workspace <name>
+  local uuid c; uuid=$(meta_get "$1" cmux_workspace 2>/dev/null || true)
+  cmux_ok || return 0
+  c=$(cmux_bin)
+  if [[ -z "$uuid" ]]; then   # fall back: any workspace whose cwd is this worktree
+    uuid=$(CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null | python3 -c '
+import json,sys
+p=sys.argv[1]
+ws=json.load(sys.stdin); ws=ws.get("workspaces",ws) if isinstance(ws,dict) else ws
+for w in ws:
+    d=w.get("current_directory") or ""
+    if d==p or d.startswith(p+"/"): print(w.get("id","")); break' "$(wt_path "$1")" 2>/dev/null || true)
+  fi
+  [[ -n "$uuid" ]] || return 0
+  CMUX_QUIET=1 "$c" workspace close "$uuid" >/dev/null 2>&1 || true
+}
+
+copy_includes() { # copy gitignored files listed in .worktreeinclude into the new worktree
+  local dest="$1" inc="$REPO/.worktreeinclude" f pat
+  [[ -f "$inc" ]] || return 0
+  git -C "$REPO" ls-files --others --ignored --exclude-standard -z | while IFS= read -r -d '' f; do
+    [[ "$f" == "$WT_DIRNAME/"* ]] && continue
+    while IFS= read -r pat || [[ -n "$pat" ]]; do
+      pat="${pat%%#*}"; pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
+      [[ -z "$pat" ]] && continue
+      pat="${pat#/}"; pat="${pat%/}"
+      # shellcheck disable=SC2053
+      if [[ "$f" == $pat || "$f" == $pat/* || "$(basename "$f")" == $pat ]]; then
+        mkdir -p "$dest/$(dirname "$f")"; cp -p "$REPO/$f" "$dest/$f"; break
+      fi
+    done < "$inc"
+  done
+}
+
+# ---------------------------------------------------------------- status
+wt_status_line() { # prints: name|branch|base|ahead|behind|dirty|last|cmux
+  local n="$1" p b base ahead behind dirty last ws
+  p=$(wt_path "$n"); b=$(wt_branch "$n")
+  base=$(meta_get "$n" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  ahead=$(git -C "$p" rev-list --count "$base..HEAD" 2>/dev/null || echo '?')
+  behind=$(git -C "$p" rev-list --count "HEAD..$base" 2>/dev/null || echo '?')
+  dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  last=$(git -C "$p" log -1 --format='%cr' 2>/dev/null || echo '-')
+  ws=$(meta_get "$n" cmux_workspace 2>/dev/null || true)
+  printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$n" "$(git -C "$p" branch --show-current 2>/dev/null || echo "$b")" "$base" "$ahead" "$behind" "$dirty" "$last" "${ws:+yes}"
+}
+
+list_names() { # registered worktrees under the wt root
+  local root; root=$(wt_root)
+  git -C "$REPO" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' \
+    | grep -F "$root/" | sed "s#^$root/##" | grep -v / || true
+}
+
+# ---------------------------------------------------------------- commands
+cmd_new() {
+  local name="" prompt="" base="" from_head=0 agent="$DEFAULT_AGENT" workspace=1 focus=false repo=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -p|--prompt) prompt="$2"; shift 2 ;;
+      -b|--base) base="$2"; shift 2 ;;
+      --head) from_head=1; shift ;;
+      -a|--agent) agent="$2"; shift 2 ;;
+      --no-workspace) workspace=0; shift ;;
+      --focus) focus=true; shift ;;
+      -r|--repo) repo="$2"; shift 2 ;;
+      -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+      -*) die "new: unknown option $1" ;;
+      *) [[ -z "$name" ]] && name="$1" || die "new: unexpected argument $1"; shift ;;
+    esac
+  done
+  resolve_repo "$repo"
+  [[ -n "$name" ]] || name=$(slugify "$prompt")
+  [[ -n "$name" ]] || name="task-$(date +%Y%m%d-%H%M%S)"
+  valid_name "$name" || die "invalid name '$name' (lowercase letters, digits, . _ -)"
+  local p b; p=$(wt_path "$name"); b=$(wt_branch "$name")
+  [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
+  git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (wt rm $name --keep-branch was used?); delete it or pick another name"
+
+  if [[ $from_head -eq 1 ]]; then base=$(git -C "$PWD" rev-parse --abbrev-ref HEAD 2>/dev/null || git -C "$REPO" rev-parse --abbrev-ref HEAD); fi
+  [[ -n "$base" ]] || base=$(default_base)
+  if [[ "$base" == origin/* ]]; then
+    git -C "$REPO" fetch -q origin "${base#origin/}" 2>/dev/null || warn "fetch of $base failed; using local ref"
+  fi
+  git -C "$REPO" rev-parse -q --verify "$base^{commit}" >/dev/null || die "base ref not found: $base"
+
+  mkdir -p "$(wt_root)"
+  git -C "$REPO" worktree add -q -b "$b" "$p" "$base" || die "git worktree add failed"
+  copy_includes "$p"
+  if [[ -x "$REPO/.wt-setup" ]]; then
+    ( cd "$p" && WT_NAME="$name" WT_REPO="$REPO" "$REPO/.wt-setup" ) || warn ".wt-setup exited non-zero"
+  fi
+  meta_set "$name" "base=$base" "created=$(date -u +%FT%TZ)" "task=$prompt" "agent=$agent"
+
+  printf 'created %s\n  path:   %s\n  branch: %s (from %s)\n' "$name" "$p" "$b" "$base"
+  [[ $workspace -eq 1 ]] && open_workspace "$name" "$agent" "$prompt" "$focus"
+  return 0
+}
+
+cmd_list() {
+  local json=0 all=0 repo=""
+  while [[ $# -gt 0 ]]; do case "$1" in --json) json=1;; --all) all=1;; -r|--repo) repo="$2"; shift;; *) die "list: unknown option $1";; esac; shift; done
+  local repos=()
+  if [[ $all -eq 1 ]]; then
+    while IFS= read -r d; do repos+=("$d"); done < <(find "$REPOS_DIR" -mindepth 1 -maxdepth 1 -type d -exec test -d '{}/.git' ';' -print | sort)
+  else
+    resolve_repo "$repo"; repos=("$REPO")
+  fi
+  local first=1; [[ $json -eq 1 ]] && printf '['
+  for r in "${repos[@]}"; do
+    REPO=$(main_root_of "$r") || continue
+    WT_DIRNAME=$(git -C "$REPO" config --get wt.dir 2>/dev/null || echo .worktrees)
+    local names; names=$(list_names); [[ -n "$names" ]] || continue
+    if [[ $json -eq 0 ]]; then
+      printf '\n%s  (%s)\n' "$(basename "$REPO")" "$REPO"
+      printf '  %-28s %-26s %-16s %6s %6s %6s  %s\n' NAME BRANCH BASE AHEAD BEHIND DIRTY LAST
+    fi
+    while IFS= read -r n; do
+      IFS='|' read -r nn br base ah be di last ws <<<"$(wt_status_line "$n")"
+      if [[ $json -eq 1 ]]; then
+        [[ $first -eq 1 ]] || printf ','; first=0
+        printf '{"repo":%s,"name":%s,"path":%s,"branch":%s,"base":%s,"ahead":%s,"behind":%s,"dirty":%s,"last_commit":%s,"cmux_workspace":%s,"task":%s}' \
+          "$(json_escape "$REPO")" "$(json_escape "$nn")" "$(json_escape "$(wt_path "$nn")")" "$(json_escape "$br")" "$(json_escape "$base")" \
+          "${ah/\?/null}" "${be/\?/null}" "$di" "$(json_escape "$last")" "$(json_escape "$(meta_get "$nn" cmux_workspace 2>/dev/null || true)")" "$(json_escape "$(meta_get "$nn" task 2>/dev/null || true)")"
+      else
+        printf '  %-28s %-26s %-16s %6s %6s %6s  %s%s\n' "$nn" "$br" "$base" "$ah" "$be" "$di" "$last" "${ws:+  [cmux]}"
+      fi
+    done <<<"$names"
+  done
+  [[ $json -eq 1 ]] && printf ']\n'
+  return 0
+}
+
+cmd_show() {
+  local name="" code=0 diff=0 json=0 repo=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --code) code=1;; --diff) diff=1;; --json) json=1;; -r|--repo) repo="$2"; shift;; -*) die "show: unknown option $1";; *) name="$1";; esac; shift
+  done
+  [[ -n "$name" ]] || die "show: worktree name required"
+  resolve_repo "$repo"; require_wt "$name"
+  IFS='|' read -r nn br base ah be di last ws <<<"$(wt_status_line "$name")"
+  if [[ $json -eq 1 ]]; then
+    printf '{"name":%s,"path":%s,"branch":%s,"base":%s,"ahead":%s,"behind":%s,"dirty":%s,"last_commit":%s,"task":%s}\n' \
+      "$(json_escape "$nn")" "$(json_escape "$P")" "$(json_escape "$br")" "$(json_escape "$base")" "${ah/\?/null}" "${be/\?/null}" "$di" "$(json_escape "$last")" "$(json_escape "$(meta_get "$name" task 2>/dev/null || true)")"
+  else
+    printf '%s\n  path:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
+      "$nn" "$P" "$br" "$ah" "$be" "$base" "$(meta_get "$name" task 2>/dev/null || echo -)" "$di" "$last"
+    printf '\n--- commits vs %s\n' "$base"; git -C "$P" log --oneline "$base..HEAD" 2>/dev/null | head -20
+    printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$P" diff --stat "$base...HEAD" 2>/dev/null | tail -15
+    printf '\n--- working tree\n'; git -C "$P" status --short 2>/dev/null | head -20
+  fi
+  if [[ $code -eq 1 ]]; then
+    have code || die "VS Code CLI 'code' not found"
+    code --new-window "$P" >/dev/null 2>&1 && printf '\nopened in VS Code: %s\n' "$P"
+  fi
+  if [[ $diff -eq 1 ]]; then
+    cmux_ok || die "cmux is not running"
+    CMUX_QUIET=1 "$(cmux_bin)" diff --branch --repo "$P" --base "$base" --layout split --title "$name vs $base" --focus true >/dev/null && printf 'opened cmux diff pane\n'
+  fi
+}
+
+cmd_attach() {
+  local name="" agent="$DEFAULT_AGENT" prompt="" focus=false repo=""
+  while [[ $# -gt 0 ]]; do case "$1" in -a|--agent) agent="$2"; shift;; -p|--prompt) prompt="$2"; shift;; --focus) focus=true;; -r|--repo) repo="$2"; shift;; -*) die "attach: unknown option $1";; *) name="$1";; esac; shift; done
+  [[ -n "$name" ]] || die "attach: worktree name required"
+  resolve_repo "$repo"; require_wt "$name"
+  [[ -n "$prompt" ]] || prompt=$(meta_get "$name" task 2>/dev/null || true)
+  open_workspace "$name" "$agent" "$prompt" "$focus"
+}
+
+cmd_sync() {
+  local name="" merge=0 repo=""
+  while [[ $# -gt 0 ]]; do case "$1" in --merge) merge=1;; -r|--repo) repo="$2"; shift;; -*) die "sync: unknown option $1";; *) name="$1";; esac; shift; done
+  [[ -n "$name" ]] || die "sync: worktree name required"
+  resolve_repo "$repo"; require_wt "$name"
+  local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  [[ "$base" == origin/* ]] && git -C "$REPO" fetch -q origin "${base#origin/}"
+  [[ -z "$(git -C "$P" status --porcelain)" ]] || die "worktree has uncommitted changes; commit or stash first"
+  if [[ $merge -eq 1 ]]; then git -C "$P" merge --no-edit "$base"; else git -C "$P" rebase "$base"; fi
+  printf 'synced %s onto %s\n' "$name" "$base"
+}
+
+cmd_pr() {
+  local name="" draft=() repo=""
+  while [[ $# -gt 0 ]]; do case "$1" in --draft) draft=(--draft);; -r|--repo) repo="$2"; shift;; -*) die "pr: unknown option $1";; *) name="$1";; esac; shift; done
+  [[ -n "$name" ]] || die "pr: worktree name required"
+  resolve_repo "$repo"; require_wt "$name"; have gh || die "gh not installed"
+  [[ -z "$(git -C "$P" status --porcelain)" ]] || die "worktree has uncommitted changes; commit first"
+  git -C "$P" push -u origin "$B"
+  local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  ( cd "$P" && gh pr create --fill --base "${base#origin/}" "${draft[@]}" )
+}
+
+cmd_rm() {
+  local name="" force=0 keep=0 repo=""
+  while [[ $# -gt 0 ]]; do case "$1" in --force|-f) force=1;; --keep-branch) keep=1;; -r|--repo) repo="$2"; shift;; -*) die "rm: unknown option $1";; *) name="$1";; esac; shift; done
+  [[ -n "$name" ]] || die "rm: worktree name required"
+  resolve_repo "$repo"; require_wt "$name"
+  [[ "$PWD" == "$P" || "$PWD" == "$P/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
+  local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  local dirty ahead pushed=1 merged=0
+  dirty=$(git -C "$P" status --porcelain | wc -l | tr -d ' ')
+  ahead=$(git -C "$P" rev-list --count "$base..HEAD" 2>/dev/null || echo 0)
+  git -C "$P" merge-base --is-ancestor HEAD "$base" 2>/dev/null && merged=1
+  if git -C "$P" rev-parse -q --verify '@{u}' >/dev/null 2>&1; then
+    [[ -z "$(git -C "$P" log '@{u}..HEAD' --oneline 2>/dev/null)" ]] || pushed=0
+  else
+    pushed=0
+  fi
+  if [[ $force -eq 0 ]]; then
+    local reasons=()
+    [[ "$dirty" -gt 0 ]] && reasons+=("$dirty uncommitted change(s)")
+    [[ "$ahead" -gt 0 && $merged -eq 0 && $pushed -eq 0 ]] && reasons+=("$ahead commit(s) not merged into $base and not pushed")
+    if [[ ${#reasons[@]} -gt 0 ]]; then
+      printf 'wt: refusing to remove %s: %s\n' "$name" "$(IFS=';'; echo "${reasons[*]}")" >&2
+      printf 'wt: inspect with `wt show %s`; push/merge first, or pass --force to discard.\n' "$name" >&2
+      exit 3
+    fi
+  fi
+  close_workspace "$name"
+  git -C "$REPO" worktree remove ${force:+--force} "$P" 2>/dev/null || git -C "$REPO" worktree remove --force "$P"
+  if [[ $keep -eq 0 ]]; then
+    git -C "$REPO" branch -D "$B" >/dev/null 2>&1 || true
+  fi
+  rm -f "$(wt_meta "$name")"
+  git -C "$REPO" worktree prune
+  printf 'removed %s%s\n' "$name" "$([[ $keep -eq 1 ]] && echo " (branch $B kept)")"
+}
+
+cmd_prune() {
+  local dry=0 repo=""
+  while [[ $# -gt 0 ]]; do case "$1" in --dry-run|-n) dry=1;; -r|--repo) repo="$2"; shift;; *) die "prune: unknown option $1";; esac; shift; done
+  resolve_repo "$repo"
+  git -C "$REPO" worktree prune
+  local n p base dirty
+  while IFS= read -r n; do
+    [[ -n "$n" ]] || continue
+    p=$(wt_path "$n"); base=$(meta_get "$n" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+    dirty=$(git -C "$p" status --porcelain | wc -l | tr -d ' ')
+    if [[ "$dirty" -eq 0 ]] && git -C "$p" merge-base --is-ancestor HEAD "$base" 2>/dev/null; then
+      if [[ $dry -eq 1 ]]; then printf 'would remove %s (merged into %s, clean)\n' "$n" "$base"
+      else ( cd "$REPO" && cmd_rm "$n" ); fi
+    else
+      printf 'keep %s (%s)\n' "$n" "$([[ "$dirty" -gt 0 ]] && echo "dirty" || echo "not merged into $base")"
+    fi
+  done <<<"$(list_names)"
+}
+
+cmd_path()    { resolve_repo "${2:-}"; require_wt "$1"; printf '%s\n' "$P"; }
+cmd_current() {
+  local root common
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not in a git repo"
+  common=$(main_root_of "$PWD") || die "not in a git repo"
+  if [[ "$root" == "$common" ]]; then printf 'main checkout: %s (%s)\n' "$root" "$(git branch --show-current)"
+  else printf 'worktree: %s\n  branch: %s\n  main:   %s\n' "$root" "$(git branch --show-current)" "$common"; fi
+}
+
+# ---------------------------------------------------------------- dispatch
+sub="${1:-help}"; shift || true
+case "$sub" in
+  new)      cmd_new "$@" ;;
+  list|ls)  cmd_list "$@" ;;
+  show)     cmd_show "$@" ;;
+  open)     [[ $# -gt 0 ]] || die "open: worktree name required"; cmd_show "$1" --code "${@:2}" ;;
+  diff)     [[ $# -gt 0 ]] || die "diff: worktree name required"; cmd_show "$1" --diff "${@:2}" ;;
+  attach)   cmd_attach "$@" ;;
+  sync)     cmd_sync "$@" ;;
+  pr)       cmd_pr "$@" ;;
+  rm|remove) cmd_rm "$@" ;;
+  prune)    cmd_prune "$@" ;;
+  path)     cmd_path "$@" ;;
+  current|cur) cmd_current ;;
+  help|-h|--help) sed -n '2,32p' "$0" ;;
+  *) die "unknown command '$sub' (wt help)" ;;
+esac
