@@ -77,7 +77,7 @@
       "type": "command"
     },
     "wt-task": {
-      "shortcut": "cmd+ctrl+t",
+      "shortcut": "cmd+ctrl+k",
       "title": "New task or shell (local or VM)",
       "type": "workspace",
       "workspace": {
