@@ -18,8 +18,8 @@ case $t in
       "$CODE" --folder-uri "vscode-remote://ssh-remote+$h$p/" >/dev/null 2>&1 & quiet; fi ;;
   wt-attach) # body: {"host":…,"repo":…,"task":…}
     h=$(field host || true); r=$(field repo || true); n=$(field task || true)
-    if valid_host "$h" && known_host "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
-      id=$(printf '%s' "${r##*/}" | tr -c 'A-Za-z0-9-' '-'); printf -v q '%q' "$r"   # mirrors repo_id / wt_session in wt
+    if valid_host "$h" && known_host "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
+      id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'); printf -v q '%q' "$r"   # mirrors valid_name / repo_id / wt_session in wt
       "$CMUX" mosh-tmux "$h" --session "wt-$id-$n" --name "$id:$n @$h" --no-focus \
         --command "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1 & quiet; fi ;;
 esac
