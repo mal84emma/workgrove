@@ -23,7 +23,7 @@
       "type": "command"
     },
     "wt-driver": {
-      "shortcut": "cmd+ctrl+d",
+      "shortcut": "cmd+ctrl+j",
       "title": "Open the driver session",
       "type": "workspace",
       "workspace": {
