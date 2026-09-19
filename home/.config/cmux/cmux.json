@@ -23,7 +23,7 @@
       "type": "command"
     },
     "wt-driver": {
-      "shortcut": "cmd+ctrl+j",
+      "shortcut": "cmd+ctrl+alt+a",
       "title": "Open the driver session",
       "type": "workspace",
       "workspace": {
@@ -70,14 +70,14 @@
         "parallel",
         "wt"
       ],
-      "shortcut": "cmd+ctrl+n",
+      "shortcut": "cmd+ctrl+alt+n",
       "subtitle": "wt new: worktree + cmux workspace running Claude; use the TextBox to pass a prompt",
       "target": "currentTerminal",
       "title": "New task worktree (Claude)",
       "type": "command"
     },
     "wt-task": {
-      "shortcut": "cmd+ctrl+k",
+      "shortcut": "cmd+ctrl+alt+t",
       "title": "New task or shell (local or VM)",
       "type": "workspace",
       "workspace": {
