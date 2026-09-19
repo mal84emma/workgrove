@@ -39,7 +39,7 @@
             ]
           }
         },
-        "name": "driver launcher @local"
+        "name": "driver launcher"
       }
     },
     "wt-list": {
@@ -93,7 +93,7 @@
             ]
           }
         },
-        "name": "task picker @local"
+        "name": "task picker"
       }
     }
   },

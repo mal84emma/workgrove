@@ -5,7 +5,7 @@ description: Create an isolated git worktree for a task, optionally with its own
 
 # Create a task worktree
 
-Tool: `wt new` (see `wt help`). One task = one worktree at `<repo>/.worktrees/<name>` on branch `wt/<name>`, one cmux row `<repo>:<name> @local|@<host>`.
+Tool: `wt new` (see `wt help`). One task = one worktree at `<repo>/.worktrees/<name>` on branch `wt/<name>`, one cmux row titled `<repo>:<name>` whose second line reads `@local` or `@<host>`.
 
 ## Command
 
@@ -29,7 +29,7 @@ wt new <name> -r <repo-name-or-path> -p "<prompt>"    # target another repo unde
 
 ## On a VM
 
-On a VM, `wt new` prepares the worktree and asks the Mac to open its row; report the row `<repo>:<name> @<host>` and the printed recovery command. For several tasks, or a task on a VM from the Mac, see `task-driver`.
+On a VM, `wt new` prepares the worktree and asks the Mac to open its row; report the row `<repo>:<name>`, whose second line reads `@<host>`, and the printed recovery command. For several tasks, or a task on a VM from the Mac, see `task-driver`.
 
 ## Per-repo setup (once, on request)
 

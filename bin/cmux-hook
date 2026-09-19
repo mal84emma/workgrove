@@ -11,6 +11,18 @@ CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmu
 valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 safe_path() { [[ $1 == /* && $1 != *$'\n'* && $1 != *//* && $1 != */ && $1 != *'/../'* && $1 != */.. && $1 != *[\'\"\`\$\\\;]* ]]; }
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
+row_by_session() { # the row cmux made for a VM tmux session; mirrors cmux_row_field session … in wt
+  "$CMUX" workspace list --json 2>/dev/null \
+    | jq -er --arg s "$1" 'first((.workspaces // .)[] | select(.remote.terminal_tmux_session == $s) | .id) // empty' 2>/dev/null; }
+attach_row() { # attach_row <host> <session> <title> <command> — create the row, then write its description (= tag_row in wt)
+  local out ref
+  out=$("$CMUX" mosh-tmux "$1" --session "$2" --name "$3" --no-focus --command "$4" 2>&1) || return 0
+  ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1)
+  for _ in 1 2 3; do                       # no workspace:N in the output: the row list lags ~1s behind create
+    [[ -n $ref ]] && break
+    sleep 1; ref=$(row_by_session "$2")
+  done
+  [[ -n $ref ]] && "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1"; }
 case $t in
   wt-open)   # body: {"host":…,"path":…}
     h=$(field host || true); p=$(field path || true)
@@ -19,8 +31,7 @@ case $t in
   wt-attach) # body: {"host":…,"repo":…,"task":…}
     h=$(field host || true); r=$(field repo || true); n=$(field task || true)
     if valid_host "$h" && known_host "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
-      id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'); printf -v q '%q' "$r"   # mirrors valid_name / repo_id / wt_session in wt
-      "$CMUX" mosh-tmux "$h" --session "wt-$id-$n" --name "$id:$n @$h" --no-focus \
-        --command "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1 & quiet; fi ;;
+      id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'); printf -v q '%q' "$r"   # mirrors valid_name / repo_id / row_title / wt_session in wt
+      attach_row "$h" "wt-$id-$n" "$id:$n" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1 & quiet; fi ;;
 esac
 exit 0

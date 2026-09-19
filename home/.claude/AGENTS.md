@@ -20,12 +20,12 @@ Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish
 
 - Worktrees: `<repo>/.worktrees/<name>` (git-ignored globally). Branches: `wt/<name>`. Base: `origin/main` unless `--head` or `-b <ref>` was given.
 - Names are short kebab-case slugs describing the task; no `.` in a name.
-- Each task has a cmux row `<repo>:<name> @local|@<host>` and, on a VM, a tmux session `wt-<repo>-<name>`; `wt show <name>` reports them.
+- Each task has a cmux row titled `<repo>:<name>`, whose second line reads `@local` or `@<host>`, and, on a VM, a tmux session `wt-<repo>-<name>`; `wt show <name>` reports them.
 - Per-repo hooks: `.worktreeinclude` (ignored files to copy in) and `.wt-setup` (runs in each new worktree).
 
 ## Local and remote
 
-`wt` owns the difference. The same subcommands run locally, run inside a VM session, or are sent to a VM from the Mac as `wt -H <vm> <sub> …` (`show`, `rm`, `path`, `open`, `attach` need `-r <repo>`). Rows end `@local` or `@<host>`, so the sidebar always says where a session runs.
+`wt` owns the difference. The same subcommands run locally, run inside a VM session, or are sent to a VM from the Mac as `wt -H <vm> <sub> …` (`show`, `rm`, `path`, `open`, `attach` need `-r <repo>`). Every row's second line reads `@local` or `@<host>`, so the sidebar always says where a session runs.
 
 Never run interactive `wt attach`, `wt task` or `wt driver` from a task session; they belong to the user's own session on the Mac.
 

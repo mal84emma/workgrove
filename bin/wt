@@ -22,7 +22,7 @@
 #   wt repos                                                  basenames of the git repos under $WT_REPOS_DIR
 #   wt task [--where local|<host>] [-a claude|codex|repo-shell|vm-shell] [-r REPO] [-p TEXT]
 #                                                             pick where/kind/repo/brief, then start it (Mac, needs fzf)
-#   wt driver                                                 open (or select) the "driver @local" row
+#   wt driver                                                 open (or select) the driver row (@local)
 #   wt update [--refresh-config]                              git pull this repo and re-run install.sh
 #   wt path <name> [-r PATH] | wt current | wt help
 #
@@ -33,7 +33,8 @@
 # Where it runs: on a Mac wt drives cmux directly; on a VM (see is_remote) it only prepares worktrees and
 # asks the Mac for rows and VS Code windows through `cmux notify` over the relay socket.
 #
-# Identity: cmux row "<repo>:<name> @local|@<host>", tmux session "wt-<repo>-<name>", <repo> = repo basename
+# Identity: cmux row titled "<repo>:<name>" with "@local"/"@<host>" as its description (the sidebar's second
+# line), tmux session "wt-<repo>-<name>", <repo> = repo basename
 # with anything outside [A-Za-z0-9-] replaced by '-'. Task names: ^[a-z0-9][a-z0-9_-]{0,62}$ (no '.').
 #
 # Task files (never committed): <repo>/.git/wt/<name>.json    base, created, agent, title, session, includes
@@ -149,10 +150,12 @@ wt_prompt() { printf '%s/.git/wt/%s.prompt' "$REPO" "$1"; }
 wt_started(){ printf '%s/.git/wt/%s.started' "$REPO" "$1"; }
 wt_branch() { printf 'wt/%s' "$1"; }
 
-# Identity — bin/cmux-hook mirrors these formats; keep them byte-compatible.
+# Identity — bin/cmux-hook mirrors these formats and tags the rows it relays the same way; keep
+# them byte-compatible. A row's title says which task, its description (row_tag) which machine.
 repo_id()    { printf '%s' "${1##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'; }
 where_am_i() { if is_remote; then printf '%s' "${WT_HOST:-remote}"; else printf 'local'; fi; }
-row_title()  { printf '%s:%s @%s' "$(repo_id "$2")" "$1" "${3:-$(where_am_i)}"; }   # row_title <name> <repo> [host]
+row_title()  { printf '%s:%s' "$(repo_id "$2")" "$1"; }                     # row_title <name> <repo>
+row_tag()    { printf '@%s' "${1:-$(where_am_i)}"; }                        # row_tag [host] — the row description
 wt_session() { printf 'wt-%s-%s' "$(repo_id "$2")" "$1"; }                  # wt_session <name> <repo>
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 valid_agent() { case "$1" in claude|codex|none) ;; *) die "unknown agent '$1' (use claude, codex or none)" ;; esac; }
@@ -200,14 +203,15 @@ require_wt() { # require_wt <name>  -> sets P (path), B (branch)
   git -C "$REPO" worktree list --porcelain | grep -qx "worktree $P" || die "$P exists but is not a registered worktree (try: git -C $REPO worktree prune)"
 }
 
-cmux_row_field() { # cmux_row_field title|session <value> <field> -> that field of the matching local row
-  local c; c=$(cmux_bin) || return 0
+cmux_row_field() { # cmux_row_field title|session <value> <field> -> that field of the matching row
+  local c; c=$(cmux_bin) || return 0     # a local and a VM row share a title, so `title` matches local rows only
   CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null | python3 -c '
 import json,sys
 how,val,k=sys.argv[1],sys.argv[2],sys.argv[3]
 ws=json.load(sys.stdin); ws=ws.get("workspaces",ws) if isinstance(ws,dict) else ws
 for w in ws:
-    got=w.get("title") if how=="title" else (w.get("remote") or {}).get("terminal_tmux_session")
+    r=w.get("remote") or {}
+    got=(None if r.get("enabled") else w.get("title")) if how=="title" else r.get("terminal_tmux_session")
     if got==val: print(w.get(k) or ""); break' "$1" "$2" "$3" 2>/dev/null || true
 }
 
@@ -231,7 +235,7 @@ open_workspace() { # open_workspace <name> <focus>
   cmux_ok || { warn "cmux is not running; skipped workspace creation (cd $(wt_path "$n"))"; return 0; }
   c=$(cmux_bin)
   title=$(meta_get "$n" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$n" "$REPO")
-  out=$(CMUX_QUIET=1 "$c" workspace create --name "$title" --cwd "$(wt_path "$n")" --focus "$focus" \
+  out=$(CMUX_QUIET=1 "$c" workspace create --name "$title" --description "$(row_tag)" --cwd "$(wt_path "$n")" --focus "$focus" \
         --command "$(shell_join "$HOME/.local/bin/wt" run "$n" -r "$REPO")" 2>&1) || die "cmux workspace create failed: $out"
   local ref; ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1 || true)
   meta_set "$n" "title=$title"
@@ -458,7 +462,7 @@ cmd_show() {
   else
     local title; title=$(meta_get "$name" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$name" "$REPO")
     printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
-      "$nn" "$P" "$REPO" "$br" "$ah" "$be" "$base" "$title" "$(prompt_line "$name")" "$di" "$last"
+      "$nn" "$P" "$REPO" "$br" "$ah" "$be" "$base" "$title $(row_tag)" "$(prompt_line "$name")" "$di" "$last"
     if is_remote; then printf '  session: %s\n' "$(session_state "$name")"; fi   # `wt -H … attach` reads this line
     printf '\n--- commits vs %s\n' "$base"; git -C "$P" log --oneline "$base..HEAD" 2>/dev/null | head -20
     printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$P" diff --stat "$base...HEAD" 2>/dev/null | tail -15
@@ -602,16 +606,16 @@ cmd_driver() { # the session that spawns tasks; its cwd is $REPOS_DIR, so `wt ne
   mac_only driver
   cmux_ok || die "cmux is not running; start cmux, then: wt driver"
   local c id out; c=$(cmux_bin)
-  id=$(cmux_row_field title "driver @local" id)
+  id=$(cmux_row_field title driver id)
   if [[ -n "$id" ]]; then
     CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
-    printf 'driver @local (selected)\n'
+    printf 'driver %s (selected)\n' "$(row_tag)"
     return 0
   fi
   need_repos_dir
-  out=$(CMUX_QUIET=1 "$c" workspace create --name "driver @local" --cwd "$REPOS_DIR" --command claude --focus true 2>&1) \
+  out=$(CMUX_QUIET=1 "$c" workspace create --name driver --description "$(row_tag)" --cwd "$REPOS_DIR" --command claude --focus true 2>&1) \
     || die "cmux workspace create failed: $out"
-  printf 'driver @local (created)\n'
+  printf 'driver %s (created)\n' "$(row_tag)"
 }
 
 cmd_update() { # pull this repo and re-run its installer
@@ -637,12 +641,24 @@ remote_wt() { local host="$1"; shift; remote_sh "$host" "exec \"\$HOME/.local/bi
 # shellcheck disable=SC2016   # $HOME must reach the VM unexpanded
 remote_run_cmd() { printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"; }
 
+tag_row() { # tag_row <workspace ref or ""> <session> <tag> — write the row's description
+  local ref="$1"
+  for _ in 1 2 3; do                    # no workspace:N in the output: the row list lags ~1s behind create
+    [[ -n "$ref" ]] && break
+    sleep 1; ref=$(cmux_row_field session "$2" id)
+  done
+  [[ -n "$ref" ]] || die "cmux reported no row for session $2; find it with: cmux workspace list --json"
+  CMUX_QUIET=1 "$(cmux_bin)" workspace-action --workspace "$ref" --action set-description --description "$3" >/dev/null 2>&1 \
+    || die "cmux workspace-action failed; run: cmux workspace-action --workspace $ref --action set-description --description $3"
+}
+
 remote_row() { # remote_row <host> <session> <title> [cmux flags…] — the local cmux row for a VM tmux session
   local host="$1" session="$2" title="$3" c out; shift 3
   cmux_ok || die "cmux is not running; start cmux, then re-run this command"
   c=$(cmux_bin)
   out=$(CMUX_QUIET=1 "$c" mosh-tmux "$host" --session "$session" --name "$title" "$@" 2>&1) || die "cmux mosh-tmux failed: $out"
-  printf 'row: %s\n' "$title"
+  tag_row "$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1 || true)" "$session" "$(row_tag "$host")"
+  printf 'row: %s %s\n' "$title" "$(row_tag "$host")"
 }
 
 need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer the repo from
@@ -662,7 +678,7 @@ host_new() { # create the worktree on the VM, then the cmux row here
   session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
   [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session (try: wt -H $host list)"
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$repo")" ]] || die "unexpected output from $host"
-  remote_row "$host" "$session" "$(row_title "$name" "$repo" "$host")" --no-focus --command "$(remote_run_cmd "$name" "$repo")"
+  remote_row "$host" "$session" "$(row_title "$name" "$repo")" --no-focus --command "$(remote_run_cmd "$name" "$repo")"
 }
 
 host_attach() { # re-attach to the VM's session; starting an agent again is never implicit
@@ -684,7 +700,7 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   [[ -n "$session" && -n "$path" ]] || die "$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))"
   state="${session#*(}"; state="${state%)}"; session="${session%% *}"
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$path")" ]] || die "unexpected output from $host"
-  title=$(row_title "$name" "$path" "$host")
+  title=$(row_title "$name" "$path")
   if [[ $restart -eq 1 ]]; then
     remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
     close_row "$(cmux_row_field session "$session" id)"
@@ -696,7 +712,7 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   id=$(cmux_row_field session "$session" id)
   if [[ -n "$id" ]]; then
     CMUX_QUIET=1 "$(cmux_bin)" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
-    printf 'row: %s (selected)\n' "$title"
+    printf 'row: %s %s (selected)\n' "$title" "$(row_tag "$host")"
   else
     remote_row "$host" "$session" "$title"
   fi
@@ -809,14 +825,14 @@ cmd_task() {
       if [[ "$where" == local ]]; then
         resolve_repo "$repo"; id=$(repo_id "$REPO")
         cmux_ok || die "cmux is not running; start cmux, then: wt task"
-        out=$(CMUX_QUIET=1 "$(cmux_bin)" workspace create --name "$id shell @local" --cwd "$REPO" 2>&1) \
+        out=$(CMUX_QUIET=1 "$(cmux_bin)" workspace create --name "$id shell" --description "$(row_tag)" --cwd "$REPO" 2>&1) \
           || die "cmux workspace create failed: $out"
-        printf 'row: %s shell @local\n' "$id"
+        printf 'row: %s shell %s\n' "$id" "$(row_tag)"
       else
         id=$(repo_id "$repo")   # the VM's shell expands its own repos dir
-        remote_row "$where" "shell-$id" "$id shell @$where" --command "cd \"\${WT_REPOS_DIR:-\$HOME/Documents/Repositories}/$repo\""
+        remote_row "$where" "shell-$id" "$id shell" --command "cd \"\${WT_REPOS_DIR:-\$HOME/Documents/Repositories}/$repo\""
       fi ;;
-    vm-shell) remote_row "$where" main "shell @$where" ;;
+    vm-shell) remote_row "$where" main shell ;;
   esac
 }
 
