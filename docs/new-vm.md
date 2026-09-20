@@ -45,7 +45,7 @@ Remote-SSH connection the setup asks you to make.
 curl -fsSL https://claude.ai/install.sh | bash        # -> ~/.local/bin/claude
 curl -fsSL https://chatgpt.com/codex/install.sh | sh  # -> ~/.local/bin/codex (static musl build)
 gh auth login --web --git-protocol https              # device code, opened in the Mac's browser
-claude                                                # /login -> paste the code from the Mac browser, then exit
+claude auth login                                     # browser login on the Mac; claude auth status must say loggedIn true
 codex login                                           # browser login; the callback comes back through VS Code
 codex                                                 # /hooks -> trust the two portable hooks, then exit
 gh auth status && claude --version && codex login status && claude doctor
