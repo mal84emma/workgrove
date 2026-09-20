@@ -27,6 +27,8 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/too
 git config --file ~/.gitconfig.local user.name  'GIT_NAME'
 git config --file ~/.gitconfig.local user.email 'GIT_EMAIL'
 mkdir -p ~/repos && [ -d ~/repos/workstation ] || git clone https://github.com/mal84emma/workstation ~/repos/workstation
+# optional: repos in more than one folder (searched in order; the file is never versioned)
+# echo 'export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"' >> ~/.zshenv.local
 bash ~/repos/workstation/install.sh          # asks once for this VM's alias, no default
 sudo chsh -s "$(command -v zsh)" "$USER" && exec zsh -l
 ```

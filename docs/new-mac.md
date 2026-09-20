@@ -26,6 +26,8 @@ git config --file ~/.gitconfig.local user.name  'GIT_NAME'
 git config --file ~/.gitconfig.local user.email 'GIT_EMAIL'
 git config --file ~/.gitconfig.local core.editor 'code --wait'
 git config --file ~/.gitconfig.local credential.https://dev.azure.com.helper manager   # drop if you do not use Azure DevOps
+# optional: repos in more than one folder (searched in order; the file is never versioned)
+# echo 'export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"' >> ~/.zshenv.local
 bash ~/repos/workstation/install.sh && exec zsh -l
 ```
 
@@ -61,6 +63,5 @@ next to the portable ones. It is a Mac-only step, and it has to be repeated afte
    `running`, run `cmux hooks codex install --yes` again and try another turn.
 4. Write `~/.ssh/config` from [ssh-config.example](ssh-config.example), one block per VM. This file is yours
    and is never versioned.
-5. Clone a repo into `~/Documents/Repositories`. To keep repos in more than one folder, set `WT_REPOS_DIR`
-   to a `:`-separated list of them in `~/.zshenv.local`. Then start a task: type a brief into the cmux
-   TextBox and press ⏎. You should get a row titled `<repo>:<name>` with `@local` on its second line.
+5. Clone a repo into `~/Documents/Repositories` and start a task: type a brief into the cmux TextBox and
+   press ⏎. You should get a row titled `<repo>:<name>` with `@local` on its second line.

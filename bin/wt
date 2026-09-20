@@ -193,7 +193,8 @@ need_repos_dir() { [[ -n "$(repos_entries)" ]] || die "repos dir not found: $REP
 repo_dirs() { # every git repo on the search path: entry order, sorted within an entry, unreadable folders skipped
   local d
   while IFS= read -r d; do
-    [[ -n "$d" && -r "$d" ]] || continue
+    [[ -n "$d" ]] || continue
+    [[ -r "$d" ]] || { warn "skipping unreadable folder in WT_REPOS_DIR: $d"; continue; }
     { find "$d" -mindepth 1 -maxdepth 1 -type d -exec test -d '{}/.git' ';' -print 2>/dev/null || true; } | sort
   done <<<"$(repos_entries)"
   return 0
@@ -632,6 +633,7 @@ cmd_path() {
   resolve_repo "$repo"; require_wt "$name"; printf '%s\n' "$P"
 }
 cmd_repos()   { # no arg: "<name><tab><path>" per repo, the picker's two columns. A name or path: just its path,
+  case "${1:-}" in -h|--help) usage; exit 0 ;; -*) die "repos: unknown option $1 (wt repos [<name>])" ;; esac
   [[ $# -le 1 ]] || die "repos: one name at most (wt repos [<name>])"      # the one resolution rule, also over ssh
   if [[ $# -eq 1 ]]; then lookup_repo "$1"; printf '%s\n' "$REPO"; return 0; fi
   need_repos_dir; repo_dirs | awk -F/ '{printf "%s\t%s\n", $NF, $0}'
@@ -812,6 +814,21 @@ task_exit() { # the launcher row closes on exit, so let a message be read first
 ssh_hosts() { # non-wildcard Host aliases, read as bin/cmux-hook reads them
   { awk '$1=="Host"{for(i=2;i<=NF;i++){if($i ~ /^#/)break; if($i !~ /[*?]/) print $i}}' "$HOME/.ssh/config" 2>/dev/null || true; } | sort -u
 }
+repo_menu() { # picker rows from cmd_repos' "<name><tab><path>": name padded to the widest, then a grey location
+  awk -F'\t' -v home="$HOME" -v grey=$'\033[90m' -v off=$'\033[0m' '
+    function loc(p,   par, m, a) {   # the local home as "~", then the three folders above the repo, never the repo
+      if (home != "" && index(p, home "/") == 1) p = "~" substr(p, length(home) + 1)
+      par = p; sub(/\/[^\/]*$/, "", par)
+      if (par == "") return "/"
+      m = split(par, a, "/")
+      if (m <= 3) return par
+      return a[m-2] "/" a[m-1] "/" a[m]
+    }
+    { rn[NR] = $1; rp[NR] = $2; if (length($1) > w) w = length($1) }
+    END { fmt = "%s\t%s\t%-" (w + 2) "s%s%s%s\n"
+          for (j = 1; j <= NR; j++) printf fmt, rn[j], rp[j], rn[j], grey, loc(rp[j]), off }
+  '
+}
 pick() { # pick <prompt> [fzf args…] — a line of stdin, or whatever was typed (fzf --print-query: query, selection)
   local out rc=0 q s p="$1"; shift
   out=$(fzf --print-query --prompt "$p> " --height 40% --reverse "$@") || rc=$?
@@ -857,13 +874,16 @@ cmd_task() {
   if [[ "$kind" != vm-shell && -z "$repo" ]]; then
     local list sel                               # "<name><tab><path>": two folders can hold the same basename,
     if [[ "$where" == local ]]; then             # so the path column, not the name, is what starts the task
-      list=$(cmd_repos) || die "task: no repos to pick from (see: wt repos)"
+      list=$(cmd_repos) || exit 1                # cmd_repos has already said what is wrong; do not repeat it
+      [[ -n "$list" ]] || die "task: no repos in WT_REPOS_DIR ($REPOS_PATH); clone one, or pass -r <path>"
     else
-      list=$(remote_wt "$where" repos) || die "task: $where listed no repos (try: wt -H $where repos)"
+      list=$(remote_wt "$where" repos) || exit 1
+      [[ -n "$list" ]] || die "task: no repos on $where (see: wt -H $where repos)"
     fi
-    sel=$(printf '%s\n' "$list" | pick repo --delimiter $'\t') || die "task: cancelled"
+    sel=$(printf '%s\n' "$list" | repo_menu | pick repo --ansi --delimiter $'\t' --with-nth 3 --nth 1,3) \
+      || die "task: cancelled"
     [[ -n "$sel" ]] || die "task: no repo picked"
-    repo="${sel##*$'\t'}"                        # a typed query has no tab and is taken as given
+    sel="${sel%$'\t'*}"; repo="${sel##*$'\t'}"   # the path column; a typed query has no tab and is taken as given
   fi
   if [[ "$kind" == claude || "$kind" == codex ]]; then       # the name is never known from the options
     read -r -p 'name (blank = from brief)> ' name || true

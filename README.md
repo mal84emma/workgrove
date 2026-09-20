@@ -195,6 +195,7 @@ always backed up. Per-machine files never enter the loop.
 | Update cmux, or repair local Codex state tracking | Back up the live `config.toml` and `hooks.json`, run `cmux hooks codex install --yes`, check that one turn returns to `idle` | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit | `wt -H <vm> update` |
 | Change `cmux.json` | Live once cmux reloads or relaunches; commit | n/a |
+| Repos in another folder | add the folder to `WT_REPOS_DIR` in `~/.zshenv.local` | same, on the VM; never versioned |
 | New tool | `Brewfile` plus `brew bundle`; commit | Add the line to [docs/new-vm.md](docs/new-vm.md) and run it by hand on existing VMs |
 | Promote a machine-local setting | Diff the live file against its `.base`, port only the portable keys, commit | Never commit live files or trust state |
 
