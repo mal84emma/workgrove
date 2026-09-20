@@ -1,6 +1,6 @@
 # Working conventions for coding agents
 
-These apply in every repository in any folder listed in `$WT_REPOS_DIR` (`~/Documents/Repositories` by default) and in every terminal inside cmux, on the Mac and on every VM.
+These apply in every repository in any folder listed in `$WT_REPOS_DIR` (`~/Documents/Repositories` on the Mac, the home folder on a VM, unless `~/.zshenv.local` says otherwise) and in every terminal inside cmux, on the Mac and on every VM.
 
 ## Tasks run in worktrees
 

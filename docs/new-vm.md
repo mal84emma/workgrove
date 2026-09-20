@@ -28,8 +28,8 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/too
 git config --file ~/.gitconfig.local user.name  'GIT_NAME'
 git config --file ~/.gitconfig.local user.email 'GIT_EMAIL'
 mkdir -p ~/repos && [ -d ~/repos/workstation ] || git clone https://github.com/mal84emma/workstation ~/repos/workstation
-# optional: repos in more than one folder (searched in order; the file is never versioned)
-# echo 'export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"' >> ~/.zshenv.local
+# install.sh writes export WT_REPOS_DIR="$HOME" to ~/.zshenv.local, so repos cloned to ~/<repo> are found.
+# For other folders, or several, edit that line: colon-separated, searched in order, e.g. "$HOME/work:$HOME"
 bash ~/repos/workstation/install.sh          # asks once for this VM's alias, no default
 sudo chsh -s "$(command -v zsh)" "$USER" && exec zsh -l
 ```
@@ -49,7 +49,7 @@ claude                                                # /login -> paste the code
 codex login                                           # browser login; the callback comes back through VS Code
 codex                                                 # /hooks -> trust the two portable hooks, then exit
 gh auth status && claude --version && codex login status && claude doctor
-cd ~/Documents/Repositories && gh repo clone OWNER/REPO
+gh repo clone OWNER/REPO ~/REPO
 ```
 
 ```bash
@@ -72,10 +72,13 @@ Check the VM answers:
 ```bash
 ssh <vm> '~/.local/bin/wt help'
 ssh <vm> 'zsh -c "echo \$WT_HOST"'
+ssh <vm> '~/.local/bin/wt repos'
 ```
 
 The second must print the alias you typed during `install.sh`. If it is empty, `wt` on the VM cannot ask the
-Mac for rows; fix `~/.zshenv.local` on the VM.
+Mac for rows; fix `~/.zshenv.local` on the VM. The third lists every git repo directly under the VM's home
+folder, one `name<TAB>path` per line, with hidden folders such as `~/.oh-my-zsh` excluded; an empty result
+only means no repo has been cloned there yet.
 
 ## Notes
 

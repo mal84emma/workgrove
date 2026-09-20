@@ -13,8 +13,9 @@
 #   2. ~/.claude/settings.json, ~/.codex/config.toml and ~/.codex/hooks.json are machine-local
 #      COPIES of the versioned .base files, because the apps write local state into them. A normal
 #      run keeps an existing copy ("kept …"); only --refresh-config stashes it and rewrites it.
-#   3. Everything else is never touched: the hand-written overrides (~/.gitconfig.local,
-#      ~/.zshrc.local, ~/.zshenv.local) and the real directories the apps write into.
+#   3. Everything else is never rewritten: the hand-written overrides (~/.gitconfig.local, ~/.zshrc.local
+#      and ~/.zshenv.local, which on a VM only gains a WT_HOST and a WT_REPOS_DIR line when it has none)
+#      and the real directories the apps write into.
 #
 # Exits 2 on a usage error, 1 if oh-my-zsh, the VM name (Linux) or a git identity is missing.
 set -euo pipefail
@@ -92,8 +93,10 @@ require_oh_my_zsh() {
 
 # make_dirs: the directories the apps write into stay real directories — never link them.
 make_dirs() {
-  mkdir -p "$HOME/.local/bin" "$HOME/.claude/skills" "$HOME/.codex" "$HOME/.agents/skills" \
-    "$HOME/Documents/Repositories"
+  mkdir -p "$HOME/.local/bin" "$HOME/.claude/skills" "$HOME/.codex" "$HOME/.agents/skills"
+  if [[ $OS == Darwin ]]; then          # the Mac's task repos folder; on a VM they live in the home folder
+    mkdir -p "$HOME/Documents/Repositories"
+  fi
 }
 
 # install_bins: link the scripts into ~/.local/bin, retiring any copy in ~/bin (which is first on PATH).
@@ -151,6 +154,15 @@ install_zsh_plugins() {
   done
 }
 
+# append_line: add one line to a file, keeping a hand-written last line that lacks its newline intact.
+append_line() {
+  local f="$1" line="$2"
+  if [[ -s "$f" && -n "$(tail -c 1 "$f")" ]]; then
+    printf '\n' >> "$f"
+  fi
+  printf '%s\n' "$line" >> "$f"
+}
+
 # ask_vm_host: on a VM, wt needs this host's alias from the Mac's ~/.ssh/config. Asked once, in a
 # terminal, then recorded in ~/.zshenv.local.
 ask_vm_host() {
@@ -167,8 +179,19 @@ ask_vm_host() {
     echo "invalid or blank name: '$h'" >&2
     exit 1
   fi
-  printf 'export WT_HOST=%s\n' "$h" >> "$HOME/.zshenv.local"
+  append_line "$HOME/.zshenv.local" "export WT_HOST=$h"
   echo "WT_HOST=$h written to ~/.zshenv.local"
+}
+
+# record_repos_dir: wt's own default is the Mac's ~/Documents/Repositories, but on a VM the task repos are
+# cloned to ~/<repo>, so the home folder is recorded once, as the literal $HOME so any user's line works.
+# shellcheck disable=SC2016
+record_repos_dir() {
+  if [[ $OS == Darwin ]] || grep -qs '^export WT_REPOS_DIR=' "$HOME/.zshenv.local"; then
+    return 0
+  fi
+  append_line "$HOME/.zshenv.local" 'export WT_REPOS_DIR="$HOME"'
+  echo 'WT_REPOS_DIR=$HOME written to ~/.zshenv.local (edit the line if repos live elsewhere)'
 }
 
 # require_git_identity: ~/.gitconfig.local is machine-local and hand-written; commits need it.
@@ -202,6 +225,7 @@ main() {
   link_cmux_config
   install_zsh_plugins
   ask_vm_host        # Linux only
+  record_repos_dir   # Linux only
   require_git_identity
   report
 }

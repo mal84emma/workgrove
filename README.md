@@ -20,8 +20,9 @@ VS Code opens on demand, through `wt open`.
   resumes with `-c`). None of this is ever committed.
 - **Per-repo hooks.** `.worktreeinclude` lists gitignore-style patterns of *ignored* files (`.env` and
   friends) to copy into each new worktree. `.wt-setup`, if executable, runs inside each new worktree.
-- **Paths.** Task repos live in the folders `$WT_REPOS_DIR` lists, default `~/Documents/Repositories`. This
-  repo lives at `~/repos/workstation` on every machine, so the same commands work everywhere.
+- **Paths.** Task repos live in the folders `$WT_REPOS_DIR` lists, default `~/Documents/Repositories` on the
+  Mac; on a VM `install.sh` records the home folder instead. This repo lives at `~/repos/workstation` on every
+  machine, so the same commands work everywhere.
 - **Auth is yours.** The repo carries tools and config only. You log in once per machine with `gh auth login`,
   `az login`, `claude` then `/login`, and `codex login`.
 
@@ -137,8 +138,9 @@ worktree folder for one repo.
 
 `WT_REPOS_DIR` may hold several folders separated by `:`, like `$PATH`, searched in the order given; empty
 entries and folders that are missing or unreadable are skipped, and a folder named twice is searched once.
-`wt repos` and `wt list --all` cover every folder in the list. A name is looked up along the list; a name
-found in more than one folder is refused with both paths, so pass the path instead. Set it in
+`wt repos` and `wt list --all` cover every folder in the list; only direct children holding a `.git` count,
+and hidden folders such as `~/.oh-my-zsh` never do. A name is looked up along the list; a name found in more
+than one folder is refused with both paths, so pass the path instead. Set it in
 `~/.zshenv.local`, for example `export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"`.
 
 ## Agents
@@ -200,7 +202,7 @@ always backed up. Per-machine files never enter the loop.
 | Update cmux, or repair local Codex state tracking | Back up the live `config.toml` and `hooks.json`, run `cmux hooks codex install --yes`, check that one turn returns to `idle` | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit | `wt -H <vm> update` |
 | Change `cmux.json` | Live once cmux reloads or relaunches; commit | n/a |
-| Repos in another folder | add the folder to `WT_REPOS_DIR` in `~/.zshenv.local` | same, on the VM; never versioned |
+| Repos in another folder | add the folder to `WT_REPOS_DIR` in `~/.zshenv.local` | edit the `WT_REPOS_DIR` line `install.sh` wrote in `~/.zshenv.local`; never versioned |
 | New tool | `Brewfile` plus `brew bundle`; commit | Add the line to [docs/new-vm.md](docs/new-vm.md) and run it by hand on existing VMs |
 | Promote a machine-local setting | Diff the live file against its `.base`, port only the portable keys, commit | Never commit live files or trust state |
 

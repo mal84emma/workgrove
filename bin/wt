@@ -190,18 +190,18 @@ repos_entries() {
   return 0
 }
 need_repos_dir() { [[ -n "$(repos_entries)" ]] || die "repos dir not found: $REPOS_PATH (set WT_REPOS_DIR, or pass -r <repo>)"; }
-repo_dirs() { # every git repo on the search path: entry order, sorted within an entry, unreadable folders skipped
+repo_dirs() { # every git repo on the search path: entry order, sorted within an entry, unreadable and hidden folders skipped
   local d
   while IFS= read -r d; do
     [[ -n "$d" ]] || continue
     [[ -r "$d" ]] || { warn "skipping unreadable folder in WT_REPOS_DIR: $d"; continue; }
-    { find "$d" -mindepth 1 -maxdepth 1 -type d -exec test -d '{}/.git' ';' -print 2>/dev/null || true; } | sort
+    { find "$d" -mindepth 1 -maxdepth 1 -type d -not -name '.*' -exec test -d '{}/.git' ';' -print 2>/dev/null || true; } | sort
   done <<<"$(repos_entries)"
   return 0
 }
-repo_matches() { # repo_matches <name> -> the entries holding that repo, first entry first
+repo_matches() { # repo_matches <name> -> the entries holding that repo, first entry first; hidden names never match
   local name="$1" d
-  case "$name" in ""|*/*|.|..) return 0 ;; esac
+  case "$name" in ""|*/*|.*) return 0 ;; esac
   while IFS= read -r d; do
     [[ -n "$d" && -d "$d/$name/.git" ]] && printf '%s\n' "$d/$name"
   done <<<"$(repos_entries)"
