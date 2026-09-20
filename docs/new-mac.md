@@ -42,6 +42,7 @@ export PATH="$HOME/.local/bin:$PATH"
 cmux hooks codex install --yes
 xargs -n1 code --install-extension < ~/repos/workstation/vscode/extensions.txt
 gh auth login --web --git-protocol https
+az login          # Azure: data access and compute instances; see docs/azml-compute.md
 claude            # /login, then exit
 codex login
 codex             # /hooks -> review and trust the two portable hooks, run one test turn, then exit

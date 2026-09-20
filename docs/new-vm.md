@@ -8,7 +8,7 @@ minutes, and the last block prints how long it actually took.
 task picker use it. Two vCPUs and 8 GB of memory are comfortable.
 
 Open a shell on the VM (`ssh <vm>`) and paste the blocks in order. Replace the UPPERCASE placeholders first.
-Nothing prompts except `install.sh` and the logins in block 3.
+Nothing prompts except `install.sh` and the logins in blocks 3 and 4.
 
 ```bash
 # 1. packages   (the first line starts this page's clock)
@@ -43,6 +43,13 @@ codex login --device-auth                             # if device auth is blocke
 codex                                                 # /hooks -> trust the two portable hooks, then exit
 gh auth status && claude --version && codex login status && claude doctor
 cd ~/Documents/Repositories && gh repo clone OWNER/REPO
+```
+
+```bash
+# 4. Azure
+command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+az login --use-device-code   # code in the Mac browser, like gh
+az account show --query name -o tsv
 echo "setup took $(( ($(date +%s) - $(cat /tmp/workstation-setup-start)) / 60 )) min"
 ```
 

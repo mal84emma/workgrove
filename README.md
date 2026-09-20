@@ -23,7 +23,7 @@ VS Code opens on demand, through `wt open`.
 - **Paths.** Task repos live in the folders `$WT_REPOS_DIR` lists, default `~/Documents/Repositories`. This
   repo lives at `~/repos/workstation` on every machine, so the same commands work everywhere.
 - **Auth is yours.** The repo carries tools and config only. You log in once per machine with `gh auth login`,
-  `claude` then `/login`, and `codex login`.
+  `az login`, `claude` then `/login`, and `codex login`.
 
 ## Layout
 
@@ -31,12 +31,13 @@ VS Code opens on demand, through `wt open`.
 workstation/
 ├── README.md
 ├── install.sh                 links this repo into $HOME (Mac and Ubuntu)
-├── Brewfile                   fzf gh jq shellcheck; casks cmux, VS Code, git-credential-manager
+├── Brewfile                   azure-cli fzf gh jq shellcheck; casks cmux, VS Code, git-credential-manager
 ├── .gitignore
 ├── bin/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
 │   ├── agent-notify           agent lifecycle hook, relays to cmux or posts a banner
-│   └── cmux-hook              Mac-side cmux notification hook: remote wt open / wt attach
+│   ├── cmux-hook              Mac-side cmux notification hook: remote wt open / wt attach
+│   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 ├── home/
 │   ├── .zshenv .zshrc .gitconfig .gitignore_global .tmux.conf
 │   ├── .oh-my-zsh/custom/themes/workstation.zsh-theme
@@ -44,7 +45,8 @@ workstation/
 │   │   ├── AGENTS.md          the working conventions both agents read
 │   │   ├── CLAUDE.md          one line: @AGENTS.md
 │   │   └── settings.base.json, keybindings.json, statusline-command.sh
-│   ├── .agents/skills/        task-driver, worktree-create, worktree-work, worktree-show, worktree-teardown
+│   ├── .agents/skills/        task-driver, worktree-create, worktree-work, worktree-show, worktree-teardown,
+│   │                          azml-compute
 │   ├── .codex/                config.base.toml, hooks.base.json
 │   └── .config/cmux/cmux.json
 ├── vscode/
@@ -53,6 +55,7 @@ workstation/
 └── docs/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
+    ├── azml-compute.md        Azure ML compute instances over ssh
     └── ssh-config.example     the Host block a VM alias needs
 ```
 
@@ -95,6 +98,7 @@ this VM's alias in the Mac's `~/.ssh/config` and writes `WT_HOST` to `~/.zshenv.
 | Hand back | Report the branch. `wt pr <name>` only when you ask for it |
 | Clean up | `wt rm <name>`, `wt -H <vm> rm -r <repo> <name>`, `wt prune` |
 | Update a machine | `wt update`, `wt -H <vm> update`; add `--refresh-config` only after reviewing a `.base` change |
+| Add an Azure ML compute instance | `azml-ssh-host add <instance>`, or say "add compute instance X to my ssh config"; then it is a VM like any other ([docs/azml-compute.md](docs/azml-compute.md)) |
 
 The name the picker asks for may be blank, in which case it comes from the brief (both blank: `task-<timestamp>`). A blank brief is fine too:
 the agent starts idle. Names are lower-cased and spaces become dashes, so "Fix Auth" becomes `fix-auth`;
@@ -144,7 +148,7 @@ so Claude and Codex read the same conventions: task work happens in a worktree m
 inside `.worktrees/<name>` stays there and commits on `wt/<name>`, and each session reports its row and branch.
 It also says plainly that this is a convention and not a sandbox.
 
-The five skills in `home/.agents/skills/` are linked into both `~/.agents/skills/` (Codex) and
+The six skills in `home/.agents/skills/` are linked into both `~/.agents/skills/` (Codex) and
 `~/.claude/skills/` (Claude), and reload live:
 
 | Skill | Triggered by |
@@ -154,6 +158,7 @@ The five skills in `home/.agents/skills/` are linked into both `~/.agents/skills
 | `worktree-show` | "show me the code", "open the worktree", "let me see it" → `wt open`; "what changed", "how far is it" → `wt list` / `wt show` |
 | `worktree-teardown` | "remove the worktree", "clean up finished tasks" |
 | `task-driver` | "start a task on `<vm>`", "queue these three", "check on the tasks" |
+| `azml-compute` | "add compute instance X to my ssh config", "which compute instances can I ssh to" |
 
 What agents never do on their own: `git push`, `wt pr`, `gh pr create`, create a remote repository, publish,
 remove a worktree you did not ask them to remove, pass `--force`, open VS Code unasked, or run the
@@ -208,4 +213,5 @@ always backed up. Per-machine files never enter the loop.
 - **Checksummed session names and stored file hashes.** `wt` compares copied files with their source at
   removal time and checks for an identity clash at creation time, which buys the same safety with names you
   can read.
-- **Personal tooling on VMs or in the `Brewfile`.** The shell files guard whatever you install yourself.
+- **Personal tooling on VMs or in the `Brewfile`.** Only what this setup itself uses goes in, which is why the
+  Azure CLI is there: `azml-ssh-host` needs it. The shell files guard whatever else you install yourself.

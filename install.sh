@@ -99,7 +99,7 @@ make_dirs() {
 # install_bins: link the scripts into ~/.local/bin, retiring any copy in ~/bin (which is first on PATH).
 install_bins() {
   local b
-  for b in wt agent-notify cmux-hook; do
+  for b in wt agent-notify cmux-hook azml-ssh-host; do
     stash "$HOME/bin/$b"
     link "bin/$b" ".local/bin/$b"
   done

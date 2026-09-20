@@ -28,6 +28,8 @@ Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish
 
 `wt` owns the difference. The same subcommands run locally, run inside a VM session, or are sent to a VM from the Mac as `wt -H <vm> <sub> …` (`show`, `rm`, `path`, `open`, `attach` need `-r <repo>`). Every row's second line reads `@local` or `@<host>`, so the sidebar always says where a session runs.
 
+- Adding an Azure ML compute instance to ssh (Mac only) goes through the `azml-compute` skill (`azml-ssh-host add <instance>`), never by editing `~/.ssh/config` by hand; `az login` and `az account set` are the user's to run, so report the helper's error and stop.
+
 Never run interactive `wt attach`, `wt task` or `wt driver` from a task session; they belong to the user's own session on the Mac.
 
 ## cmux

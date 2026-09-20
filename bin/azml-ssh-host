@@ -1,0 +1,404 @@
+#!/usr/bin/env bash
+# azml-ssh-host — turn an Azure ML compute instance into a Host block in ~/.ssh/config.
+#
+# An SSH-enabled compute instance is an ordinary Linux host: one public IP, a per-instance port, an
+# admin user, and a public key fixed when the instance was created. This reads those facts from
+# Azure Resource Manager, finds the matching private key in ~/.ssh, writes one marked block into the
+# ssh config and verifies the login. After that `ssh <instance>`, VS Code Remote-SSH, the `wt task`
+# picker and `wt -H <instance> …` all work, because they all read the same file.
+#
+# Usage:
+#   azml-ssh-host [-F <file>] add <instance>    read the instance, write/update its block, verify
+#   azml-ssh-host [-F <file>] list              every SSH-enabled compute instance this account sees
+#   azml-ssh-host [-F <file>] rm <instance>     remove the block written by add
+#   azml-ssh-host help
+#
+#   -F <file>   the ssh config to manage, default ~/.ssh/config (mirrors ssh's own -F)
+#
+# Requires: az (logged in), jq, ssh, ssh-keygen. The stale `az ml` extension is never used; every
+# call goes through `az resource list` and `az rest` with an explicit api-version.
+#
+# Writes only between its own markers, which always sit at the top of the file, because ssh keeps
+# the first value it is given and an earlier `Host *` or `Match host …` would otherwise win:
+#     # >>> azml-ssh-host <instance>
+#     Host <instance> …
+#     # <<< azml-ssh-host <instance>
+# Everything outside the markers is left byte for byte as it was, and `rm` puts the file back exactly
+# as `add` found it. A `Host`/`Match` line naming the instance outside the markers is refused rather
+# than edited, and markers that do not pair are refused rather than repaired. The file is created
+# 600, in a 700 ~/.ssh. UseKeychain is written on macOS only; Linux OpenSSH rejects it.
+set -euo pipefail
+
+API=2024-10-01-preview                       # ARM api-version for MachineLearningServices computes
+CONFIG="$HOME/.ssh/config"                   # -F overrides
+SUB=""                                       # subscription id, from az account show
+JSON=""; WORKSPACE=""                        # filled in by find_compute
+STATE=""; ADMIN=""; PORT=""; IP=""; PUBKEY="" # filled in by read_facts
+KEY=""                                       # filled in by match_key: basename of the private key
+TMPFILES=()                                  # removed by cleanup on exit
+
+# ---------------------------------------------------------------- helpers
+die()  { printf 'azml-ssh-host: %s\n' "$*" >&2; exit 1; }
+say()  { printf '%s\n' "$*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+usage() { awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; }
+
+tilde() { # every printed path goes through this, so messages read like the documentation
+  case "$1" in
+    "$HOME") printf '~' ;;
+    "$HOME"/*) printf '~%s' "${1#"$HOME"}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+parent_dir() { # the folder holding a path; a builtin, so it works before require_tools
+  local d
+  case "$1" in
+    */*) d="${1%/*}"; printf '%s' "${d:-/}" ;;
+    *) printf '.' ;;
+  esac
+}
+
+cleanup() { if [ ${#TMPFILES[@]} -gt 0 ]; then rm -f "${TMPFILES[@]}"; fi; }
+trap cleanup EXIT
+
+tmpfile() { # tmpfile <var>: a temp file whose path lands in <var>; never call this in a subshell,
+              # or cleanup would not see it
+  local f
+  f=$(mktemp "${TMPDIR:-/tmp}/azml-ssh-host.XXXXXX" 2>/dev/null) \
+    || die "could not create a temporary file in ${TMPDIR:-/tmp}; point TMPDIR at a writable folder, then re-run"
+  TMPFILES+=("$f")
+  printf -v "$1" '%s' "$f"
+}
+
+require_tools() { # each error names the command that fixes it
+  have az || die "az not found: install the Azure CLI (brew install azure-cli), then: az login"
+  have jq || die "jq not found: install jq (brew install jq)"
+  have ssh || die "ssh not found: install OpenSSH"
+  have ssh-keygen || die "ssh-keygen not found: install OpenSSH"
+  SUB=$(az account show --query id -o tsv </dev/null 2>/dev/null) || die "not logged in: az login"
+  [ -n "$SUB" ] || die "not logged in: az login"
+}
+
+need_instance() { # it becomes a Host alias, which wt and cmux-hook must accept
+  [ -n "${1:-}" ] || die "usage: azml-ssh-host [-F <file>] add|rm <instance>"
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,63}$ ]] \
+    || die "invalid instance name '$1' (letters, digits and '-', 64 at most, starting with a letter or digit)"
+}
+
+# ---------------------------------------------------------------- Azure
+ws_url() { # ws_url <workspace> <group> <suffix> — an ARM URL under one workspace
+  printf 'https://management.azure.com/subscriptions/%s/resourceGroups/%s/providers/Microsoft.MachineLearningServices/workspaces/%s/%s?api-version=%s' \
+    "$SUB" "$2" "$1" "$3" "$API"
+}
+
+workspaces() { # "<name><tab><group>" per Azure ML workspace visible in this subscription
+  az resource list --resource-type Microsoft.MachineLearningServices/workspaces \
+    --query '[].[name,resourceGroup]' -o tsv </dev/null \
+    || die "could not list Azure ML workspaces in subscription $SUB; check the account: az account show"
+}
+
+is_json() { printf '%s' "$1" | jq -e . >/dev/null 2>&1; }
+
+find_compute() { # find_compute <instance>: sets JSON and WORKSPACE; the first workspace that has it wins
+  local list ws group url out badurl="" badws=""
+  list=$(workspaces)
+  while IFS=$'\t' read -r ws group; do
+    [ -n "$ws" ] || continue
+    url=$(ws_url "$ws" "$group" "computes/$1")
+    if out=$(az rest --method get --url "$url" -o json </dev/null 2>/dev/null); then
+      if is_json "$out"; then
+        JSON="$out"
+        WORKSPACE="$ws"
+        return 0
+      fi
+      [ -n "$badurl" ] || { badurl="$url"; badws="$ws"; }   # reported only if nothing matches anywhere
+    fi
+  done <<EOF
+$list
+EOF
+  [ -z "$badurl" ] \
+    || die "az rest returned something that is not JSON for $1 in $badws; try: az rest --method get --url '$badurl'"
+  die "compute instance '$1' not found in subscription $SUB; az account set -s <other> if it lives elsewhere; azml-ssh-host list shows what is visible"
+}
+
+read_facts() { # read_facts <instance>: STATE, ADMIN, PORT, IP, PUBKEY from JSON, with the two hard stops
+  local tsv access
+  tsv=$(jq -r '.properties.properties
+    | [ (.state // "unknown"), (.sshSettings.sshPublicAccess // "unknown"),
+        (.sshSettings.adminUserName // "-"), (.sshSettings.sshPort // 22 | tostring),
+        (.connectivityEndpoints.publicIpAddress // "null") ] | @tsv' <<<"$JSON") \
+    || die "could not read the compute resource of $1 in $WORKSPACE; try: azml-ssh-host list"
+  IFS=$'\t' read -r STATE access ADMIN PORT IP <<<"$tsv"
+  PUBKEY=$(jq -r '.properties.properties.sshSettings.adminPublicKey // ""' <<<"$JSON")
+  [ "$access" = Enabled ] || die "SSH public access is '$access' on $1; recreate the instance with SSH enabled"
+  [ -n "$IP" ] && [ "$IP" != null ] || die "$1 has no public IP (state: $STATE); start it in Azure ML Studio, then re-run"
+}
+
+match_key() { # match_key <instance>: the ~/.ssh key whose public half is the one registered on the instance
+  local want pub fp
+  [ -n "$PUBKEY" ] || die "$1 reports no registered public key; recreate the instance with SSH enabled"
+  want=$(ssh-keygen -lf - <<<"$PUBKEY" | awk '{print $2}') \
+    || die "could not fingerprint the key registered on $1; check it in Azure ML Studio"
+  for pub in "$HOME"/.ssh/*.pub; do
+    [ -f "$pub" ] || continue
+    fp=$(ssh-keygen -lf "$pub" 2>/dev/null | awk '{print $2}') || continue
+    if [ "$fp" = "$want" ]; then
+      KEY=$(basename "${pub%.pub}")
+      return 0
+    fi
+  done
+  die "no key in ~/.ssh matches $want, the key registered on $1; the instance was created with a different key; create instances with a key that is in ~/.ssh"
+}
+
+# ---------------------------------------------------------------- the ssh config file
+start_marker() { printf '# >>> azml-ssh-host %s' "$1"; }
+end_marker()   { printf '# <<< azml-ssh-host %s' "$1"; }
+
+check_config_path() { # -F must name a file this can read and write; nothing is created here
+  local dir
+  [ ! -d "$CONFIG" ] || die "$(tilde "$CONFIG") is a directory; -F takes an ssh config file (default ~/.ssh/config)"
+  if [ ! -e "$CONFIG" ]; then
+    dir=$(parent_dir "$CONFIG")
+    if [ -d "$dir" ] && [ ! -w "$dir" ]; then
+      die "cannot create $(tilde "$CONFIG"): $(tilde "$dir") is not writable; check it: ls -ld $(tilde "$dir")"
+    fi
+    return 0
+  fi
+  [ -r "$CONFIG" ] || die "cannot read $(tilde "$CONFIG"); check it: ls -l $(tilde "$CONFIG")"
+  [ -w "$CONFIG" ] || die "cannot write $(tilde "$CONFIG"); check it: ls -l $(tilde "$CONFIG")"
+}
+
+ensure_config() { # ~/.ssh is 700, the config is 600; neither is created before it is needed
+  local dir
+  if [ ! -e "$CONFIG" ]; then
+    dir=$(parent_dir "$CONFIG")
+    if [ ! -d "$dir" ]; then
+      mkdir -p "$dir" 2>/dev/null || die "could not create $(tilde "$dir"); create it yourself, then re-run"
+      chmod 700 "$dir"
+    fi
+    : >"$CONFIG" 2>/dev/null || die "could not create $(tilde "$CONFIG"); check the folder: ls -ld $(tilde "$dir")"
+  fi
+  chmod 600 "$CONFIG"
+}
+
+block_text() { # block_text <instance>: the managed block, markers included
+  start_marker "$1"; printf '\n'
+  printf '# Azure ML compute instance in workspace %s\n' "$WORKSPACE"
+  printf 'Host %s\n' "$1"
+  printf '  HostName %s\n' "$IP"
+  printf '  Port %s\n' "$PORT"
+  printf '  User %s\n' "$ADMIN"
+  printf '  IdentityFile ~/.ssh/%s\n' "$KEY"
+  printf '  IdentitiesOnly yes\n'
+  printf '  ServerAliveInterval 30\n'
+  printf '  ServerAliveCountMax 6\n'
+  printf '  AddKeysToAgent yes\n'
+  if [ "$(uname -s)" = Darwin ]; then
+    printf '  UseKeychain yes\n'
+  fi
+  end_marker "$1"; printf '\n'
+}
+
+# Marker lines are compared with trailing blanks and a CR stripped, so a stray space cannot make a
+# start and its end look like different lines.
+check_markers() { # check_markers <instance>: every start marker closed, in order, or nothing is touched
+  [ -f "$CONFIG" ] || return 0
+  awk -v s="$(start_marker "$1")" -v e="$(end_marker "$1")" '
+    { line = $0; sub(/[ \t\r]+$/, "", line) }
+    line == s { if (inb) { bad = 1; exit } inb = 1; next }
+    line == e { if (!inb) { bad = 1; exit } inb = 0; next }
+    END { exit((bad || inb) ? 1 : 0) }' "$CONFIG" \
+    || die "managed block for $1 in $(tilde "$CONFIG") is damaged (markers do not pair); fix it by hand, then re-run"
+}
+
+block_count() { # block_count <instance>: how many managed blocks the file holds for it
+  [ -f "$CONFIG" ] || { printf '0'; return 0; }
+  awk -v s="$(start_marker "$1")" '
+    { line = $0; sub(/[ \t\r]+$/, "", line); if (line == s) n++ }
+    END { printf "%d", n + 0 }' "$CONFIG"
+}
+
+first_start_line() { # first_start_line <instance>: line number of the first start marker, 0 if none
+  [ -f "$CONFIG" ] || { printf '0'; return 0; }
+  awk -v s="$(start_marker "$1")" '
+    { line = $0; sub(/[ \t\r]+$/, "", line); if (line == s && !f) f = NR }
+    END { printf "%d", f + 0 }' "$CONFIG"
+}
+
+read_block() { # read_block <instance>: the first managed block as it stands, empty if there is none
+  [ -f "$CONFIG" ] || return 0
+  awk -v s="$(start_marker "$1")" -v e="$(end_marker "$1")" '
+    done_one { next }
+    { line = $0; sub(/[ \t\r]+$/, "", line) }
+    line == s { inb = 1 }
+    inb { print }
+    inb && line == e { inb = 0; done_one = 1 }' "$CONFIG"
+}
+
+strip_blocks() { # strip_blocks <instance>: the file without its managed blocks. A block that starts at
+                 # line 1 takes the blank line after it, which is the separator add itself writes, so
+                 # add and rm are exact inverses.
+  awk -v s="$(start_marker "$1")" -v e="$(end_marker "$1")" '
+    { line = $0; sub(/[ \t\r]+$/, "", line) }
+    !inb && line == s { inb = 1; top = (NR == 1); next }
+    inb && line == e { inb = 0; eat = top; top = 0; next }
+    inb { next }
+    eat { eat = 0; if ($0 == "") next }
+    { print }' "$CONFIG"
+}
+
+unmanaged_host() { # unmanaged_host <instance>: a Host or Match line naming it outside the managed blocks
+  [ -f "$CONFIG" ] || return 1
+  awk -v s="$(start_marker "$1")" -v e="$(end_marker "$1")" -v h="$1" '
+    { line = $0; sub(/[ \t\r]+$/, "", line) }
+    !inb && line == s { inb = 1; next }
+    inb && line == e { inb = 0; next }
+    inb { next }
+    { kw = tolower($1) }
+    kw == "host" { for (i = 2; i <= NF; i++) { if ($i ~ /^#/) break; if ($i == h) found = 1 } }
+    kw == "match" && line ~ ("(^|[^A-Za-z0-9_-])" h "([^A-Za-z0-9_-]|$)") { found = 1 }
+    END { exit(found ? 0 : 1) }' "$CONFIG"
+}
+
+write_config() { # write_config <instance> [<block file>]: the block first, then the file without its blocks
+  local rest out nonl=0
+  if [ -s "$CONFIG" ] && [ -n "$(tail -c 1 "$CONFIG")" ]; then
+    nonl=1                                   # awk ends every line, so put that back afterwards
+  fi
+  tmpfile rest; tmpfile out
+  strip_blocks "$1" >"$rest"
+  if [ -n "${2:-}" ]; then
+    cat "$2" >"$out"
+    if [ -s "$rest" ]; then
+      printf '\n' >>"$out"
+      cat "$rest" >>"$out"
+    fi
+  else
+    cat "$rest" >"$out"
+  fi
+  if [ "$nonl" = 1 ]; then                   # keeps the file, and so its mode, in place
+    printf '%s' "$(cat "$out")" >"$CONFIG"
+  else
+    cat "$out" >"$CONFIG"
+  fi
+  chmod 600 "$CONFIG"
+}
+
+install_block() { # install_block <instance>: unchanged, or written at the top of the file
+  local new count line
+  check_markers "$1"
+  tmpfile new
+  block_text "$1" >"$new"
+  count=$(block_count "$1")
+  line=$(first_start_line "$1")
+  if [ "$count" = 1 ] && [ "$line" = 1 ] && [ "$(read_block "$1")" = "$(cat "$new")" ]; then
+    say "unchanged: Host $1 is already correct in $(tilde "$CONFIG")"
+    return 0
+  fi
+  if [ "$count" = 0 ]; then
+    if unmanaged_host "$1"; then
+      die "Host $1 is already in $(tilde "$CONFIG") and not managed by azml-ssh-host; remove it or pick another name"
+    fi
+    write_config "$1" "$new"
+    say "wrote Host $1 to $(tilde "$CONFIG")"
+  else
+    write_config "$1" "$new"
+    say "updated Host $1 in $(tilde "$CONFIG")"
+  fi
+}
+
+# ---------------------------------------------------------------- verify and report
+verify() { # verify <instance>: one non-interactive login, with the two failures that have a next command
+  local out rc=0
+  out=$(ssh -F "$CONFIG" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
+    "$1" 'echo "connected as $(whoami) on $(hostname)"' 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    say "$out"
+    return 0
+  fi
+  printf '%s\n' "$out" >&2
+  case "$out" in
+    *"REMOTE HOST IDENTIFICATION HAS CHANGED"*)
+      die "the host key of $1 changed (a recreated instance gets a new one); run: ssh-keygen -R '[$IP]:$PORT'
+  then re-run: azml-ssh-host add $1" ;;
+  esac
+  die "ssh to $1 failed; if it was just started wait a minute, then re-run: azml-ssh-host add $1"
+}
+
+# ---------------------------------------------------------------- subcommands
+cmd_add() {
+  need_instance "${1:-}"
+  check_config_path
+  require_tools
+  find_compute "$1"
+  read_facts "$1"
+  match_key "$1"
+  ensure_config
+  install_block "$1"
+  verify "$1"
+  say "$1: $ADMIN@$IP:$PORT, key ~/.ssh/$KEY, config $(tilde "$CONFIG")"
+  say "now: wt task (⌃⌥⌘T) -> $1, or wt -H $1 …"
+}
+
+cmd_list() {
+  require_tools
+  local list ws group json out
+  list=$(workspaces)
+  out=$(while IFS=$'\t' read -r ws group; do
+    [ -n "$ws" ] || continue
+    json=$(az rest --method get --url "$(ws_url "$ws" "$group" computes)" -o json </dev/null 2>/dev/null) || continue
+    is_json "$json" || continue
+    jq -r --arg ws "$ws" '
+      .value[]?
+      | select(.properties.computeType == "ComputeInstance")
+      | select(.properties.properties.sshSettings.sshPublicAccess == "Enabled")
+      | [ .name, $ws, (.properties.properties.state // "unknown"),
+          ((.properties.properties.connectivityEndpoints.publicIpAddress // "-") + ":"
+           + ((.properties.properties.sshSettings.sshPort // 22) | tostring)) ]
+      | join(" ")' <<<"$json"
+  done <<EOF
+$list
+EOF
+)
+  if [ -z "$out" ]; then
+    printf 'azml-ssh-host: no SSH-enabled compute instances visible in subscription %s (az account set -s <other>)\n' "$SUB" >&2
+    return 0
+  fi
+  say "$out"
+}
+
+cmd_rm() {
+  need_instance "${1:-}"
+  check_config_path
+  check_markers "$1"
+  local block ip port
+  block=$(read_block "$1")
+  [ -n "$block" ] || die "no managed block for $1 in $(tilde "$CONFIG")"
+  ip=$(printf '%s\n' "$block" | awk '$1=="HostName"{print $2; exit}')
+  port=$(printf '%s\n' "$block" | awk '$1=="Port"{print $2; exit}')
+  write_config "$1"
+  say "removed Host $1 from $(tilde "$CONFIG")"
+  if [ -n "$ip" ] && [ -n "$port" ]; then
+    printf "its host key stays in ~/.ssh/known_hosts; to drop it too: ssh-keygen -R '[%s]:%s'\n" "$ip" "$port"
+  fi
+}
+
+main() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -F) [ $# -ge 2 ] || die "-F needs a file"; CONFIG="$2"; shift 2 ;;
+      -F*) CONFIG="${1#-F}"; shift ;;
+      *) break ;;
+    esac
+  done
+  case "${1:-help}" in
+    add)  shift; cmd_add "$@" ;;
+    list) shift; cmd_list "$@" ;;
+    rm)   shift; cmd_rm "$@" ;;
+    help|-h|--help) usage ;;
+    *) die "unknown command '$1' (add, list, rm, help)" ;;
+  esac
+}
+
+main "$@"
