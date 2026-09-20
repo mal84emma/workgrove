@@ -22,7 +22,7 @@ wt -H <vm> open -r <repo> <name>   # from the Mac, opens the VM folder over Remo
 
 wt show <name>             # path, repo, branch, row:, task prompt, commits vs base, diff --stat, status
 wt list                    # this repo: NAME BRANCH BASE AHEAD BEHIND DIRTY LAST
-wt list --all              # every repo under $WT_REPOS_DIR
+wt list --all              # every repo in every folder of $WT_REPOS_DIR
 wt -H <vm> list            # the same, on a VM (implies --all)
 wt -H <vm> show -r <repo> <name>
 ```

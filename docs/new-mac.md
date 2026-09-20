@@ -61,5 +61,6 @@ next to the portable ones. It is a Mac-only step, and it has to be repeated afte
    `running`, run `cmux hooks codex install --yes` again and try another turn.
 4. Write `~/.ssh/config` from [ssh-config.example](ssh-config.example), one block per VM. This file is yours
    and is never versioned.
-5. Clone a repo into `~/Documents/Repositories` and start a task: type a brief into the cmux TextBox and
-   press ⏎. You should get a row titled `<repo>:<name>` with `@local` on its second line.
+5. Clone a repo into `~/Documents/Repositories`. To keep repos in more than one folder, set `WT_REPOS_DIR`
+   to a `:`-separated list of them in `~/.zshenv.local`. Then start a task: type a brief into the cmux
+   TextBox and press ⏎. You should get a row titled `<repo>:<name>` with `@local` on its second line.

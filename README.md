@@ -20,8 +20,8 @@ VS Code opens on demand, through `wt open`.
   resumes with `-c`). None of this is ever committed.
 - **Per-repo hooks.** `.worktreeinclude` lists gitignore-style patterns of *ignored* files (`.env` and
   friends) to copy into each new worktree. `.wt-setup`, if executable, runs inside each new worktree.
-- **Paths.** Task repos live under `$WT_REPOS_DIR`, default `~/Documents/Repositories`. This repo lives at
-  `~/repos/workstation` on every machine, so the same commands work everywhere.
+- **Paths.** Task repos live in the folders `$WT_REPOS_DIR` lists, default `~/Documents/Repositories`. This
+  repo lives at `~/repos/workstation` on every machine, so the same commands work everywhere.
 - **Auth is yours.** The repo carries tools and config only. You log in once per machine with `gh auth login`,
   `claude` then `/login`, and `codex login`.
 
@@ -119,16 +119,23 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 | `wt task` | The picker on ⌃⌥⌘T (Mac, needs fzf) |
 | `wt driver` | Open or select the `driver` row |
 | `wt update [--refresh-config]` | `git pull --ff-only` this repo, then re-run `install.sh` |
-| `wt repos`, `wt path <name>`, `wt current`, `wt diff <name>`, `wt help` | Small helpers |
+| `wt repos [<name>]` | List the name and path of every repo, or print one repo's path |
+| `wt path <name>`, `wt current`, `wt diff <name>`, `wt help` | Small helpers |
 | `wt -H <host> <sub> …` | Run a subcommand on a VM over ssh while the cmux row stays local. `show`, `rm`, `path`, `open` and `attach` need `-r <repo>` |
 
 `wt rm` refuses, with exit status 3, to destroy work: uncommitted changes, commits that are neither merged
 into the base nor pushed, or a file copied in through `.worktreeinclude` that no longer matches its source
 in the main checkout. It names what blocked it. `--force` overrides. `wt prune` is stricter still: it only removes worktrees whose branch is merged and whose tree is clean.
 
-Useful environment variables: `WT_REPOS_DIR` (where repos are found), `WT_AGENT` (default agent),
-`WT_AGENT_ARGS` (extra agent arguments), and `WT_HOST` on a VM. `git config wt.dir` renames the worktree
-folder for one repo.
+Useful environment variables: `WT_REPOS_DIR` (the folders repos are looked for in), `WT_AGENT` (default
+agent), `WT_AGENT_ARGS` (extra agent arguments), and `WT_HOST` on a VM. `git config wt.dir` renames the
+worktree folder for one repo.
+
+`WT_REPOS_DIR` may hold several folders separated by `:`, like `$PATH`, searched in the order given; empty
+entries and folders that are missing or unreadable are skipped, and a folder named twice is searched once.
+`wt repos` and `wt list --all` cover every folder in the list. A name is looked up along the list; a name
+found in more than one folder is refused with both paths, so pass the path instead. Set it in
+`~/.zshenv.local`, for example `export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"`.
 
 ## Agents
 

@@ -9,7 +9,7 @@
 #           [-a|--agent claude|codex|none] [--no-workspace] [--focus] [-r|--repo PATH]
 #                                                             create a worktree (+ a cmux row running `wt run`)
 #   wt run  <name> [-r PATH]                                  run the worktree's agent with its brief (cmux runs this)
-#   wt list [--json] [--all] [-r PATH]                        list worktrees (--all: every repo under $WT_REPOS_DIR)
+#   wt list [--json] [--all] [-r PATH]                        list worktrees (--all: every repo in $WT_REPOS_DIR)
 #   wt show <name> [--diff] [--json] [-r PATH]                status summary; --diff also opens a cmux diff pane
 #   wt open [name] [-r PATH]                                  open a worktree in VS Code (default: the one you are in)
 #   wt diff <name>                                            = wt show <name> --diff
@@ -19,7 +19,8 @@
 #   wt rm <name> [--force] [--keep-branch]                    remove a worktree; refuses to destroy work, including an
 #                                                             edited .worktreeinclude copy, unless --force
 #   wt prune [--dry-run]                                      remove worktrees whose branch is merged and tree is clean
-#   wt repos                                                  basenames of the git repos under $WT_REPOS_DIR
+#   wt repos [<name>]                                         "<name><tab><path>" per git repo in $WT_REPOS_DIR; given a
+#                                                             name or path, just that repo's path (also over ssh)
 #   wt task [--where local|<host>] [-a claude|codex|repo-shell|vm-shell] [-r REPO] [-p TEXT]
 #                                                             pick where/kind/repo/name/brief, then start it (Mac, needs fzf)
 #   wt driver                                                 open (or select) the driver row (@local)
@@ -42,7 +43,8 @@
 #                               <repo>/.git/wt/<name>.started marker: Claude resumes with -c after this exists
 #
 # Environment / git config:
-#   WT_REPOS_DIR        where `wt list --all`, `wt repos` and `wt new -r <name>` look for repos (default ~/Documents/Repositories)
+#   WT_REPOS_DIR        ':'-separated folders `wt list --all`, `wt repos` and `wt new -r <name>` search, in order,
+#                       for repos; a name found in two of them must be given as a path (default ~/Documents/Repositories)
 #   WT_HOST             on a VM: this machine's alias in the Mac's ~/.ssh/config (set by install.sh in ~/.zshenv.local)
 #   WT_AGENT            default agent for `wt new`                                              (default claude)
 #   WT_AGENT_ARGS       extra args for the agent command (e.g. "--model opus")
@@ -53,7 +55,7 @@
 #   .wt-setup           executable run inside each new worktree after creation (install deps, etc.)
 set -euo pipefail
 
-REPOS_DIR="${WT_REPOS_DIR:-$HOME/Documents/Repositories}"
+REPOS_PATH="${WT_REPOS_DIR:-$HOME/Documents/Repositories}"   # ':'-separated, searched in order (see repos_entries)
 DEFAULT_AGENT="${WT_AGENT:-claude}"
 
 # ---------------------------------------------------------------- helpers
@@ -132,17 +134,23 @@ main_root_of() {
 REPO=""      # main checkout root
 WT_DIRNAME=""
 set_repo() { REPO=$(main_root_of "$1") || return 1; WT_DIRNAME=$(git -C "$REPO" config --get wt.dir 2>/dev/null || echo .worktrees); }
-resolve_repo() {
-  local want="${1:-}"
+lookup_repo() { # a path is taken as given; a name is searched along $WT_REPOS_DIR, and must be in one folder only
+  local want="${1:-}" hits
   if [[ -n "$want" ]]; then
-    [[ -d "$want" ]] || want="$REPOS_DIR/$want"
-    [[ -d "$want" ]] || die "repo not found: ${1} (see: wt repos)"
+    if [[ ! -d "$want" ]]; then
+      hits=$(repo_matches "$want")
+      [[ -n "$hits" ]] || die "repo not found: ${1} (see: wt repos)"
+      [[ "$hits" == *$'\n'* ]] && die "repo name '${1}' is in more than one WT_REPOS_DIR folder ($(printf '%s' "$hits" | tr '\n' ' ')); pass the path instead"
+      want="$hits"
+    fi
     set_repo "$want" || die "not a git repo: $want"
   else
-    set_repo "$PWD" || die "not inside a git repo; pass -r <repo> (name under $REPOS_DIR or a path)"
+    set_repo "$PWD" || die "not inside a git repo; pass -r <repo> (a name in $REPOS_PATH, or a path)"
   fi
-  git -C "$REPO" rev-parse HEAD >/dev/null 2>&1 || die "$REPO has no commits yet (git -C $REPO commit --allow-empty -m init)"
 }
+# every command that makes or reads a worktree needs a commit to branch from; a plain lookup does not
+resolve_repo() { lookup_repo "${1:-}"; need_commits; }
+need_commits() { git -C "$REPO" rev-parse HEAD >/dev/null 2>&1 || die "$REPO has no commits yet (git -C $REPO commit --allow-empty -m init)"; }
 wt_root()   { printf '%s/%s' "$REPO" "$WT_DIRNAME"; }
 wt_path()   { printf '%s/%s/%s' "$REPO" "$WT_DIRNAME" "$1"; }
 wt_meta()   { printf '%s/.git/wt/%s.json' "$REPO" "$1"; }
@@ -167,8 +175,37 @@ slugify() {
     | sed 's/^-//; s/-$//' | cut -d- -f1-5 | cut -c1-48 | sed 's/-$//'
 }
 
-need_repos_dir() { [[ -d "$REPOS_DIR" ]] || die "repos dir not found: $REPOS_DIR (set WT_REPOS_DIR, or pass -r <repo>)"; }
-repo_dirs() { find "$REPOS_DIR" -mindepth 1 -maxdepth 1 -type d -exec test -d '{}/.git' ';' -print | sort; }
+# $WT_REPOS_DIR is a search path like $PATH: entries in order, each one once, empty and missing ones skipped.
+repos_entries() {
+  local rest="$REPOS_PATH" d seen=""
+  while [[ -n "$rest" ]]; do
+    d="${rest%%:*}"
+    case "$rest" in *:*) rest="${rest#*:}" ;; *) rest="" ;; esac
+    while [[ "$d" == */ && "$d" != / ]]; do d="${d%/}"; done      # "$X/" and "$X" are the same folder
+    [[ -n "$d" && -d "$d" ]] || continue
+    case "$seen" in *":$d:"*) continue ;; esac
+    seen="$seen:$d:"
+    printf '%s\n' "$d"
+  done
+  return 0
+}
+need_repos_dir() { [[ -n "$(repos_entries)" ]] || die "repos dir not found: $REPOS_PATH (set WT_REPOS_DIR, or pass -r <repo>)"; }
+repo_dirs() { # every git repo on the search path: entry order, sorted within an entry, unreadable folders skipped
+  local d
+  while IFS= read -r d; do
+    [[ -n "$d" && -r "$d" ]] || continue
+    { find "$d" -mindepth 1 -maxdepth 1 -type d -exec test -d '{}/.git' ';' -print 2>/dev/null || true; } | sort
+  done <<<"$(repos_entries)"
+  return 0
+}
+repo_matches() { # repo_matches <name> -> the entries holding that repo, first entry first
+  local name="$1" d
+  case "$name" in ""|*/*|.|..) return 0 ;; esac
+  while IFS= read -r d; do
+    [[ -n "$d" && -d "$d/$name/.git" ]] && printf '%s\n' "$d/$name"
+  done <<<"$(repos_entries)"
+  return 0
+}
 
 default_base() {
   local ref
@@ -594,7 +631,11 @@ cmd_path() {
   [[ -n "$name" ]] || die "path: worktree name required"
   resolve_repo "$repo"; require_wt "$name"; printf '%s\n' "$P"
 }
-cmd_repos()   { need_repos_dir; repo_dirs | sed 's#.*/##'; }
+cmd_repos()   { # no arg: "<name><tab><path>" per repo, the picker's two columns. A name or path: just its path,
+  [[ $# -le 1 ]] || die "repos: one name at most (wt repos [<name>])"      # the one resolution rule, also over ssh
+  if [[ $# -eq 1 ]]; then lookup_repo "$1"; printf '%s\n' "$REPO"; return 0; fi
+  need_repos_dir; repo_dirs | awk -F/ '{printf "%s\t%s\n", $NF, $0}'
+}
 cmd_current() {
   local root common
   root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not in a git repo"
@@ -604,10 +645,10 @@ cmd_current() {
 }
 
 # ---------------------------------------------------------------- driver and self-update
-cmd_driver() { # the session that spawns tasks; its cwd is $REPOS_DIR, so `wt new` there needs -r
+cmd_driver() { # the session that spawns tasks; its cwd is a repos folder, so `wt new` there needs -r
   mac_only driver
   cmux_ok || die "cmux is not running; start cmux, then: wt driver"
-  local c id out; c=$(cmux_bin)
+  local c id out cwd; c=$(cmux_bin)
   id=$(cmux_row_field title driver id)
   if [[ -n "$id" ]]; then
     CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
@@ -615,7 +656,8 @@ cmd_driver() { # the session that spawns tasks; its cwd is $REPOS_DIR, so `wt ne
     return 0
   fi
   need_repos_dir
-  out=$(CMUX_QUIET=1 "$c" workspace create --name driver --description "$(row_tag)" --cwd "$REPOS_DIR" --command claude --focus true 2>&1) \
+  cwd=$(repos_entries | sed -n 1p)                                   # the first folder that exists
+  out=$(CMUX_QUIET=1 "$c" workspace create --name driver --description "$(row_tag)" --cwd "$cwd" --command claude --focus true 2>&1) \
     || die "cmux workspace create failed: $out"
   printf 'driver %s (created)\n' "$(row_tag)"
 }
@@ -770,9 +812,9 @@ task_exit() { # the launcher row closes on exit, so let a message be read first
 ssh_hosts() { # non-wildcard Host aliases, read as bin/cmux-hook reads them
   { awk '$1=="Host"{for(i=2;i<=NF;i++){if($i ~ /^#/)break; if($i !~ /[*?]/) print $i}}' "$HOME/.ssh/config" 2>/dev/null || true; } | sort -u
 }
-pick() { # pick <prompt> — a line of stdin, or whatever was typed (fzf --print-query: query line, then selection)
-  local out rc=0 q s
-  out=$(fzf --print-query --prompt "$1> " --height 40% --reverse) || rc=$?
+pick() { # pick <prompt> [fzf args…] — a line of stdin, or whatever was typed (fzf --print-query: query, selection)
+  local out rc=0 q s p="$1"; shift
+  out=$(fzf --print-query --prompt "$p> " --height 40% --reverse "$@") || rc=$?
   [[ $rc -le 1 ]] || return 1                                   # 130: aborted
   q=$(printf '%s\n' "$out" | sed -n '1p'); s=$(printf '%s\n' "$out" | sed -n '2p')
   printf '%s' "${s:-$q}"
@@ -813,10 +855,15 @@ cmd_task() {
   esac
 
   if [[ "$kind" != vm-shell && -z "$repo" ]]; then
-    local list
-    if [[ "$where" == local ]]; then list=$(cmd_repos); else list=$(remote_wt "$where" repos); fi
-    repo=$(printf '%s\n' "$list" | pick repo) || die "task: cancelled"
-    [[ -n "$repo" ]] || die "task: no repo picked"
+    local list sel                               # "<name><tab><path>": two folders can hold the same basename,
+    if [[ "$where" == local ]]; then             # so the path column, not the name, is what starts the task
+      list=$(cmd_repos) || die "task: no repos to pick from (see: wt repos)"
+    else
+      list=$(remote_wt "$where" repos) || die "task: $where listed no repos (try: wt -H $where repos)"
+    fi
+    sel=$(printf '%s\n' "$list" | pick repo --delimiter $'\t') || die "task: cancelled"
+    [[ -n "$sel" ]] || die "task: no repo picked"
+    repo="${sel##*$'\t'}"                        # a typed query has no tab and is taken as given
   fi
   if [[ "$kind" == claude || "$kind" == codex ]]; then       # the name is never known from the options
     read -r -p 'name (blank = from brief)> ' name || true
@@ -838,8 +885,9 @@ cmd_task() {
           || die "cmux workspace create failed: $out"
         printf 'row: %s shell %s\n' "$id" "$(row_tag)"
       else
-        id=$(repo_id "$repo")   # the VM's shell expands its own repos dir
-        remote_row "$where" "shell-$id" "$id shell" --command "cd \"\${WT_REPOS_DIR:-\$HOME/Documents/Repositories}/$repo\""
+        id=$(repo_id "$repo")   # the VM's own wt resolves the name against its $WT_REPOS_DIR; on a failed
+                                # lookup its error stays on screen and the pane keeps $HOME as its cwd
+        remote_row "$where" "shell-$id" "$id shell" --command "d=\$(\"\$HOME/.local/bin/wt\" repos $(shell_join "$repo")) && cd \"\$d\""
       fi ;;
     vm-shell) remote_row "$where" main shell ;;
   esac
@@ -866,7 +914,7 @@ case "$sub" in
   rm|remove) cmd_rm "$@" ;;
   prune)    cmd_prune "$@" ;;
   path)     cmd_path "$@" ;;
-  repos)    cmd_repos ;;
+  repos)    cmd_repos "$@" ;;
   task)     cmd_task "$@" ;;
   driver)   cmd_driver ;;
   update)   cmd_update "$@" ;;

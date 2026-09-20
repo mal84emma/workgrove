@@ -14,10 +14,10 @@ wt new <name> -p "<complete task prompt>"            # worktree + cmux row runni
 wt new <name> -p "<prompt>" -a codex                  # ...running Codex instead
 wt new <name> --no-workspace                          # worktree only; no agent, no cmux row
 wt new <name> -p "<prompt>" --head                    # branch from the current branch instead of origin/main
-wt new <name> -r <repo-name-or-path> -p "<prompt>"    # target another repo under $WT_REPOS_DIR
+wt new <name> -r <repo-name-or-path> -p "<prompt>"    # target another repo in $WT_REPOS_DIR
 ```
 
-`wt new` prints the path, branch, repo and session. It runs from anywhere inside the repo, including from another worktree (it always resolves the main checkout). In a driver session, whose cwd is `$WT_REPOS_DIR` and not a repo, `-r <repo>` is required.
+`wt new` prints the path, branch, repo and session. It runs from anywhere inside the repo, including from another worktree (it always resolves the main checkout). In a driver session, whose cwd is the first existing folder in `$WT_REPOS_DIR` and not a repo, `-r <repo>` is required. A repo name is searched along `$WT_REPOS_DIR` (several folders, separated by `:`); if the same name sits in two of them, `wt` refuses it and you pass the path.
 
 ## Rules
 
