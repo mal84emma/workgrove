@@ -1,13 +1,19 @@
 # One block per VM, in ~/.ssh/config on the Mac. This file is never versioned.
 #
-# The alias on the Host line is the name install.sh asks for when it runs on that VM, and the name
+# For an Azure ML compute instance do not write a block by hand: run `azml-ssh-host add <instance>`, which
+# reads the instance from Azure and writes its own block at the top of the file (docs/azml-compute.md).
+#
+# The alias on the Host line is the WT_HOST value install.sh records when it runs on that VM, and the name
 # `wt -H <vm> …`, the ⌃⌥⌘T picker and VS Code Remote-SSH all use. Keep it short, lower-case and
 # free of dots if you can: it ends up in row descriptions as @<vm>.
 
 Host vm-a
     HostName 203.0.113.10        # the VM's public IP or DNS name
+    Port 22                      # the default; some hosts listen elsewhere, and a compute instance always does
     User ubuntu                  # the account you created on the VM
     IdentityFile ~/.ssh/id_ed25519
     IdentitiesOnly yes           # use only this key, not every key in the agent
     ServerAliveInterval 30       # keepalive, so a sleeping laptop does not silently drop the session
     ServerAliveCountMax 6        # give up after ~3 minutes of silence; cmux then reconnects the row
+    AddKeysToAgent yes           # add the key to the agent on first use, so a passphrase is asked once
+    UseKeychain yes              # macOS only; remove on Linux

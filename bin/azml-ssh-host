@@ -23,16 +23,18 @@
 #     # >>> azml-ssh-host <instance>
 #     Host <instance> …
 #     # <<< azml-ssh-host <instance>
-# Everything outside the markers is left byte for byte as it was, and `rm` puts the file back exactly
-# as `add` found it. A `Host`/`Match` line naming the instance outside the markers is refused rather
-# than edited, and markers that do not pair are refused rather than repaired. The file is created
-# 600, in a 700 ~/.ssh. UseKeychain is written on macOS only; Linux OpenSSH rejects it.
+# Everything outside the markers is left byte for byte as it was, and `rm` restores the content
+# exactly as `add` found it; the mode is normalised to 600 whenever the file is written, so a config
+# that was 644 comes back 600. A `Host`/`Match` line naming the instance outside the markers is
+# refused rather than edited, and markers that do not pair are refused rather than repaired; a run
+# that refuses leaves the file alone, mode included. The file is created 600, in a 700 ~/.ssh.
+# UseKeychain is written on macOS only; Linux OpenSSH rejects it.
 set -euo pipefail
 
 API=2024-10-01-preview                       # ARM api-version for MachineLearningServices computes
 CONFIG="$HOME/.ssh/config"                   # -F overrides
 SUB=""                                       # subscription id, from az account show
-JSON=""; WORKSPACE=""                        # filled in by find_compute
+JSON=""; WORKSPACE=""; GROUP=""; URL=""      # filled in by find_compute
 STATE=""; ADMIN=""; PORT=""; IP=""; PUBKEY="" # filled in by read_facts
 KEY=""                                       # filled in by match_key: basename of the private key
 TMPFILES=()                                  # removed by cleanup on exit
@@ -100,9 +102,12 @@ workspaces() { # "<name><tab><group>" per Azure ML workspace visible in this sub
 
 is_json() { printf '%s' "$1" | jq -e . >/dev/null 2>&1; }
 
-find_compute() { # find_compute <instance>: sets JSON and WORKSPACE; the first workspace that has it wins
+find_compute() { # find_compute <instance>: sets JSON, WORKSPACE, GROUP and URL; the first workspace that
+                 # has it wins
   local list ws group url out badurl="" badws=""
   list=$(workspaces)
+  [ -n "$list" ] \
+    || die "no Azure ML workspaces visible in subscription $SUB; check az account show and that you have Reader on the workspace"
   while IFS=$'\t' read -r ws group; do
     [ -n "$ws" ] || continue
     url=$(ws_url "$ws" "$group" "computes/$1")
@@ -110,6 +115,8 @@ find_compute() { # find_compute <instance>: sets JSON and WORKSPACE; the first w
       if is_json "$out"; then
         JSON="$out"
         WORKSPACE="$ws"
+        GROUP="$group"
+        URL="$url"
         return 0
       fi
       [ -n "$badurl" ] || { badurl="$url"; badws="$ws"; }   # reported only if nothing matches anywhere
@@ -119,11 +126,15 @@ $list
 EOF
   [ -z "$badurl" ] \
     || die "az rest returned something that is not JSON for $1 in $badws; try: az rest --method get --url '$badurl'"
-  die "compute instance '$1' not found in subscription $SUB; az account set -s <other> if it lives elsewhere; azml-ssh-host list shows what is visible"
+  die "compute instance '$1' not found in subscription $SUB; azml-ssh-host list shows what is visible
+  az account list -o table shows what you are logged into; az account set -s <other>, or az login --tenant <tenant> for another directory"
 }
 
-read_facts() { # read_facts <instance>: STATE, ADMIN, PORT, IP, PUBKEY from JSON, with the two hard stops
-  local tsv access
+read_facts() { # read_facts <instance>: STATE, ADMIN, PORT, IP, PUBKEY from JSON, with the hard stops
+  local tsv access ctype
+  ctype=$(jq -r '.properties.computeType // "unknown"' <<<"$JSON")
+  [ "$ctype" = ComputeInstance ] \
+    || die "$1 is of type $ctype, not a compute instance; azml-ssh-host list shows the instances"
   tsv=$(jq -r '.properties.properties
     | [ (.state // "unknown"), (.sshSettings.sshPublicAccess // "unknown"),
         (.sshSettings.adminUserName // "-"), (.sshSettings.sshPort // 22 | tostring),
@@ -137,7 +148,8 @@ read_facts() { # read_facts <instance>: STATE, ADMIN, PORT, IP, PUBKEY from JSON
 
 match_key() { # match_key <instance>: the ~/.ssh key whose public half is the one registered on the instance
   local want pub fp
-  [ -n "$PUBKEY" ] || die "$1 reports no registered public key; recreate the instance with SSH enabled"
+  [ -n "$PUBKEY" ] \
+    || die "$1 did not return sshSettings.adminPublicKey from ARM; check: az rest --method get --url '$URL'"
   want=$(ssh-keygen -lf - <<<"$PUBKEY" | awk '{print $2}') \
     || die "could not fingerprint the key registered on $1; check it in Azure ML Studio"
   for pub in "$HOME"/.ssh/*.pub; do
@@ -169,7 +181,9 @@ check_config_path() { # -F must name a file this can read and write; nothing is 
   [ -w "$CONFIG" ] || die "cannot write $(tilde "$CONFIG"); check it: ls -l $(tilde "$CONFIG")"
 }
 
-ensure_config() { # ~/.ssh is 700, the config is 600; neither is created before it is needed
+ensure_config() { # ~/.ssh is 700, the config is 600; neither is created before it is needed. An existing
+                  # file keeps its mode here; write_config normalises it to 600 when it writes, so a run
+                  # that refuses or finds the block unchanged does not touch the file at all.
   local dir
   if [ ! -e "$CONFIG" ]; then
     dir=$(parent_dir "$CONFIG")
@@ -178,13 +192,13 @@ ensure_config() { # ~/.ssh is 700, the config is 600; neither is created before 
       chmod 700 "$dir"
     fi
     : >"$CONFIG" 2>/dev/null || die "could not create $(tilde "$CONFIG"); check the folder: ls -ld $(tilde "$dir")"
+    chmod 600 "$CONFIG"
   fi
-  chmod 600 "$CONFIG"
 }
 
 block_text() { # block_text <instance>: the managed block, markers included
   start_marker "$1"; printf '\n'
-  printf '# Azure ML compute instance in workspace %s\n' "$WORKSPACE"
+  printf '# Azure ML compute instance %s in workspace %s, resource group %s\n' "$1" "$WORKSPACE" "$GROUP"
   printf 'Host %s\n' "$1"
   printf '  HostName %s\n' "$IP"
   printf '  Port %s\n' "$PORT"
@@ -248,6 +262,11 @@ strip_blocks() { # strip_blocks <instance>: the file without its managed blocks.
     { print }' "$CONFIG"
 }
 
+# Only `Host`/`Match` lines in this file, with the usual whitespace between keyword and value, are
+# looked at: not the `Host=<name>` form, and not files pulled in by `Include`. That is enough, because
+# the managed block is written at line 1 and ssh keeps the first value it is given, so anything this
+# misses is overridden by the block rather than overriding it; the point of the check is only to avoid
+# silently shadowing a block the user wrote by hand.
 unmanaged_host() { # unmanaged_host <instance>: a Host or Match line naming it outside the managed blocks
   [ -f "$CONFIG" ] || return 1
   awk -v s="$(start_marker "$1")" -v e="$(end_marker "$1")" -v h="$1" '
@@ -259,6 +278,15 @@ unmanaged_host() { # unmanaged_host <instance>: a Host or Match line naming it o
     kw == "host" { for (i = 2; i <= NF; i++) { if ($i ~ /^#/) break; if ($i == h) found = 1 } }
     kw == "match" && line ~ ("(^|[^A-Za-z0-9_-])" h "([^A-Za-z0-9_-]|$)") { found = 1 }
     END { exit(found ? 0 : 1) }' "$CONFIG"
+}
+
+precheck_block() { # precheck_block <instance>: the refusals that need only the config file, so they can
+                   # run before anything is asked of Azure
+  check_markers "$1"
+  if [ "$(block_count "$1")" = 0 ] && unmanaged_host "$1"; then
+    die "Host $1 is already in $(tilde "$CONFIG") and was not written by azml-ssh-host.
+  Delete that Host block and the comment above it, keep the alias, then re-run: azml-ssh-host add $1"
+  fi
 }
 
 write_config() { # write_config <instance> [<block file>]: the block first, then the file without its blocks
@@ -287,7 +315,7 @@ write_config() { # write_config <instance> [<block file>]: the block first, then
 
 install_block() { # install_block <instance>: unchanged, or written at the top of the file
   local new count line
-  check_markers "$1"
+  precheck_block "$1"
   tmpfile new
   block_text "$1" >"$new"
   count=$(block_count "$1")
@@ -296,14 +324,10 @@ install_block() { # install_block <instance>: unchanged, or written at the top o
     say "unchanged: Host $1 is already correct in $(tilde "$CONFIG")"
     return 0
   fi
+  write_config "$1" "$new"
   if [ "$count" = 0 ]; then
-    if unmanaged_host "$1"; then
-      die "Host $1 is already in $(tilde "$CONFIG") and not managed by azml-ssh-host; remove it or pick another name"
-    fi
-    write_config "$1" "$new"
     say "wrote Host $1 to $(tilde "$CONFIG")"
   else
-    write_config "$1" "$new"
     say "updated Host $1 in $(tilde "$CONFIG")"
   fi
 }
@@ -323,6 +347,8 @@ verify() { # verify <instance>: one non-interactive login, with the two failures
       die "the host key of $1 changed (a recreated instance gets a new one); run: ssh-keygen -R '[$IP]:$PORT'
   then re-run: azml-ssh-host add $1" ;;
   esac
+  [ "$STATE" = Running ] \
+    || die "ssh to $1 failed and its state is '$STATE'; start it in Azure ML Studio, then re-run: azml-ssh-host add $1"
   die "ssh to $1 failed; if it was just started wait a minute, then re-run: azml-ssh-host add $1"
 }
 
@@ -330,6 +356,7 @@ verify() { # verify <instance>: one non-interactive login, with the two failures
 cmd_add() {
   need_instance "${1:-}"
   check_config_path
+  precheck_block "$1"            # every local refusal first, so a bad config costs no Azure call
   require_tools
   find_compute "$1"
   read_facts "$1"
@@ -362,7 +389,7 @@ $list
 EOF
 )
   if [ -z "$out" ]; then
-    printf 'azml-ssh-host: no SSH-enabled compute instances visible in subscription %s (az account set -s <other>)\n' "$SUB" >&2
+    printf 'azml-ssh-host: no SSH-enabled compute instances visible in subscription %s; check az account show, your Reader role, or az account set -s <other>\n' "$SUB" >&2
     return 0
   fi
   say "$out"

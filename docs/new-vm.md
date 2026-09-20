@@ -1,37 +1,47 @@
 # Set up a new VM
 
 For an Ubuntu 22.04 or 24.04 machine that already exists and that your Mac can already reach with `ssh <vm>`,
-including an Azure ML compute instance. About 20 minutes, and the last block prints how long it actually took.
+including an Azure ML compute instance. About 20 minutes of wall time, roughly 5 of it machine time; the rest
+is the browser logins. The last block prints the elapsed wall time since the first line of block 1.
 
-`<vm>` is the alias you gave the machine in the Mac's `~/.ssh/config`. Add that block first, from
-[ssh-config.example](ssh-config.example); `install.sh` asks for exactly this name, and `wt -H <vm> …` and the
+`<vm>` is the alias you gave the machine in the Mac's `~/.ssh/config`. Add that block first: for an Azure ML
+compute instance run `azml-ssh-host add <instance>` on the Mac ([azml-compute.md](azml-compute.md)), which
+writes the block with the right port, user and key; for any other VM copy
+[ssh-config.example](ssh-config.example). `install.sh` is given exactly this name, and `wt -H <vm> …` and the
 task picker use it. Two vCPUs and 8 GB of memory are comfortable.
 
-Open a shell on the VM (`ssh <vm>`) and paste the blocks in order. Replace the UPPERCASE placeholders first.
-Nothing prompts except `install.sh` and the logins in blocks 3 and 4. Blocks 1, 2 and 4 work over plain `ssh <vm>`;
-block 3 wants a VS Code terminal (explained there).
+Open a shell on the VM (`ssh <vm>`) and paste blocks 1, 2 and 4 each as one chunk, in order; run block 3 line by
+line, because its logins and the `codex` TUI take over the terminal. Replace the UPPERCASE placeholders first.
+`sudo` must work without a password, or block 1 asks for one; apt on an Azure ML image prints many repository
+warnings, which are pre-existing and harmless. Blocks 1, 2 and 4 work over plain `ssh <vm>`; block 3 wants a
+VS Code terminal (explained there). Nothing else prompts. Until the repo is public, seed it from the Mac before
+block 2 (see the Notes).
 
 ```bash
 # 1. packages   (the first line starts this page's clock)
 date +%s > /tmp/workstation-setup-start
-sudo apt-get update && sudo apt-get install -y git zsh tmux python3 jq curl rsync build-essential
-(type -p wget >/dev/null || sudo apt-get install -y wget) && sudo mkdir -p -m 755 /etc/apt/keyrings \
+sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git zsh tmux python3 jq curl rsync build-essential
+(type -p wget >/dev/null || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wget) && sudo mkdir -p -m 755 /etc/apt/keyrings \
   && wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null \
-  && sudo apt-get update && sudo apt-get install -y gh
+  && sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gh
 sudo update-locale LANG=C.UTF-8
 ```
 
 ```bash
-# 2. shell, identity, repo   (edit GIT_NAME / GIT_EMAIL first)
+# 2. shell, identity, repo   (edit GIT_NAME / GIT_EMAIL / VM first)
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
 git config --file ~/.gitconfig.local user.name  'GIT_NAME'
 git config --file ~/.gitconfig.local user.email 'GIT_EMAIL'
-mkdir -p ~/repos && [ -d ~/repos/workstation ] || git clone https://github.com/mal84emma/workstation ~/repos/workstation
+mkdir -p ~/repos
+[ -d ~/repos/workstation ] || git clone https://github.com/mal84emma/workstation ~/repos/workstation
 # install.sh writes export WT_REPOS_DIR="$HOME" to ~/.zshenv.local, so repos cloned to ~/<repo> are found.
 # For other folders, or several, edit that line: colon-separated, searched in order, e.g. "$HOME/work:$HOME"
-bash ~/repos/workstation/install.sh          # asks once for this VM's alias, no default
-sudo chsh -s "$(command -v zsh)" "$USER" && exec zsh -l
+# --refresh-config installs the portable Claude and Codex configs even when the image shipped its own; the
+# old ones go to ~/.workstation-backup/<stamp>-<pid>/. On a later update never pass it without reading the sync
+# table in the README, because it also drops Codex's hook and folder trust.
+WT_HOST=VM bash ~/repos/workstation/install.sh --refresh-config   # VM = this machine's alias in the Mac's ~/.ssh/config
+sudo chsh -s "$(command -v zsh)" "$(id -un)" && exec zsh -l   # last line: exec replaces the shell
 ```
 
 Run block 3 from a VS Code terminal on the machine (Remote-SSH: Connect to Host → `<vm>`, then Terminal → New
@@ -42,20 +52,20 @@ Remote-SSH connection the setup asks you to make.
 
 ```bash
 # 3. agents and logins (interactive, in a VS Code terminal on the machine)
-curl -fsSL https://claude.ai/install.sh | bash        # -> ~/.local/bin/claude
-curl -fsSL https://chatgpt.com/codex/install.sh | sh  # -> ~/.local/bin/codex (static musl build)
-gh auth login --web --git-protocol https              # device code, opened in the Mac's browser
-claude auth login                                     # browser login on the Mac; claude auth status must say loggedIn true
-codex login                                           # browser login; the callback comes back through VS Code
-codex                                                 # /hooks -> trust the two portable hooks, then exit
-gh auth status && claude --version && codex login status && claude doctor
+command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash   # -> ~/.local/bin/claude
+command -v codex  >/dev/null || curl -fsSL https://chatgpt.com/codex/install.sh | sh   # -> ~/.local/bin/codex
+gh auth status >/dev/null 2>&1 || gh auth login --web --git-protocol https   # one-time code; VS Code forwards the callback
+claude auth status | grep -q '"loggedIn": true' || claude auth login   # browser login on the Mac
+codex login status >/dev/null 2>&1 || codex login   # browser login; the callback comes back through VS Code
+codex   # /hooks -> trust the two portable hooks, then exit
+gh auth status; claude auth status; codex login status; claude doctor   # loggedIn true; ignore doctor's Remote Control lines
 gh repo clone OWNER/REPO ~/REPO
 ```
 
 ```bash
 # 4. Azure
 command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-az login --use-device-code   # code in the Mac browser, like gh
+az account show >/dev/null 2>&1 || az login --use-device-code   # code in the Mac browser, like gh
 az account show --query name -o tsv
 echo "setup took $(( ($(date +%s) - $(cat /tmp/workstation-setup-start)) / 60 )) min"
 ```
@@ -71,23 +81,29 @@ Check the VM answers:
 
 ```bash
 ssh <vm> '~/.local/bin/wt help'
-ssh <vm> 'zsh -c "echo \$WT_HOST"'
+ssh <vm> 'cat ~/.zshenv.local'   # export WT_HOST=<vm> and export WT_REPOS_DIR="$HOME"
 ssh <vm> '~/.local/bin/wt repos'
 ```
 
-The second must print the alias you typed during `install.sh`. If it is empty, `wt` on the VM cannot ask the
-Mac for rows; fix `~/.zshenv.local` on the VM. The third lists every git repo directly under the VM's home
-folder, one `name<TAB>path` per line, with hidden folders such as `~/.oh-my-zsh` excluded; an empty result
-only means no repo has been cloned there yet.
+The second must show both lines `install.sh` wrote: the alias you gave it, and the repos folder. If either
+line is missing, `wt` on the VM cannot ask the Mac for rows or find repos; fix `~/.zshenv.local` on the VM.
+The third lists every git repo directly under the VM's home folder, one `name<TAB>path` per line, with hidden
+folders such as `~/.oh-my-zsh` excluded; an empty result only means no repo has been cloned there yet.
 
 ## Notes
 
-- **A machine that is not fresh** (an Azure ML compute instance usually is not) works the same; `install.sh` moves
-  whatever is in the way into `~/.workstation-backup/<stamp>/` and prints the path. Before block 2, copy anything
-  you want to keep from an existing `~/.gitconfig` beyond `user.*` (credential helpers, per-URL settings) into
-  `~/.gitconfig.local`, because the linked `~/.gitconfig` includes that file and nothing else. An existing
-  `~/.claude/settings.json` is kept as is, so the portable hooks are not installed until you run
-  `bash ~/repos/workstation/install.sh --refresh-config` and put your own keys back.
+- **A machine that is not fresh** (an Azure ML compute instance usually is not). Skip this on a fresh machine.
+  `install.sh` moves whatever is in the way into `~/.workstation-backup/<stamp>-<pid>/` and prints that path, or
+  prints `done. nothing needed backing up`. Before block 2, copy from an existing `~/.gitconfig` only what the
+  linked one does not already cover: the linked `~/.gitconfig` routes github.com through
+  `gh auth git-credential` and includes `~/.gitconfig.local`, so carry over other hosts' credential helpers
+  and per-URL settings into `~/.gitconfig.local`, not the github.com helper.
+- **Seeding before the repo is public.** From the Mac:
+  `ssh <vm> 'mkdir -p ~/repos' && rsync -a --exclude .git ~/repos/workstation/ <vm>:~/repos/workstation/`.
+  Block 2's clone line then finds the folder and skips. A seeded copy has no `.git`, so `wt update` and
+  `wt -H <vm> update` refuse until it is replaced by a clone; until then re-seed with the same rsync line and
+  rerun `bash ~/repos/workstation/install.sh` on the VM.
+- **Check free disk first** with `df -h /`: blocks 1 and 3 download about 1 GB.
 - **Do not run `cmux hooks codex install` on a VM.** That is a Mac-only step. The VM keeps only the portable
   hooks, which relay over the cmux socket; cmux's generated handlers hold Mac-local paths and a state protocol
   that cannot travel.

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# install.sh — install this repo into $HOME.   bash ~/repos/workstation/install.sh [--refresh-config]
+# install.sh: install this repo into $HOME.
+#   bash ~/repos/workstation/install.sh [--refresh-config]   (on a VM, prefix WT_HOST=<vm>)
 #
 # Idempotent: rerun it whenever the repo changes. Nothing is ever deleted; anything in the way is
 # moved into ~/.workstation-backup/<YYYYmmdd-HHMMSS>-<pid>, created only if it is actually needed
@@ -13,6 +14,8 @@
 #   2. ~/.claude/settings.json, ~/.codex/config.toml and ~/.codex/hooks.json are machine-local
 #      COPIES of the versioned .base files, because the apps write local state into them. A normal
 #      run keeps an existing copy ("kept …"); only --refresh-config stashes it and rewrites it.
+#      A refresh therefore drops the state Codex writes into config.toml (its hook trust hashes and
+#      folder trust), so trust the hooks in /hooks after a refresh, not before.
 #   3. Everything else is never rewritten: the hand-written overrides (~/.gitconfig.local, ~/.zshrc.local
 #      and ~/.zshenv.local, which on a VM only gains a WT_HOST and a WT_REPOS_DIR line when it has none)
 #      and the real directories the apps write into.
@@ -62,7 +65,9 @@ link() {
 
 # copy_config <repo-relative .base> <home-relative dst> <claude|plain>: install one machine-local
 # copy, keeping an existing real file unless --refresh-config was given. Kind "claude" drops the
-# voice keys off a Mac, because a VM has no local microphone.
+# voice keys off a Mac, because a VM has no local microphone. A replaced copy is only ever stashed,
+# never merged: a refreshed .codex/config.toml loses the tables Codex wrote into it (hook trust,
+# folder trust), which the old file in the backup dir still holds and /hooks restores.
 copy_config() {
   local src="$R/$1" dst="$HOME/$2" kind="$3"
   if [[ -e "$dst" && ! -L "$dst" && $REFRESH -eq 0 ]]; then
@@ -163,19 +168,23 @@ append_line() {
   printf '%s\n' "$line" >> "$f"
 }
 
-# ask_vm_host: on a VM, wt needs this host's alias from the Mac's ~/.ssh/config. Asked once, in a
-# terminal, then recorded in ~/.zshenv.local.
+# ask_vm_host: on a VM, wt needs this host's alias from the Mac's ~/.ssh/config. The setup page runs
+# WT_HOST=<vm> bash install.sh, so the answer never comes from stdin: read would otherwise eat the next
+# line of a block pasted in one go. Asked in a terminal only when the variable is absent, then either way
+# recorded in ~/.zshenv.local.
 ask_vm_host() {
   if [[ $OS == Darwin ]] || grep -qs '^export WT_HOST=' "$HOME/.zshenv.local"; then
     return 0
   fi
-  if [[ ! -t 0 ]]; then
-    echo "WT_HOST unset: run install.sh in a terminal so it can ask for the VM name" >&2
-    exit 1
+  local h="${WT_HOST:-}"
+  if [[ -z $h ]]; then
+    if [[ ! -t 0 ]]; then
+      echo "WT_HOST unset: run install.sh in a terminal so it can ask for the VM name" >&2
+      exit 1
+    fi
+    read -r -p "Name of this VM exactly as in the Mac's ~/.ssh/config (e.g. dev-a): " h
   fi
-  local h
-  read -r -p "Name of this VM exactly as in the Mac's ~/.ssh/config (e.g. dev-a): " h
-  if [[ ! $h =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  if [[ $h == VM || ! $h =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then   # VM is the page's placeholder
     echo "invalid or blank name: '$h'" >&2
     exit 1
   fi

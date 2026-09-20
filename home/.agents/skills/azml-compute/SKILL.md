@@ -22,8 +22,10 @@ azml-ssh-host rm <instance>      # remove the block again
 1. **Never edit `~/.ssh/config` by hand**, and never write a `Host` block for a compute instance yourself. The helper owns the region between `# >>> azml-ssh-host <instance>` and `# <<< azml-ssh-host <instance>`, keeps it at the top of the file so nothing earlier can override it, and touches nothing else.
 2. **Never run `az login` or `az account set` for the user.** If the helper says "not logged in" or that the instance is not in this subscription, report its error and stop. Logging in is the user's action.
 3. **On "not found"**, run `azml-ssh-host list` once and show the instance names it prints, then stop. Do not loop over subscriptions.
-4. **Stop on any non-zero exit.** Each error names the next command; pass it on rather than retrying.
-5. **Report** the helper's summary line (`<instance>: <user>@<ip>:<port>, key ~/.ssh/<name>, config ~/.ssh/config`), and that the host now appears in the ⌃⌥⌘T task picker (`wt task`) and works with `wt -H <instance> …`, `ssh <instance>` and VS Code Remote-SSH.
+4. **If `azml-ssh-host` is not found**, tell the user to run `wt update` on the Mac, which re-runs `install.sh` and links the helper, and stop. Do not install it yourself or call `az` by hand.
+5. **If the helper says a `Host` block was not written by azml-ssh-host**, show the user the offending lines from `~/.ssh/config` (read them, do not edit the file: editing it is theirs) and ask them to delete that block and the comment lines above it, keeping the alias. Re-run `add` once they say it is gone.
+6. **Stop on any non-zero exit.** Each error names the next command; pass it on rather than retrying.
+7. **Report** the helper's summary line (`<instance>: <user>@<ip>:<port>, key ~/.ssh/<name>, config ~/.ssh/config`), and that the host now appears in the ⌃⌥⌘T task picker (`wt task`) and works with `wt -H <instance> …`, `ssh <instance>` and VS Code Remote-SSH.
 
 ## After it is added
 

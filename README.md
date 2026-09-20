@@ -21,10 +21,11 @@ VS Code opens on demand, through `wt open`.
 - **Per-repo hooks.** `.worktreeinclude` lists gitignore-style patterns of *ignored* files (`.env` and
   friends) to copy into each new worktree. `.wt-setup`, if executable, runs inside each new worktree.
 - **Paths.** Task repos live in the folders `$WT_REPOS_DIR` lists, default `~/Documents/Repositories` on the
-  Mac; on a VM `install.sh` records the home folder instead. This repo lives at `~/repos/workstation` on every
-  machine, so the same commands work everywhere.
+  Mac; on a VM `install.sh` records the home folder instead, so every git repo directly under the home folder
+  then counts as a task repo, hidden folders such as `~/.oh-my-zsh` excluded. This repo lives at
+  `~/repos/workstation` on every machine, so the same commands work everywhere.
 - **Auth is yours.** The repo carries tools and config only. You log in once per machine with `gh auth login`,
-  `az login`, `claude` then `/login`, and `codex login`.
+  `az login`, `claude auth login`, and `codex login`; `claude auth status` must report `"loggedIn": true`.
 
 ## Layout
 
@@ -69,18 +70,24 @@ bash ~/repos/workstation/install.sh
 
 Full instructions: [docs/new-mac.md](docs/new-mac.md) and [docs/new-vm.md](docs/new-vm.md).
 
+Until the repo is published, seed a machine with the `rsync` line in the notes of
+[docs/new-vm.md](docs/new-vm.md) instead of the clone. A seeded copy has no `.git`, so `wt update` refuses
+until it is replaced by a clone.
+
 `install.sh` sorts every file into one of three classes.
 
 | Class | Files | Behaviour |
 |---|---|---|
 | Symlinks | shell, git and tmux dotfiles, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, `cmux.json` (Mac only) | Edits, including an agent's, land in the repo, so `git diff` is the review |
 | Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
-| Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (except the one `WT_HOST` line on a VM), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files |
+| Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files |
 
 It is idempotent: rerun it after every repo change. Nothing is deleted. Anything in the way is moved into
 `~/.workstation-backup/<timestamp>-<pid>`, which is created only when it is actually needed. It stops with a
-message if oh-my-zsh is missing, or if `~/.gitconfig.local` holds no git identity. On Linux it asks once for
-this VM's alias in the Mac's `~/.ssh/config` and writes `WT_HOST` to `~/.zshenv.local`.
+message if oh-my-zsh is missing, or if `~/.gitconfig.local` holds no git identity. On Linux it records this
+VM's alias in the Mac's `~/.ssh/config` as a `WT_HOST` line in `~/.zshenv.local`: given in the environment
+(`WT_HOST=<vm> bash install.sh`, which is what the setup page does) or asked for once at a prompt. It records
+`export WT_REPOS_DIR="$HOME"` there too.
 
 ## Daily use
 
@@ -198,13 +205,15 @@ always backed up. Per-machine files never enter the loop.
 | Change | Mac | VM |
 |---|---|---|
 | Edit `AGENTS.md`, a skill, `wt` | Skills apply live, `AGENTS.md` at the next session; commit | `wt -H <vm> update` |
-| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file, then `bash ~/repos/workstation/install.sh --refresh-config && cmux hooks codex install --yes`; review the portable handlers with Codex `/hooks`; commit | `wt -H <vm> update --refresh-config`; do **not** run the cmux installer; review with `/hooks` on the VM |
+| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file, then `bash ~/repos/workstation/install.sh --refresh-config && cmux hooks codex install --yes`; review the portable handlers with Codex `/hooks`; commit | `wt -H <vm> update --refresh-config`; the refresh rewrites `~/.codex/config.toml` from the `.base` file and drops Codex's hook trust hashes and folder trust, so re-trust in `/hooks` on the VM afterwards; do **not** run the cmux installer there |
 | Update cmux, or repair local Codex state tracking | Back up the live `config.toml` and `hooks.json`, run `cmux hooks codex install --yes`, check that one turn returns to `idle` | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit | `wt -H <vm> update` |
 | Change `cmux.json` | Live once cmux reloads or relaunches; commit | n/a |
 | Repos in another folder | add the folder to `WT_REPOS_DIR` in `~/.zshenv.local` | edit the `WT_REPOS_DIR` line `install.sh` wrote in `~/.zshenv.local`; never versioned |
 | New tool | `Brewfile` plus `brew bundle`; commit | Add the line to [docs/new-vm.md](docs/new-vm.md) and run it by hand on existing VMs |
 | Promote a machine-local setting | Diff the live file against its `.base`, port only the portable keys, commit | Never commit live files or trust state |
+
+`wt update` needs a real clone: a VM seeded with `rsync` refuses it until the seed is replaced by a clone.
 
 ## Deliberately left out
 

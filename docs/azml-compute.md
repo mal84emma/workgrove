@@ -14,8 +14,9 @@ result with one non-interactive login.
 
 | Requirement | Why | Check |
 |---|---|---|
+| `azml-ssh-host` on PATH | The helper itself; `install.sh` links it into `~/.local/bin` | `command -v azml-ssh-host`, and if it is missing run `wt update`, which re-runs `install.sh` and links it |
 | Azure CLI, logged in | The helper reads the compute resource with `az rest` | `az account show` |
-| Reader on the workspace | Lets that GET return the resource instead of 403 | `azml-ssh-host list` shows the instance |
+| Reader on the workspace, and the workspace visible in the subscription | The helper finds workspaces with `az resource list` and then reads the instance under one of them; without the role the workspace is invisible and the GET is a 403 | `az resource list --resource-type Microsoft.MachineLearningServices/workspaces -o table` lists it, and `azml-ssh-host list` shows the instance |
 | `jq` | Parses the ARM response | `jq --version` |
 | OpenSSH (`ssh`, `ssh-keygen`) | Connects, and compares key fingerprints | `ssh -V` |
 | A local private key | Its public half must be the one registered on the instance | The key sits in `~/.ssh` |
@@ -44,14 +45,14 @@ ci-example: azureuser@203.0.113.10:50000, key ~/.ssh/azml-key, config ~/.ssh/con
 now: wt task (⌃⌥⌘T) -> ci-example, or wt -H ci-example …
 ```
 
-Run it again and the first line becomes `unchanged: Host ci-example is already correct`, followed by the same
-verification. If the instance was rebuilt with a different IP, the block is rewritten at the top of the file.
+Run it again and the first line becomes `unchanged: Host ci-example is already correct in ~/.ssh/config`,
+followed by the same verification. If the instance was rebuilt with a different IP, the block is rewritten at the top of the file.
 
 ## What it writes
 
 ```
 # >>> azml-ssh-host <instance>
-# Azure ML compute instance in workspace <workspace>
+# Azure ML compute instance <instance> in workspace <workspace>, resource group <resource group>
 Host <instance>
   HostName <ip>
   Port <port>
@@ -68,9 +69,30 @@ Host <instance>
 The block sits at the top of the file so that nothing earlier can override it: ssh keeps the first value it is
 given for each setting, so a `Host *` or `Match host …` further up would otherwise decide the user or the port.
 The markers delimit the only region the helper ever changes. Everything else stays byte for byte as it was, and
-`rm` puts the file back exactly as `add` found it. A `Host` or `Match` line naming the instance outside the
-markers is refused rather than edited, and markers that do not pair are refused rather than repaired.
+`rm` restores the content exactly as `add` found it; the mode is normalised to 600 whenever the file is written,
+so a config that was 644 comes back 600. A `Host` or `Match` line naming the instance outside the markers is
+refused rather than edited, and markers that do not pair are refused rather than repaired.
 `IdentitiesOnly yes` stops ssh offering every agent key first. `UseKeychain yes` is the only macOS-only line.
+
+## Migrating a hand-written block
+
+If `~/.ssh/config` already holds a `Host <instance>` block you wrote yourself, `add` refuses rather than edits it:
+
+```
+azml-ssh-host: Host ci-example is already in ~/.ssh/config and was not written by azml-ssh-host.
+  Delete that Host block and the comment above it, keep the alias, then re-run: azml-ssh-host add ci-example
+```
+
+Editing the file is yours to do. Delete the block and any comment lines above it, including a note about the
+instance at the very top of the file, because the managed block is inserted at line 1 and those lines would end
+up describing it. Keep the alias exactly as it was: it is the Azure resource name the lookup uses, and it is
+also the name the ⌃⌥⌘T picker, `wt -H <instance> …` and VS Code Remote-SSH already know. Then run
+`azml-ssh-host add <instance>`.
+
+What you gain is the two keepalive lines, `ServerAliveInterval 30` and `ServerAliveCountMax 6`, which a
+hand-written block usually lacks. Without them an idle session carrying tmux or VS Code Remote-SSH hangs
+silently the moment a NAT or a router drops the connection: the client sits there with a dead socket. With
+them the client gives up after about three minutes, and cmux or VS Code reconnects on its own.
 
 ## Gotchas
 
@@ -86,6 +108,13 @@ markers is refused rather than edited, and markers that do not pair are refused 
   prints the line to run: `ssh-keygen -R '[<ip>]:<port>'`, after which `add` works again.
 - `UseKeychain` is a macOS option; Linux OpenSSH rejects it, so the helper writes it only on a Mac.
   `AddKeysToAgent` is valid on both and is always written.
+- A 403, an expired token and a genuinely missing name all surface as the same "not found", because the helper
+  does not distinguish them. If `azml-ssh-host list` prints nothing at all, the problem is permissions or the
+  subscription, not the instance name.
+- Another directory needs another login: `az login --tenant <tenant>`. `az account list -o table` shows what
+  you are logged into, and `az account set -s <subscription>` switches between subscriptions in it.
+- The registered key comes from `sshSettings.adminPublicKey` in the ARM GET. If it is absent, the helper says
+  so and prints the exact `az rest --method get --url …` call it made, so you can look at the response yourself.
 - The `az ml` extension is not used: it can send an unsupported api-version, so every call goes through
   `az resource list` and `az rest` with the version written out.
 - The key cannot be changed on an existing instance. Create instances with a public key whose private half is
@@ -94,5 +123,5 @@ markers is refused rather than edited, and markers that do not pair are refused 
 ## In this setup
 
 Once `add` has verified the login, the instance is a VM like any other here: give it the same treatment as a
-fresh VM with [new-vm.md](new-vm.md), using `<instance>` as the alias it asks for. After that it appears in
+fresh VM with [new-vm.md](new-vm.md), with `WT_HOST=<instance>` on its install line. After that it appears in
 the ⌃⌥⌘T picker, and `wt -H <instance> new -r <repo> -p "…"` starts tasks on it with their rows on the Mac.
