@@ -8,7 +8,8 @@ including an Azure ML compute instance. About 20 minutes, and the last block pri
 task picker use it. Two vCPUs and 8 GB of memory are comfortable.
 
 Open a shell on the VM (`ssh <vm>`) and paste the blocks in order. Replace the UPPERCASE placeholders first.
-Nothing prompts except `install.sh` and the logins in blocks 3 and 4.
+Nothing prompts except `install.sh` and the logins in blocks 3 and 4. Blocks 1, 2 and 4 work over plain `ssh <vm>`;
+block 3 wants a VS Code terminal (explained there).
 
 ```bash
 # 1. packages   (the first line starts this page's clock)
@@ -33,13 +34,19 @@ bash ~/repos/workstation/install.sh          # asks once for this VM's alias, no
 sudo chsh -s "$(command -v zsh)" "$USER" && exec zsh -l
 ```
 
+Run block 3 from a VS Code terminal on the machine (Remote-SSH: Connect to Host → `<vm>`, then Terminal → New
+Terminal), not from a plain `ssh` session. VS Code forwards the login callback port automatically, so `codex login`
+opens the Mac browser and completes on its own; over plain ssh it needs `ssh -L 1455:localhost:1455 <vm>` kept
+open in another Mac terminal, and `codex login --device-auth` is refused on some accounts. This also is the one
+Remote-SSH connection the setup asks you to make.
+
 ```bash
-# 3. agents and logins (interactive)
+# 3. agents and logins (interactive, in a VS Code terminal on the machine)
 curl -fsSL https://claude.ai/install.sh | bash        # -> ~/.local/bin/claude
 curl -fsSL https://chatgpt.com/codex/install.sh | sh  # -> ~/.local/bin/codex (static musl build)
 gh auth login --web --git-protocol https              # device code, opened in the Mac's browser
 claude                                                # /login -> paste the code from the Mac browser, then exit
-codex login --device-auth                             # if device auth is blocked: on the Mac, ssh -L 1455:localhost:1455 <vm>, then codex login
+codex login                                           # browser login; the callback comes back through VS Code
 codex                                                 # /hooks -> trust the two portable hooks, then exit
 gh auth status && claude --version && codex login status && claude doctor
 cd ~/Documents/Repositories && gh repo clone OWNER/REPO
