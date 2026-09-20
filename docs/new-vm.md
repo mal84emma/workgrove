@@ -1,7 +1,7 @@
 # Set up a new VM
 
-For an Ubuntu 24.04 VM that already exists and that your Mac can already reach with `ssh <vm>`. About 20
-minutes, and the last block prints how long it actually took.
+For an Ubuntu 22.04 or 24.04 machine that already exists and that your Mac can already reach with `ssh <vm>`,
+including an Azure ML compute instance. About 20 minutes, and the last block prints how long it actually took.
 
 `<vm>` is the alias you gave the machine in the Mac's `~/.ssh/config`. Add that block first, from
 [ssh-config.example](ssh-config.example); `install.sh` asks for exactly this name, and `wt -H <vm> …` and the
@@ -72,6 +72,12 @@ Mac for rows; fix `~/.zshenv.local` on the VM.
 
 ## Notes
 
+- **A machine that is not fresh** (an Azure ML compute instance usually is not) works the same; `install.sh` moves
+  whatever is in the way into `~/.workstation-backup/<stamp>/` and prints the path. Before block 2, copy anything
+  you want to keep from an existing `~/.gitconfig` beyond `user.*` (credential helpers, per-URL settings) into
+  `~/.gitconfig.local`, because the linked `~/.gitconfig` includes that file and nothing else. An existing
+  `~/.claude/settings.json` is kept as is, so the portable hooks are not installed until you run
+  `bash ~/repos/workstation/install.sh --refresh-config` and put your own keys back.
 - **Do not run `cmux hooks codex install` on a VM.** That is a Mac-only step. The VM keeps only the portable
   hooks, which relay over the cmux socket; cmux's generated handlers hold Mac-local paths and a state protocol
   that cannot travel.
