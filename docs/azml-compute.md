@@ -23,8 +23,8 @@ result with one non-interactive login.
 | SSH enabled at creation | Cannot be turned on afterwards | `sshSettings.sshPublicAccess` is `Enabled` |
 
 The Azure CLI and `jq` come from the `Brewfile` on the Mac, and `az login` is one of the logins in
-[new-mac.md](new-mac.md). On an Azure ML compute instance itself az is preinstalled: the VM page's install line
-is skipped by its own guard, so it only logs in.
+[new-mac.md](new-mac.md). On an Azure ML compute instance itself az is preinstalled: the VM page's install
+block is skipped by its own guard, so it only logs in.
 
 ## Usage
 
@@ -70,8 +70,11 @@ The block sits at the top of the file so that nothing earlier can override it: s
 given for each setting, so a `Host *` or `Match host …` further up would otherwise decide the user or the port.
 The markers delimit the only region the helper ever changes. Everything else stays byte for byte as it was, and
 `rm` restores the content exactly as `add` found it; the mode is normalised to 600 whenever the file is written,
-so a config that was 644 comes back 600. A `Host` or `Match` line naming the instance outside the markers is
-refused rather than edited, and markers that do not pair are refused rather than repaired.
+so a config that was 644 comes back 600. The new file is built in full beside the target and then renamed onto
+it, and the file it replaces is first copied to `~/.ssh/config.bak`, also 600. Nothing is ever truncated in
+place, so an interrupt or a failed write costs you neither the config nor a line of it: what is there is either
+the old file or the new one. A `Host` or `Match` line naming the instance outside the markers is refused rather
+than edited, and markers that do not pair are refused rather than repaired.
 `IdentitiesOnly yes` stops ssh offering every agent key first. `UseKeychain yes` is the only macOS-only line.
 
 ## Migrating a hand-written block
@@ -104,6 +107,12 @@ them the client gives up after about three minutes, and cmux or VS Code reconnec
 - The port is per instance and is not 22. It comes from `sshSettings.sshPort`.
 - The IP is fixed for the life of the instance and survives a stop and start in practice, but the resource is
   the only authority. If `ssh <instance>` stops connecting, run `azml-ssh-host add <instance>` again.
+- The first host key an instance offers is accepted without a prompt: the verification login connects with
+  `StrictHostKeyChecking=accept-new`, so the key is recorded in `~/.ssh/known_hosts` and the login goes
+  through. Compute instances are created and destroyed constantly and a fresh one always presents a key
+  nothing has seen before, so a prompt at every `add` would only teach you to answer yes without reading it.
+  The cost is the usual one: someone able to intercept that first connection could hand you their key instead.
+  A key that changes afterwards is still refused, which is the next gotcha.
 - A recreated instance with the same name gets a new host key, and ssh then refuses to connect. The helper
   prints the line to run: `ssh-keygen -R '[<ip>]:<port>'`, after which `add` works again.
 - `UseKeychain` is a macOS option; Linux OpenSSH rejects it, so the helper writes it only on a Mac.

@@ -63,8 +63,15 @@ gh repo clone OWNER/REPO ~/REPO
 ```
 
 ```bash
-# 4. Azure
-command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+# 4. Azure   (Microsoft's step-by-step install: their signing key in a keyring, their apt source signed by it)
+command -v az >/dev/null || { sudo DEBIAN_FRONTEND=noninteractive apt-get install -y apt-transport-https ca-certificates gnupg lsb-release \
+  && sudo mkdir -p -m 755 /etc/apt/keyrings \
+  && curl -sLS https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | sudo tee /etc/apt/keyrings/microsoft.gpg >/dev/null \
+  && sudo chmod go+r /etc/apt/keyrings/microsoft.gpg \
+  && printf 'Types: deb\nURIs: https://packages.microsoft.com/repos/azure-cli/\nSuites: %s\nComponents: main\nArchitectures: %s\nSigned-by: /etc/apt/keyrings/microsoft.gpg\n' "$(lsb_release -cs)" "$(dpkg --print-architecture)" | sudo tee /etc/apt/sources.list.d/azure-cli.sources >/dev/null \
+  && sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y azure-cli; }
+# Shorter, but unverified: a shortened URL piped into a root shell, with no signature check on what comes back.
+# command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 az account show >/dev/null 2>&1 || az login --use-device-code   # code in the Mac browser, like gh
 az account show --query name -o tsv
 echo "setup took $(( ($(date +%s) - $(cat /tmp/workstation-setup-start)) / 60 )) min"
@@ -111,9 +118,13 @@ run `exec bash` in that pane or open a new tmux window.
   Block 2's clone line then finds the folder and skips. A seeded copy has no `.git`, so `wt update` and
   `wt -H <vm> update` refuse until it is replaced by a clone; until then re-seed with the same rsync line and
   rerun `bash ~/repos/workstation/install.sh` on the VM.
-- **Update the Mac's `wt` and each VM's `wt` together** (`wt update` on the Mac, `wt -H <vm> update` on the
-  VM, or the rsync seed above for an uncommitted change), because `wt -H <vm> …` runs the VM's copy for the
-  remote half of every command, and a VM left behind answers in a vocabulary the Mac no longer expects.
+- **Update the Mac's `wt` and each VM's `wt` together** (`wt update` on the Mac, and for a VM either
+  `wt -H <vm> update` from an interactive Mac terminal or `wt update` in a shell on the VM, or the rsync seed
+  above for an uncommitted change), because `wt -H <vm> …` runs the VM's copy for the remote half of every
+  command, and a VM left behind answers in a vocabulary the Mac no longer expects.
+  `wt update` prints the incoming commits and a diffstat and asks before it merges them and runs `install.sh`,
+  defaulting to no; with no terminal on stdin it refuses rather than apply them unattended, and
+  `wt -H <vm> update` has a terminal to lend the VM only when the Mac side has one.
 - **Check free disk first** with `df -h /`: blocks 1 and 3 download about 1 GB.
 - **Do not run `cmux hooks codex install` on a VM.** That is a Mac-only step. The VM keeps only the portable
   hooks, which relay over the cmux socket; cmux's generated handlers hold Mac-local paths and a state protocol
