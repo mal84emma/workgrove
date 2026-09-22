@@ -13,6 +13,17 @@
   },
   "model": "fable",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+          }
+        ]
+      }
+    ],
     "PermissionRequest": [
       {
         "matcher": "",
@@ -36,6 +47,17 @@
       }
     ],
     "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
       {
         "matcher": "",
         "hooks": [
