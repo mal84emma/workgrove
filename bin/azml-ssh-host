@@ -27,8 +27,10 @@
 # exactly as `add` found it; the mode is normalised to 600 whenever the file is written, so a config
 # that was 644 comes back 600. Every write builds the whole file in a temporary file in the same folder
 # and renames it into place, keeping the previous file as <config>.bak, so an interrupted or failed run
-# cannot leave a truncated config behind. A `Host`/`Match` line naming the instance outside the markers is
-# refused rather than edited, and markers that do not pair are refused rather than repaired; a run
+# cannot leave a truncated config behind. A config that is itself a symlink, as a dotfiles checkout makes it,
+# is followed to the real file first, so the link survives the write and the .bak lands beside its target; a
+# link with no target is refused rather than turned into a file. A `Host`/`Match` line naming the instance
+# outside the markers is refused rather than edited, and markers that do not pair are refused rather than repaired; a run
 # that refuses leaves the file alone, mode included. The file is created 600, in a 700 ~/.ssh.
 # UseKeychain is written on macOS only; Linux OpenSSH rejects it.
 set -euo pipefail
@@ -169,8 +171,32 @@ match_key() { # match_key <instance>: the ~/.ssh key whose public half is the on
 start_marker() { printf '# >>> azml-ssh-host %s' "$1"; }
 end_marker()   { printf '# <<< azml-ssh-host %s' "$1"; }
 
+resolve_config_path() { # a config managed by stow, chezmoi or this repo's own install.sh is a symlink into a
+                        # dotfiles checkout. Renaming the new file onto the link would replace the link with a
+                        # regular file and quietly detach it, so the link is followed to the real file once, up
+                        # front, and every write below lands there. readlink -f is GNU and absent on macOS, so
+                        # the chain is walked a link at a time; a relative target is read from the link's folder.
+  local orig="$CONFIG" p="$CONFIG" target n=0
+  while [ -L "$p" ]; do
+    n=$((n + 1))
+    [ "$n" -le 32 ] \
+      || die "$(tilde "$orig") is a loop of symlinks; follow it yourself: ls -l $(tilde "$orig")"
+    target=$(readlink "$p") \
+      || die "could not read the symlink $(tilde "$p"); check it: ls -l $(tilde "$p")"
+    case "$target" in
+      /*) p="$target" ;;
+      *) p="$(parent_dir "$p")/$target" ;;
+    esac
+  done
+  if [ "$p" != "$orig" ] && [ ! -e "$p" ]; then
+    die "$(tilde "$orig") is a symlink to $(tilde "$p"), which does not exist; create that file or repoint the link, then re-run"
+  fi
+  CONFIG="$p"
+}
+
 check_config_path() { # -F must name a file this can read and write; nothing is created here
   local dir
+  resolve_config_path                        # first, so the checks and every later write see the real file
   [ ! -d "$CONFIG" ] || die "$(tilde "$CONFIG") is a directory; -F takes an ssh config file (default ~/.ssh/config)"
   if [ ! -e "$CONFIG" ]; then
     dir=$(parent_dir "$CONFIG")
@@ -252,13 +278,13 @@ read_block() { # read_block <instance>: the first managed block as it stands, em
     inb && line == e { inb = 0; done_one = 1 }' "$CONFIG"
 }
 
-strip_blocks() { # strip_blocks <instance>: the file without its managed blocks. A block that starts at
-                 # line 1 takes the blank line after it, which is the separator add itself writes, so
-                 # add and rm are exact inverses.
+strip_blocks() { # strip_blocks <instance>: the file without its managed blocks. Every block takes the
+                 # blank line after it, which is the separator add itself writes, so add and rm are
+                 # exact inverses however many blocks the file holds and whatever order they go in.
   awk -v s="$(start_marker "$1")" -v e="$(end_marker "$1")" '
     { line = $0; sub(/[ \t\r]+$/, "", line) }
-    !inb && line == s { inb = 1; top = (NR == 1); next }
-    inb && line == e { inb = 0; eat = top; top = 0; next }
+    !inb && line == s { inb = 1; next }
+    inb && line == e { inb = 0; eat = 1; next }
     inb { next }
     eat { eat = 0; if ($0 == "") next }
     { print }' "$CONFIG"
@@ -320,6 +346,7 @@ write_config() { # write_config <instance> [<block file>]: the block first, then
     cat "$out" >"$new" || die "could not write the new $(tilde "$CONFIG")"
   fi
   if [ -e "$CONFIG" ]; then                  # the previous file is kept before anything replaces it
+    rm -f "$CONFIG.bak"                      # an old .bak may be a symlink; cp would write through it
     cp "$CONFIG" "$CONFIG.bak" || die "could not back up $(tilde "$CONFIG") to $(tilde "$CONFIG").bak"
     chmod 600 "$CONFIG.bak" || die "could not set the mode of $(tilde "$CONFIG").bak"
   fi
