@@ -25,13 +25,15 @@
 #   wt task [--where local|<host>] [-a claude|codex|repo-shell|vm-shell] [-r REPO] [-p TEXT]
 #                                                             pick where/kind/repo/name/brief, then start it (Mac, needs fzf)
 #   wt driver                                                 open (or select) the driver row (@local)
-#   wt update [--refresh-config]                              git pull this repo and re-run install.sh
+#   wt update [--refresh-config]                              show what git pull would bring in, then, once you confirm,
+#                                                             pull this repo and re-run install.sh
 #   wt path <name> [-r PATH] | wt current | wt help
 #
 #   wt -H <host> <new|attach|list|show|rm|path|open|repos|update|help> …
 #                                                             run wt on that VM over ssh and keep the cmux row local;
 #                                                             show/rm/path/open/attach need -r;
-#                                                             attach [--restart-agent|--reattach]
+#                                                             attach [--restart-agent|--reattach];
+#                                                             update asks here, so run it from a terminal
 #
 # Where it runs: on a Mac wt drives cmux directly; on a VM (see is_remote) it only prepares worktrees and
 # asks the Mac for rows and VS Code windows through `cmux notify` over the relay socket. A VM task's row is a
@@ -702,7 +704,21 @@ cmd_update() { # pull this repo and re-run its installer
   [[ "$s" == /* ]] || s="$(dirname "$0")/$s"
   dir=$(cd "$(dirname "$s")/.." && pwd -P)
   [[ -d "$dir/.git" ]] || die "$dir is not a git clone; replace the seed: mv $dir $dir.seed && git clone https://github.com/mal84emma/workstation $dir"
-  git -C "$dir" pull --ff-only
+  local ans
+  git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 \
+    || die "$dir has no upstream branch; set one: git -C $dir branch --set-upstream-to origin/main"
+  git -C "$dir" fetch --quiet || die "git fetch failed in $dir"
+  if [[ "$(git -C "$dir" rev-parse HEAD)" == "$(git -C "$dir" rev-parse '@{u}')" ]]; then
+    printf 'Already up to date.\n'
+  else                                                     # `wt update` runs install.sh, so show the code first
+    printf 'incoming commits:\n'; git -C "$dir" --no-pager log --oneline 'HEAD..@{u}'
+    printf '\nfiles changed:\n';  git -C "$dir" --no-pager diff --stat 'HEAD..@{u}'
+    [[ -t 0 ]] || die "update: refusing to apply these commits unattended; run wt update from an interactive terminal (for a VM, wt -H <vm> update from one, or a shell on the VM)"
+    printf '\n'
+    read -r -p "apply them and run $dir/install.sh? [y/N] " ans || ans=""
+    [[ "$ans" == [yY] || "$ans" == [yY][eE][sS] ]] || die "update: cancelled"
+    git -C "$dir" merge --ff-only '@{u}'
+  fi
   bash "$dir/install.sh" "${refresh[@]+"${refresh[@]}"}"
 }
 
@@ -714,6 +730,17 @@ remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means we never 
   return $rc
 }
 remote_wt() { local host="$1"; shift; remote_sh "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the VM this terminal when we have one,
+                  # so a command that asks before it acts (wt update) can read the answer. Never for a caller
+                  # that captures stdout: a pty folds stderr into it and turns every \n into \r\n. Without a
+                  # local terminal there is nothing to lend, and the VM's own refusal is the right answer.
+  local host="$1" cmd="$2" rc=0 tty=()
+  [[ -t 0 ]] && tty=(-t)                                   # -t and BatchMode=yes agree: BatchMode only gags prompts
+  ssh -o BatchMode=yes -o ConnectTimeout=5 "${tty[@]+"${tty[@]}"}" "$host" "$cmd" || rc=$?
+  if [[ $rc -eq 255 ]]; then die "host unreachable: is the VM running? (ssh $host)"; fi
+  return $rc
+}
+remote_wt_tty() { local host="$1"; shift; remote_sh_tty "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
 # shellcheck disable=SC2016   # $HOME must reach the VM unexpanded
 remote_run_cmd() { printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"; }
 
@@ -882,6 +909,7 @@ host_open() { # VS Code Remote-SSH on a VM worktree
   [[ -n "$name" ]] || die "open: worktree name required (wt -H $host open -r <repo> <name>)"
   [[ -n "$repo" ]] || die "open: -r <repo> is required with -H (wt -H $host repos lists them)"
   local p; p=$(remote_wt "$host" path "$name" -r "$repo")
+  hook_safe_path "$p" || die "open: refusing an unsafe path from $host ($p)"
   open_code "vscode-remote://ssh-remote+$host$p/" "$host:$p"
 }
 
@@ -915,7 +943,8 @@ cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac c
     show|path) need_r "$host" "$sub" "$@"; remote_wt "$host" "$sub" "$@" ;;
     repos)     if [[ -t 1 ]]; then case " $* " in *" --porcelain "*|*" --table "*) ;; *) set -- "$@" --table ;; esac; fi
                remote_wt "$host" repos "$@" ;;     # ssh gives the VM no terminal, so ask for the table explicitly
-    update|help) remote_wt "$host" "$sub" "$@" ;;
+    update)    remote_wt_tty "$host" "$sub" "$@" ;;   # the VM asks before it installs, so it needs a terminal
+    help)      remote_wt "$host" "$sub" "$@" ;;
     *) die "wt -H: '$sub' does not run remotely (new attach list show rm path open repos update help)" ;;
   esac
 }
