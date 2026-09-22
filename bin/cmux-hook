@@ -11,17 +11,37 @@ CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmu
 valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 safe_path() { [[ $1 == /* && $1 != *$'\n'* && $1 != *//* && $1 != */ && $1 != *'/../'* && $1 != */.. && $1 != *[\'\"\`\$\\\;]* ]]; }
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
-row_by_session() { # the row cmux made for a VM tmux session; mirrors cmux_row_field session … in wt
+row_by_title() { # the local row for a VM task; mirrors cmux_row_field <title> <field> <host> in wt
   "$CMUX" workspace list --json 2>/dev/null \
-    | jq -er --arg s "$1" 'first((.workspaces // .)[] | select(.remote.terminal_tmux_session == $s) | .id) // empty' 2>/dev/null; }
-attach_row() { # attach_row <host> <session> <title> <command> — create the row, then write its description (= tag_row in wt)
-  local out ref
-  out=$("$CMUX" mosh-tmux "$1" --session "$2" --name "$3" --no-focus --command "$4" 2>&1) || return 0
-  ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1)
-  for _ in 1 2 3; do                       # no workspace:N in the output: the row list lags ~1s behind create
-    [[ -n $ref ]] && break
-    sleep 1; ref=$(row_by_session "$2")
-  done
+    | jq -er --arg t "$1" --arg h "$2" 'first((.workspaces // .)[] | select(.title == $t and .remote.enabled and (((.remote.destination // "") == $h) or ((.description // "") == "@" + $h))) | .id) // empty' 2>/dev/null; }
+tmux_cmd() { # tmux_cmd <session> [command] [shared]
+  # The body below mirrors tmux_cmd in bin/wt byte for byte, although the hook only ever needs the task form:
+  # diff <(sed -n '/^tmux_cmd()/,/^}/p' bin/wt | grep -v '^ *#') <(sed -n '/^tmux_cmd()/,/^}/p' bin/cmux-hook |
+  # grep -v '^ *#') must print nothing. Comments may differ between the two, executable lines may not.
+  local run=""
+  [[ -n "${2:-}" ]] && printf -v run '%q' "$2; exec bash"
+  if [[ "${3:-}" == shared ]]; then
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux attach -t '=%s'" "$1" "$run" "$1"
+  else
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1"
+  fi
+}
+attach_row() { # attach_row <host> <session> <title> <command> — bring this task's row forward, or create it
+               # first, then write its description (= remote_row in wt: one row per title+host, and an existing
+               # row is only selected, never typed into: its pane may hold an agent that would eat the line)
+  local out ref line
+  ref=$(row_by_title "$3" "$1")
+  if [[ -n $ref ]]; then
+    "$CMUX" workspace select "$ref" >/dev/null 2>&1
+  else
+    line=$(tmux_cmd "$2" "$4")
+    out=$("$CMUX" ssh "$1" --name "$3" --no-focus --command "$line" 2>&1) || return 0
+    ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1)
+    for _ in 1 2 3; do                     # no workspace:N in the output: the row list lags ~1s behind create
+      [[ -n $ref ]] && break
+      sleep 1; ref=$(row_by_title "$3" "$1")
+    done
+  fi
   [[ -n $ref ]] && "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1"; }
 case $t in
   wt-open)   # body: {"host":…,"path":…}

@@ -12,8 +12,9 @@ VS Code opens on demand, through `wt open`.
 
 - **Identity.** Every row a task owns is titled `<repo>:<name>`; its description line, the sidebar's second
   line, reads `@local` or `@<host>`, so you always know where a session runs. A task on a VM also has the
-  tmux session `wt-<repo>-<name>`, which keeps the agent alive across disconnects. Other rows: `<repo> shell`
-  for a repo shell, `shell` for a VM shell, `driver` for the driver session.
+  tmux session `wt-<repo>-<name>`, which keeps the agent alive across disconnects: the row is a plain `cmux ssh`
+  row, and the shell it opens creates that session (running the agent) or takes over the one already there.
+  Other rows: `<repo> shell` for a repo shell, `shell` for a VM shell, `driver` for the driver session.
 - **Git owns the worktree; sidecar files own the launch metadata.** `wt` reads `git worktree list`. Per task
   it keeps `<repo>/.git/wt/<name>.json` (base ref, agent, row title, tmux session, copied files),
   `<name>.prompt` (the brief, handed to the agent by `wt run`) and `<name>.started` (after which Claude
@@ -103,8 +104,8 @@ non-interactive shell, so the line has to come first to cover `ssh <vm> '<cmd>'`
 | Look at the code | Say "show me the worktree code" (the agent runs `wt open`), or run `wt open <name>` / `wt -H <vm> open -r <repo> <name>`. This works from VM sessions too |
 | Shell on a VM | ⌃⌥⌘T → `<vm>` → `vm-shell` (row `shell`, second line `@<vm>`). A host you type that is not a configured alias is tried as-is; requests from inside that VM need a real `Host` entry |
 | Shell in a repo | ⌃⌥⌘T → where → `repo-shell` → repo (row `<repo> shell`) |
-| Re-open a VM task's row | `wt -H <vm> attach -r <repo> <name>`. It re-attaches a live agent; after a VM restart it refuses and prints the `--restart-agent` line, which resumes Claude with `-c` |
-| Reconnect after sleep or Wi-Fi loss | Nothing. cmux reconnects the row and the agent kept running in tmux |
+| Re-open a VM task's row | `wt -H <vm> attach -r <repo> <name>`. It re-attaches a live agent, including one whose row lost its pty in a cmux relaunch and now shows a bare shell; when no agent is running in the session (it exited, or a VM restart took the session) it refuses and prints the `--restart-agent` line, which resumes Claude with `-c` |
+| Reconnect after sleep or Wi-Fi loss | Nothing: the row reconnects by itself and the agent kept running in tmux. A lost remote pty (a cmux relaunch) needs `wt -H <vm> attach -r <repo> <name>`; a VM reboot takes the tmux session with it, so that one needs `--restart-agent` |
 | Hand back | Report the branch. `wt pr <name>` only when you ask for it |
 | Clean up | `wt rm <name>`, `wt -H <vm> rm -r <repo> <name>`, `wt prune` |
 | Update a machine | `wt update`, `wt -H <vm> update`; add `--refresh-config` only after reviewing a `.base` change |
@@ -195,7 +196,7 @@ interactive `wt attach`, `wt task` and `wt driver`, which belong to your own ses
 - Codex runs with `approvals_reviewer = "auto_review"`, so sandbox escalations are approved automatically and
   a Codex row rarely shows a needs-input state. Expect it only when Codex really does prompt.
 - VM rows are bash with cmux's shell integration, not zsh, which is why `install.sh` gives `~/.bashrc` a first
-  line sourcing `~/.zshenv`; type `zsh` in a row for the usual prompt.
+  line sourcing `~/.zshenv`; type `zsh` inside the row's tmux for the usual prompt.
 - The VM paths are implemented and documented here as designed, but they are the newest part of this
   setup. The first time you use one, check that the row appears with its `@<host>` line and that
   `wt -H <vm> show -r <repo> <name>` reports the tmux session.
@@ -218,11 +219,15 @@ always backed up. Per-machine files never enter the loop.
 | Promote a machine-local setting | Diff the live file against its `.base`, port only the portable keys, commit | Never commit live files or trust state |
 
 `wt update` needs a real clone: a VM seeded with `rsync` refuses it until the seed is replaced by a clone.
+Update the Mac's `wt` and each VM's `wt` together (`wt update` here, `wt -H <vm> update` there, or the rsync
+seed while the repo is private): `wt -H <vm> …` runs the VM's copy for the remote half of every command, so a
+VM left behind answers in a vocabulary this Mac no longer expects.
 
 ## Deliberately left out
 
 - **Tailscale.** Optional hardening; this works over the ssh you already have.
-- **mosh.** Not installed at either end. cmux's `mosh-tmux` falls back to tmux over plain ssh.
+- **mosh.** Not installed at either end, and cmux's `mosh-tmux` profile connects only one row per host. A VM
+  task row is a plain `cmux ssh` row whose shell creates or attaches the task's tmux session instead.
 - **Agent-native worktree features** (`claude --worktree`, `codex --worktree`, worktree-creation hooks).
   They overlap with `wt`, and mixing them makes nested or duplicate worktrees.
 - **Checksummed session names and stored file hashes.** `wt` compares copied files with their source at

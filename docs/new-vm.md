@@ -84,6 +84,7 @@ ssh <vm> '~/.local/bin/wt help'
 ssh <vm> 'cat ~/.zshenv.local'   # export WT_HOST=<vm> and export WT_REPOS_DIR="$HOME"
 ssh <vm> '~/.local/bin/wt repos'
 ssh <vm> 'bash -ic "echo \$WT_REPOS_DIR"'   # what a cmux row sees; must print the home folder
+ssh <vm> 'time bash -ic true'   # real under 0.1s; see the conda note below
 wt -H <vm> repos   # on the Mac; must print exactly the same lines as the third
 ```
 
@@ -108,20 +109,37 @@ on the VM; if it fails with `repos dir not found`, the `~/.zshenv` line is missi
   Block 2's clone line then finds the folder and skips. A seeded copy has no `.git`, so `wt update` and
   `wt -H <vm> update` refuse until it is replaced by a clone; until then re-seed with the same rsync line and
   rerun `bash ~/repos/workstation/install.sh` on the VM.
+- **Update the Mac's `wt` and each VM's `wt` together** (`wt update` on the Mac, `wt -H <vm> update` on the
+  VM, or the rsync seed above while the repo is private), because `wt -H <vm> …` runs the VM's copy for the
+  remote half of every command, and a VM left behind answers in a vocabulary the Mac no longer expects.
 - **Check free disk first** with `df -h /`: blocks 1 and 3 download about 1 GB.
 - **Do not run `cmux hooks codex install` on a VM.** That is a Mac-only step. The VM keeps only the portable
   hooks, which relay over the cmux socket; cmux's generated handlers hold Mac-local paths and a state protocol
   that cannot travel.
-- **cmux rows on a VM run bash, not zsh.** cmux's remote tmux profile starts every row as bash with its own
-  rc file and types `--command` text into it, so the oh-my-zsh prompt is not used there. An Azure ML compute
-  instance goes further: it resets the login shell to `/bin/bash` at every boot, so the `chsh` line in block 2
-  only lasts until the next stop/start there, and nothing in the harness depends on it. The one line
-  `install.sh` puts at the *top* of `~/.bashrc`, which sources `~/.zshenv`, is what carries `wt`, `WT_HOST`
-  and `WT_REPOS_DIR` into every bash on the VM, interactive or not, including `ssh <vm> '<cmd>'` and so
-  `wt -H <vm> …`. At the top because Ubuntu's own `~/.bashrc` returns on its fourth line when the shell is
-  not interactive, and anything below that return is never read by a command sent over ssh. Type `zsh` in a
-  row if you want the zsh prompt.
-- No extra network rule is needed. cmux's `mosh-tmux` runs tmux over plain ssh when mosh is absent.
+- **cmux rows on a VM run bash, not zsh.** A row is a plain `cmux ssh` row: it starts the VM's login shell
+  and types its `--command` text into it once, and that line creates or attaches the task's tmux session, so
+  the oh-my-zsh prompt is not used there. An Azure ML compute instance goes further: it resets the login
+  shell to `/bin/bash` at every boot, so the `chsh` line in block 2 only lasts until the next stop/start
+  there, and nothing in the harness depends on it. The one line `install.sh` puts at the *top* of `~/.bashrc`,
+  which sources `~/.zshenv`, is what carries `wt`, `WT_HOST` and `WT_REPOS_DIR` into every bash on the VM,
+  interactive or not, including `ssh <vm> '<cmd>'` and so `wt -H <vm> …`. At the top because Ubuntu's own
+  `~/.bashrc` returns on its fourth line when the shell is not interactive, and anything below that return is
+  never read by a command sent over ssh. Type `zsh` inside the row's tmux for the usual prompt.
+- No extra network rule is needed: the rows are plain ssh, and tmux is started by the row's own shell. After a
+  VM reboot or a cmux relaunch onto a lost pty a row shows a bare shell; `wt -H <vm> attach -r <repo> <name>`
+  re-attaches it (add `--restart-agent` when the reboot took the tmux session with it).
+- **Slow shells on an Azure ML compute instance.** The image's `~/.bashrc` runs a `conda init` block (about
+  2.5 s) and `conda activate azureml_py38` (about 1 s) in every shell, which delays each cmux row, each
+  `wt -H <vm>` call and the tmux status line. If your repos manage Python with `uv`, comment out the
+  `conda activate` line and replace the `# >>> conda initialize >>>` block with a lazy wrapper, so that
+  `conda` still works on first use:
+
+  ```bash
+  conda() { unset -f conda; eval "$(/anaconda/bin/conda shell.bash hook 2>/dev/null)"; conda "$@"; }
+  ```
+
+  A fresh shell then has `python3` but no bare `python`. `~/.bashrc` is your file: `install.sh` only adds its
+  one sourcing line at the top and never edits the rest of it.
 - Give the VM a regular OS disk, not an ephemeral one: an ephemeral disk loses its contents when the machine
   is stopped, and the point of the tmux sessions is that they survive.
 - Restrict the VM's inbound ssh rule to your own IP address.
