@@ -173,6 +173,30 @@ link_cmux_config() {
   fi
 }
 
+# remove_retired_links: link() only knows the names the repo uses today, so a link an earlier run made
+# under a name that has since been renamed away is never revisited and dangles forever — a rerun just adds
+# the new link beside it. That is how ~/.oh-my-zsh/custom/themes/max.zsh-theme outlived its rename to
+# workstation.zsh-theme, leaving oh-my-zsh looking for a theme that was already gone; `wt update` reruns
+# this script, so every later rename would litter every machine the same way.
+# Three things together make an entry ours to retire: it is a symlink, its target no longer exists, and it
+# points into THIS repo. Anything else dangling here belongs to the user and is left strictly alone, as is
+# every live link. Depth 1, and only the directories the linking steps above write into: $HOME is never
+# walked recursively.
+remove_retired_links() {
+  local d e rel
+  for d in "$HOME" "$HOME/.claude" "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.codex" \
+           "$HOME/.local/bin" "$HOME/.oh-my-zsh/custom/themes" "$HOME/.config/cmux"; do
+    [[ -d "$d" ]] || continue                            # a directory this machine never got
+    while IFS= read -r e; do
+      [[ -e "$e" ]] && continue                          # live link: the repo still has the file
+      [[ "$(readlink "$e")" == "$R"/* ]] || continue     # points outside this repo: not ours to touch
+      rel="${e#"$HOME"/}"
+      stash "$e"                                         # the backup contract holds here too: nothing is deleted
+      echo "retired ~/$rel (the repo no longer has the file it pointed at)"
+    done < <(find "$d" -maxdepth 1 -type l)              # -maxdepth 1: never descend into $HOME
+  done
+}
+
 # install_zsh_plugins: the two plugins ~/.zshrc enables, cloned once.
 install_zsh_plugins() {
   local zc="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}" p
@@ -367,6 +391,8 @@ main() {
   install_configs
   link_skills
   link_cmux_config
+  remove_retired_links  # after every linking step, so this run's links exist and are live; before the two
+                        # steps that can fail, so a rerun still tidies up even without a network or a ~/.bashrc
   hook_bashrc        # Linux only
   install_zsh_plugins   # last: the only step that needs the network, so an offline VM still gets the rest
 }
