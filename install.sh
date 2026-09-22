@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # install.sh: install this repo into $HOME.
-#   bash ~/repos/workstation/install.sh [--refresh-config]   (on a VM, prefix WT_HOST=<vm>)
+#   bash ~/repos/workstation/install.sh [--refresh-config] [--opinionated-config]
+#       [--with-zshrc] [--with-gitconfig] [--with-tmux-conf] [--with-keybindings] [--with-statusline]
+#   (on a VM, prefix WT_HOST=<vm>)
 #
 # Idempotent: rerun it whenever the repo changes. Nothing is ever deleted; anything in the way is
 # moved into ~/.workstation-backup/<YYYYmmdd-HHMMSS>-<pid>, created only if it is actually needed
@@ -10,7 +12,8 @@
 # Three classes of file:
 #   1. Stable files — shell/git/tmux dotfiles, the Claude and Codex instructions, the skills, the
 #      bin/ scripts, cmux.json — are SYMLINKED out of this repo, so edits (including an agent's)
-#      land in the repo and `git diff` is the review.
+#      land in the repo and `git diff` is the review. Five of them are the author's taste rather than
+#      machinery, so they are OPT-IN; see below.
 #   2. ~/.claude/settings.json, ~/.codex/config.toml and ~/.codex/hooks.json are machine-local
 #      COPIES of the versioned .base files, because the apps write local state into them. A normal
 #      run keeps an existing copy ("kept …"); only --refresh-config stashes it and rewrites it.
@@ -21,25 +24,70 @@
 #      and the real directories the apps write into. On a VM ~/.bashrc likewise only gains one line, which
 #      sources ~/.zshenv, when it has none.
 #
-# Exits 2 on a usage error, 1 if oh-my-zsh, the VM name (Linux) or a git identity is missing.
+# Cutting across the three, an opt-in: installing this repo must not hand a stranger the author's shell
+# prompt, git config and tmux bindings, so the five files in class 1 that are taste rather than machinery
+# arrive only when asked for — ~/.zshrc (and with it the oh-my-zsh theme, the oh-my-zsh prerequisite and the
+# plugin clone that exist only to serve it) with --with-zshrc, ~/.gitconfig with --with-gitconfig,
+# ~/.tmux.conf with --with-tmux-conf, ~/.claude/keybindings.json with --with-keybindings and
+# ~/.claude/statusline-command.sh with --with-statusline; --opinionated-config turns on all five.
+# The flag never has to be repeated: a destination that is already a link into this repo counts as asked for,
+# so `wt update`, which reruns this script bare, keeps what an earlier run installed.
+# Two of the five also carry settings the rest of this repo depends on, and declining the file does not
+# decline those: without the linked ~/.gitconfig, `git config` puts core.excludesFile (what git-ignores
+# .worktrees/) and the ~/.gitconfig.local include into the user's own file and changes nothing else; without
+# the linked ~/.tmux.conf, its one update-environment line — how cmux's relay variables reach panes in an
+# already-running session — is appended to the user's.
+#
+# Exits 2 on a usage error, 1 if oh-my-zsh (only when ~/.zshrc is opted in), the VM name (Linux) or a git
+# identity is missing.
 set -euo pipefail
 umask 077
 
 R="$(cd "$(dirname "$0")" && pwd)"   # this repo
 OS="$(uname -s)"
 REFRESH=0                            # set by --refresh-config
+WITH_ZSHRC=0                         # the five opinionated files, each set by its own --with-… flag
+WITH_GITCONFIG=0
+WITH_TMUX_CONF=0
+WITH_KEYBINDINGS=0
+WITH_STATUSLINE=0
 BK=""                                # this run's backup dir; filled in by main
 
-# parse_args <script args…>: the only argument accepted is --refresh-config.
+# parse_args <script args…>: flags in any order and any combination — each --with-… adds one opinionated
+# file, --opinionated-config is all five at once, --refresh-config is orthogonal to all of them.
 parse_args() {
-  if [[ ${1:-} == --refresh-config ]]; then
-    REFRESH=1
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --with-zshrc)         WITH_ZSHRC=1 ;;
+      --with-gitconfig)     WITH_GITCONFIG=1 ;;
+      --with-tmux-conf)     WITH_TMUX_CONF=1 ;;
+      --with-keybindings)   WITH_KEYBINDINGS=1 ;;
+      --with-statusline)    WITH_STATUSLINE=1 ;;
+      --opinionated-config) WITH_ZSHRC=1; WITH_GITCONFIG=1; WITH_TMUX_CONF=1
+                            WITH_KEYBINDINGS=1; WITH_STATUSLINE=1 ;;
+      --refresh-config)     REFRESH=1 ;;
+      *)
+        { echo "usage: install.sh [--refresh-config] [--opinionated-config]"
+          echo "                  [--with-zshrc] [--with-gitconfig] [--with-tmux-conf]"
+          echo "                  [--with-keybindings] [--with-statusline]"
+        } >&2
+        exit 2 ;;
+    esac
     shift
+  done
+}
+
+# opted_in <flag> <home-relative dst>: does this run install that opinionated file? Either the flag asked for
+# it, or ~/dst is ALREADY a link into this repo, which is the record an earlier run's flag left: `wt update`
+# reruns this script with no arguments, so a choice made once has to survive a run that cannot see it, and no
+# state is stored anywhere for it to disagree with. On a machine where all five are already linked — every
+# machine the author has — every answer is yes, so this whole opt-in changes nothing there.
+opted_in() {
+  local dst="$HOME/$2"
+  if [[ $1 -eq 1 ]]; then
+    return 0
   fi
-  if [[ $# -ne 0 ]]; then
-    echo "usage: install.sh [--refresh-config]" >&2
-    exit 2
-  fi
+  [[ -L "$dst" && "$(readlink "$dst")" == "$R"/* ]]
 }
 
 # die <message>: stop with a message on stderr. The EXIT trap still reports where anything went.
@@ -85,8 +133,15 @@ copy_config() {
   fi
   mkdir -p "$(dirname "$dst")"
   local tmp; tmp="$(mktemp "$dst.XXXXXX")"                # built first: a failure here leaves ~/$2 untouched
-  if [[ $kind == claude && $OS != Darwin ]]; then
-    jq 'del(.voice, .voiceEnabled)' "$src" >"$tmp" || { rm -f "$tmp"; die "jq failed on $1"; }
+  if [[ $kind == claude ]]; then
+    local filter='.'
+    if [[ $OS != Darwin ]]; then
+      filter="$filter | del(.voice, .voiceEnabled)"
+    fi
+    if ! opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh; then
+      filter="$filter | del(.statusLine)"                 # the script it names is opt-in: a command pointing at a
+    fi                                                    # file that was never installed breaks the status line
+    jq "$filter" "$src" >"$tmp" || { rm -f "$tmp"; die "jq failed on $1"; }
   elif [[ $kind == codex && $OS != Darwin ]]; then
     grep -v '^cli_auth_credentials_store' "$src" >"$tmp" || { rm -f "$tmp"; die "failed to filter $1"; }
   else
@@ -98,7 +153,9 @@ copy_config() {
   echo "installed ~/$2"
 }
 
-# require_oh_my_zsh: the linked ~/.zshrc needs it, so stop early and name the setup page.
+# require_oh_my_zsh: the linked ~/.zshrc needs it, so stop early and name the setup page — but only when that
+# .zshrc is opted in: nothing else this script installs uses oh-my-zsh, so refusing without it would be a
+# prerequisite invented for a file the user is not getting.
 # require_jq: only the Linux copy_config filters need it, and it must be present BEFORE anything moves.
 require_jq() {
   if [[ $OS == Darwin ]] || command -v jq >/dev/null 2>&1; then
@@ -108,6 +165,9 @@ require_jq() {
 }
 
 require_oh_my_zsh() {
+  if ! opted_in "$WITH_ZSHRC" .zshrc; then
+    return 0
+  fi
   if [[ -f "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]]; then
     return 0
   fi
@@ -137,14 +197,32 @@ install_bins() {
   done
 }
 
-# link_dotfiles: the stable shell, git, tmux, Claude and theme files.
+# link_dotfiles: the stable shell, git, tmux, Claude and theme files. The first loop is machinery every
+# install needs: ~/.zshenv carries PATH and the wt variables, ~/.gitignore_global is the list core.excludesFile
+# points at (linked either way, because the git fallback below points at it too), and the two instruction
+# files are what the agents read. The rest is taste, so each waits for its own opt-in — the theme with the
+# ~/.zshrc that is the only thing naming it.
 link_dotfiles() {
   local f
-  for f in .zshenv .zshrc .gitconfig .gitignore_global .tmux.conf \
-           .claude/AGENTS.md .claude/CLAUDE.md .claude/keybindings.json .claude/statusline-command.sh \
-           .oh-my-zsh/custom/themes/workstation.zsh-theme; do
+  for f in .zshenv .gitignore_global .claude/AGENTS.md .claude/CLAUDE.md; do
     link "home/$f" "$f"
   done
+  if opted_in "$WITH_ZSHRC" .zshrc; then
+    link home/.zshrc .zshrc
+    link home/.oh-my-zsh/custom/themes/workstation.zsh-theme .oh-my-zsh/custom/themes/workstation.zsh-theme
+  fi
+  if opted_in "$WITH_GITCONFIG" .gitconfig; then
+    link home/.gitconfig .gitconfig
+  fi
+  if opted_in "$WITH_TMUX_CONF" .tmux.conf; then
+    link home/.tmux.conf .tmux.conf
+  fi
+  if opted_in "$WITH_KEYBINDINGS" .claude/keybindings.json; then
+    link home/.claude/keybindings.json .claude/keybindings.json
+  fi
+  if opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh; then
+    link home/.claude/statusline-command.sh .claude/statusline-command.sh
+  fi
 }
 
 # install_configs: the three mutable files, copied from their .base versions.
@@ -197,9 +275,13 @@ remove_retired_links() {
   done
 }
 
-# install_zsh_plugins: the two plugins ~/.zshrc enables, cloned once.
+# install_zsh_plugins: the two plugins ~/.zshrc enables, cloned once. Only that .zshrc names them, so without
+# it there is nothing to clone — which also means a default install never touches the network at all.
 install_zsh_plugins() {
   local zc="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}" p
+  if ! opted_in "$WITH_ZSHRC" .zshrc; then
+    return 0
+  fi
   for p in zsh-autosuggestions zsh-syntax-highlighting; do
     if [[ ! -d "$zc/plugins/$p" ]]; then
       echo "cloning the $p plugin that ~/.zshrc enables (needs the network)"
@@ -253,6 +335,22 @@ record_repos_dir() {
   echo 'WT_REPOS_DIR=$HOME written to ~/.zshenv.local (edit the line if repos live elsewhere)'
 }
 
+# require_plain_file <home-relative path>: the two refusals hook_bashrc and hook_tmux_conf both have to make
+# about a file this repo does not own but has to add a line to. A dangling symlink: -f calls it false, and a
+# redirection would write through it, somewhere outside $HOME. Anything that is not a regular file: a
+# directory or a device in its place, which nothing below could read. A LIVE symlink is not a refusal for
+# either caller — both leave it to its dotfile manager and say so at the point of the skip. Shared so that
+# each hook's check_… twin, which makes the same refusals early, cannot drift from its wording.
+require_plain_file() {
+  local p="$HOME/$1"
+  if [[ -L $p && ! -e $p ]]; then
+    die "broken symlink at ~/$1 (-> $(readlink "$p")): remove or repair it, then rerun"
+  fi
+  if [[ -e $p && ! -L $p && ! -f $p ]]; then
+    die "not a regular file: ~/$1; move it aside, then rerun"
+  fi
+}
+
 # check_bashrc: hook_bashrc runs seventh, long after files have moved, so its three refusals would land on a
 # half-installed machine. They are made here instead, while nothing has been touched, with the same wording.
 # A ~/.bashrc that is a live symlink is not a refusal: hook_bashrc skips it and says so at the point of the
@@ -262,17 +360,12 @@ check_bashrc() {
   if [[ $OS == Darwin ]]; then
     return 0
   fi
-  if [[ -L $rc && ! -e $rc ]]; then
-    die "broken symlink at ~/.bashrc (-> $(readlink "$rc")): remove or repair it, then rerun"
-  fi
+  require_plain_file .bashrc           # the two refusals hook_bashrc shares with hook_tmux_conf
   if [[ -L $rc ]]; then
     return 0                           # a dotfile manager owns it; hook_bashrc leaves it alone and warns
   fi
   if [[ ! -e $rc ]]; then
     return 0                           # nothing there: hook_bashrc writes the file itself
-  fi
-  if [[ ! -f $rc ]]; then
-    die "not a regular file: ~/.bashrc; move it aside, then rerun"
   fi
   mode="$(stat -c %a "$rc" 2>/dev/null || stat -f %Lp "$rc" 2>/dev/null || true)"   # -c is GNU, -f is BSD
   if [[ $mode =~ ^[0-7]+$ ]] && (( 8#$mode & 8#022 )); then
@@ -295,11 +388,9 @@ hook_bashrc() {
   if [[ $OS == Darwin ]]; then
     return 0
   fi
-  # check_bashrc made the refusals below before anything moved; they stay here to cover the gap between the
+  # check_bashrc made these refusals before anything moved; they stay here to cover the gap between the
   # two calls, and because nothing further down may run on a ~/.bashrc it cannot read.
-  if [[ -L $rc && ! -e $rc ]]; then   # dangling link: -f is false for it, and > "$rc" would write through it, outside $HOME
-    die "broken symlink at ~/.bashrc (-> $(readlink "$rc")): remove or repair it, then rerun"
-  fi
+  require_plain_file .bashrc
   if [[ -L $rc ]]; then               # a live link into a dotfiles repo: rewriting it here would put a regular
     target="$(readlink -f "$rc")"     # file in its place and orphan the target, so the repo would quietly stop
     {                                 # governing ~/.bashrc — a breakage the user only meets weeks later
@@ -314,9 +405,6 @@ hook_bashrc() {
     printf '%s\n' "$line" > "$rc"
     echo "bash reads ~/.zshenv too (first line of ~/.bashrc): cmux rows on a VM run bash"
     return 0
-  fi
-  if [[ ! -f $rc ]]; then               # a directory or device in its place: nothing below can read it
-    die "not a regular file: ~/.bashrc; move it aside, then rerun"
   fi
   first="$(head -n 1 "$rc")"
   if [[ $first == "$src"* ]]; then                 # our line, whatever comment an older version put after it
@@ -354,13 +442,100 @@ hook_bashrc() {
   fi
 }
 
-# require_git_identity: ~/.gitconfig.local is machine-local and hand-written; commits need it.
+# check_tmux_conf: check_bashrc's reasoning, for the other file this script adds a line to — hook_tmux_conf
+# runs near the end, so its refusals are made here, while the machine is still untouched. Unlike
+# check_bashrc this one is not Linux-only: cmux drives tmux on the Mac too.
+check_tmux_conf() {
+  if opted_in "$WITH_TMUX_CONF" .tmux.conf; then
+    return 0                           # ~/.tmux.conf is about to become a link into this repo
+  fi
+  require_plain_file .tmux.conf
+}
+
+# hook_tmux_conf: tmux forwards to a pane only the variables named in update-environment, and cmux rebinds
+# CMUX_SOCKET_PATH and CMUX_WORKSPACE_ID on every attach, so without the one line below a pane started in an
+# already-running session gets a stale socket path and agent-notify goes nowhere. That line is the whole of
+# home/.tmux.conf, but the rest of that file is the author's taste, so when it was not asked for the line
+# alone is APPENDED to the user's own ~/.tmux.conf (created if there is none). Appending, not rewriting:
+# every line already there survives, which is why — unlike hook_bashrc, which has to rebuild ~/.bashrc to get
+# its line above Ubuntu's early return — there is nothing here to stash and no mode to carry to a new file.
+# `set -ag` appends to update-environment, so it cannot clobber a setting of the user's either.
+hook_tmux_conf() {
+  local line='set -ag update-environment " CMUX_SOCKET_PATH CMUX_WORKSPACE_ID"'
+  local rc="$HOME/.tmux.conf"
+  if opted_in "$WITH_TMUX_CONF" .tmux.conf; then
+    return 0                          # the linked home/.tmux.conf already carries this line
+  fi
+  # check_tmux_conf made these refusals before anything moved; they stay here to cover the gap between the
+  # two calls, and because nothing further down may run on a ~/.tmux.conf it cannot read.
+  require_plain_file .tmux.conf
+  if [[ -L $rc ]]; then               # a live link into a dotfiles repo: appending would write through it,
+    {                                 # into a file that repo owns and rewrites — not ours to edit
+      echo "skipped ~/.tmux.conf: it is a symlink to $(readlink "$rc"), left alone because a dotfile manager owns it."
+      echo "add this line yourself, at the end of that file:"
+      echo "  $line"
+      echo "until then cmux's relay variables never reach panes started in a running tmux session."
+    } >&2
+    return 0
+  fi
+  if [[ ! -e $rc && ! -L $rc ]]; then   # -L as well as -e: only now is there really nothing there
+    printf '%s\n' "$line" > "$rc"
+    echo "created ~/.tmux.conf with the update-environment line cmux needs"
+    return 0
+  fi
+  if awk -v s="$line" 'index($0, s) == 1 { found = 1 } END { exit !found }' "$rc"; then
+    return 0                            # already there: only lines that START with it count, so a mention
+  fi                                    # inside a comment is not mistaken for the setting
+  append_line "$rc" "$line"
+  echo "appended the update-environment line cmux needs to ~/.tmux.conf"
+}
+
+# require_git_identity: commits need one, so this stays unconditional — ~/.gitconfig.local is where this repo
+# puts it on every machine, opted in or not, because configure_git includes that file when ~/.gitconfig is
+# not linked. It is read directly, not through git's own lookup, because on a first run the include does not
+# exist yet; a user who already keeps an identity in their own ~/.gitconfig is not asked to move it.
 require_git_identity() {
   local email
   email="$(git config --file "$HOME/.gitconfig.local" user.email 2>/dev/null || true)"
   if [[ -z "$email" ]]; then
+    email="$(git config --global user.email 2>/dev/null || true)"
+  fi
+  if [[ -z "$email" ]]; then
     echo "set user.name/user.email in ~/.gitconfig.local (see the setup page), then rerun" >&2
     exit 1
+  fi
+}
+
+# configure_git: two settings of home/.gitconfig are machinery, not taste — core.excludesFile, which is what
+# git-ignores .worktrees/ and so what makes `wt` invisible to git, and the ~/.gitconfig.local include, which is
+# where the identity above lives. When that file was not opted in they are written into the user's own
+# ~/.gitconfig with `git config`, which edits in place and leaves every other line of it alone. Silent unless
+# it changes something, so a rerun (and `wt update`) says nothing.
+configure_git() {
+  local ex="$HOME/.gitignore_global" inc="$HOME/.gitconfig.local" have found=0 v
+  if opted_in "$WITH_GITCONFIG" .gitconfig; then
+    return 0                           # the linked home/.gitconfig carries both settings
+  fi
+  have="$(git config --global --get core.excludesFile 2>/dev/null || true)"
+  if [[ -z $have ]]; then
+    git config --global core.excludesFile "$ex"
+    echo "set core.excludesFile = ~/.gitignore_global in ~/.gitconfig (it is what git-ignores .worktrees/)"
+  elif [[ $have != "$ex" ]]; then      # the user points it at their own file: replacing it would silently drop
+    {                                  # every rule in that file, so say what is missing instead
+      echo "kept core.excludesFile = $have: this repo did not change it."
+      echo "add the lines of ~/.gitignore_global to that file, or .worktrees/ is not ignored."
+    } >&2
+  fi
+  # include.path is multi-valued, so a plain `git config --global include.path …` is not idempotent in the way
+  # core.excludesFile is: it would overwrite the one include the user already has, and refuse outright (exit 5)
+  # once there are two. Read every value and --add only when ours is missing. --type=path expands a value
+  # written as ~/… so it compares equal to the one written here.
+  while IFS= read -r v; do
+    if [[ $v == "$inc" ]]; then found=1; fi
+  done < <(git config --global --get-all --type=path include.path 2>/dev/null || true)
+  if (( ! found )); then
+    git config --global --add include.path "$inc"
+    echo "added include.path = ~/.gitconfig.local to ~/.gitconfig (where your git identity lives)"
   fi
 }
 
@@ -370,6 +545,24 @@ report() {
     echo "done. backups in $BK"
   else
     echo "done. nothing needed backing up"
+  fi
+}
+
+# report_skipped: name the opinionated files this run did not install, and the flag that would. A default
+# install deliberately leaves the user's own shell, git and tmux alone, and someone who wanted the author's
+# prompt should not have to read this script to find out why it never arrived. Deliberately not part of
+# report(): that one is the EXIT trap and so also runs after a die(), where a list of optional extras would
+# sit under a failure message and say nothing about it.
+report_skipped() {
+  local f=""
+  opted_in "$WITH_ZSHRC"       .zshrc                          || f="$f --with-zshrc"
+  opted_in "$WITH_GITCONFIG"   .gitconfig                      || f="$f --with-gitconfig"
+  opted_in "$WITH_TMUX_CONF"   .tmux.conf                      || f="$f --with-tmux-conf"
+  opted_in "$WITH_KEYBINDINGS" .claude/keybindings.json        || f="$f --with-keybindings"
+  opted_in "$WITH_STATUSLINE"  .claude/statusline-command.sh   || f="$f --with-statusline"
+  if [[ -n $f ]]; then
+    echo "left alone (the author's own taste, not machinery):$f"
+    echo "rerun with those flags, or --opinionated-config for all of them, to install them"
   fi
 }
 
@@ -384,6 +577,7 @@ main() {
   ask_vm_host        # Linux only — rejects the page's VM placeholder before anything moves
   record_repos_dir   # Linux only
   check_bashrc       # Linux only — hook_bashrc's refusals, made while ~/.bashrc is still the only thing at stake
+  check_tmux_conf    # the same, for the ~/.tmux.conf hook_tmux_conf appends to on both platforms
   trap report EXIT   # from here on files move, so always say where the originals went
   make_dirs
   install_bins
@@ -394,7 +588,10 @@ main() {
   remove_retired_links  # after every linking step, so this run's links exist and are live; before the two
                         # steps that can fail, so a rerun still tidies up even without a network or a ~/.bashrc
   hook_bashrc        # Linux only
+  configure_git      # the two fallbacks for the files that were not opted in: after the linking steps, so
+  hook_tmux_conf     # what they look at is this run's final state, and no-ops when the link was made instead
   install_zsh_plugins   # last: the only step that needs the network, so an offline VM still gets the rest
+  report_skipped     # after every step, so it lists what is still missing rather than what was about to arrive
 }
 
 main "$@"
