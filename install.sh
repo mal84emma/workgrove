@@ -156,10 +156,13 @@ copy_config() {
 # require_oh_my_zsh: the linked ~/.zshrc needs it, so stop early and name the setup page — but only when that
 # .zshrc is opted in: nothing else this script installs uses oh-my-zsh, so refusing without it would be a
 # prerequisite invented for a file the user is not getting.
-# require_jq: only the Linux copy_config filters need it, and it must be present BEFORE anything moves.
+# require_jq: copy_config filters the Claude settings on every platform, and it must be present BEFORE anything moves.
 require_jq() {
-  if [[ $OS == Darwin ]] || command -v jq >/dev/null 2>&1; then
-    return 0
+  if command -v jq >/dev/null 2>&1; then                  # every platform: copy_config filters the Claude
+    return 0                                              # settings on both, and statusline-command.sh is
+  fi                                                      # opt-in, so the statusLine key is dropped on a Mac too
+  if [[ $OS == Darwin ]]; then
+    die "jq not found: brew install jq (or brew bundle --file $R/Brewfile), then rerun"
   fi
   die "jq not found: sudo apt-get install -y jq, then rerun"
 }
