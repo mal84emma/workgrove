@@ -10,7 +10,12 @@
       "Bash(git diff *)",
       "Bash(git log *)",
       "Bash(git show *)",
-      "Bash(git branch *)",
+      "Bash(git branch)",
+      "Bash(git branch --list *)",
+      "Bash(git branch --show-current)",
+      "Bash(git branch -a)",
+      "Bash(git branch -r)",
+      "Bash(git branch -v)",
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(wt list *)",
@@ -18,11 +23,16 @@
     ],
     "deny": [
       "Bash(git -c *)",
+      "Bash(git -C *)",
       "Bash(git config *)",
       "Bash(git push *)",
+      "Bash(git remote add *)",
       "Bash(git filter-branch *)",
+      "Bash(gh api *)",
       "Bash(gh pr create *)",
       "Bash(gh repo create *)",
+      "Bash(gh repo fork *)",
+      "Bash(gh release create *)",
       "Bash(wt pr *)"
     ]
   },
@@ -34,7 +44,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "timeout": 10
           }
         ]
       }
@@ -45,7 +56,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "timeout": 10
           }
         ]
       }
@@ -56,7 +68,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "timeout": 10
           }
         ]
       }
@@ -67,7 +80,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "timeout": 10
           }
         ]
       }
@@ -78,7 +92,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "timeout": 10
           }
         ]
       }

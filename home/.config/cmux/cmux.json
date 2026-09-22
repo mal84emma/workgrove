@@ -143,9 +143,6 @@
         },
         "needsInput": {
           "sound": "Submarine"
-        },
-        "turnDone": {
-          "sound": "Pop"
         }
       },
       "codex": {
@@ -154,9 +151,6 @@
         },
         "needsInput": {
           "sound": "Submarine"
-        },
-        "turnDone": {
-          "sound": "Pop"
         }
       }
     },

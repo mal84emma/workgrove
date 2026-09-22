@@ -34,12 +34,16 @@ default_tools_approval_mode = "prompt"
 destructive_enabled = false
 open_world_enabled = false
 
-# Pass a reduced environment to spawned commands and automatically remove
-# common secret-bearing variable names.
+# Pass the full environment to spawned commands, but automatically remove common
+# secret-bearing variable names. inherit = "core" would hand them a reduced
+# environment instead: HOME, PATH, USER and a handful more, nothing else.
 [shell_environment_policy]
 inherit = "all"
 ignore_default_excludes = false
 
+# ignore_default_excludes = false keeps Codex's own default excludes, which
+# already strip *KEY*, *SECRET* and *TOKEN*, so the last three entries below are
+# belt-and-braces; only AWS_*, AZURE_* and GITHUB_* add anything.
 [shell_environment_policy.filters]
 "AWS_*" = "exclude"
 "AZURE_*" = "exclude"
