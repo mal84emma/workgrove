@@ -129,7 +129,9 @@ run `exec bash` in that pane or open a new tmux window.
   never read by a command sent over ssh. Type `zsh` inside the row's tmux for the usual prompt.
 - No extra network rule is needed: the rows are plain ssh, and tmux is started by the row's own shell. After a
   VM reboot or a cmux relaunch onto a lost pty a row shows a bare shell; `wt -H <vm> attach -r <repo> <name>`
-  re-attaches it (add `--restart-agent` when the reboot took the tmux session with it).
+  re-attaches it (add `--restart-agent` when the reboot took the tmux session with it, or `--reattach` when a
+  dropped connection left the VM holding the old pty, which is the case cmux announces in the row as
+  `remote session was lost; starting a new shell`).
 - **Slow shells on an Azure ML compute instance.** The image's `~/.bashrc` runs a `conda init` block (about
   2.5 s) and `conda activate azureml_py38` (about 1 s) in every shell, which delays each cmux row, each
   `wt -H <vm>` call and the tmux status line. If your repos manage Python with `uv`, comment out the

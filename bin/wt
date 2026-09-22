@@ -30,7 +30,8 @@
 #
 #   wt -H <host> <new|attach|list|show|rm|path|open|repos|update|help> …
 #                                                             run wt on that VM over ssh and keep the cmux row local;
-#                                                             show/rm/path/open/attach need -r; attach [--restart-agent]
+#                                                             show/rm/path/open/attach need -r;
+#                                                             attach [--restart-agent|--reattach]
 #
 # Where it runs: on a Mac wt drives cmux directly; on a VM (see is_remote) it only prepares worktrees and
 # asks the Mac for rows and VS Code windows through `cmux notify` over the relay socket. A VM task's row is a
@@ -731,6 +732,10 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared]
   # The line a VM row's shell runs: create that tmux session (running <command>, then a shell) or take over
   # the one already there. A task row owns its session, so it attaches with -d and hands the session THIS
   # row's relay socket and workspace id, which is what makes `cmux notify` from inside it light up this row.
+  # The shell cmux starts after "remote session was lost" carries none of the CMUX_* variables, and
+  # home/.tmux.conf puts both in update-environment, so attaching from it would mark them removed in the
+  # session and silence `cmux notify` there. Each is therefore taken from the session when the shell has
+  # none (the row's old relay port stays bound to the row), and only set when it is non-empty.
   # A session you may also be sitting in yourself (the VM shell, a repo shell) is passed "shared" instead:
   # the row joins your clients rather than evicting them, and leaves their relay socket as it is.
   # bin/cmux-hook mirrors this function; keep the two byte-for-byte.
@@ -739,7 +744,7 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared]
   if [[ "${3:-}" == shared ]]; then
     printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux attach -t '=%s'" "$1" "$run" "$1"
   else
-    printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1"
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; [ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1" "$1" "$1"
   fi
 }
 
@@ -794,10 +799,11 @@ agent_on_vm() { # agent_on_vm <host> <session> — 0 when claude or codex holds 
 }
 
 host_attach() { # re-attach to the VM's session; starting an agent again is never implicit
-  local host="$1" restart=0 name="" repo=""; shift
+  local host="$1" restart=0 reattach=0 name="" repo=""; shift
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --restart-agent) restart=1; shift ;;
+      --reattach) reattach=1; shift ;;
       -r|--repo) repo="$2"; shift 2 ;;
       -*) die "attach: unknown option $1" ;;
       *) name="$1"; shift ;;
@@ -805,7 +811,8 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   done
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   [[ -n "$repo" ]] || die "attach: -r <repo> is required with -H (wt -H $host repos lists them)"
-  local out session state title id path c what=selected
+  if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
+  local out session state title id path c screen last what=selected
   out=$(remote_wt "$host" show "$name" -r "$repo")
   session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
   path=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
@@ -813,6 +820,28 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   state="${session#*(}"; state="${state%)}"; session="${session%% *}"
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$path")" ]] || die "unexpected output from $host"
   title=$(row_title "$name" "$path")
+  if [[ $reattach -eq 1 ]]; then  # A dropped connection can leave the row with a fresh login shell while the VM
+                                  # keeps the pty that holds tmux, so the abandoned client is still listed and
+                                  # session_state cannot call the session detached. The flag is the user's word
+                                  # that the row shows a shell; the screen check is the backstop that stops the
+                                  # tmux line from being typed into a running agent's prompt.
+    id=$(cmux_row_field "$title" id "$host")
+    [[ -n "$id" ]] || die "no row $title $(row_tag "$host") is open; wt -H $host attach -r $(shell_join "$repo") $name opens one"
+    c=$(cmux_bin)
+    screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null || true)
+    last=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -1)
+    case "$last" in
+      *'$'|*'#'|*'%') ;;
+      *) die "$title $(row_tag "$host") does not end at a shell prompt (last line: ${last:-empty}); it is probably still attached to tmux. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'" ;;
+    esac
+    CMUX_QUIET=1 "$c" send --workspace "$id" "$(tmux_cmd "$session")" >/dev/null 2>&1 \
+      || die "cmux send failed for $id; type this in the row instead: tmux attach -d -t '=$session'"
+    CMUX_QUIET=1 "$c" send-key --workspace "$id" enter >/dev/null 2>&1 \
+      || die "cmux send-key failed for $id; press return in the row to finish the attach"
+    CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
+    printf 'row: %s %s (re-attached)\n' "$title" "$(row_tag "$host")"
+    return 0
+  fi
   if [[ $restart -eq 1 ]]; then
     if agent_on_vm "$host" "$session"; then   # a VM running an older wt reports a live agent as 'shell only'
       die "$name on $host still has an agent running; wt -H $host attach -r $(shell_join "$repo") $name re-attaches it, or wt -H $host update if the VM's wt is older than the Mac's"
