@@ -18,7 +18,8 @@
 #      folder trust), so trust the hooks in /hooks after a refresh, not before.
 #   3. Everything else is never rewritten: the hand-written overrides (~/.gitconfig.local, ~/.zshrc.local
 #      and ~/.zshenv.local, which on a VM only gains a WT_HOST and a WT_REPOS_DIR line when it has none)
-#      and the real directories the apps write into.
+#      and the real directories the apps write into. On a VM ~/.bashrc likewise only gains one line, which
+#      sources ~/.zshenv, when it has none.
 #
 # Exits 2 on a usage error, 1 if oh-my-zsh, the VM name (Linux) or a git identity is missing.
 set -euo pipefail
@@ -203,6 +204,19 @@ record_repos_dir() {
   echo 'WT_REPOS_DIR=$HOME written to ~/.zshenv.local (edit the line if repos live elsewhere)'
 }
 
+# hook_bashrc: cmux's remote tmux rows start every pane as bash with its own rcfile, which ends by sourcing
+# ~/.bashrc, and never run zsh, so the linked ~/.zshenv is otherwise never read there. It is plain sh, so one
+# line gives bash the same environment (PATH, WT_HOST, WT_REPOS_DIR) that a zsh session gets.
+# shellcheck disable=SC2016
+hook_bashrc() {
+  local src='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
+  if [[ $OS == Darwin ]] || grep -qsF "$src" "$HOME/.bashrc"; then
+    return 0
+  fi
+  append_line "$HOME/.bashrc" "$src   # workstation: PATH, WT_HOST, WT_REPOS_DIR in cmux's bash rows"
+  echo "bash reads ~/.zshenv too (line added to ~/.bashrc): cmux rows on a VM run bash"
+}
+
 # require_git_identity: ~/.gitconfig.local is machine-local and hand-written; commits need it.
 require_git_identity() {
   local email
@@ -235,6 +249,7 @@ main() {
   install_zsh_plugins
   ask_vm_host        # Linux only
   record_repos_dir   # Linux only
+  hook_bashrc        # Linux only
   require_git_identity
   report
 }

@@ -87,7 +87,8 @@ It is idempotent: rerun it after every repo change. Nothing is deleted. Anything
 message if oh-my-zsh is missing, or if `~/.gitconfig.local` holds no git identity. On Linux it records this
 VM's alias in the Mac's `~/.ssh/config` as a `WT_HOST` line in `~/.zshenv.local`: given in the environment
 (`WT_HOST=<vm> bash install.sh`, which is what the setup page does) or asked for once at a prompt. It records
-`export WT_REPOS_DIR="$HOME"` there too.
+`export WT_REPOS_DIR="$HOME"` there too, and appends one line to `~/.bashrc` so that bash reads `~/.zshenv`,
+because cmux runs its VM rows in bash.
 
 ## Daily use
 
@@ -192,6 +193,8 @@ interactive `wt attach`, `wt task` and `wt driver`, which belong to your own ses
   `wt-attach`, and then opens the remote folder in VS Code or creates the row for the new VM task.
 - Codex runs with `approvals_reviewer = "auto_review"`, so sandbox escalations are approved automatically and
   a Codex row rarely shows a needs-input state. Expect it only when Codex really does prompt.
+- VM rows are bash with cmux's shell integration, not zsh, which is why `install.sh` gives `~/.bashrc` a line
+  sourcing `~/.zshenv`; type `zsh` in a row for the usual prompt.
 - The VM paths are implemented and documented here as designed, but they are the newest part of this
   setup. The first time you use one, check that the row appears with its `@<host>` line and that
   `wt -H <vm> show -r <repo> <name>` reports the tmux session.

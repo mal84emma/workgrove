@@ -83,6 +83,7 @@ Check the VM answers:
 ssh <vm> '~/.local/bin/wt help'
 ssh <vm> 'cat ~/.zshenv.local'   # export WT_HOST=<vm> and export WT_REPOS_DIR="$HOME"
 ssh <vm> '~/.local/bin/wt repos'
+ssh <vm> 'bash -ic "echo \$WT_REPOS_DIR"'   # what a cmux row sees; must print the home folder
 ```
 
 The second must show both lines `install.sh` wrote: the alias you gave it, and the repos folder. If either
@@ -107,6 +108,10 @@ folders such as `~/.oh-my-zsh` excluded; an empty result only means no repo has 
 - **Do not run `cmux hooks codex install` on a VM.** That is a Mac-only step. The VM keeps only the portable
   hooks, which relay over the cmux socket; cmux's generated handlers hold Mac-local paths and a state protocol
   that cannot travel.
+- **cmux rows on a VM run bash, not zsh.** cmux's remote tmux profile starts every row as bash with its own
+  rc file and types `--command` text into it, so the oh-my-zsh prompt is not used there; `install.sh` adds one
+  line to `~/.bashrc` that sources `~/.zshenv`, which is why `wt`, `WT_HOST` and `WT_REPOS_DIR` work in those
+  rows. Type `zsh` in a row if you want the zsh prompt.
 - No extra network rule is needed. cmux's `mosh-tmux` runs tmux over plain ssh when mosh is absent.
 - Give the VM a regular OS disk, not an ephemeral one: an ephemeral disk loses its contents when the machine
   is stopped, and the point of the tmux sessions is that they survive.
