@@ -1,3 +1,8 @@
+# Everything from here down to the `### !!! previous zsh config` marker is the stock oh-my-zsh .zshrc
+# template (https://github.com/ohmyzsh/ohmyzsh, MIT), with the theme and plugin lines filled in. It is kept
+# close to stock so that an upstream change to the template is easy to diff in; the configuration specific
+# to this setup starts at that marker.
+
 # If you come from bash you might have to change your $PATH.
 # export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$PATH
 

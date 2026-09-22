@@ -231,6 +231,53 @@ Update the Mac's `wt` and each VM's `wt` together (`wt update` here, `wt -H <vm>
 seed for an uncommitted change): `wt -H <vm> …` runs the VM's copy for the remote half of every command, so a
 VM left behind answers in a vocabulary this Mac no longer expects.
 
+## Security
+
+All of this runs as you, with your keys and your logins, and a good deal of it exists to remove prompts. That
+is the point of it, but four of the choices behind it are worth knowing before you run `install.sh` on your
+own machine.
+
+- **The Claude permission list auto-approves, and denies.** The eleven `permissions.allow` entries in
+  [`home/.claude/settings.base.json`](home/.claude/settings.base.json) — `ls`, `cd`, the read-only git
+  subcommands (`status`, `diff`, `log`, `show`, `branch`), `git add`, `git commit`, `wt list` and `wt show` —
+  run with no prompt at all, so an agent commits to its branch without asking you. Seven `deny` entries win
+  over them: `git -c`, `git config`, `git push`, `git filter-branch`, `gh pr create`, `gh repo create` and
+  `wt pr`. Four of them — `git push`, `gh pr create`, `gh repo create` and `wt pr` — are things the Agents
+  section says agents never do on their own, and the deny list turns those from a convention an agent is
+  asked to keep into a refusal at the tool level. The allowlist names subcommands one by one because the
+  broader `Bash(git *)` it replaced also matched `git -c alias.x='!<shell>' x`, which runs arbitrary shell
+  with no prompt — which is why `git -c` is denied outright now as well.
+
+- **The hooks run scripts from this repo on every turn.** `settings.base.json` wires five Claude events
+  (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `SessionEnd`) to `agent-notify`, and
+  `cmux.json` hands cmux `~/.local/bin/cmux-hook` as a notification hook. Both are symlinks into this repo's
+  `bin/`, and both run as you. So `wt update` is a code-execution event rather than a data update: pulling
+  changes the scripts that then run by themselves, with nothing to restart. That is why `wt update` prints
+  the incoming commits and a diffstat and asks before it fast-forwards and re-runs `install.sh`, and why it
+  refuses to apply them at all when stdin is not a terminal. Read that diff the way you would read any other
+  pull that lands on your `PATH`.
+
+- **A task VM sits inside this Mac's trust boundary, so keep it single-user.** `wt` on a VM cannot open VS
+  Code or make a row itself; it sends a `wt-open` or `wt-attach` notification over the row's relay socket,
+  and `bin/cmux-hook` does the work on the Mac. The hook is picky about what it will act on: the host has to
+  look like a hostname (`valid_host`) and be a literal, wildcard-free `Host` entry in `~/.ssh/config`
+  (`known_host`); the notifying row must itself be a cmux SSH row pointed at that same host
+  (`from_row_on_host`); a path must be absolute with no `..`, no `//`, no trailing slash and no shell
+  metacharacters (`safe_path`); and a task name must match `^[a-z0-9][a-z0-9_-]{0,62}$`. Those checks stop
+  one VM from naming a different host, and stop shell being smuggled through a path or a name. What they do
+  not stop — because it is the feature — is that VM asking the Mac to open any path on it in a VS Code
+  remote window, or to create a row that runs `wt run` there. The relay socket is loopback TCP on the VM, so
+  anyone with an account on that VM can ask for both: it is as trusted as you are.
+
+- **Two smaller ones.** `wt new` runs the repo's `.wt-setup`, when it is executable, inside the new worktree,
+  so starting a task in a repo you have not read is running that repo's script as you. And `azml-ssh-host`
+  makes its one verification login with `StrictHostKeyChecking=accept-new`, which records the first host key
+  a new instance offers without asking: Azure ML instances are created and destroyed often enough that
+  confirming a key for each one would be most of what you did with the tool, but it is trust on first use,
+  and whoever can intercept that very first connection can present their own key instead. Only that
+  verification relaxes the check — the `Host` block the tool writes does not carry it, so later connections
+  use your normal ssh settings and a key that changes underneath you still stops the connection.
+
 ## Known limitations
 
 - **Switching to a VM row is slower than a local one.** A `cmux ssh` row takes roughly 1 to 3 seconds to paint
