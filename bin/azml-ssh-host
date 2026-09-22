@@ -25,7 +25,9 @@
 #     # <<< azml-ssh-host <instance>
 # Everything outside the markers is left byte for byte as it was, and `rm` restores the content
 # exactly as `add` found it; the mode is normalised to 600 whenever the file is written, so a config
-# that was 644 comes back 600. A `Host`/`Match` line naming the instance outside the markers is
+# that was 644 comes back 600. Every write builds the whole file in a temporary file in the same folder
+# and renames it into place, keeping the previous file as <config>.bak, so an interrupted or failed run
+# cannot leave a truncated config behind. A `Host`/`Match` line naming the instance outside the markers is
 # refused rather than edited, and markers that do not pair are refused rather than repaired; a run
 # that refuses leaves the file alone, mode included. The file is created 600, in a 700 ~/.ssh.
 # UseKeychain is written on macOS only; Linux OpenSSH rejects it.
@@ -289,8 +291,11 @@ precheck_block() { # precheck_block <instance>: the refusals that need only the 
   fi
 }
 
-write_config() { # write_config <instance> [<block file>]: the block first, then the file without its blocks
-  local rest out nonl=0
+write_config() { # write_config <instance> [<block file>]: the block first, then the file without its blocks.
+                 # The new file is built in full beside the target and moved onto it, so an interruption, a
+                 # full disk or any failure below leaves the config exactly as it was; the previous file is
+                 # kept as <config>.bak (the suffix .gitignore already reserves).
+  local rest out new nonl=0
   if [ -s "$CONFIG" ] && [ -n "$(tail -c 1 "$CONFIG")" ]; then
     nonl=1                                   # awk ends every line, so put that back afterwards
   fi
@@ -305,12 +310,20 @@ write_config() { # write_config <instance> [<block file>]: the block first, then
   else
     cat "$rest" >"$out"
   fi
-  if [ "$nonl" = 1 ]; then                   # keeps the file, and so its mode, in place
-    printf '%s' "$(cat "$out")" >"$CONFIG"
+  new=$(mktemp "$CONFIG.XXXXXX") \
+    || die "could not create a temporary file beside $(tilde "$CONFIG"); check the folder: ls -ld $(tilde "$(parent_dir "$CONFIG")")"
+  TMPFILES+=("$new")                         # cleanup removes it if anything below fails
+  chmod 600 "$new" || die "could not set the mode of the new $(tilde "$CONFIG")"
+  if [ "$nonl" = 1 ]; then
+    printf '%s' "$(cat "$out")" >"$new" || die "could not write the new $(tilde "$CONFIG")"
   else
-    cat "$out" >"$CONFIG"
+    cat "$out" >"$new" || die "could not write the new $(tilde "$CONFIG")"
   fi
-  chmod 600 "$CONFIG"
+  if [ -e "$CONFIG" ]; then                  # the previous file is kept before anything replaces it
+    cp "$CONFIG" "$CONFIG.bak" || die "could not back up $(tilde "$CONFIG") to $(tilde "$CONFIG").bak"
+    chmod 600 "$CONFIG.bak" || die "could not set the mode of $(tilde "$CONFIG").bak"
+  fi
+  mv "$new" "$CONFIG" || die "could not replace $(tilde "$CONFIG"); it is unchanged, and $(tilde "$CONFIG").bak holds a copy"
 }
 
 install_block() { # install_block <instance>: unchanged, or written at the top of the file

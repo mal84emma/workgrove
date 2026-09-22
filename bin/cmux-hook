@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # cmux notification hook. Acts only on wt-open / wt-attach sent from a VM row; otherwise prints nothing (= unchanged).
 set -u
-in=$(cat)
+cat >/dev/null          # drain the envelope: everything acted on comes from the CMUX_NOTIFICATION_* env
 t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; ws=${CMUX_NOTIFICATION_WORKSPACE_ID:-}
 case $t in wt-open|wt-attach) ;; *) exit 0 ;; esac
 known_host() { awk -v w="$1" '$1=="Host"{for(i=2;i<=NF;i++){if($i~/^#/)break; if($i==w && $i!~/[*?]/)f=1}} END{exit(f?0:1)}' "$HOME/.ssh/config" 2>/dev/null; }
-quiet() { printf '%s' "$in" | jq -c '.effects.desktop=false | .effects.sound=false | .effects.markUnread=false | .effects.paneFlash=false' 2>/dev/null || true; }
+# A hook response is a patch: cmux merges the keys it is given and leaves the rest alone (the other hook in
+# cmux.json answers `{"effects":{"desktop":false}}` or `{}`). So this prints a fixed literal rather than
+# echoing the envelope back, which carries whatever the agent session was working on.
+quiet() { printf '%s\n' '{"effects":{"desktop":false,"sound":false,"markUnread":false,"paneFlash":false}}'; }
 CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
 CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
 valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }

@@ -9,13 +9,14 @@ set -u
 title=${AGENT_NOTIFY_SOURCE:-Claude Code}
 event=$(printf '%s' "$payload" | jq -r '.hook_event_name // empty' 2>/dev/null || true)
 session=$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null | tr -cd 'A-Za-z0-9-' || true)
-stamps="${TMPDIR:-/tmp}/claude-start-times"
+stamps="${XDG_STATE_HOME:-$HOME/.local/state}/claude-start-times"   # private state, not /tmp: TMPDIR is empty on the VMs
 quiet_seconds=${AGENT_NOTIFY_MIN_SECONDS:-180}   # a turn shorter than this finishes without a banner
 
 case $event in
   UserPromptSubmit)
     [[ -n $session ]] || exit 0
-    mkdir -p "$stamps"
+    (umask 077; mkdir -p "$stamps") 2>/dev/null || exit 0          # 700; no stamp dir just means no quiet gate
+    chmod 700 "$stamps" 2>/dev/null || true                        # and 700 even if something else made it
     find "$stamps" -type f -mtime +2 -delete 2>/dev/null || true   # a session that never ends leaves its stamp
     date +%s > "$stamps/$session"
     exit 0 ;;
