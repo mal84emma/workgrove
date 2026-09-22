@@ -94,7 +94,9 @@ The third lists every git repo directly under the VM's home folder, one `name<TA
 folders such as `~/.oh-my-zsh` excluded; an empty result only means no repo has been cloned there yet. The
 last runs the same thing from the Mac and must print the same lines, because both are a non-interactive bash
 on the VM; if it fails with `repos dir not found`, the `~/.zshenv` line is missing from the top of the VM's
-`~/.bashrc`, and rerunning `install.sh` there puts it back.
+`~/.bashrc`, and rerunning `install.sh` there puts it back. A tmux session that already existed when
+`install.sh` ran keeps its old environment, so a shell row attached to it still lacks `WT_REPOS_DIR` until you
+run `exec bash` in that pane or open a new tmux window.
 
 ## Notes
 
