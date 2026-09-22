@@ -229,6 +229,33 @@ record_repos_dir() {
   echo 'WT_REPOS_DIR=$HOME written to ~/.zshenv.local (edit the line if repos live elsewhere)'
 }
 
+# check_bashrc: hook_bashrc runs seventh, long after files have moved, so its three refusals would land on a
+# half-installed machine. They are made here instead, while nothing has been touched, with the same wording.
+# A ~/.bashrc that is a live symlink is not a refusal: hook_bashrc skips it and says so at the point of the
+# skip, so the warning is not buried under the whole install's output.
+check_bashrc() {
+  local rc="$HOME/.bashrc" mode
+  if [[ $OS == Darwin ]]; then
+    return 0
+  fi
+  if [[ -L $rc && ! -e $rc ]]; then
+    die "broken symlink at ~/.bashrc (-> $(readlink "$rc")): remove or repair it, then rerun"
+  fi
+  if [[ -L $rc ]]; then
+    return 0                           # a dotfile manager owns it; hook_bashrc leaves it alone and warns
+  fi
+  if [[ ! -e $rc ]]; then
+    return 0                           # nothing there: hook_bashrc writes the file itself
+  fi
+  if [[ ! -f $rc ]]; then
+    die "not a regular file: ~/.bashrc; move it aside, then rerun"
+  fi
+  mode="$(stat -c %a "$rc" 2>/dev/null || stat -f %Lp "$rc" 2>/dev/null || true)"   # -c is GNU, -f is BSD
+  if [[ $mode =~ ^[0-7]+$ ]] && (( 8#$mode & 8#022 )); then
+    die "refusing to copy mode $mode: ~/.bashrc is group- or other-writable; chmod go-w ~/.bashrc, then rerun"
+  fi
+}
+
 # hook_bashrc: cmux's remote tmux rows start every pane as bash with its own rcfile, which ends by sourcing
 # ~/.bashrc, and never run zsh, so the linked ~/.zshenv is otherwise never read there. It is plain sh, so one
 # line gives bash the same environment (PATH, WT_HOST, WT_REPOS_DIR) that a zsh session gets. The line goes
@@ -239,15 +266,33 @@ record_repos_dir() {
 # shellcheck disable=SC2016
 hook_bashrc() {
   local src='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
-  local rc="$HOME/.bashrc" line first mode tmp moved=0
+  local rc="$HOME/.bashrc" line first mode tmp target moved=0
   line="$src   # workstation: PATH, WT_HOST, WT_REPOS_DIR in cmux's bash rows"
   if [[ $OS == Darwin ]]; then
     return 0
   fi
-  if [[ ! -f $rc ]]; then
+  # check_bashrc made the refusals below before anything moved; they stay here to cover the gap between the
+  # two calls, and because nothing further down may run on a ~/.bashrc it cannot read.
+  if [[ -L $rc && ! -e $rc ]]; then   # dangling link: -f is false for it, and > "$rc" would write through it, outside $HOME
+    die "broken symlink at ~/.bashrc (-> $(readlink "$rc")): remove or repair it, then rerun"
+  fi
+  if [[ -L $rc ]]; then               # a live link into a dotfiles repo: rewriting it here would put a regular
+    target="$(readlink -f "$rc")"     # file in its place and orphan the target, so the repo would quietly stop
+    {                                 # governing ~/.bashrc — a breakage the user only meets weeks later
+      echo "skipped ~/.bashrc: it is a symlink to $target, left alone because a dotfile manager owns it."
+      echo "add this yourself, as the FIRST line of $target:"
+      echo "  $line"
+      echo "until then 'wt -H <vm> …' fails: cmux's remote bash rows read ~/.bashrc, never ~/.zshenv."
+    } >&2
+    return 0
+  fi
+  if [[ ! -e $rc && ! -L $rc ]]; then   # -L as well as -e: only now is there really nothing there
     printf '%s\n' "$line" > "$rc"
     echo "bash reads ~/.zshenv too (first line of ~/.bashrc): cmux rows on a VM run bash"
     return 0
+  fi
+  if [[ ! -f $rc ]]; then               # a directory or device in its place: nothing below can read it
+    die "not a regular file: ~/.bashrc; move it aside, then rerun"
   fi
   first="$(head -n 1 "$rc")"
   if [[ $first == "$src"* ]]; then                 # our line, whatever comment an older version put after it
@@ -256,7 +301,13 @@ hook_bashrc() {
   if awk -v s="$src" 'index($0, s) == 1 { found = 1 } END { exit !found }' "$rc"; then
     moved=1                                        # an older run appended it below Ubuntu's early return
   fi
-  mode="$(stat -c %a "$rc" 2>/dev/null || stat -f %Lp "$rc" 2>/dev/null || true)"   # -c is GNU, -f is BSD
+  mode="$(stat -c %a "$rc" 2>/dev/null || stat -f %Lp "$rc" 2>/dev/null || true)"   # -c is GNU, -f is BSD;
+                                                                                    # $rc is a regular file by here, so there is no link mode to read through
+  if [[ ! $mode =~ ^[0-7]+$ ]]; then
+    mode=""                            # stat said nothing usable: keep the 600 mktemp gives under this umask
+  elif (( 8#$mode & 8#022 )); then     # never copy a group- or other-writable mode onto a file every login shell sources
+    die "refusing to copy mode $mode: ~/.bashrc is group- or other-writable; chmod go-w ~/.bashrc, then rerun"
+  fi
   tmp="$(mktemp "$rc.XXXXXX")"
   {
     printf '%s\n' "$line"
@@ -308,6 +359,7 @@ main() {
   require_git_identity
   ask_vm_host        # Linux only — rejects the page's VM placeholder before anything moves
   record_repos_dir   # Linux only
+  check_bashrc       # Linux only — hook_bashrc's refusals, made while ~/.bashrc is still the only thing at stake
   trap report EXIT   # from here on files move, so always say where the originals went
   make_dirs
   install_bins
