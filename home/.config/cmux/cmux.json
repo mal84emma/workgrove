@@ -129,7 +129,7 @@
       {
         "command": "~/.local/bin/cmux-hook",
         "id": "wt",
-        "timeoutSeconds": 10
+        "timeoutSeconds": 20
       }
     ],
     "paneFlash": true,

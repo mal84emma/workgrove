@@ -57,6 +57,10 @@ case $t in
     h=$(field host || true); r=$(field repo || true); n=$(field task || true)
     if valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
       id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'); printf -v q '%q' "$r"   # mirrors valid_name / repo_id / row_title / wt_session in wt
-      attach_row "$h" "wt-$id-$n" "$id:$n" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1 & quiet; fi ;;
+      # Synchronous on purpose: cmux authorises the socket by process ancestry, and a backgrounded child is
+      # reparented away from the cmux tree the moment this hook exits, which the app then refuses
+      # ("Access denied - only processes started inside cmux can connect"). Creating the row costs ~4 s
+      # against the hook's 20 s budget in cmux.json.
+      attach_row "$h" "wt-$id-$n" "$id:$n" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; quiet; fi ;;
 esac
 exit 0
