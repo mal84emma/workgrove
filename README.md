@@ -226,6 +226,17 @@ Update the Mac's `wt` and each VM's `wt` together (`wt update` here, `wt -H <vm>
 seed while the repo is private): `wt -H <vm> …` runs the VM's copy for the remote half of every command, so a
 VM left behind answers in a vocabulary this Mac no longer expects.
 
+## Known limitations
+
+- **Switching to a VM row is slower than a local one.** A `cmux ssh` row takes roughly 1 to 3 seconds to paint
+  when you select it, against about a quarter of a second for a local row, and about 7 seconds to create. The
+  connection, the network and the agent are not at fault: the row's screen is already on the Mac and reads back
+  instantly while the row is hidden, so the cost is in cmux's own remote-surface path. Reported upstream as
+  [manaflow-ai/cmux#13648](https://github.com/manaflow-ai/cmux/issues/13648). Accepted as tolerable for now.
+  If it ever stops being tolerable, the alternative is to build VM rows as plain local terminals running
+  `ssh -t <host> tmux …` with the cmux socket forwarded back for notifications, which paints as fast as any
+  local row but gives up cmux's SSH badge, managed reconnect and relay.
+
 ## Deliberately left out
 
 - **Tailscale.** Optional hardening; this works over the ssh you already have.
