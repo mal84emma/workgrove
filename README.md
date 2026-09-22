@@ -237,6 +237,16 @@ VM left behind answers in a vocabulary this Mac no longer expects.
   `ssh -t <host> tmux …` with the cmux socket forwarded back for notifications, which paints as fast as any
   local row but gives up cmux's SSH badge, managed reconnect and relay.
 
+- **A Codex session on a VM cannot reach the Mac by itself.** Codex runs the commands it issues in a sandbox
+  that refuses to create sockets, and the cmux relay a VM row uses is a loopback TCP socket, so `wt open` and
+  `wt new` inside a Codex row on a VM cannot ask the Mac to open VS Code or a new row. `wt` detects the failed
+  relay and prints the command to run on the Mac instead, for example
+  `wt -H <host> open -r <repo> <task>`; run that in any Mac shell for `open`, and in a cmux terminal for
+  `new` or `attach`, which need the cmux socket. Claude sessions on a VM are unaffected, and so are Codex's own
+  notifications, because Codex spawns its lifecycle hooks outside that sandbox. Allowing network access in
+  `[sandbox_workspace_write]` is not the fix: it would open outbound network for every command Codex runs on
+  the VM, and it does not lift the loopback restriction.
+
 ## Deliberately left out
 
 - **Tailscale.** Optional hardening; this works over the ssh you already have.
