@@ -176,7 +176,7 @@ tidy_name()  { printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed -E '
 valid_agent() { case "$1" in claude|codex|none) ;; *) die "unknown agent '$1' (use claude, codex or none)" ;; esac; }
 
 slugify() {
-  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' \
+  printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cs 'a-z0-9' '-' \
     | sed 's/^-//; s/-$//' | cut -d- -f1-5 | cut -c1-48 | sed 's/-$//'
 }
 
@@ -214,7 +214,7 @@ repo_matches() { # repo_matches <name> -> the entries holding that repo, first e
 }
 
 default_base() {
-  local ref
+  local ref b
   if ref=$(git -C "$REPO" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null); then
     printf '%s' "$ref"; return
   fi
@@ -222,7 +222,9 @@ default_base() {
     git -C "$REPO" show-ref -q --verify "refs/remotes/origin/$b" && { printf 'origin/%s' "$b"; return; }
     git -C "$REPO" show-ref -q --verify "refs/heads/$b" && { printf '%s' "$b"; return; }
   done
-  git -C "$REPO" rev-parse --abbrev-ref HEAD
+  # the branch checked out here, or its commit when HEAD is detached; never the literal "HEAD", which
+  # resolves in every worktree to that worktree's own tip and so compares a worktree with itself
+  git -C "$REPO" symbolic-ref -q --short HEAD || git -C "$REPO" rev-parse HEAD
 }
 
 meta_get() { # meta_get <name> <key>
@@ -245,7 +247,7 @@ require_wt() { # require_wt <name>  -> sets P (path), B (branch)
   local n="$1"; valid_name "$n" || die "invalid worktree name: $n"
   P=$(wt_path "$n"); B=$(wt_branch "$n")
   [[ -d "$P" ]] || die "no worktree named '$n' in $REPO (see: wt list)"
-  git -C "$REPO" worktree list --porcelain | grep -qx "worktree $P" || die "$P exists but is not a registered worktree (try: git -C $REPO worktree prune)"
+  git -C "$REPO" worktree list --porcelain | grep -qxF "worktree $P" || die "$P exists but is not a registered worktree (try: git -C $REPO worktree prune)"
 }
 
 cmux_row_field() { # cmux_row_field <title> <field> [host] -> that field of the row; no host: the local row
@@ -313,7 +315,11 @@ copy_includes() { # copy gitignored files listed in .worktreeinclude into the ne
       pat="${pat#/}"; pat="${pat%/}"
       # shellcheck disable=SC2053
       if [[ "$f" == $pat || "$f" == $pat/* || "$(basename "$f")" == $pat ]]; then
-        mkdir -p "$dest/$(dirname "$f")"; cp -p "$REPO/$f" "$dest/$f"; printf '%s\n' "$f"; break
+        # errexit does not reach in here (a pipeline inside $( )), so a failed copy has to be caught by
+        # hand; printing it anyway would record in "includes" a file the worktree does not have
+        mkdir -p "$dest/$(dirname "$f")"
+        cp -p "$REPO/$f" "$dest/$f" || { warn "could not copy $f into the worktree"; break; }
+        printf '%s\n' "$f"; break
       fi
     done < "$inc"
   done
@@ -373,9 +379,14 @@ wt_status_line() { # prints: name|branch|base|ahead|behind|dirty|last
 }
 
 list_names() { # registered worktrees under the wt root
-  local root; root=$(wt_root)
-  git -C "$REPO" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}' \
-    | grep -F "$root/" | sed "s#^$root/##" | grep -v / || true
+  local root p; root=$(wt_root)
+  while IFS= read -r p; do          # the prefix is stripped here, not by sed: a repo path may hold '#'
+    [[ "$p" == "$root/"* ]] || continue
+    p=${p#"$root/"}
+    case "$p" in */*) continue ;; esac
+    printf '%s\n' "$p"
+  done < <(git -C "$REPO" worktree list --porcelain | awk '/^worktree /{print substr($0,10)}')
+  return 0
 }
 
 # ---------------------------------------------------------------- commands
@@ -383,14 +394,14 @@ cmd_new() {
   local name="" prompt="" stdin_prompt=0 base="" from_head=0 agent="$DEFAULT_AGENT" workspace=1 focus=false repo=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -p|--prompt) prompt="$2"; shift 2 ;;
+      -p|--prompt) [[ $# -ge 2 ]] || die "new: $1 needs a brief"; prompt="$2"; shift 2 ;;
       --prompt-stdin) stdin_prompt=1; shift ;;
-      -b|--base) base="$2"; shift 2 ;;
+      -b|--base) [[ $# -ge 2 ]] || die "new: $1 needs a ref"; base="$2"; shift 2 ;;
       --head) from_head=1; shift ;;
-      -a|--agent) agent="$2"; shift 2 ;;
+      -a|--agent) [[ $# -ge 2 ]] || die "new: $1 needs an agent"; agent="$2"; shift 2 ;;
       --no-workspace) workspace=0; shift ;;
       --focus) focus=true; shift ;;
-      -r|--repo) repo="$2"; shift 2 ;;
+      -r|--repo) [[ $# -ge 2 ]] || die "new: $1 needs a repo"; repo="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       -*) die "new: unknown option $1" ;;
       *) if [[ -z "$name" ]]; then name="$1"; else die "new: unexpected argument $1"; fi; shift ;;
@@ -411,7 +422,13 @@ cmd_new() {
     wt_host >/dev/null; have jq || die "jq not found (sudo apt-get install -y jq)"
   fi
 
-  if [[ $from_head -eq 1 ]]; then base=$(git -C "$PWD" rev-parse --abbrev-ref HEAD 2>/dev/null || git -C "$REPO" rev-parse --abbrev-ref HEAD); fi
+  # --head is this checkout's HEAD: its branch name, or its commit when HEAD is detached (mid-rebase, a
+  # checked-out tag). Never the literal "HEAD": that resolves in every worktree to the worktree's own tip,
+  # so the base would compare the worktree with itself and rm and prune would read it as nothing to lose.
+  if [[ $from_head -eq 1 ]]; then
+    base=$(git -C "$PWD" symbolic-ref -q --short HEAD 2>/dev/null || git -C "$PWD" rev-parse HEAD 2>/dev/null) \
+      || base=$(git -C "$REPO" symbolic-ref -q --short HEAD || git -C "$REPO" rev-parse HEAD)
+  fi
   [[ -n "$base" ]] || base=$(default_base)
   if [[ "$base" == origin/* ]]; then
     git -C "$REPO" fetch -q origin "${base#origin/}" 2>/dev/null || warn "fetch of $base failed; using local ref"
@@ -438,7 +455,7 @@ cmd_new() {
 
 cmd_run() { # run the worktree's agent here; cmux types this into the row's shell, which stays after it exits
   local name="" repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) repo="$2"; shift;; -*) die "run: unknown option $1";; *) name="$1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) [[ $# -ge 2 ]] || die "run: $1 needs a repo"; repo="$2"; shift;; -*) die "run: unknown option $1";; *) [[ -z "$name" ]] || die "run: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "run: worktree name required (wt run <name> -r <repo>)"
   resolve_repo "$repo"; require_wt "$name"
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac
@@ -470,7 +487,7 @@ cmd_run() { # run the worktree's agent here; cmux types this into the row's shel
 
 cmd_list() {
   local json=0 all=0 repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in --json) json=1;; --all) all=1;; -r|--repo) repo="$2"; shift;; *) die "list: unknown option $1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in --json) json=1;; --all) all=1;; -r|--repo) [[ $# -ge 2 ]] || die "list: $1 needs a repo"; repo="$2"; shift;; *) die "list: unknown option $1";; esac; shift; done
   local repos=()
   if [[ $all -eq 1 ]]; then
     need_repos_dir
@@ -505,7 +522,7 @@ cmd_list() {
 cmd_show() {
   local name="" diff=0 json=0 repo=""
   while [[ $# -gt 0 ]]; do
-    case "$1" in --diff) diff=1;; --json) json=1;; -r|--repo) repo="$2"; shift;; -*) die "show: unknown option $1";; *) name="$1";; esac; shift
+    case "$1" in --diff) diff=1;; --json) json=1;; -r|--repo) [[ $# -ge 2 ]] || die "show: $1 needs a repo"; repo="$2"; shift;; -*) die "show: unknown option $1";; *) [[ -z "$name" ]] || die "show: unexpected argument $1"; name="$1";; esac; shift
   done
   [[ -n "$name" ]] || die "show: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
@@ -530,7 +547,7 @@ cmd_show() {
 
 cmd_open() { # wt open [name] [-r PATH] — no name: the worktree holding $PWD
   local name="" repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) repo="$2"; shift;; -*) die "open: unknown option $1";; *) name="$1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) [[ $# -ge 2 ]] || die "open: $1 needs a repo"; repo="$2"; shift;; -*) die "open: unknown option $1";; *) [[ -z "$name" ]] || die "open: unexpected argument $1"; name="$1";; esac; shift; done
   if [[ -n "$name" ]]; then
     resolve_repo "$repo"
   else
@@ -546,7 +563,7 @@ cmd_open() { # wt open [name] [-r PATH] — no name: the worktree holding $PWD
 
 cmd_attach() {
   local name="" agent="" prompt="" focus=false repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in -a|--agent) agent="$2"; shift;; -p|--prompt) prompt="$2"; shift;; --focus) focus=true;; -r|--repo) repo="$2"; shift;; -*) die "attach: unknown option $1";; *) name="$1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in -a|--agent) [[ $# -ge 2 ]] || die "attach: $1 needs an agent"; agent="$2"; shift;; -p|--prompt) [[ $# -ge 2 ]] || die "attach: $1 needs a brief"; prompt="$2"; shift;; --focus) focus=true;; -r|--repo) [[ $# -ge 2 ]] || die "attach: $1 needs a repo"; repo="$2"; shift;; -*) die "attach: unknown option $1";; *) [[ -z "$name" ]] || die "attach: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "attach: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
   if [[ -n "$agent" ]]; then valid_agent "$agent"; meta_set "$name" "agent=$agent"; fi
@@ -556,7 +573,7 @@ cmd_attach() {
 
 cmd_sync() {
   local name="" merge=0 repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in --merge) merge=1;; -r|--repo) repo="$2"; shift;; -*) die "sync: unknown option $1";; *) name="$1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in --merge) merge=1;; -r|--repo) [[ $# -ge 2 ]] || die "sync: $1 needs a repo"; repo="$2"; shift;; -*) die "sync: unknown option $1";; *) [[ -z "$name" ]] || die "sync: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "sync: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
   local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
@@ -568,7 +585,7 @@ cmd_sync() {
 
 cmd_pr() {
   local name="" draft=() repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in --draft) draft=(--draft);; -r|--repo) repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "pr: unknown option $1";; *) name="$1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in --draft) draft=(--draft);; -r|--repo) [[ $# -ge 2 ]] || die "pr: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "pr: unknown option $1";; *) [[ -z "$name" ]] || die "pr: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "pr: worktree name required"
   resolve_repo "$repo"; require_wt "$name"; have gh || die "gh not installed"
   [[ -z "$(git -C "$P" status --porcelain)" ]] || die "worktree has uncommitted changes; commit first"
@@ -579,16 +596,22 @@ cmd_pr() {
 
 cmd_rm() {
   local name="" force=0 keep=0 repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in --force|-f) force=1;; --keep-branch) keep=1;; -r|--repo) repo="$2"; shift;; -*) die "rm: unknown option $1";; *) name="$1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in --force|-f) force=1;; --keep-branch) keep=1;; -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift;; -*) die "rm: unknown option $1";; *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "rm: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
   local here there; here=$(pwd -P); there=$(cd "$P" && pwd -P)   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
   local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
-  local dirty ahead pushed=1 merged=0
+  local dirty ahead=0 pushed=1 merged=0 base_ok=0
   dirty=$(git -C "$P" status --porcelain | wc -l | tr -d ' ')
-  ahead=$(git -C "$P" rev-list --count "$base..HEAD" 2>/dev/null || echo 0)
-  git -C "$P" merge-base --is-ancestor HEAD "$base" 2>/dev/null && merged=1
+  # a base that no longer resolves fails both checks below, and each failure reads as "nothing to lose";
+  # the literal "HEAD" resolves in every worktree to that worktree's own tip and reads the same way. So
+  # settle the base first and let either case be a refusal, never a silent zero.
+  if [[ "$base" != HEAD ]] && git -C "$P" rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1; then
+    base_ok=1
+    git -C "$P" merge-base --is-ancestor HEAD "$base" 2>/dev/null && merged=1
+    ahead=$(git -C "$P" rev-list --count "$base..HEAD" 2>/dev/null || echo 0)
+  fi
   if git -C "$P" rev-parse -q --verify '@{u}' >/dev/null 2>&1; then
     [[ -z "$(git -C "$P" log '@{u}..HEAD' --oneline 2>/dev/null)" ]] || pushed=0
   else
@@ -597,6 +620,7 @@ cmd_rm() {
   if [[ $force -eq 0 ]]; then
     local reasons=() f
     [[ "$dirty" -gt 0 ]] && reasons+=("$dirty uncommitted change(s)")
+    [[ $base_ok -eq 1 ]] || reasons+=("base '$base' cannot be compared with this worktree (gone, or the literal HEAD)")
     [[ "$ahead" -gt 0 && $merged -eq 0 && $pushed -eq 0 ]] && reasons+=("$ahead commit(s) not merged into $base and not pushed")
     while IFS= read -r f; do
       [[ -n "$f" ]] || continue
@@ -622,7 +646,7 @@ cmd_rm() {
 
 cmd_prune() {
   local dry=0 repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in --dry-run|-n) dry=1;; -r|--repo) repo="$2"; shift;; *) die "prune: unknown option $1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in --dry-run|-n) dry=1;; -r|--repo) [[ $# -ge 2 ]] || die "prune: $1 needs a repo"; repo="$2"; shift;; *) die "prune: unknown option $1";; esac; shift; done
   resolve_repo "$repo"
   git -C "$REPO" worktree prune
   local n p base dirty changed
@@ -641,7 +665,7 @@ cmd_prune() {
 
 cmd_path() {
   local name="" repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) repo="$2"; shift;; -*) die "path: unknown option $1";; *) name="$1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) [[ $# -ge 2 ]] || die "path: $1 needs a repo"; repo="$2"; shift;; -*) die "path: unknown option $1";; *) [[ -z "$name" ]] || die "path: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "path: worktree name required"
   resolve_repo "$repo"; require_wt "$name"; printf '%s\n' "$P"
 }
@@ -808,7 +832,7 @@ need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer
 
 host_new() { # create the worktree on the VM, then the cmux row here
   local host="$1" prompt="" args=(); shift
-  while [[ $# -gt 0 ]]; do case "$1" in -p|--prompt) prompt="$2"; shift 2;; *) args+=("$1"); shift;; esac; done
+  while [[ $# -gt 0 ]]; do case "$1" in -p|--prompt) [[ $# -ge 2 ]] || die "new: $1 needs a brief"; prompt="$2"; shift 2;; *) args+=("$1"); shift;; esac; done
   local out name repo session
   out=$(printf '%s' "$prompt" | remote_wt "$host" new "${args[@]+"${args[@]}"}" --no-workspace --prompt-stdin)
   printf '%s\n' "$out"
@@ -832,9 +856,9 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
     case "$1" in
       --restart-agent) restart=1; shift ;;
       --reattach) reattach=1; shift ;;
-      -r|--repo) repo="$2"; shift 2 ;;
+      -r|--repo) [[ $# -ge 2 ]] || die "attach: $1 needs a repo"; repo="$2"; shift 2 ;;
       -*) die "attach: unknown option $1" ;;
-      *) name="$1"; shift ;;
+      *) [[ -z "$name" ]] || die "attach: unexpected argument $1"; name="$1"; shift ;;
     esac
   done
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
@@ -906,7 +930,7 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
 
 host_open() { # VS Code Remote-SSH on a VM worktree
   local host="$1" name="" repo=""; shift
-  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) repo="$2"; shift 2;; -*) die "open: unknown option $1";; *) name="$1"; shift;; esac; done
+  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) [[ $# -ge 2 ]] || die "open: $1 needs a repo"; repo="$2"; shift 2;; -*) die "open: unknown option $1";; *) [[ -z "$name" ]] || die "open: unexpected argument $1"; name="$1"; shift;; esac; done
   [[ -n "$name" ]] || die "open: worktree name required (wt -H $host open -r <repo> <name>)"
   [[ -n "$repo" ]] || die "open: -r <repo> is required with -H (wt -H $host repos lists them)"
   local p; p=$(remote_wt "$host" path "$name" -r "$repo")
@@ -916,7 +940,7 @@ host_open() { # VS Code Remote-SSH on a VM worktree
 
 host_rm() { # remove on the VM, close the row, then kill the session (closing first stops cmux recreating it)
   local host="$1" name="" repo="" args=(); shift
-  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) repo="$2"; shift 2;; -*) args+=("$1"); shift;; *) name="$1"; shift;; esac; done
+  while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift 2;; -*) args+=("$1"); shift;; *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1"; shift;; esac; done
   [[ -n "$name" ]] || die "rm: worktree name required (wt -H $host rm -r <repo> <name>)"
   [[ -n "$repo" ]] || die "rm: -r <repo> is required with -H (wt -H $host repos lists them)"
   local session title; session=$(wt_session "$name" "$repo"); title=$(row_title "$name" "$repo")
@@ -930,7 +954,7 @@ cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac c
   valid_host "$host" || die "invalid host '$host' (an ssh alias: letters, digits, '.', '_' and '-')"
   while [[ $# -gt 0 ]]; do   # normalise -r once: a trailing '/' would change repo_id, and so the identity
     case "$1" in
-      -r|--repo) v="$2"; while [[ "$v" == */ && "$v" != / ]]; do v="${v%/}"; done; args+=("$1" "$v"); shift 2 ;;
+      -r|--repo) [[ $# -ge 2 ]] || die "$sub: $1 needs a repo"; v="$2"; while [[ "$v" == */ && "$v" != / ]]; do v="${v%/}"; done; args+=("$1" "$v"); shift 2 ;;
       *) args+=("$1"); shift ;;
     esac
   done
@@ -1003,10 +1027,10 @@ cmd_task() {
   local args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --where) where="$2"; shift 2 ;;
-      -a|--agent) kind="$2"; shift 2 ;;
-      -r|--repo) repo="$2"; shift 2 ;;
-      -p|--prompt) brief="$2"; asked=0; shift 2 ;;
+      --where) [[ $# -ge 2 ]] || die "task: $1 needs local or a host"; where="$2"; shift 2 ;;
+      -a|--agent) [[ $# -ge 2 ]] || die "task: $1 needs a kind"; kind="$2"; shift 2 ;;
+      -r|--repo) [[ $# -ge 2 ]] || die "task: $1 needs a repo"; repo="$2"; shift 2 ;;
+      -p|--prompt) [[ $# -ge 2 ]] || die "task: $1 needs a brief"; brief="$2"; asked=0; shift 2 ;;
       *) die "task: unknown option $1" ;;
     esac
   done
