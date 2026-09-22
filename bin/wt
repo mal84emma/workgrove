@@ -760,7 +760,8 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared]
   # the one already there. A task row owns its session, so it attaches with -d and hands the session THIS
   # row's relay socket and workspace id, which is what makes `cmux notify` from inside it light up this row.
   # The shell cmux starts after "remote session was lost" carries none of the CMUX_* variables, and
-  # home/.tmux.conf puts both in update-environment, so attaching from it would mark them removed in the
+  # ~/.tmux.conf carries both in update-environment (install.sh links home/.tmux.conf with --with-tmux-conf,
+  # or appends that one line to the file you already have), so attaching from it would mark them removed in the
   # session and silence `cmux notify` there. Each is therefore taken from the session when the shell has
   # none (the row's old relay port stays bound to the row), and only set when it is non-empty.
   # A session you may also be sitting in yourself (the VM shell, a repo shell) is passed "shared" instead:

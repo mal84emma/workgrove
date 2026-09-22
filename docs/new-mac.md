@@ -1,7 +1,8 @@
 # Set up a new Mac
 
-About 30 minutes, most of it downloads and logins. Run the blocks in order: block 3 needs oh-my-zsh and a git
-identity, both of which `install.sh` insists on.
+About 30 minutes, most of it downloads and logins. Run the blocks in order: block 3 asks for the author's own
+config with `--opinionated-config`, so it needs oh-my-zsh and a git identity: `install.sh` insists on the
+identity always, and on oh-my-zsh whenever that config's `~/.zshrc` is asked for.
 
 ```bash
 # 1. Command Line Tools (wait for the installer if it opens; re-run until it prints a path)
@@ -29,15 +30,23 @@ git config --file ~/.gitconfig.local core.editor 'code --wait'
 # git config --file ~/.gitconfig.local credential.https://dev.azure.com.helper manager
 # optional: repos in more than one folder (searched in order; the file is never versioned)
 # echo 'export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"' >> ~/.zshenv.local
-bash ~/repos/workstation/install.sh
+bash ~/repos/workstation/install.sh --opinionated-config
 exec zsh -l     # separate line on purpose: chained with && it is skipped whenever install.sh exits non-zero
 ```
 
+`--opinionated-config` is what asks for the five files that are the author's taste rather than machinery:
+`~/.zshrc` (with the oh-my-zsh theme), `~/.gitconfig`, `~/.tmux.conf`, the Claude keymap and the status line.
+A bare `install.sh` installs the machinery and leaves all five alone, which is what a stranger cloning this
+repo gets; the README's Install section has the per-file flags and what arrives instead. The flag never has to
+be repeated: once those files are links into this repo, a later bare run — `wt update`'s, for instance — keeps
+them.
+
 `install.sh` prints one line per file it links or installs and says where it put anything it moved out of the
-way. Rerun it whenever the repo changes. It refuses before touching anything if oh-my-zsh or a git identity is
-missing, so a run that stops early has changed nothing. Its last step clones the two zsh plugins `~/.zshrc`
-enables (`zsh-autosuggestions`, `zsh-syntax-highlighting`) into `~/.oh-my-zsh/custom/plugins/`, which is the one
-step that needs the network; everything before it is local.
+way. Rerun it whenever the repo changes. It refuses before touching anything if a git identity is missing, or,
+because this page installs `~/.zshrc`, if oh-my-zsh is missing, so a run that stops early has changed nothing.
+Its last step clones the two zsh plugins `~/.zshrc` enables (`zsh-autosuggestions`, `zsh-syntax-highlighting`)
+into `~/.oh-my-zsh/custom/plugins/`, which is the one step that needs the network; everything before it is
+local. Both the prerequisite and the clone belong to that `~/.zshrc` alone, so without it neither applies.
 
 ```bash
 # 4. agents, Codex hooks and logins

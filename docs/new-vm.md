@@ -40,7 +40,11 @@ mkdir -p ~/repos
 # --refresh-config installs the portable Claude and Codex configs even when the image shipped its own; the
 # old ones go to ~/.workstation-backup/<stamp>-<pid>/. On a later update never pass it without reading the sync
 # table in the README, because it also drops Codex's hook and folder trust.
-WT_HOST=<vm> bash ~/repos/workstation/install.sh --refresh-config   # replace <vm> with this machine's alias in the Mac's ~/.ssh/config
+# --opinionated-config asks for the author's own ~/.zshrc (hence the oh-my-zsh line above), ~/.gitconfig,
+# ~/.tmux.conf, Claude keymap and status line; drop it and the install leaves all five to you, machinery
+# intact (README, Install). It never has to be repeated: once they are links into the repo, the bare rerun
+# behind `wt update` keeps them.
+WT_HOST=<vm> bash ~/repos/workstation/install.sh --opinionated-config --refresh-config   # replace <vm> with this machine's alias in the Mac's ~/.ssh/config
 sudo chsh -s "$(command -v zsh)" "$(id -un)" && exec zsh -l   # last line: exec replaces the shell
 ```
 
@@ -109,10 +113,13 @@ run `exec bash` in that pane or open a new tmux window.
 
 - **A machine that is not fresh** (an Azure ML compute instance usually is not). Skip this on a fresh machine.
   `install.sh` moves whatever is in the way into `~/.workstation-backup/<stamp>-<pid>/` and prints that path, or
-  prints `done. nothing needed backing up`. Before block 2, copy from an existing `~/.gitconfig` only what the
-  linked one does not already cover: the linked `~/.gitconfig` routes github.com through
-  `gh auth git-credential` and includes `~/.gitconfig.local`, so carry over other hosts' credential helpers
-  and per-URL settings into `~/.gitconfig.local`, not the github.com helper.
+  prints `done. nothing needed backing up`. Block 2's `--opinionated-config` is what puts an existing
+  `~/.gitconfig` and `~/.tmux.conf` there in the first place, so before running it, copy from an existing
+  `~/.gitconfig` only what the linked one does not already cover: the linked `~/.gitconfig` routes github.com
+  through `gh auth git-credential` and includes `~/.gitconfig.local`, so carry over other hosts' credential
+  helpers and per-URL settings into `~/.gitconfig.local`, not the github.com helper. Without that flag neither
+  file is displaced: `install.sh` adds `core.excludesFile` and the `~/.gitconfig.local` include to the
+  `~/.gitconfig` you already have, and appends cmux's one `update-environment` line to your `~/.tmux.conf`.
 - **Seeding instead of cloning** (to carry an uncommitted change to a VM). From the Mac:
   `ssh <vm> 'mkdir -p ~/repos' && rsync -a --exclude .git ~/repos/workstation/ <vm>:~/repos/workstation/`.
   Block 2's clone line then finds the folder and skips. A seeded copy has no `.git`, so `wt update` and

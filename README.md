@@ -42,12 +42,12 @@ workstation/
 │   ├── cmux-hook              Mac-side cmux notification hook: remote wt open / wt attach
 │   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 ├── home/
-│   ├── .zshenv .zshrc .gitconfig .gitignore_global .tmux.conf
-│   ├── .oh-my-zsh/custom/themes/workstation.zsh-theme
+│   ├── .zshenv .gitignore_global   always installed; .zshrc .gitconfig .tmux.conf are opt-in
+│   ├── .oh-my-zsh/custom/themes/workstation.zsh-theme   with the .zshrc opt-in
 │   ├── .claude/
 │   │   ├── AGENTS.md          the working conventions both agents read
 │   │   ├── CLAUDE.md          one line: @AGENTS.md
-│   │   └── settings.base.json, keybindings.json, statusline-command.sh
+│   │   └── settings.base.json; keybindings.json and statusline-command.sh are opt-in
 │   ├── .agents/skills/        task-driver, worktree-create, worktree-work, worktree-show, worktree-teardown,
 │   │                          azml-compute
 │   ├── .codex/                config.base.toml, hooks.base.json
@@ -55,6 +55,8 @@ workstation/
 ├── vscode/
 │   ├── settings-snippet.jsonc six keys to paste; Settings Sync owns the rest
 │   └── extensions.txt
+├── test/
+│   └── install-smoke.sh       a smoke test of a default install
 └── docs/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
@@ -75,22 +77,53 @@ To put a local change on a machine before committing it, seed it with the `rsync
 [docs/new-vm.md](docs/new-vm.md) instead of the clone. A seeded copy has no `.git`, so `wt update` refuses
 until it is replaced by a clone.
 
+That bare run installs the machinery and leaves your own shell, git and tmux alone. Five of the files here
+are the author's taste rather than machinery, so each waits for its own flag: installing a task tool should
+not hand a stranger someone else's prompt, git config, tmux bindings, Claude keymap and status line.
+
+| Flag | Links | What arrives instead when you leave it out |
+|---|---|---|
+| `--with-zshrc` | `~/.zshrc`, and with it the oh-my-zsh theme, the oh-my-zsh prerequisite and the clone of the two plugins it enables | Nothing: your `~/.zshrc` is untouched, and a default install therefore has no oh-my-zsh prerequisite and no network step at all |
+| `--with-gitconfig` | `~/.gitconfig`: `core.excludesFile`, the github.com credential helper, the `~/.gitconfig.local` include | Its two machinery settings only, written into your own `~/.gitconfig` with `git config --global`: `core.excludesFile` (what git-ignores `.worktrees/`) and the `~/.gitconfig.local` include (where your identity lives). Every other line of your file is left alone |
+| `--with-tmux-conf` | `~/.tmux.conf` | Its one line, appended to your own `~/.tmux.conf` (created if you have none), leaving every line already there in place: that `set -ag update-environment` is how cmux's relay variables reach a pane started in an already-running session |
+| `--with-keybindings` | `~/.claude/keybindings.json` | Nothing; Claude keeps its own keymap |
+| `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing, and `statusLine` is stripped from the `~/.claude/settings.json` copy, because it names a script that would not be there |
+
+`--opinionated-config` is all five at once; `--refresh-config` is orthogonal to them, and they combine in any
+order. The one deliberate exception to the fallbacks above is a `core.excludesFile` that already points at a
+file of your own: that is kept, not overwritten, with a message asking you to add `.gitignore_global`'s lines
+to it, because overwriting it would silently drop every global ignore you had — which is the harm this whole
+opt-in is about.
+
+The choice is sticky, with nothing stored anywhere to disagree with: a destination that is already a symlink
+into this repo counts as opted in, so `wt update` — which re-runs `install.sh` with at most
+`--refresh-config` — keeps what each machine chose. Opting in later means running `install.sh --with-…`
+yourself once, after which `wt update` carries it. A run that leaves some out names them and the flag that
+would install each.
+
+`~/.zshenv` and `~/.gitignore_global` are not on that list, because they are the contract rather than taste:
+`~/.zshenv` puts `~/.local/bin` on `PATH` and carries `WT_HOST` and `WT_REPOS_DIR`, and `~/.gitignore_global`
+is the file that git-ignores `.worktrees/`.
+
 `install.sh` sorts every file into one of three classes.
 
 | Class | Files | Behaviour |
 |---|---|---|
-| Symlinks | shell, git and tmux dotfiles, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, `cmux.json` (Mac only) | Edits, including an agent's, land in the repo, so `git diff` is the review |
-| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
-| Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files |
+| Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, `cmux.json` (Mac only), and every opt-in file you asked for | Edits, including an agent's, land in the repo, so `git diff` is the review |
+| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use: `statusLine` without `--with-statusline`, the voice keys off a Mac. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
+| Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files — `~/.zshrc.local` only when `~/.zshrc` is one of them |
 
 It is idempotent: rerun it after every repo change. Nothing is deleted. Anything in the way is moved into
 `~/.workstation-backup/<timestamp>-<pid>`, which is created only when it is actually needed. It stops with a
-message if oh-my-zsh is missing, or if `~/.gitconfig.local` holds no git identity. On Linux it records this
-VM's alias in the Mac's `~/.ssh/config` as a `WT_HOST` line in `~/.zshenv.local`: given in the environment
+message if no git identity is set — `~/.gitconfig.local` first, then your global git config — or, when
+`~/.zshrc` is opted in, if oh-my-zsh is missing. On Linux it records this VM's alias in the Mac's
+`~/.ssh/config` as a `WT_HOST` line in `~/.zshenv.local`: given in the environment
 (`WT_HOST=<vm> bash install.sh`, which is what the setup page does) or asked for once at a prompt. It records
 `export WT_REPOS_DIR="$HOME"` there too, and puts one line at the top of `~/.bashrc` so that bash reads
 `~/.zshenv`, because cmux runs its VM rows in bash. At the top because Ubuntu's `~/.bashrc` returns early in a
 non-interactive shell, so the line has to come first to cover `ssh <vm> '<cmd>'` and `wt -H <vm> …` as well.
+
+`bash test/install-smoke.sh` is the repo's smoke test: it exercises a default, no-flags install.
 
 ## Daily use
 
