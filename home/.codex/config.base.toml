@@ -1,5 +1,9 @@
-# Security baseline: keep local writes inside the selected workspace and ask
-# before crossing the sandbox boundary.
+# Security baseline: keep local writes inside the selected workspace and require
+# an approval before crossing the sandbox boundary. That approval is granted by a
+# model, not by you: with approvals_reviewer = "auto_review" Codex reviews its own
+# escalation requests and can approve them in seconds with no human prompt, so the
+# sandbox boundary is a speed bump, not a consent gate. Set approvals_reviewer =
+# "user" to be asked yourself.
 approval_policy = "on-request"
 approvals_reviewer = "auto_review"
 sandbox_mode = "workspace-write"
@@ -20,8 +24,10 @@ service_tier = "default"
 [sandbox_workspace_write]
 network_access = false
 
-# Connected apps: review every escalation, ask before running their tools, and
-# keep the destructive and open-world classes off entirely.
+# Connected apps: keep the destructive and open-world classes off entirely, and
+# gate their other tools behind an approval. As above, that approval is reviewed
+# by a model rather than by you; set approvals_reviewer = "user" here too to be
+# asked yourself.
 [apps._default]
 approvals_reviewer = "auto_review"
 default_tools_approval_mode = "prompt"

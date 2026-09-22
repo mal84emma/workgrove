@@ -1,2 +1,29 @@
 *.bak
 .DS_Store
+
+# Machine-local overrides (~/.zshrc.local, ~/.gitconfig.local, ~/.zshenv.local).
+*.local
+
+# The mutable copies install.sh generates from the .base templates; only the
+# templates are versioned.
+home/.claude/settings.json
+home/.claude.json
+home/.codex/config.toml
+home/.codex/hooks.json
+
+# Credentials and environment files.
+auth.json
+credentials.json
+.netrc
+.env
+.env.*
+
+# Private keys.
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+
+# A real ssh config; the repo ships docs/ssh-config.example instead.
+home/.ssh/config
