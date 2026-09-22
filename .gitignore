@@ -4,6 +4,9 @@
 # Machine-local overrides (~/.zshrc.local, ~/.gitconfig.local, ~/.zshenv.local).
 *.local
 
+# Temporary and backup files.
+*/tmp/*
+
 # The mutable copies install.sh generates from the .base templates; only the
 # templates are versioned.
 home/.claude/settings.json
