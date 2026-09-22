@@ -134,7 +134,7 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 | `wt task` | The picker on ⌃⌥⌘T (Mac, needs fzf) |
 | `wt driver` | Open or select the `driver` row |
 | `wt update [--refresh-config]` | `git pull --ff-only` this repo, then re-run `install.sh` |
-| `wt repos [<name>]` | List the name and path of every repo, or print one repo's path |
+| `wt repos [<name>] [--porcelain\|--table]` | List every repo (name, task count, location on a terminal; `name<TAB>path` when piped), or print one repo's path |
 | `wt path <name>`, `wt current`, `wt diff <name>`, `wt help` | Small helpers |
 | `wt -H <host> <sub> …` | Run a subcommand on a VM over ssh while the cmux row stays local. `show`, `rm`, `path`, `open` and `attach` need `-r <repo>` |
 
@@ -149,7 +149,10 @@ worktree folder for one repo.
 `WT_REPOS_DIR` may hold several folders separated by `:`, like `$PATH`, searched in the order given; empty
 entries and folders that are missing or unreadable are skipped, and a folder named twice is searched once.
 `wt repos` and `wt list --all` cover every folder in the list; only direct children holding a `.git` count,
-and hidden folders such as `~/.oh-my-zsh` never do. A name is looked up along the list; a name found in more
+and hidden folders such as `~/.oh-my-zsh` never do. On a terminal `wt repos` prints a table: the repo name,
+how many task worktrees it holds (`-` for none) and where it lives, `~/…` for this home; the ⌃⌥⌘T picker
+shows the same name and location columns. Piped, or with `--porcelain`, it prints `name<TAB>path` per repo, the form scripts and
+the picker read; `--table` forces the table, which is what `wt -H <vm> repos` sends to a VM. A name is looked up along the list; a name found in more
 than one folder is refused with both paths, so pass the path instead. Set it in
 `~/.zshenv.local`, for example `export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"`.
 

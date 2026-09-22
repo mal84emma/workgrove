@@ -19,8 +19,9 @@
 #   wt rm <name> [--force] [--keep-branch]                    remove a worktree; refuses to destroy work, including an
 #                                                             edited .worktreeinclude copy, unless --force
 #   wt prune [--dry-run]                                      remove worktrees whose branch is merged and tree is clean
-#   wt repos [<name>]                                         "<name><tab><path>" per git repo in $WT_REPOS_DIR; given a
-#                                                             name or path, just that repo's path (also over ssh)
+#   wt repos [<name>] [--porcelain|--table]                   every git repo in $WT_REPOS_DIR: on a terminal a table of
+#                                                             name, task count and location; piped, "<name><tab><path>"
+#                                                             per repo. Given a name or path, just that repo's path
 #   wt task [--where local|<host>] [-a claude|codex|repo-shell|vm-shell] [-r REPO] [-p TEXT]
 #                                                             pick where/kind/repo/name/brief, then start it (Mac, needs fzf)
 #   wt driver                                                 open (or select) the driver row (@local)
@@ -641,11 +642,30 @@ cmd_path() {
   [[ -n "$name" ]] || die "path: worktree name required"
   resolve_repo "$repo"; require_wt "$name"; printf '%s\n' "$P"
 }
-cmd_repos()   { # no arg: "<name><tab><path>" per repo, the picker's two columns. A name or path: just its path,
-  case "${1:-}" in -h|--help) usage; exit 0 ;; -*) die "repos: unknown option $1 (wt repos [<name>])" ;; esac
-  [[ $# -le 1 ]] || die "repos: one name at most (wt repos [<name>])"      # the one resolution rule, also over ssh
-  if [[ $# -eq 1 ]]; then lookup_repo "$1"; printf '%s\n' "$REPO"; return 0; fi
-  need_repos_dir; repo_dirs | awk -F/ '{printf "%s\t%s\n", $NF, $0}'
+cmd_repos()   { # wt repos [<name>] [--porcelain|--table]. No name: every repo, as a table (name, how many task
+                # worktrees it holds, location) when stdout is a terminal or with --table, which is how
+                # `wt -H <host> repos` asks a VM for one; as "<name><tab><path>" per repo, the picker's two
+                # columns, when piped or with --porcelain. A name or path: just that repo's path (also over ssh).
+  local mode="" name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --porcelain|--table) mode="${1#--}" ;;
+      -*) die "repos: unknown option $1 (wt repos [<name>] [--porcelain|--table])" ;;
+      *) [[ -z "$name" ]] || die "repos: one name at most (wt repos [<name>])"; name="$1" ;;   # the one resolution rule
+    esac
+    shift
+  done
+  if [[ -n "$name" ]]; then lookup_repo "$name"; printf '%s\n' "$REPO"; return 0; fi
+  need_repos_dir
+  if [[ -z "$mode" ]]; then if [[ -t 1 ]]; then mode=table; else mode=porcelain; fi; fi
+  if [[ "$mode" == porcelain ]]; then repo_dirs | awk -F/ '{printf "%s\t%s\n", $NF, $0}'; return 0; fi
+  local d n
+  while IFS= read -r d; do                     # "<name><tab><path><tab><tasks>": what repo_menu table lays out
+    [[ -n "$d" ]] || continue
+    n=0; if set_repo "$d"; then n=$(list_names | grep -c . || true); fi
+    printf '%s\t%s\t%s\n' "${d##*/}" "$d" "$n"
+  done < <(repo_dirs) | repo_menu table
 }
 cmd_current() {
   local root common
@@ -864,7 +884,9 @@ cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac c
     rm)        host_rm "$host" "$@" ;;
     list)      remote_wt "$host" list --all "$@" ;;
     show|path) need_r "$host" "$sub" "$@"; remote_wt "$host" "$sub" "$@" ;;
-    repos|update|help) remote_wt "$host" "$sub" "$@" ;;
+    repos)     if [[ -t 1 ]]; then case " $* " in *" --porcelain "*|*" --table "*) ;; *) set -- "$@" --table ;; esac; fi
+               remote_wt "$host" repos "$@" ;;     # ssh gives the VM no terminal, so ask for the table explicitly
+    update|help) remote_wt "$host" "$sub" "$@" ;;
     *) die "wt -H: '$sub' does not run remotely (new attach list show rm path open repos update help)" ;;
   esac
 }
@@ -877,8 +899,12 @@ task_exit() { # the launcher row closes on exit, so let a message be read first
 ssh_hosts() { # non-wildcard Host aliases, read as bin/cmux-hook reads them
   { awk '$1=="Host"{for(i=2;i<=NF;i++){if($i ~ /^#/)break; if($i !~ /[*?]/) print $i}}' "$HOME/.ssh/config" 2>/dev/null || true; } | sort -u
 }
-repo_menu() { # picker rows from cmd_repos' "<name><tab><path>": name padded to the widest, then a grey location
-  awk -F'\t' -v home="$HOME" -v grey=$'\033[90m' -v off=$'\033[0m' '
+repo_menu() { # repo_menu [table] — lays out cmd_repos' "<name><tab><path>[<tab><tasks>]" lines. Default: picker
+              # rows "<name><tab><path><tab><display>", the display being the name padded to the widest, then a
+              # grey location. "table": the terminal listing, a grey header then name, task count ("-" for none)
+              # and location per repo. The location is "~" for this home, then at most the three folders above
+              # the repo, never the repo itself.
+  awk -F'\t' -v home="$HOME" -v table="${1:-}" -v grey=$'\033[90m' -v off=$'\033[0m' '
     function loc(p,   par, m, a) {   # the local home as "~", then the three folders above the repo, never the repo
       if (home != "" && index(p, home "/") == 1) p = "~" substr(p, length(home) + 1)
       par = p; sub(/\/[^\/]*$/, "", par)
@@ -887,9 +913,21 @@ repo_menu() { # picker rows from cmd_repos' "<name><tab><path>": name padded to 
       if (m <= 3) return par
       return a[m-2] "/" a[m-1] "/" a[m]
     }
-    { rn[NR] = $1; rp[NR] = $2; if (length($1) > w) w = length($1) }
-    END { fmt = "%s\t%s\t%-" (w + 2) "s%s%s%s\n"
-          for (j = 1; j <= NR; j++) printf fmt, rn[j], rp[j], rn[j], grey, loc(rp[j]), off }
+    { rn[NR] = $1; rp[NR] = $2; rt[NR] = $3; if (length($1) > w) w = length($1) }
+    END {
+      if (NR == 0) exit
+      if (table != "") {
+        if (w < 4) w = 4
+        printf "%s%-" (w + 2) "s%-7s%s%s\n", grey, "NAME", "TASKS", "LOCATION", off
+        for (j = 1; j <= NR; j++) {
+          t = sprintf("%-7s", rt[j] == "0" ? "-" : rt[j]); if (rt[j] == "0") t = grey t off
+          printf "%-" (w + 2) "s%s%s%s%s\n", rn[j], t, grey, loc(rp[j]), off
+        }
+        exit
+      }
+      fmt = "%s\t%s\t%-" (w + 2) "s%s%s%s\n"
+      for (j = 1; j <= NR; j++) printf fmt, rn[j], rp[j], rn[j], grey, loc(rp[j]), off
+    }
   '
 }
 pick() { # pick <prompt> [fzf args…] — a line of stdin, or whatever was typed (fzf --print-query: query, selection)
@@ -940,7 +978,7 @@ cmd_task() {
       list=$(cmd_repos) || exit 1                # cmd_repos has already said what is wrong; do not repeat it
       [[ -n "$list" ]] || die "task: no repos in WT_REPOS_DIR ($REPOS_PATH); clone one, or pass -r <path>"
     else
-      list=$(remote_wt "$where" repos) || exit 1
+      list=$(remote_wt "$where" repos) || exit 1   # no flag: ssh gives the VM no terminal, so this is the plain form on any wt version
       [[ -n "$list" ]] || die "task: no repos on $where (see: wt -H $where repos)"
     fi
     sel=$(printf '%s\n' "$list" | repo_menu | pick repo --ansi --delimiter $'\t' --with-nth 3 --nth 1,3) \

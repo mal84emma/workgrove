@@ -82,10 +82,10 @@ Check the VM answers:
 ```bash
 ssh <vm> '~/.local/bin/wt help'
 ssh <vm> 'cat ~/.zshenv.local'   # export WT_HOST=<vm> and export WT_REPOS_DIR="$HOME"
-ssh <vm> '~/.local/bin/wt repos'
+ssh <vm> '~/.local/bin/wt repos'   # name<TAB>path per repo: piped output is the plain form
 ssh <vm> 'bash -ic "echo \$WT_REPOS_DIR"'   # what a cmux row sees; must print the home folder
 ssh <vm> 'time bash -ic true'   # real under 0.1s; see the conda note below
-wt -H <vm> repos   # on the Mac; must print exactly the same lines as the third
+wt -H <vm> repos --porcelain   # on the Mac; must print exactly the same lines as the third
 ```
 
 The second must show both lines `install.sh` wrote: the alias you gave it, and the repos folder. If either
@@ -93,7 +93,7 @@ line is missing, `wt` on the VM cannot ask the Mac for rows or find repos; fix `
 The third lists every git repo directly under the VM's home folder, one `name<TAB>path` per line, with hidden
 folders such as `~/.oh-my-zsh` excluded; an empty result only means no repo has been cloned there yet. The
 last runs the same thing from the Mac and must print the same lines, because both are a non-interactive bash
-on the VM; if it fails with `repos dir not found`, the `~/.zshenv` line is missing from the top of the VM's
+on the VM (without `--porcelain`, `wt -H <vm> repos` on a terminal asks the VM for the table instead); if it fails with `repos dir not found`, the `~/.zshenv` line is missing from the top of the VM's
 `~/.bashrc`, and rerunning `install.sh` there puts it back. A tmux session that already existed when
 `install.sh` ran keeps its old environment, so a shell row attached to it still lacks `WT_REPOS_DIR` until you
 run `exec bash` in that pane or open a new tmux window.
