@@ -84,12 +84,16 @@ ssh <vm> '~/.local/bin/wt help'
 ssh <vm> 'cat ~/.zshenv.local'   # export WT_HOST=<vm> and export WT_REPOS_DIR="$HOME"
 ssh <vm> '~/.local/bin/wt repos'
 ssh <vm> 'bash -ic "echo \$WT_REPOS_DIR"'   # what a cmux row sees; must print the home folder
+wt -H <vm> repos   # on the Mac; must print exactly the same lines as the third
 ```
 
 The second must show both lines `install.sh` wrote: the alias you gave it, and the repos folder. If either
 line is missing, `wt` on the VM cannot ask the Mac for rows or find repos; fix `~/.zshenv.local` on the VM.
 The third lists every git repo directly under the VM's home folder, one `name<TAB>path` per line, with hidden
-folders such as `~/.oh-my-zsh` excluded; an empty result only means no repo has been cloned there yet.
+folders such as `~/.oh-my-zsh` excluded; an empty result only means no repo has been cloned there yet. The
+last runs the same thing from the Mac and must print the same lines, because both are a non-interactive bash
+on the VM; if it fails with `repos dir not found`, the `~/.zshenv` line is missing from the top of the VM's
+`~/.bashrc`, and rerunning `install.sh` there puts it back.
 
 ## Notes
 
@@ -109,9 +113,14 @@ folders such as `~/.oh-my-zsh` excluded; an empty result only means no repo has 
   hooks, which relay over the cmux socket; cmux's generated handlers hold Mac-local paths and a state protocol
   that cannot travel.
 - **cmux rows on a VM run bash, not zsh.** cmux's remote tmux profile starts every row as bash with its own
-  rc file and types `--command` text into it, so the oh-my-zsh prompt is not used there; `install.sh` adds one
-  line to `~/.bashrc` that sources `~/.zshenv`, which is why `wt`, `WT_HOST` and `WT_REPOS_DIR` work in those
-  rows. Type `zsh` in a row if you want the zsh prompt.
+  rc file and types `--command` text into it, so the oh-my-zsh prompt is not used there. An Azure ML compute
+  instance goes further: it resets the login shell to `/bin/bash` at every boot, so the `chsh` line in block 2
+  only lasts until the next stop/start there, and nothing in the harness depends on it. The one line
+  `install.sh` puts at the *top* of `~/.bashrc`, which sources `~/.zshenv`, is what carries `wt`, `WT_HOST`
+  and `WT_REPOS_DIR` into every bash on the VM, interactive or not, including `ssh <vm> '<cmd>'` and so
+  `wt -H <vm> …`. At the top because Ubuntu's own `~/.bashrc` returns on its fourth line when the shell is
+  not interactive, and anything below that return is never read by a command sent over ssh. Type `zsh` in a
+  row if you want the zsh prompt.
 - No extra network rule is needed. cmux's `mosh-tmux` runs tmux over plain ssh when mosh is absent.
 - Give the VM a regular OS disk, not an ephemeral one: an ephemeral disk loses its contents when the machine
   is stopped, and the point of the tmux sessions is that they survive.

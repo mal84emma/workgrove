@@ -206,15 +206,50 @@ record_repos_dir() {
 
 # hook_bashrc: cmux's remote tmux rows start every pane as bash with its own rcfile, which ends by sourcing
 # ~/.bashrc, and never run zsh, so the linked ~/.zshenv is otherwise never read there. It is plain sh, so one
-# line gives bash the same environment (PATH, WT_HOST, WT_REPOS_DIR) that a zsh session gets.
+# line gives bash the same environment (PATH, WT_HOST, WT_REPOS_DIR) that a zsh session gets. The line goes
+# at the very top: Ubuntu's ~/.bashrc returns on its fourth line when the shell is not interactive, and the
+# bash sshd starts for `ssh <vm> '<cmd>'` does read ~/.bashrc, so a line further down never runs there and
+# `wt -H <vm> …` fails. Nothing may depend on zsh on a VM anyway: an Azure ML compute instance resets the
+# login shell to /bin/bash on every boot, so this one line carries the environment to every bash there.
 # shellcheck disable=SC2016
 hook_bashrc() {
   local src='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
-  if [[ $OS == Darwin ]] || grep -qsF "$src" "$HOME/.bashrc"; then
+  local rc="$HOME/.bashrc" line first mode tmp moved=0
+  line="$src   # workstation: PATH, WT_HOST, WT_REPOS_DIR in cmux's bash rows"
+  if [[ $OS == Darwin ]]; then
     return 0
   fi
-  append_line "$HOME/.bashrc" "$src   # workstation: PATH, WT_HOST, WT_REPOS_DIR in cmux's bash rows"
-  echo "bash reads ~/.zshenv too (line added to ~/.bashrc): cmux rows on a VM run bash"
+  if [[ ! -f $rc ]]; then
+    printf '%s\n' "$line" > "$rc"
+    echo "bash reads ~/.zshenv too (first line of ~/.bashrc): cmux rows on a VM run bash"
+    return 0
+  fi
+  first="$(head -n 1 "$rc")"
+  if [[ $first == *"$src"* ]]; then
+    return 0
+  fi
+  if grep -qsF "$src" "$rc"; then   # an older run appended it below Ubuntu's early return
+    moved=1
+  fi
+  mode="$(stat -c %a "$rc" 2>/dev/null || stat -f %Lp "$rc" 2>/dev/null || true)"   # -c is GNU, -f is BSD
+  tmp="$(mktemp "$rc.XXXXXX")"
+  {
+    printf '%s\n' "$line"
+    if (( moved )); then
+      grep -vF "$src" "$rc" || true
+    else
+      cat "$rc"
+    fi
+  } > "$tmp"
+  if [[ -n $mode ]]; then
+    chmod "$mode" "$tmp"
+  fi
+  mv "$tmp" "$rc"
+  if (( moved )); then
+    echo "moved the ~/.zshenv line to the top of ~/.bashrc so non-interactive shells read it too"
+  else
+    echo "bash reads ~/.zshenv too (first line of ~/.bashrc): cmux rows on a VM run bash"
+  fi
 }
 
 # require_git_identity: ~/.gitconfig.local is machine-local and hand-written; commits need it.
