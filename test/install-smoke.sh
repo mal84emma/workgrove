@@ -20,7 +20,7 @@
 # and a pass/fail count, and exits non-zero if any assertion failed.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"   # -P: install.sh records the physical path, so compare like for like
 OS="$(uname -s)"
 # Resolved before anything else runs, and while HOME is still the real one: everything below compares
 # against this, so it must be captured before any scenario can have changed HOME.

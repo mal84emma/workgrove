@@ -4,8 +4,15 @@
 # Machine-local overrides (~/.zshrc.local, ~/.gitconfig.local, ~/.zshenv.local).
 *.local
 
+# Worktrees wt makes inside this very repo. ~/.gitignore_global carries these too,
+# but install.sh will not overwrite an excludesFile you already have, so a clone
+# cannot depend on it.
+.worktrees/
+.claude/worktrees/
+
 # Temporary and backup files.
-*/tmp/*
+tmp/
+*/tmp/
 
 # The mutable copies install.sh generates from the .base templates; only the
 # templates are versioned.

@@ -43,7 +43,11 @@
 set -euo pipefail
 umask 077
 
-R="$(cd "$(dirname "$0")" && pwd)"   # this repo
+# -P, not a plain pwd: every link below records this path and opted_in reads it back, and `wt update`
+# reruns this script from "$(cd "$(dirname "$s")/.." && pwd -P)". A clone reached through a symlinked path
+# component would otherwise record one spelling from one entry point and the other from the other, and
+# every link made under the first would read as "not ours" under the second.
+R="$(cd "$(dirname "$0")" && pwd -P)"   # this repo
 OS="$(uname -s)"
 REFRESH=0                            # set by --refresh-config
 WITH_ZSHRC=0                         # the five opinionated files, each set by its own --with-… flag
@@ -52,6 +56,7 @@ WITH_TMUX_CONF=0
 WITH_KEYBINDINGS=0
 WITH_STATUSLINE=0
 BK=""                                # this run's backup dir; filled in by main
+TMPFILES=()                          # half-built files; removed by report, which is the EXIT trap
 
 # parse_args <script args…>: flags in any order and any combination — each --with-… adds one opinionated
 # file, --opinionated-config is all five at once, --refresh-config is orthogonal to all of them.
@@ -77,17 +82,46 @@ parse_args() {
   done
 }
 
+# our_link <absolute path> <repo-relative src>: is that symlink one this script made for <src>? Three ways to
+# be ours, in order of how much they assume.
+#   1. It points into $R, the spelling every link this run makes carries.
+#   2. It still RESOLVES into $R. A run before $R was resolved with pwd -P recorded the clone's path with a
+#      symlinked component in it, and that link is live and correct — it just spells the repo differently.
+#   3. It DANGLES and its target ends in the same repo-relative path. That is what a link made before the
+#      clone was moved or renamed looks like afterwards: the old root is gone, but the tail is this repo's
+#      own layout, so link() can stash it and re-point it and the machine heals itself.
+# The dangling requirement in 3 is what keeps the tail test honest. A LIVE link into a SECOND checkout the
+# user deliberately keeps — the one link this script must never touch — would match on its tail alone, so a
+# link whose target still exists is ours only when it resolves into THIS repo, which that one never does.
+our_link() {
+  local p="$1" t dir
+  if [[ ! -L $p ]]; then
+    return 1
+  fi
+  t="$(readlink "$p")"
+  if [[ $t == "$R"/* ]]; then
+    return 0
+  fi
+  if [[ -e $p ]]; then
+    dir="$(cd "$(dirname "$p")" 2>/dev/null && cd "$(dirname "$t")" 2>/dev/null && pwd -P)" || dir=""
+    if [[ -n $dir && "$dir/$(basename "$t")" == "$R"/* ]]; then
+      return 0                         # the same repo, reached by another spelling of the path
+    fi
+    return 1                           # live and landing elsewhere: someone else's link, left alone
+  fi
+  [[ $t == */"$2" ]]
+}
+
 # opted_in <flag> <home-relative dst>: does this run install that opinionated file? Either the flag asked for
-# it, or ~/dst is ALREADY a link into this repo, which is the record an earlier run's flag left: `wt update`
+# it, or ~/dst is ALREADY a link this script made, which is the record an earlier run's flag left: `wt update`
 # reruns this script with no arguments, so a choice made once has to survive a run that cannot see it, and no
 # state is stored anywhere for it to disagree with. On a machine where all five are already linked — every
 # machine the author has — every answer is yes, so this whole opt-in changes nothing there.
 opted_in() {
-  local dst="$HOME/$2"
   if [[ $1 -eq 1 ]]; then
     return 0
   fi
-  [[ -L "$dst" && "$(readlink "$dst")" == "$R"/* ]]
+  our_link "$HOME/$2" "home/$2"
 }
 
 # die <message>: stop with a message on stderr. The EXIT trap still reports where anything went.
@@ -129,10 +163,19 @@ copy_config() {
   local src="$R/$1" dst="$HOME/$2" kind="$3"
   if [[ -e "$dst" && ! -L "$dst" && $REFRESH -eq 0 ]]; then
     echo "kept ~/$2 (install.sh --refresh-config replaces it)"
+    # Keeping the file also keeps the filter decision the FIRST install made. --with-statusline on a machine
+    # that is already installed therefore links the script and leaves settings.json without the key that
+    # names it: the status line never appears and every line of the run says success. Say it here instead.
+    if [[ $kind == claude ]] && opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh \
+       && ! jq -e 'has("statusLine")' "$dst" >/dev/null 2>&1; then
+      echo "…but the kept ~/$2 has no statusLine key, so the status line will not appear:" >&2
+      echo "rerun with --refresh-config to rewrite it (the old copy goes to the backup dir)" >&2
+    fi
     return 0
   fi
   mkdir -p "$(dirname "$dst")"
   local tmp; tmp="$(mktemp "$dst.XXXXXX")"                # built first: a failure here leaves ~/$2 untouched
+  TMPFILES+=("$tmp")                                      # and the EXIT trap removes it, signals included
   if [[ $kind == claude ]]; then
     local filter='.'
     if [[ $OS != Darwin ]]; then
@@ -240,6 +283,9 @@ install_configs() {
 link_skills() {
   local d n
   for d in "$R"/home/.agents/skills/*/; do
+    [[ -d "$d" ]] || continue          # nullglob is off, so a fork with no skills runs the body once with
+                                       # the pattern itself and would link ~/.agents/skills/* — which the
+                                       # next run then retires, minting a backup dir on every run
     n="$(basename "$d")"
     link "home/.agents/skills/$n" ".agents/skills/$n"
     link "home/.agents/skills/$n" ".claude/skills/$n"
@@ -259,10 +305,11 @@ link_cmux_config() {
 # the new link beside it. That is how ~/.oh-my-zsh/custom/themes/max.zsh-theme outlived its rename to
 # workstation.zsh-theme, leaving oh-my-zsh looking for a theme that was already gone; `wt update` reruns
 # this script, so every later rename would litter every machine the same way.
-# Three things together make an entry ours to retire: it is a symlink, its target no longer exists, and it
-# points into THIS repo. Anything else dangling here belongs to the user and is left strictly alone, as is
-# every live link. Depth 1, and only the directories the linking steps above write into: $HOME is never
-# walked recursively.
+# Three things together make an entry ours to retire: it is a symlink, its target no longer exists, and it is
+# ours by our_link — into this repo, or into the same home/<name> under a root this clone has since moved
+# away from, so a rename does not strand the retired names either. Anything else dangling here belongs to the
+# user and is left strictly alone, as is every live link. Depth 1, and only the directories the linking steps
+# above write into: $HOME is never walked recursively.
 remove_retired_links() {
   local d e rel
   for d in "$HOME" "$HOME/.claude" "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.codex" \
@@ -270,8 +317,8 @@ remove_retired_links() {
     [[ -d "$d" ]] || continue                            # a directory this machine never got
     while IFS= read -r e; do
       [[ -e "$e" ]] && continue                          # live link: the repo still has the file
-      [[ "$(readlink "$e")" == "$R"/* ]] || continue     # points outside this repo: not ours to touch
       rel="${e#"$HOME"/}"
+      our_link "$e" "home/$rel" || continue              # points outside this repo: not ours to touch
       stash "$e"                                         # the backup contract holds here too: nothing is deleted
       echo "retired ~/$rel (the repo no longer has the file it pointed at)"
     done < <(find "$d" -maxdepth 1 -type l)              # -maxdepth 1: never descend into $HOME
@@ -338,12 +385,12 @@ record_repos_dir() {
   echo 'WT_REPOS_DIR=$HOME written to ~/.zshenv.local (edit the line if repos live elsewhere)'
 }
 
-# require_plain_file <home-relative path>: the two refusals hook_bashrc and hook_tmux_conf both have to make
-# about a file this repo does not own but has to add a line to. A dangling symlink: -f calls it false, and a
-# redirection would write through it, somewhere outside $HOME. Anything that is not a regular file: a
-# directory or a device in its place, which nothing below could read. A LIVE symlink is not a refusal for
-# either caller — both leave it to its dotfile manager and say so at the point of the skip. Shared so that
-# each hook's check_… twin, which makes the same refusals early, cannot drift from its wording.
+# require_plain_file <home-relative path>: the refusals every step that edits a file this repo does not own
+# has to make about it. A dangling symlink: -f calls it false, and a redirection, an append or `git config`
+# would write through it, somewhere outside $HOME. Anything that is not a regular file: a directory or a
+# device in its place, which nothing below could read. A LIVE symlink is not a refusal here — each caller
+# decides for itself, and the three that leave it to its dotfile manager say so at the point of the skip.
+# Shared so that each step's check_… twin, which makes the same refusals early, cannot drift from its wording.
 require_plain_file() {
   local p="$HOME/$1"
   if [[ -L $p && ! -e $p ]]; then
@@ -352,6 +399,20 @@ require_plain_file() {
   if [[ -e $p && ! -L $p && ! -f $p ]]; then
     die "not a regular file: ~/$1; move it aside, then rerun"
   fi
+}
+
+# check_zshenv_local: ask_vm_host and record_repos_dir append to ~/.zshenv.local, so it needs the same two
+# refusals as the files the hooks append to — a dangling symlink there and append_line's >> creates the
+# target, a file outside $HOME that nothing will ever read; a directory there and the append fails raw.
+# A LIVE symlink is deliberately NOT a refusal, unlike ~/.tmux.conf: this is the machine-local overrides
+# file, the two lines are machine-local facts (this VM's name, where its repos live) rather than anything
+# this repo owns, both callers' grep reads back through the link so a rerun still adds nothing, and refusing
+# would leave a VM whose ~/.zshenv.local is managed with no way to finish the install at all.
+check_zshenv_local() {
+  if [[ $OS == Darwin ]]; then
+    return 0                           # neither caller writes the file on a Mac
+  fi
+  require_plain_file .zshenv.local
 }
 
 # check_bashrc: hook_bashrc runs seventh, long after files have moved, so its three refusals would land on a
@@ -424,6 +485,7 @@ hook_bashrc() {
     die "refusing to copy mode $mode: ~/.bashrc is group- or other-writable; chmod go-w ~/.bashrc, then rerun"
   fi
   tmp="$(mktemp "$rc.XXXXXX")"
+  TMPFILES+=("$tmp")                 # the EXIT trap removes it if anything below fails
   {
     printf '%s\n' "$line"
     if (( moved )); then
@@ -509,17 +571,46 @@ require_git_identity() {
   fi
 }
 
+# check_gitconfig: check_tmux_conf's reasoning, for the third file this script writes into. configure_git
+# runs near the end, and `git config --global` makes its own refusals there in git's voice, mid-install,
+# after everything has moved: a dangling ~/.gitconfig is "error: could not lock config file", exit 255, and
+# a directory is "fatal: unknown error occurred while reading the configuration files", exit 128. Made here
+# instead, while the machine is still untouched, in this script's wording.
+check_gitconfig() {
+  if opted_in "$WITH_GITCONFIG" .gitconfig; then
+    return 0                           # ~/.gitconfig is about to become a link into this repo
+  fi
+  require_plain_file .gitconfig
+}
+
 # configure_git: two settings of home/.gitconfig are machinery, not taste — core.excludesFile, which is what
 # git-ignores .worktrees/ and so what makes `wt` invisible to git, and the ~/.gitconfig.local include, which is
 # where the identity above lives. When that file was not opted in they are written into the user's own
 # ~/.gitconfig with `git config`, which edits in place and leaves every other line of it alone. Silent unless
 # it changes something, so a rerun (and `wt update`) says nothing.
 configure_git() {
-  local ex="$HOME/.gitignore_global" inc="$HOME/.gitconfig.local" have found=0 v
+  local ex="$HOME/.gitignore_global" inc="$HOME/.gitconfig.local" rc="$HOME/.gitconfig" have found=0 v
   if opted_in "$WITH_GITCONFIG" .gitconfig; then
     return 0                           # the linked home/.gitconfig carries both settings
   fi
-  have="$(git config --global --get core.excludesFile 2>/dev/null || true)"
+  # check_gitconfig made these refusals before anything moved; they stay here to cover the gap between the
+  # two calls, and because `git config` below would write through whatever is at ~/.gitconfig.
+  require_plain_file .gitconfig
+  if [[ -L $rc ]]; then               # a live link into a dotfiles repo: `git config --global` follows it
+    {                                 # and edits the file that repo owns and syncs — not ours to edit, and
+      echo "skipped ~/.gitconfig: it is a symlink to $(readlink "$rc"), left alone because a dotfile manager owns it."
+      echo "add these yourself, in that file (both paths are this machine's, so keep them out of anything you sync):"
+      echo "  [core]"
+      echo "      excludesFile = $ex"
+      echo "  [include]"
+      echo "      path = $inc"
+      echo "until then .worktrees/ is not git-ignored and git never reads your ~/.gitconfig.local identity."
+    } >&2
+    return 0
+  fi
+  # --type=path, not the raw string: a config that says `excludesFile = ~/.gitignore_global` — what this
+  # repo's own home/.gitconfig writes — is the very value wanted, and comparing it raw warns about it forever.
+  have="$(git config --global --get --type=path core.excludesFile 2>/dev/null || true)"
   if [[ -z $have ]]; then
     git config --global core.excludesFile "$ex"
     echo "set core.excludesFile = ~/.gitignore_global in ~/.gitconfig (it is what git-ignores .worktrees/)"
@@ -542,8 +633,25 @@ configure_git() {
   fi
 }
 
-# report: where anything that was in the way ended up.
+# report: the EXIT trap, armed once files start to move. Two jobs. It removes the half-built files the two
+# mktemp steps leave behind when a signal arrives between building one and moving it into place — an EXIT
+# trap runs on SIGINT and SIGTERM too, so without this a ^C mid-run orphans a ~/.claude/settings.json.XXXXXX
+# for good. And it says where anything that was in the way ended up — but a die() reaches it just as a
+# finished run does, so it has to know which happened: $? at trap entry is still the status that is ending
+# the script, so a failure gets a line that admits it instead of "done." printed under the error message.
 report() {
+  local rc=$?
+  if [[ ${#TMPFILES[@]} -gt 0 ]]; then
+    rm -f "${TMPFILES[@]}"             # already moved into place: rm -f on a gone path is a no-op
+  fi
+  if [[ $rc -ne 0 ]]; then
+    if [[ -d "$BK" ]]; then
+      echo "install.sh stopped part-way (exit $rc): what had already moved is in $BK" >&2
+    else
+      echo "install.sh stopped part-way (exit $rc): nothing had been backed up" >&2
+    fi
+    return 0                           # a return does not change the status the script is exiting with
+  fi
   if [[ -d "$BK" ]]; then
     echo "done. backups in $BK"
   else
@@ -573,14 +681,21 @@ main() {
   parse_args "$@"
   BK="$HOME/.workstation-backup/$(date +%Y%m%d-%H%M%S)-$$"   # timestamp+pid: same-second reruns cannot collide
   # Everything that can refuse runs first, while the machine is still untouched: a half-install that
-  # then says "set user.name … and rerun" leaves the user with displaced files and no idea where.
+  # then says "set user.name … and rerun" leaves the user with displaced files and no idea where. Every
+  # refusal, including the later steps' check_… twins, therefore comes before the FIRST write of any kind
+  # — the two ~/.zshenv.local lines below used to be made in among them, so a run that went on to refuse
+  # had already edited a file class 3 promises is never rewritten, and had no trap yet to say so.
   require_oh_my_zsh
   require_jq
   require_git_identity
-  ask_vm_host        # Linux only — rejects the page's VM placeholder before anything moves
-  record_repos_dir   # Linux only
+  check_zshenv_local # Linux only — the file the next two steps append to
   check_bashrc       # Linux only — hook_bashrc's refusals, made while ~/.bashrc is still the only thing at stake
   check_tmux_conf    # the same, for the ~/.tmux.conf hook_tmux_conf appends to on both platforms
+  check_gitconfig    # the same, for the ~/.gitconfig configure_git writes two settings into
+  ask_vm_host        # Linux only — rejects the page's VM placeholder before anything moves
+  record_repos_dir   # Linux only
+  trap 'exit 130' INT    # so $? at report's entry is the signal's status, not the last command's
+  trap 'exit 143' TERM
   trap report EXIT   # from here on files move, so always say where the originals went
   make_dirs
   install_bins
