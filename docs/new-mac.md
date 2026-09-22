@@ -28,11 +28,15 @@ git config --file ~/.gitconfig.local core.editor 'code --wait'
 git config --file ~/.gitconfig.local credential.https://dev.azure.com.helper manager   # drop if you do not use Azure DevOps
 # optional: repos in more than one folder (searched in order; the file is never versioned)
 # echo 'export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"' >> ~/.zshenv.local
-bash ~/repos/workstation/install.sh && exec zsh -l
+bash ~/repos/workstation/install.sh
+exec zsh -l     # separate line on purpose: chained with && it is skipped whenever install.sh exits non-zero
 ```
 
 `install.sh` prints one line per file it links or installs and says where it put anything it moved out of the
-way. Rerun it whenever the repo changes.
+way. Rerun it whenever the repo changes. It refuses before touching anything if oh-my-zsh or a git identity is
+missing, so a run that stops early has changed nothing. Its last step clones the two zsh plugins `~/.zshrc`
+enables (`zsh-autosuggestions`, `zsh-syntax-highlighting`) into `~/.oh-my-zsh/custom/plugins/`, which is the one
+step that needs the network; everything before it is local.
 
 ```bash
 # 4. agents, Codex hooks and logins

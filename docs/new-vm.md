@@ -40,7 +40,7 @@ mkdir -p ~/repos
 # --refresh-config installs the portable Claude and Codex configs even when the image shipped its own; the
 # old ones go to ~/.workstation-backup/<stamp>-<pid>/. On a later update never pass it without reading the sync
 # table in the README, because it also drops Codex's hook and folder trust.
-WT_HOST=VM bash ~/repos/workstation/install.sh --refresh-config   # VM = this machine's alias in the Mac's ~/.ssh/config
+WT_HOST=<vm> bash ~/repos/workstation/install.sh --refresh-config   # replace <vm> with this machine's alias in the Mac's ~/.ssh/config
 sudo chsh -s "$(command -v zsh)" "$(id -un)" && exec zsh -l   # last line: exec replaces the shell
 ```
 

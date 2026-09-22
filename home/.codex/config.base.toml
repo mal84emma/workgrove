@@ -9,12 +9,24 @@ allow_login_shell = false
 # the lower-exposure cached search index.
 web_search = "cached"
 
+# Cache credentials in the macOS Keychain rather than a plaintext ~/.codex/auth.json.
+# install.sh drops this line on Linux, where there is no Keychain to store them in.
+cli_auth_credentials_store = "keyring"
+
 model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 service_tier = "default"
 
 [sandbox_workspace_write]
 network_access = false
+
+# Connected apps: review every escalation, ask before running their tools, and
+# keep the destructive and open-world classes off entirely.
+[apps._default]
+approvals_reviewer = "auto_review"
+default_tools_approval_mode = "prompt"
+destructive_enabled = false
+open_world_enabled = false
 
 # Pass a reduced environment to spawned commands and automatically remove
 # common secret-bearing variable names.

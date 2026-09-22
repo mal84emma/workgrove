@@ -221,6 +221,11 @@ always backed up. Per-machine files never enter the loop.
 | New tool | `Brewfile` plus `brew bundle`; commit | Add the line to [docs/new-vm.md](docs/new-vm.md) and run it by hand on existing VMs |
 | Promote a machine-local setting | Diff the live file against its `.base`, port only the portable keys, commit | Never commit live files or trust state |
 
+A rewritten config reaches a **new process**, not a running one. A session that was open when the installer
+ran keeps the settings it started with, so after a refresh exit and resume the ones you care about — `claude -c`
+re-reads the config and keeps the conversation — rather than starting them over. The same rule one layer down is
+why a tmux pane that predates an `install.sh` run needs `exec bash` before it sees the new environment.
+
 `wt update` needs a real clone: a VM seeded with `rsync` refuses it until the seed is replaced by a clone.
 Update the Mac's `wt` and each VM's `wt` together (`wt update` here, `wt -H <vm> update` there, or the rsync
 seed while the repo is private): `wt -H <vm> …` runs the VM's copy for the remote half of every command, so a
@@ -246,6 +251,13 @@ VM left behind answers in a vocabulary this Mac no longer expects.
   notifications, because Codex spawns its lifecycle hooks outside that sandbox. Allowing network access in
   `[sandbox_workspace_write]` is not the fix: it would open outbound network for every command Codex runs on
   the VM, and it does not lift the loopback restriction.
+
+- **The notification hooks find `agent-notify` on `PATH`.** The portable hooks in
+  `home/.claude/settings.base.json` and `home/.codex/hooks.base.json` call it by bare name, and `~/.zshenv` puts
+  `~/.local/bin` on `PATH` for every zsh, so anything started from a shell finds it. An agent launched by
+  something that bypasses the login shell would not, and the hook then fails silently rather than reporting a
+  missing command. If that ever happens, the fix is the absolute path `~/.local/bin/agent-notify`, which is how
+  `cmux.json` already invokes `cmux-hook`.
 
 ## Deliberately left out
 

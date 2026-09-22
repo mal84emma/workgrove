@@ -42,6 +42,12 @@ parse_args() {
   fi
 }
 
+# die <message>: stop with a message on stderr. The EXIT trap still reports where anything went.
+die() {
+  echo "$*" >&2
+  exit 1
+}
+
 # stash <path>: move an existing file, dir or symlink into the backup dir. Never deletes.
 stash() {
   if [[ ! -e "$1" && ! -L "$1" ]]; then
@@ -64,9 +70,11 @@ link() {
   echo "linked ~/$2"
 }
 
-# copy_config <repo-relative .base> <home-relative dst> <claude|plain>: install one machine-local
+# copy_config <repo-relative .base> <home-relative dst> <claude|codex|plain>: install one machine-local
 # copy, keeping an existing real file unless --refresh-config was given. Kind "claude" drops the
-# voice keys off a Mac, because a VM has no local microphone. A replaced copy is only ever stashed,
+# voice keys off a Mac, because a VM has no local microphone; kind "codex" drops the Keychain
+# credential store off a Mac, because only macOS has one. The new file is built in full before the
+# old one is stashed, so a filter that fails cannot leave a truncated ~/dst behind. A replaced copy is only ever stashed,
 # never merged: a refreshed .codex/config.toml loses the tables Codex wrote into it (hook trust,
 # folder trust), which the old file in the backup dir still holds and /hooks restores.
 copy_config() {
@@ -76,17 +84,29 @@ copy_config() {
     return 0
   fi
   mkdir -p "$(dirname "$dst")"
-  stash "$dst"
+  local tmp; tmp="$(mktemp "$dst.XXXXXX")"                # built first: a failure here leaves ~/$2 untouched
   if [[ $kind == claude && $OS != Darwin ]]; then
-    jq 'del(.voice, .voiceEnabled)' "$src" >"$dst"
+    jq 'del(.voice, .voiceEnabled)' "$src" >"$tmp" || { rm -f "$tmp"; die "jq failed on $1"; }
+  elif [[ $kind == codex && $OS != Darwin ]]; then
+    grep -v '^cli_auth_credentials_store' "$src" >"$tmp" || { rm -f "$tmp"; die "failed to filter $1"; }
   else
-    cp "$src" "$dst"
+    cp "$src" "$tmp"
   fi
-  chmod 600 "$dst"
+  chmod 600 "$tmp"
+  stash "$dst"                                            # only now is anything moved
+  mv "$tmp" "$dst"
   echo "installed ~/$2"
 }
 
 # require_oh_my_zsh: the linked ~/.zshrc needs it, so stop early and name the setup page.
+# require_jq: only the Linux copy_config filters need it, and it must be present BEFORE anything moves.
+require_jq() {
+  if [[ $OS == Darwin ]] || command -v jq >/dev/null 2>&1; then
+    return 0
+  fi
+  die "jq not found: sudo apt-get install -y jq, then rerun"
+}
+
 require_oh_my_zsh() {
   if [[ -f "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]]; then
     return 0
@@ -109,7 +129,10 @@ make_dirs() {
 install_bins() {
   local b
   for b in wt agent-notify cmux-hook azml-ssh-host; do
-    stash "$HOME/bin/$b"
+    if [[ -e "$HOME/bin/$b" || -L "$HOME/bin/$b" ]]; then
+      stash "$HOME/bin/$b"
+      echo "retired ~/bin/$b (it shadowed ~/.local/bin/$b); the old copy is in the backup dir"
+    fi
     link "bin/$b" ".local/bin/$b"
   done
 }
@@ -127,7 +150,7 @@ link_dotfiles() {
 # install_configs: the three mutable files, copied from their .base versions.
 install_configs() {
   copy_config home/.claude/settings.base.json .claude/settings.json claude
-  copy_config home/.codex/config.base.toml    .codex/config.toml    plain
+  copy_config home/.codex/config.base.toml    .codex/config.toml    codex
   copy_config home/.codex/hooks.base.json     .codex/hooks.json     plain
 }
 
@@ -155,7 +178,9 @@ install_zsh_plugins() {
   local zc="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}" p
   for p in zsh-autosuggestions zsh-syntax-highlighting; do
     if [[ ! -d "$zc/plugins/$p" ]]; then
-      git clone -q --depth 1 "https://github.com/zsh-users/$p" "$zc/plugins/$p"
+      echo "cloning the $p plugin that ~/.zshrc enables (needs the network)"
+      git clone -q --depth 1 "https://github.com/zsh-users/$p" "$zc/plugins/$p" \
+        || die "could not clone $p; rerun when the network is back"
     fi
   done
 }
@@ -225,18 +250,19 @@ hook_bashrc() {
     return 0
   fi
   first="$(head -n 1 "$rc")"
-  if [[ $first == *"$src"* ]]; then
+  if [[ $first == "$src"* ]]; then                 # our line, whatever comment an older version put after it
     return 0
   fi
-  if grep -qsF "$src" "$rc"; then   # an older run appended it below Ubuntu's early return
-    moved=1
+  if awk -v s="$src" 'index($0, s) == 1 { found = 1 } END { exit !found }' "$rc"; then
+    moved=1                                        # an older run appended it below Ubuntu's early return
   fi
   mode="$(stat -c %a "$rc" 2>/dev/null || stat -f %Lp "$rc" 2>/dev/null || true)"   # -c is GNU, -f is BSD
   tmp="$(mktemp "$rc.XXXXXX")"
   {
     printf '%s\n' "$line"
     if (( moved )); then
-      grep -vF "$src" "$rc" || true
+      awk -v s="$src" 'index($0, s) != 1' "$rc"      # drop only lines that START with it: a user line that
+                                                    # merely mentions the text in prose is left alone
     else
       cat "$rc"
     fi
@@ -244,6 +270,7 @@ hook_bashrc() {
   if [[ -n $mode ]]; then
     chmod "$mode" "$tmp"
   fi
+  stash "$rc"                        # the backup contract applies here too: keep the original
   mv "$tmp" "$rc"
   if (( moved )); then
     echo "moved the ~/.zshenv line to the top of ~/.bashrc so non-interactive shells read it too"
@@ -274,19 +301,22 @@ report() {
 main() {
   parse_args "$@"
   BK="$HOME/.workstation-backup/$(date +%Y%m%d-%H%M%S)-$$"   # timestamp+pid: same-second reruns cannot collide
+  # Everything that can refuse runs first, while the machine is still untouched: a half-install that
+  # then says "set user.name … and rerun" leaves the user with displaced files and no idea where.
   require_oh_my_zsh
+  require_jq
+  require_git_identity
+  ask_vm_host        # Linux only — rejects the page's VM placeholder before anything moves
+  record_repos_dir   # Linux only
+  trap report EXIT   # from here on files move, so always say where the originals went
   make_dirs
   install_bins
   link_dotfiles
   install_configs
   link_skills
   link_cmux_config
-  install_zsh_plugins
-  ask_vm_host        # Linux only
-  record_repos_dir   # Linux only
   hook_bashrc        # Linux only
-  require_git_identity
-  report
+  install_zsh_plugins   # last: the only step that needs the network, so an offline VM still gets the rest
 }
 
 main "$@"
