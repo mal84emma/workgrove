@@ -25,7 +25,8 @@ the first line of this block and start at `eval "$(...brew shellenv)"`.
 git config --file ~/.gitconfig.local user.name  'GIT_NAME'
 git config --file ~/.gitconfig.local user.email 'GIT_EMAIL'
 git config --file ~/.gitconfig.local core.editor 'code --wait'
-git config --file ~/.gitconfig.local credential.https://dev.azure.com.helper manager   # drop if you do not use Azure DevOps
+# optional: a credential helper for another git host, e.g. Azure DevOps
+# git config --file ~/.gitconfig.local credential.https://dev.azure.com.helper manager
 # optional: repos in more than one folder (searched in order; the file is never versioned)
 # echo 'export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"' >> ~/.zshenv.local
 bash ~/repos/workstation/install.sh

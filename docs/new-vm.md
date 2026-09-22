@@ -14,7 +14,7 @@ Open a shell on the VM (`ssh <vm>`) and paste blocks 1, 2 and 4 each as one chun
 line, because its logins and the `codex` TUI take over the terminal. Replace the UPPERCASE placeholders first.
 `sudo` must work without a password, or block 1 asks for one; apt on an Azure ML image prints many repository
 warnings, which are pre-existing and harmless. Blocks 1, 2 and 4 work over plain `ssh <vm>`; block 3 wants a
-VS Code terminal (explained there). Nothing else prompts. Until the repo is public, seed it from the Mac before
+VS Code terminal (explained there). Nothing else prompts. To install an uncommitted change, seed the repo from the Mac before
 block 2 (see the Notes).
 
 ```bash
@@ -106,13 +106,13 @@ run `exec bash` in that pane or open a new tmux window.
   linked one does not already cover: the linked `~/.gitconfig` routes github.com through
   `gh auth git-credential` and includes `~/.gitconfig.local`, so carry over other hosts' credential helpers
   and per-URL settings into `~/.gitconfig.local`, not the github.com helper.
-- **Seeding before the repo is public.** From the Mac:
+- **Seeding instead of cloning** (to carry an uncommitted change to a VM). From the Mac:
   `ssh <vm> 'mkdir -p ~/repos' && rsync -a --exclude .git ~/repos/workstation/ <vm>:~/repos/workstation/`.
   Block 2's clone line then finds the folder and skips. A seeded copy has no `.git`, so `wt update` and
   `wt -H <vm> update` refuse until it is replaced by a clone; until then re-seed with the same rsync line and
   rerun `bash ~/repos/workstation/install.sh` on the VM.
 - **Update the Mac's `wt` and each VM's `wt` together** (`wt update` on the Mac, `wt -H <vm> update` on the
-  VM, or the rsync seed above while the repo is private), because `wt -H <vm> …` runs the VM's copy for the
+  VM, or the rsync seed above for an uncommitted change), because `wt -H <vm> …` runs the VM's copy for the
   remote half of every command, and a VM left behind answers in a vocabulary the Mac no longer expects.
 - **Check free disk first** with `df -h /`: blocks 1 and 3 download about 1 GB.
 - **Do not run `cmux hooks codex install` on a VM.** That is a Mac-only step. The VM keeps only the portable

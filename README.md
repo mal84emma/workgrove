@@ -71,7 +71,7 @@ bash ~/repos/workstation/install.sh
 
 Full instructions: [docs/new-mac.md](docs/new-mac.md) and [docs/new-vm.md](docs/new-vm.md).
 
-Until the repo is published, seed a machine with the `rsync` line in the notes of
+To put a local change on a machine before committing it, seed it with the `rsync` line in the notes of
 [docs/new-vm.md](docs/new-vm.md) instead of the clone. A seeded copy has no `.git`, so `wt update` refuses
 until it is replaced by a clone.
 
@@ -228,7 +228,7 @@ why a tmux pane that predates an `install.sh` run needs `exec bash` before it se
 
 `wt update` needs a real clone: a VM seeded with `rsync` refuses it until the seed is replaced by a clone.
 Update the Mac's `wt` and each VM's `wt` together (`wt update` here, `wt -H <vm> update` there, or the rsync
-seed while the repo is private): `wt -H <vm> …` runs the VM's copy for the remote half of every command, so a
+seed for an uncommitted change): `wt -H <vm> …` runs the VM's copy for the remote half of every command, so a
 VM left behind answers in a vocabulary this Mac no longer expects.
 
 ## Known limitations
