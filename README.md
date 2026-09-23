@@ -313,20 +313,27 @@ All of this runs as you, with your keys and your logins, and a good deal of it e
 is the point of it, but five of the choices behind it are worth knowing before you run `install.sh` on your
 own machine.
 
-- **The Claude permission list auto-approves, and denies.** The twenty-five `permissions.allow` entries in
+- **The Claude permission list auto-approves, and denies.** The sixteen `permissions.allow` entries in
   [`home/.claude/settings.base.json`](home/.claude/settings.base.json) — `ls`, `cd`, the read-only git
-  subcommands (`status`, `diff`, `log`, `show`, and the six read-only spellings of `branch`), the same set
-  again in its `git -C <path>` spelling, `branch` there only bare, `git add`, `git commit`, `wt list` and
-  `wt show` — run with no prompt at all, so an agent commits to its branch without asking you. Thirteen
+  subcommands (`status`, `diff`, `log`, `show`, and the six read-only spellings of `branch`), `git add`,
+  `git commit`, `wt list` and `wt show` — run with no prompt at all, so an agent commits to its branch
+  without asking you. Thirteen
   `deny` entries cover `git -c`, `git config`, `git push` in its plain and its `git -C` spelling,
   `git remote add`, `git filter-branch`, `gh api`,
   `gh pr create`, `gh repo create`, `gh repo fork`, `gh release create` and `wt pr`; most of them are things
   the Agents section says agents never do on their own. Each list is spelled out form by form for the same
   reason: the broader `Bash(git *)` the allowlist replaced also matched `git -c alias.x='!<shell>' x`, which
   runs arbitrary shell with no prompt, and `Bash(git branch *)` covered `git branch -D` as readily as
-  `git branch -v`. A blanket `Bash(git -C *)` deny was tried for the same hole and taken out again, because
-  it also refused every read-only `git -C <path> status` an agent has good reason to run: the read-only forms
-  are allowed by name now, and only `git -C … push` is denied.
+  `git branch -v`. There is no allow entry for `git -C <path>` at all, and that is deliberate. Nine were
+  tried — `git -C * status`, `diff`, `log`, `show`, `branch` — on the reasoning that running a read-only git
+  in another worktree is harmless, and taken out again for two independent reasons. They never fired: rules
+  are matched case-insensitively, so the `git -c *` deny below also catches `git -C`, and deny beats allow.
+  And they could not have been made safe, because `*` matches any text, not just a path: `git -C <repo> -c
+  diff.external=<script> diff` matches `Bash(git -C * diff)` and runs the script. That is the shape Claude
+  Code's own settings validator warns about — a wildcard before the subcommand also approves options
+  inserted at that position — and `git -C` always has one, since the path must precede the subcommand. To
+  read another worktree, agents are told to use `cd <path> && git <subcommand>`, where the wildcard falls
+  after the subcommand and the compound splitter checks both halves.
 
   Two things about how the lists are read are worth keeping in mind. Deny beats allow whenever both match,
   and rule specificity does not change that; and a compound command is split on `&&`, `||`, `;`, `|`, `&` and
