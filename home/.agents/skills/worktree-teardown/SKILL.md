@@ -25,7 +25,7 @@ wt prune                             # remove those
 
 ## Safety contract (enforced by `wt rm`, exit code 3 on refusal)
 
-`wt rm` refuses when the worktree has uncommitted changes, has commits that are neither merged into the base branch nor pushed, or when a file copied in by `.worktreeinclude` now differs from its source in the main checkout (an agent edited `.env`). The refusal message names the reason and the file. `wt prune` applies the same checks.
+`wt rm` refuses when the worktree has uncommitted changes, has commits that are neither merged into the base branch nor pushed, when a file copied in by `.worktreeinclude` now differs from its source in the main checkout (an agent edited `.env`), or when it cannot compare the worktree against its base at all — the base ref was deleted, or a sidecar from an older `wt` records the literal `HEAD`, which resolves to the worktree's own tip and would make every other count read as nothing to lose. The refusal message names the reason and the file. `wt prune` applies the same checks.
 
 ## Rules
 

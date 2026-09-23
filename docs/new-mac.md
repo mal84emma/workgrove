@@ -34,12 +34,15 @@ bash ~/repos/workstation/install.sh --opinionated-config
 exec zsh -l     # separate line on purpose: chained with && it is skipped whenever install.sh exits non-zero
 ```
 
-`--opinionated-config` is what asks for the five files that are the author's taste rather than machinery:
-`~/.zshrc` (with the oh-my-zsh theme), `~/.gitconfig`, `~/.tmux.conf`, the Claude keymap and the status line.
-A bare `install.sh` installs the machinery and leaves all five alone, which is what a stranger cloning this
-repo gets; the README's Install section has the per-file flags and what arrives instead. The flag never has to
-be repeated: once those files are links into this repo, a later bare run — `wt update`'s, for instance — keeps
-them.
+`--opinionated-config` is what asks for the six pieces that are the author's taste rather than machinery: the
+five files — `~/.zshrc` (with the oh-my-zsh theme), `~/.gitconfig`, `~/.tmux.conf`, the Claude keymap and the
+status line — and the `tui`, `voice` and `theme` keys of `~/.claude/settings.json`, a file that is installed
+either way for its hooks and permissions. A bare `install.sh` installs the machinery and leaves all six
+alone, which is what a stranger cloning this repo gets; the README's Install section has the per-flag detail
+and what arrives instead. For the five files the flag never has to be repeated: once they are links into this
+repo, a later bare run — `wt update`'s, for instance — keeps them. The UI keys are the exception, because a
+copied file records no such choice: `--with-claude-ui`, or `--opinionated-config` again, has to be given on
+any later run that rewrites that copy, which means any run with `--refresh-config`.
 
 `install.sh` prints one line per file it links or installs and says where it put anything it moved out of the
 way. Rerun it whenever the repo changes. It refuses before touching anything if a git identity is missing, or,

@@ -56,7 +56,7 @@ workstation/
 │   ├── settings-snippet.jsonc six keys to paste; Settings Sync owns the rest
 │   └── extensions.txt
 ├── test/
-│   └── install-smoke.sh       a smoke test of a default install
+│   └── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 └── docs/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
@@ -78,18 +78,20 @@ To put a local change on a machine before committing it, seed it with the `rsync
 until it is replaced by a clone.
 
 That bare run installs the machinery and leaves your own shell, git and tmux alone. Five of the files here
-are the author's taste rather than machinery, so each waits for its own flag: installing a task tool should
-not hand a stranger someone else's prompt, git config, tmux bindings, Claude keymap and status line.
+are the author's taste rather than machinery, and so is one group of keys inside a file that is installed
+either way, so each waits for its own flag: installing a task tool should not hand a stranger someone else's
+prompt, git config, tmux bindings, Claude keymap, status line and Claude UI.
 
-| Flag | Links | What arrives instead when you leave it out |
+| Flag | Asks for | What arrives instead when you leave it out |
 |---|---|---|
 | `--with-zshrc` | `~/.zshrc`, and with it the oh-my-zsh theme, the oh-my-zsh prerequisite and the clone of the two plugins it enables | Nothing: your `~/.zshrc` is untouched, and a default install therefore has no oh-my-zsh prerequisite and no network step at all |
 | `--with-gitconfig` | `~/.gitconfig`: `core.excludesFile`, the github.com credential helper, the `~/.gitconfig.local` include | Its two machinery settings only, written into your own `~/.gitconfig` with `git config --global`: `core.excludesFile` (what git-ignores `.worktrees/`) and the `~/.gitconfig.local` include (where your identity lives). Every other line of your file is left alone |
 | `--with-tmux-conf` | `~/.tmux.conf` | Its one line, appended to your own `~/.tmux.conf` (created if you have none), leaving every line already there in place: that `set -ag update-environment` is how cmux's relay variables reach a pane started in an already-running session |
 | `--with-keybindings` | `~/.claude/keybindings.json` | Nothing; Claude keeps its own keymap |
 | `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing, and `statusLine` is stripped from the `~/.claude/settings.json` copy, because it names a script that would not be there |
+| `--with-claude-ui` | No file of its own: the `tui`, `voice` and `theme` keys, kept in the `~/.claude/settings.json` copy | Those three keys are deleted from the copy, so Claude keeps its own full-screen setting, voice mode and theme; the hooks and permissions in the same file arrive either way |
 
-`--opinionated-config` is all five at once; `--refresh-config` is orthogonal to them, and they combine in any
+`--opinionated-config` is all six at once; `--refresh-config` is orthogonal to them, and they combine in any
 order. The one deliberate exception to the fallbacks above is a `core.excludesFile` that already points at a
 file of your own: that is kept, not overwritten, with a message asking you to add `.gitignore_global`'s lines
 to it, because overwriting it would silently drop every global ignore you had — which is the harm this whole
@@ -101,6 +103,12 @@ into this repo counts as opted in, so `wt update` — which re-runs `install.sh`
 yourself once, after which `wt update` carries it. A run that leaves some out names them and the flag that
 would install each.
 
+`--with-claude-ui` is the exception, because what makes the other five sticky is the symlink itself, and keys
+inside a copied file leave no such trace behind. It is not sticky: it has to be given again on every run that
+writes `~/.claude/settings.json`, which is only `--refresh-config`, since an ordinary rerun keeps the copy
+that is already there. Given on its own, on a machine whose copy was written without it, it changes nothing
+and says so rather than reporting success.
+
 `~/.zshenv` and `~/.gitignore_global` are not on that list, because they are the contract rather than taste:
 `~/.zshenv` puts `~/.local/bin` on `PATH` and carries `WT_HOST` and `WT_REPOS_DIR`, and `~/.gitignore_global`
 is the file that git-ignores `.worktrees/`.
@@ -110,7 +118,7 @@ is the file that git-ignores `.worktrees/`.
 | Class | Files | Behaviour |
 |---|---|---|
 | Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, `cmux.json` (Mac only), and every opt-in file you asked for | Edits, including an agent's, land in the repo, so `git diff` is the review |
-| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use: `statusLine` without `--with-statusline`, the voice keys off a Mac. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
+| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use or did not ask for: the voice keys and the Keychain credential store off a Mac, `statusLine` without `--with-statusline`, and `tui`, `voice` and `theme` without `--with-claude-ui`. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files — `~/.zshrc.local` only when `~/.zshrc` is one of them |
 
 It is idempotent: rerun it after every repo change. Nothing is deleted. Anything in the way is moved into
@@ -123,7 +131,10 @@ message if no git identity is set — `~/.gitconfig.local` first, then your glob
 `~/.zshenv`, because cmux runs its VM rows in bash. At the top because Ubuntu's `~/.bashrc` returns early in a
 non-interactive shell, so the line has to come first to cover `ssh <vm> '<cmd>'` and `wt -H <vm> …` as well.
 
-`bash test/install-smoke.sh` is the repo's smoke test: it exercises a default, no-flags install.
+`bash test/install-smoke.sh` is the repo's smoke test: 323 assertions across eight scenarios, each run
+against a throwaway `$HOME` with no network. They cover the default no-flags install — into an empty home
+and over a stranger's own dotfiles — `--opinionated-config`, each file flag on its own, the stickiness rule,
+idempotence, an unknown flag, and `--with-claude-ui` including the way it is not sticky.
 
 ## Daily use
 
@@ -172,8 +183,11 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 | `wt -H <host> <sub> …` | Run a subcommand on a VM over ssh while the cmux row stays local. `show`, `rm`, `path`, `open` and `attach` need `-r <repo>` |
 
 `wt rm` refuses, with exit status 3, to destroy work: uncommitted changes, commits that are neither merged
-into the base nor pushed, or a file copied in through `.worktreeinclude` that no longer matches its source
-in the main checkout. It names what blocked it. `--force` overrides. `wt prune` is stricter still: it only removes worktrees whose branch is merged and whose tree is clean.
+into the base nor pushed, a file copied in through `.worktreeinclude` that no longer matches its source
+in the main checkout, or a base ref it cannot compare the worktree against — deleted since, or a sidecar from
+an older `wt` holding the literal `HEAD`, which resolves to the worktree's own tip and would make every other
+count read as nothing to lose. It names what blocked it. `--force` overrides. `wt prune` is stricter still:
+it only removes worktrees whose branch is merged and whose tree is clean.
 
 Useful environment variables: `WT_REPOS_DIR` (the folders repos are looked for in), `WT_AGENT` (default
 agent), `WT_AGENT_ARGS` (extra agent arguments), and `WT_HOST` on a VM. `git config wt.dir` renames the
@@ -270,16 +284,32 @@ All of this runs as you, with your keys and your logins, and a good deal of it e
 is the point of it, but four of the choices behind it are worth knowing before you run `install.sh` on your
 own machine.
 
-- **The Claude permission list auto-approves, and denies.** The eleven `permissions.allow` entries in
+- **The Claude permission list auto-approves, and denies.** The twenty-five `permissions.allow` entries in
   [`home/.claude/settings.base.json`](home/.claude/settings.base.json) — `ls`, `cd`, the read-only git
-  subcommands (`status`, `diff`, `log`, `show`, `branch`), `git add`, `git commit`, `wt list` and `wt show` —
-  run with no prompt at all, so an agent commits to its branch without asking you. Seven `deny` entries win
-  over them: `git -c`, `git config`, `git push`, `git filter-branch`, `gh pr create`, `gh repo create` and
-  `wt pr`. Four of them — `git push`, `gh pr create`, `gh repo create` and `wt pr` — are things the Agents
-  section says agents never do on their own, and the deny list turns those from a convention an agent is
-  asked to keep into a refusal at the tool level. The allowlist names subcommands one by one because the
-  broader `Bash(git *)` it replaced also matched `git -c alias.x='!<shell>' x`, which runs arbitrary shell
-  with no prompt — which is why `git -c` is denied outright now as well.
+  subcommands (`status`, `diff`, `log`, `show`, and the six read-only spellings of `branch`), the same set
+  again in its `git -C <path>` spelling, `branch` there only bare, `git add`, `git commit`, `wt list` and
+  `wt show` — run with no prompt at all, so an agent commits to its branch without asking you. Thirteen
+  `deny` entries cover `git -c`, `git config`, `git push` in its plain and its `git -C` spelling,
+  `git remote add`, `git filter-branch`, `gh api`,
+  `gh pr create`, `gh repo create`, `gh repo fork`, `gh release create` and `wt pr`; most of them are things
+  the Agents section says agents never do on their own. Each list is spelled out form by form for the same
+  reason: the broader `Bash(git *)` the allowlist replaced also matched `git -c alias.x='!<shell>' x`, which
+  runs arbitrary shell with no prompt, and `Bash(git branch *)` covered `git branch -D` as readily as
+  `git branch -v`. A blanket `Bash(git -C *)` deny was tried for the same hole and taken out again, because
+  it also refused every read-only `git -C <path> status` an agent has good reason to run: the read-only forms
+  are allowed by name now, and only `git -C … push` is denied.
+
+  Two things about how the lists are read are worth keeping in mind. Deny beats allow whenever both match,
+  and rule specificity does not change that; and a compound command is split on `&&`, `||`, `;`, `|`, `&` and
+  newlines, with a deny applying if it matches any subcommand, including one nested in a subshell or a
+  command substitution. What the lists are not is enforcement. They match the text of the command Claude
+  writes, and the permissions documentation says in as many words that this "isn't a security boundary around
+  the program", warning that "Bash permission patterns that try to constrain command arguments are fragile".
+  `Bash(git push *)` does not stop `/usr/bin/git push`, `bash -c 'git push'`, `git 'push' origin main` or
+  `git -c core.fsmonitor=<script> -C <path> push`. So read these lists as intent made legible where the tool
+  can act on it: they catch the ordinary spellings an agent actually writes, and they save you a prompt on
+  the ones you would always approve. Anything that has to actually hold wants what those docs
+  point at instead: a sandbox, or a `PreToolUse` hook that inspects the command itself.
 
 - **The hooks run scripts from this repo on every turn.** `settings.base.json` wires five Claude events
   (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `SessionEnd`) to `agent-notify`, and
@@ -290,17 +320,22 @@ own machine.
   refuses to apply them at all when stdin is not a terminal. Read that diff the way you would read any other
   pull that lands on your `PATH`.
 
-- **A task VM sits inside this Mac's trust boundary, so keep it single-user.** `wt` on a VM cannot open VS
-  Code or make a row itself; it sends a `wt-open` or `wt-attach` notification over the row's relay socket,
+- **Every host you open a cmux `ssh` row to sits inside this Mac's trust boundary.** `wt` on a VM cannot open
+  VS Code or make a row itself; it sends a `wt-open` or `wt-attach` notification over the row's relay socket,
   and `bin/cmux-hook` does the work on the Mac. The hook is picky about what it will act on: the host has to
   look like a hostname (`valid_host`) and be a literal, wildcard-free `Host` entry in `~/.ssh/config`
   (`known_host`); the notifying row must itself be a cmux SSH row pointed at that same host
   (`from_row_on_host`); a path must be absolute with no `..`, no `//`, no trailing slash and no shell
   metacharacters (`safe_path`); and a task name must match `^[a-z0-9][a-z0-9_-]{0,62}$`. Those checks stop
-  one VM from naming a different host, and stop shell being smuggled through a path or a name. What they do
-  not stop — because it is the feature — is that VM asking the Mac to open any path on it in a VS Code
-  remote window, or to create a row that runs `wt run` there. The relay socket is loopback TCP on the VM, so
-  anyone with an account on that VM can ask for both: it is as trusted as you are.
+  one host from naming a different one, and stop shell being smuggled through a path or a name. What they do
+  not stop — because it is the feature — is that host asking the Mac to open any path on it in a VS Code
+  remote window, or to create a row that runs `wt run` there. And `from_row_on_host` asks only whether the
+  notifying row is a remote row whose destination is that host: not whether a task lives there, not whether
+  you ever ran `wt` on it. So the set that can ask is every `cmux ssh` row you have open to any aliased host:
+  a task VM, but equally a shared bastion, a customer's jump host, a build box. The path is unconstrained
+  beyond that shape check, `/etc` and a home `.ssh` directory included. The relay socket is loopback TCP on
+  the far side, so anyone with an account on such a machine can ask for both: treat any host you keep a row
+  to as trusted the way you are, and prefer single-user machines for task rows.
 
 - **Two smaller ones.** `wt new` runs the repo's `.wt-setup`, when it is executable, inside the new worktree,
   so starting a task in a repo you have not read is running that repo's script as you. And `azml-ssh-host`

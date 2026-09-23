@@ -41,9 +41,11 @@ mkdir -p ~/repos
 # old ones go to ~/.workstation-backup/<stamp>-<pid>/. On a later update never pass it without reading the sync
 # table in the README, because it also drops Codex's hook and folder trust.
 # --opinionated-config asks for the author's own ~/.zshrc (hence the oh-my-zsh line above), ~/.gitconfig,
-# ~/.tmux.conf, Claude keymap and status line; drop it and the install leaves all five to you, machinery
-# intact (README, Install). It never has to be repeated: once they are links into the repo, the bare rerun
-# behind `wt update` keeps them.
+# ~/.tmux.conf, Claude keymap and status line, plus the tui/voice/theme keys of ~/.claude/settings.json;
+# drop it and the install leaves all six to you, machinery intact (README, Install). For the five files it
+# never has to be repeated: once they are links into the repo, the bare rerun behind `wt update` keeps them.
+# The UI keys live in a copied file, which records no choice, so they need the flag again on any later run
+# that passes --refresh-config — the only run that rewrites that copy.
 WT_HOST=<vm> bash ~/repos/workstation/install.sh --opinionated-config --refresh-config   # replace <vm> with this machine's alias in the Mac's ~/.ssh/config
 sudo chsh -s "$(command -v zsh)" "$(id -un)" && exec zsh -l   # last line: exec replaces the shell
 ```
