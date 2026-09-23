@@ -72,6 +72,20 @@ have() { command -v "$1" >/dev/null 2>&1; }
 usage() { awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; }
 shell_join() { local out="" a; for a in "$@"; do printf -v a '%q' "$a"; out="${out:+$out }$a"; done; printf '%s' "$out"; }
 
+# The EXIT trap. meta_set builds each sidecar in a temp file beside the real one and moves it into place, so
+# a signal arriving between the two would leave <name>.json.new.<pid> in .git/wt for good: list_names reads
+# `git worktree list` and never that directory, and cmd_rm removes only the .json, .prompt and .started, so
+# nothing else in this file would ever see it again. An EXIT trap runs on SIGINT and SIGTERM too, which is
+# when this matters. Nothing here uses exec, so the trap is always reached; the exec's in this file are all
+# inside command strings sent to a VM, where they belong to that shell and not to this one.
+WT_TMPFILES=()
+wt_cleanup() {
+  if [[ ${#WT_TMPFILES[@]} -gt 0 ]]; then
+    rm -f "${WT_TMPFILES[@]}"          # already moved into place: rm -f on a gone path is a no-op
+  fi
+}
+trap wt_cleanup EXIT
+
 cmux_bin() {
   local c="${CMUX_BUNDLED_CLI_PATH:-}"
   [[ -x "$c" ]] || c=$(command -v cmux 2>/dev/null || true)
@@ -257,6 +271,7 @@ meta_set() { # meta_set <name> key=value ...  — a key with no '=' is stored wi
   # index("=") is null when there is no '=', and null+1 is 1 in jq, so the no-'=' arm is not optional:
   # without it `meta_set x bare` would slice the key and store the wrong one.
   local f t; f=$(wt_meta "$1"); shift; mkdir -p "$(dirname "$f")"; t="$f.new.$$"
+  WT_TMPFILES+=("$t")                    # a signal between the jq below and the mv would otherwise orphan it
   if ! { if [[ -f "$f" ]]; then cat "$f"; else printf '{}\n'; fi; } \
        | jq --indent 1 'reduce ($ARGS.positional[]) as $kv (.;
              ($kv | index("=")) as $i
@@ -296,7 +311,7 @@ rows_json() { # rows_json — every cmux row, in every window, as one {"workspac
   # error `Cannot index array with "workspaces"` — only the `?` turns that into the empty it can fall back from.
   local c w out docs=""
   c=$(cmux_bin) || return 0
-  for w in $(CMUX_QUIET=1 "$c" list-windows 2>/dev/null | awk '{print $2}' | grep -Ex '[0-9A-Fa-f-]{36}' || true); do
+  for w in $(CMUX_QUIET=1 "$c" list-windows 2>/dev/null | awk '{print $2}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' || true); do
     out=$(CMUX_QUIET=1 "$c" workspace list --json --window "$w" 2>/dev/null) || continue   # a window closed mid-loop
     docs="$docs$out"
   done

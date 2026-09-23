@@ -299,14 +299,17 @@ stub_cmux() {
     *) echo "ABORT: stub_cmux takes dead or alive, not '$1'" >&2; exit 1 ;;
   esac
   : >"$CMUX_LOG"
-  : >"$WT_WINDOWS"; rm -f "$WT_ROWS_DIR"/*.json     # back to a one-window cmux; stub_windows opts in again
+  # back to a one-window cmux; stub_windows opts in again. Guarded like every other path this suite
+  # destroys: this is the only rm in the file that takes a glob, and the header promises all of them go
+  # through guard_scratch_root before anything is removed.
+  : >"$WT_WINDOWS"; guard_scratch_root "$WT_ROWS_DIR"; rm -f "$WT_ROWS_DIR"/*.json
 }
 
 # stub_windows <window uuid…>: what `cmux list-windows` prints, in cmux's own format, and an empty row list
 # for each window named. A scenario then fills "$WT_ROWS_DIR/<uuid>.json" for the window it cares about.
 # Called after stub_cmux, which resets this: with no call, list-windows prints nothing, rows_json falls back
 # to the single-window call it made before windows were merged, and every other scenario sees the same cmux
-# it always saw. The uuids must LOOK like uuids — rows_json takes only 36-character ones from that output,
+# it always saw. The uuids must LOOK like uuids — rows_json takes only uuid-shaped fields from that output,
 # so that a cmux which prints something else entirely is treated as one that cannot be enumerated.
 stub_windows() {
   local u i=0
@@ -962,6 +965,40 @@ scenario_shared_tmux_cmd() {
   b="$(sed -n "s/.*| jq -s -c '\(.*\)'.*/\1/p" "$REPO/bin/cmux-hook")"
   assert_has "bin/wt merges the windows' row lists" "$a" "workspaces"
   assert_eq "bin/cmux-hook merges them the same way" "$a" "$b"
+  # …and they must agree on which fields of `cmux list-windows` count as a window, for the same reason:
+  # a pattern that matched in one file and not the other would give the two a different set of windows.
+  a="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/wt")"
+  b="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/cmux-hook")"
+  assert_eq "the two take the same window uuids" "$a" "$b"
+  end_scenario
+}
+
+# 11. lib_cleanup's backstop, which no real run reaches: both suites build $TEST_ROOT with mktemp -d and
+# refuse one inside the real home before arming the trap, so the refusal below only ever fires for a suite
+# that did neither — and a branch nothing exercises is a branch nobody knows is broken. Both cases are
+# played out on directories inside this run's own scratch root, with HOME pointed at one of them, so
+# nothing outside it is so much as named even if the guard were wrong.
+# shellcheck disable=SC2016   # the $1 in the bash -c program is for THAT bash to expand, not this file
+scenario_cleanup_guard() {
+  begin_scenario "11. lib_cleanup refuses a scratch root it must not remove"
+  local bad="$TEST_ROOT/cleanup-bad" good="$TEST_ROOT/cleanup-good" out
+  mkdir -p "$bad/home/inner" "$good/inner"
+  guard_scratch_root "$bad"
+  guard_scratch_root "$good"
+  # In a bash of its own, not a subshell: TEST_ROOT and HOME reach it as environment, so this run's own
+  # values are never shadowed even for an instant, and what runs is test/lib.sh exactly as a suite sources
+  # it. A non-zero exit cannot abort this suite either — it would show up in the assertions below instead.
+
+  # a root with the home directory inside it: refused, and nothing removed
+  out="$(TEST_ROOT="$bad" HOME="$bad/home" KEEP='' "$BASH" -c '. "$1"; lib_cleanup' _ "$REPO/test/lib.sh" 2>&1)" || true
+  assert_has "it says which root it refused" "$out" "refusing to remove"
+  assert_dir "…and removed nothing" "$bad"
+
+  # …and a root that is plainly this run's own is still removed, or the guard would have stopped the trap
+  # from doing its job at all, which is a worse bug than the one it is here to prevent.
+  out="$(TEST_ROOT="$good" KEEP='' "$BASH" -c '. "$1"; lib_cleanup' _ "$REPO/test/lib.sh" 2>&1)" || true
+  assert_gone "a root with nothing of the user's under it is still removed" "$good"
+  assert_eq "…and says nothing about it" "" "$out"
   end_scenario
 }
 
@@ -978,7 +1015,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=232
+FIXED_ASSERTIONS=237
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
@@ -1004,6 +1041,7 @@ main() {
   scenario_cmux
   scenario_host_args
   scenario_shared_tmux_cmd
+  scenario_cleanup_guard
   lib_summary "$(expected_assertions)"
 }
 

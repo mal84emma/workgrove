@@ -57,7 +57,7 @@ ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in ever
   [[ -n $WS_RC ]] && return "$WS_RC"
   local wins w out docs="" rc=0
   wins=$(capped "$CMUX" list-windows 2>/dev/null) || wins=""      # cannot enumerate: the fallback below stands in
-  wins=$(printf '%s\n' "$wins" | awk '{print $2}' | grep -Ex '[0-9A-Fa-f-]{36}') || wins=""
+  wins=$(printf '%s\n' "$wins" | awk '{print $2}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}') || wins=""
   for w in $wins; do
     out=$(capped "$CMUX" workspace list --json --window "$w" 2>/dev/null); rc=$?
     [[ $rc -eq 0 ]] || break               # a window whose list timed out must not pass for one holding no rows

@@ -216,11 +216,12 @@ opted_in() {
   consenting_link "$HOME/$2" "home/$2"
 }
 
-# claude_ui_opted_in: the same question for the sixth flag. An existing ~/.claude/settings.json that is a real
-# file and still has a top-level .tui key was written by a run that was given --with-claude-ui: copy_config
-# strips that key from every copy written without it. Reading it back here is what keeps `wt update
-# --refresh-config`, which cannot forward the flag, from silently deleting the UI keys of a machine that has
-# them. Probed with the jq call copy_config already makes eleven lines further down, so the two cannot drift.
+# claude_ui_opted_in: the same question for the seventh flag (--with-cmux-config is the sixth, and the last
+# of the six that are FILES). An existing ~/.claude/settings.json that is a real file and still has a
+# top-level .tui key was written by a run that was given --with-claude-ui: copy_config strips that key from
+# every copy written without it. Reading it back here is what keeps `wt update --refresh-config`, which
+# cannot forward the flag, from silently deleting the UI keys of a machine that has them. Probed with the jq
+# call copy_config already makes eleven lines further down, so the two cannot drift.
 claude_ui_opted_in() {
   local dst="$HOME/.claude/settings.json"
   if [[ $WITH_CLAUDE_UI -eq 1 ]]; then

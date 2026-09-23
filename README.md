@@ -181,16 +181,20 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 253 assertions over eleven groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 258 assertions over twelve groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
 base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
 worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that `wt prune` keeps
 exactly what `wt rm` refuses, that a row sitting in a second cmux window is still found and still closed, and
-that `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd` and on how they merge the windows' row lists. Run on a VM
-it makes 232: scenario 8 is about the Mac's row list, and `bin/wt` has no `FORCE_OS` to lie to `is_remote()`
-with, so there `wt new` asks the Mac for a row over the relay and never consults cmux at all. Both suites
-carry an expected-total guard, because a scenario that silently skips its assertions is the failure mode a
-green run hides. What neither covers is anything needing ssh, tmux or a live cmux.
+that `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists and on which
+field of `cmux list-windows` is a window. The last group is the odd one out: it tests `test/lib.sh`'s own
+`rm -rf`, which no real run reaches, because both suites build their scratch root with `mktemp -d` and refuse
+one inside the real home before arming the trap that calls it — and a branch nothing exercises is a branch
+nobody knows is broken. Run on a VM it makes 237: scenario 8 is about the Mac's row list, and `bin/wt` has no
+`FORCE_OS` to lie to `is_remote()` with, so there `wt new` asks the Mac for a row over the relay and never
+consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
+assertions is the failure mode a green run hides. What neither covers is anything needing ssh, tmux or a live
+cmux.
 
 **There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
 

@@ -14,7 +14,9 @@
 #
 # What a caller sets before the first call:
 #   REPO             the workstation checkout root — assert_link compares link targets against it
-#   TEST_ROOT        this run's scratch directory — lib_cleanup is what removes it
+#   TEST_ROOT        this run's scratch directory — lib_cleanup is what removes it, and a suite owns
+#                    checking that it is somewhere safe: lib_cleanup only refuses the roots that could
+#                    never be one ("/", the home directory, or any ancestor of it)
 #   KEEP_LABEL       what lib_cleanup calls what it keeps ("scratch homes", "scratch repos")
 #   LIB_BASE_LABEL   optional: how the <base> half of a <base> <rel> pair reads in a failure message.
 #                    install-smoke.sh sets "~", because every base it passes IS a scratch HOME and "~/.zshrc"
@@ -139,13 +141,34 @@ end_scenario() {
 
 # lib_cleanup: the EXIT trap both suites install. KEEP=1 keeps the scratch tree for inspection, and so does
 # any failure — a failed assertion is exactly when you want to look at what was left behind.
+#
+# The `rm -rf` is the one destructive line in this file, and the only path a suite reaches without passing
+# through a guard of its own: both suites build $TEST_ROOT with `mktemp -d`, resolve it with `pwd -P` and
+# refuse a root inside the real home BEFORE arming this trap, and every fixture path they touch afterwards
+# goes through their own guard_scratch_root. None of that is visible from here, and this file is written to
+# be sourced by a suite that does not exist yet, so the paths that can only ever be a mistake are refused
+# here too: "/", the home directory itself, and any ancestor of it. A root that cannot be resolved at all is
+# left alone rather than guessed at. This is a backstop, not the check — a suite still owns validating its
+# own root, because "not obviously catastrophic" is a much weaker promise than "inside this run's scratch
+# root", which is the one the suites make.
 lib_cleanup() {
   [[ -n "${TEST_ROOT:-}" ]] || return 0
   if [[ -n "${KEEP:-}" || $FAIL -gt 0 ]]; then
     echo "${KEEP_LABEL:-scratch files} kept in $TEST_ROOT"
     return 0
   fi
-  rm -rf "$TEST_ROOT"
+  local root home
+  root="$(cd "$TEST_ROOT" 2>/dev/null && pwd -P)" || return 0
+  home="$(cd "${HOME:-/nonexistent}" 2>/dev/null && pwd -P)" || home=""
+  if [[ "$root" == / || ( -n "$home" && "$root" == "$home" ) ]]; then
+    echo "lib_cleanup: refusing to remove TEST_ROOT=$root" >&2
+    return 0
+  fi
+  if [[ -n "$home" && "$home/" == "$root"/* ]]; then
+    echo "lib_cleanup: refusing to remove TEST_ROOT=$root; the home directory is inside it" >&2
+    return 0
+  fi
+  rm -rf "$root"
 }
 
 # lib_summary <expected assertions>: the count line, and the check that catches the failure mode a pass/fail
