@@ -16,7 +16,8 @@ VS Code opens on demand, through `wt open`.
   row, and the shell it opens creates that session (running the agent) or takes over the one already there.
   Other rows: `<repo> shell` for a repo shell, `shell` for a VM shell, `driver` for the driver session.
 - **Git owns the worktree; sidecar files own the launch metadata.** `wt` reads `git worktree list`. Per task
-  it keeps `<repo>/.git/wt/<name>.json` (base ref, agent, row title, tmux session, copied files),
+  it keeps `<repo>/.git/wt/<name>.json` (base ref, agent, row title, tmux session, copied files, and what
+  `.wt-setup` left behind),
   `<name>.prompt` (the brief, handed to the agent by `wt run`) and `<name>.started` (after which Claude
   resumes with `-c`). None of this is ever committed.
 - **Per-repo hooks.** `.wt-include` lists gitignore-style patterns of *ignored* files (`.env` and
@@ -165,7 +166,7 @@ an unknown flag, every refusal path, which links count as this repo's own, the d
 `install.sh` itself under bash 3.2, which is what a fresh Mac gives it; `FORCE_OS=Linux` drives the
 Linux-only steps from a Mac.
 
-`bash test/wt-smoke.sh` is the other one: 233 assertions over eleven groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 242 assertions over eleven groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
 base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
 worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that `wt prune` keeps
@@ -254,6 +255,13 @@ in the main checkout, or a base ref it cannot compare the worktree against — d
 an older `wt` holding the literal `HEAD`, which resolves to the worktree's own tip and would make every other
 count read as nothing to lose. It names what blocked it. `--force` overrides. `wt prune` is stricter still:
 it only removes worktrees whose branch is merged and whose tree is clean.
+
+What a repo's own `.wt-setup` wrote is not counted against it. A hook that runs `uv sync` or `npm ci`
+regenerates a *tracked* lockfile, which would otherwise leave the worktree dirty from the moment it was
+created and every `wt rm` a refusal for its whole life — so the one deliberate way past the refusals would
+become the routine way, and it discards unmerged commits too. `wt new` hashes whatever the hook left behind
+into the sidecar, and `wt rm` excuses those paths only while they still hold exactly that: edit the lockfile
+yourself and it counts again. `wt list` keeps showing git's own dirty count, unexcused.
 
 Useful environment variables: `WT_REPOS_DIR` (the folders repos are looked for in), `WT_AGENT` (default
 agent), `WT_AGENT_ARGS` (extra agent arguments), and `WT_HOST` on a VM. `git config wt.dir` renames the

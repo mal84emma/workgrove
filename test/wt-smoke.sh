@@ -504,7 +504,9 @@ scenario_names_and_collisions() {
   assert_has "tidy_name lowercases and joins on whitespace" "$WT_OUT" "created fix-auth"
   assert_dir "…and that is the directory it made" "$r/.worktrees/fix-auth"
 
-  # CURRENT BEHAVIOUR: an uppercase name is tidied, not refused — need_name never sees the original
+  # Deliberate: an uppercase name is tidied, not refused — need_name never sees the original. `wt new
+  # "Fix Auth"` is a natural thing to type, and tidy_name runs on the reading side too (the task picker),
+  # so the capitalised spelling still finds the worktree. Only git and tmux see the lowercase name.
   assert_wt_ok "wt new ABC" new ABC --no-workspace -r "$r"
   assert_has "an uppercase name is lowercased rather than refused" "$WT_OUT" "created abc"
 
@@ -599,8 +601,8 @@ scenario_include_and_setup() {
   printf 'SECRET=1\n' >"$r/.env"
   printf 'noise\n' >"$r/other.log"
   printf '%s\n' '.env' >"$r/.wt-include"
-  # the hook writes to a gitignored name on purpose: a file it left untracked would make the worktree
-  # dirty, and scenario 6 is where a dirty worktree is supposed to be the interesting thing
+  # the hook writes to a gitignored name here on purpose, so that this half tests the hook and nothing else;
+  # a hook that dirties the worktree is the last block of this scenario, and scenario 6 has dirt on its own
   # shellcheck disable=SC2016   # the hook is a script: those are for it to expand, not for this file
   printf '%s\n' '#!/bin/sh' 'printf "%s %s\n" "$WT_NAME" "$WT_REPO" >setup-ran.log' >"$r/.wt-setup"
   chmod +x "$r/.wt-setup"
@@ -623,6 +625,28 @@ scenario_include_and_setup() {
   assert_wt_ok "a .wt-setup that fails does not fail the creation" new badsetup --no-workspace -r "$r"
   assert_has "…it warns" "$WT_OUT" ".wt-setup exited non-zero"
   assert_dir "…and the worktree is there" "$r/.worktrees/badsetup"
+
+  # A hook that rewrites a TRACKED file — `uv sync`, `npm ci`, anything that regenerates a committed
+  # lockfile — leaves the worktree dirty from birth. What the hook wrote is hashed into the sidecar at
+  # creation and subtracted from rm's dirty count, because otherwise every worktree in such a repo would be
+  # unremovable for its whole life and --force, which also discards unmerged commits, would be the only way
+  # to tidy up. The subtraction is by content, not by name: the file is excused only while it still holds
+  # exactly what the hook left in it.
+  printf 'lock v1\n' >"$r/lock.txt"
+  fixture_git "$r" add lock.txt
+  fixture_git "$r" commit -q -m lock
+  printf '%s\n' '#!/bin/sh' 'printf "lock v2\n" >lock.txt' >"$r/.wt-setup"
+  p="$r/.worktrees/relock"
+  assert_wt_ok "wt new relock, whose .wt-setup rewrites a tracked file" new relock --no-workspace -r "$r"
+  assert_meta "$r" relock setup "lock.txt:$(sha256_of "$p/lock.txt")"
+  assert_wt_ok "what .wt-setup itself wrote is not a reason to refuse" rm relock -r "$r"
+  assert_gone "…so the worktree goes" "$p"
+
+  assert_wt_ok "wt new relock again" new relock --no-workspace -r "$r"
+  printf 'my own work\n' >>"$p/lock.txt"
+  refuses "$r" relock "1 uncommitted change(s)"      # an edit on top of the hook's output is real work
+  printf 'lock v2\n' >"$p/lock.txt"
+  assert_wt_ok "putting it back byte for byte makes it removable again" rm relock -r "$r"
   end_scenario
 }
 
@@ -865,7 +889,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=221
+FIXED_ASSERTIONS=230
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under

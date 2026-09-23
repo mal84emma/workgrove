@@ -383,6 +383,47 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
   done <<<"$list"
 }
 
+porcelain_paths() { # porcelain_paths <checkout> — one path per line for every entry `git status` reports.
+  # -z because a path with a space in it comes back quoted otherwise, and this list is compared by exact
+  # string. A rename or copy emits its source as a second record, which is consumed and dropped: the
+  # destination is the path that is dirty, and the source no longer exists to hash.
+  local p="$1" rec f
+  git -C "$p" status --porcelain -z 2>/dev/null | while IFS= read -r -d '' rec; do
+    f="${rec:3}"
+    case "${rec:0:2}" in R*|C*) IFS= read -r -d '' _src || true ;; esac
+    if [[ -n "$f" ]]; then printf '%s\n' "$f"; fi
+  done
+}
+
+setup_dirt() { # setup_dirt <worktree path> — what .wt-setup left in git's way, as "<path>:<sha256>" lines.
+  # Only ever called immediately after the hook ran, so this is the hook's own output and nobody else's.
+  # It is recorded for the same reason copy_includes records a hash: so that rm can tell the work a human
+  # did inside the worktree from the state the worktree was born with. A `.wt-setup` that runs `uv sync` or
+  # `npm ci` rewrites a TRACKED lockfile, which without this makes `git status` dirty from birth and every
+  # `wt rm` a refusal for the worktree's whole life — leaving --force, which discards the unmerged-commit
+  # check too, as the only way to clean up. Ignored files never reach here: `status` does not list them.
+  local p="$1" f
+  porcelain_paths "$p" | while IFS= read -r f; do
+    printf '%s:%s\n' "$f" "$(file_hash "$p/$f")"      # a file the hook DELETED hashes to "", and matches as ""
+  done
+}
+
+unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-setup did not put there
+  # A recorded path counts as explained only while it still holds exactly what the hook left: edit that
+  # lockfile by hand and the hash stops matching, so it is a reason again. Metadata from before this was
+  # recorded has no "setup" key, so every path is unexplained and the old refusal stands unchanged.
+  local n="$1" p="$2" recorded f h e explained
+  recorded=$(meta_get "$n" setup 2>/dev/null || true)
+  [[ -n "$recorded" ]] || { porcelain_paths "$p"; return 0; }
+  porcelain_paths "$p" | while IFS= read -r f; do
+    h=$(file_hash "$p/$f"); explained=0
+    while IFS= read -r e; do
+      if [[ -n "$e" && "${e%:*}" == "$f" && "${e##*:}" == "$h" ]]; then explained=1; break; fi
+    done <<<"$recorded"
+    if [[ $explained -eq 0 ]]; then printf '%s\n' "$f"; fi
+  done
+}
+
 branch_pushed() { # branch_pushed <branch> — 0 only when the remote still has every commit of that branch.
   # A remote-tracking ref is not proof: refs/remotes/origin/wt/x outlives the remote branch (abandoned PR,
   # `git push origin :wt/x`, someone else's cleanup), and the next fetch with fetch.prune drops it and leaves
@@ -406,7 +447,7 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
   # merged" while `branch -D` still destroys every commit the branch holds, its reflog with it. $B resolves
   # whether or not it is checked out; refs are shared with the main checkout, so ask $REPO about it.
   local n="$1" p="$2" b="$3" base="$4" dirty ahead=0 merged=0 base_ok=0 head_ref f
-  dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  dirty=$(unexplained_dirt "$n" "$p" | wc -l | tr -d ' ')      # what .wt-setup itself wrote is not a reason
   [[ "$dirty" -gt 0 ]] && printf '%s uncommitted change(s)\n' "$dirty"
   # a base that no longer resolves fails both checks below, and each failure reads as "nothing to lose"; the
   # literal HEAD (metadata from before wt canonicalised the base) resolves in every worktree to that
@@ -556,13 +597,16 @@ cmd_new() {
   mkdir -p "$(wt_root)"
   git -C "$REPO" worktree add -q -b "$b" "$p" "$base" || die "git worktree add failed"
   local includes; includes=$(copy_includes "$p")
+  local setup=""
   if [[ -x "$REPO/.wt-setup" ]]; then
     ( cd "$p" && WT_NAME="$name" WT_REPO="$REPO" "$REPO/.wt-setup" ) || warn ".wt-setup exited non-zero"
+    setup=$(setup_dirt "$p")               # recorded even when the hook failed: it may have written half of it
   fi
   mkdir -p "$REPO/.git/wt"
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; fi
   meta_set "$name" "base=$base" "created=$(date -u +%FT%TZ)" "agent=$agent" \
-    "title=$(row_title "$name" "$REPO")" "session=$(wt_session "$name" "$REPO")" "includes=$includes"
+    "title=$(row_title "$name" "$REPO")" "session=$(wt_session "$name" "$REPO")" \
+    "includes=$includes" "setup=$setup"
 
   printf 'created %s\n  path:   %s\n  branch: %s (from %s)\n  repo:   %s\n  session: %s\n' \
     "$name" "$p" "$b" "$base" "$REPO" "$(wt_session "$name" "$REPO")"
