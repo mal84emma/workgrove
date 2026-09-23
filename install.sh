@@ -44,7 +44,7 @@
 # Two of the five also carry settings the rest of this repo depends on, and declining the file does not
 # decline those: without the linked ~/.gitconfig, `git config` puts core.excludesFile (what git-ignores
 # .worktrees/) and the ~/.gitconfig.local include into the user's own file and changes nothing else; without
-# the linked ~/.tmux.conf, its one update-environment line — how cmux's relay variables reach panes in an
+# the linked ~/.tmux.conf, its update-environment line — how cmux's relay variables reach panes in an
 # already-running session — is appended to the user's.
 #
 # Exits 2 on a usage error, 1 if oh-my-zsh (only when ~/.zshrc is opted in), the VM name (Linux) or a git
@@ -547,7 +547,7 @@ check_tmux_conf() {
 
 # hook_tmux_conf: tmux forwards to a pane only the variables named in update-environment, and cmux rebinds
 # CMUX_SOCKET_PATH and CMUX_WORKSPACE_ID on every attach, so without the one line below a pane started in an
-# already-running session gets a stale socket path and agent-notify goes nowhere. That line is the whole of
+# already-running session gets a stale socket path and agent-notify goes nowhere. That line opens
 # home/.tmux.conf, but the rest of that file is the author's taste, so when it was not asked for the line
 # alone is APPENDED to the user's own ~/.tmux.conf (created if there is none). Appending, not rewriting:
 # every line already there survives, which is why — unlike hook_bashrc, which has to rebuild ~/.bashrc to get

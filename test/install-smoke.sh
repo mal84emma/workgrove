@@ -439,7 +439,7 @@ scenario_default_empty() {
       "$h/.gitignore_global" "$(scratch_git "$h" config --global --get core.excludesFile)"
     assert_eq "include.path in the scratch ~/.gitconfig" \
       "$h/.gitconfig.local" "$(scratch_git "$h" config --global --get-all --type=path include.path)"
-    # ... and so does tmux's one line, appended rather than linked.
+    # ... and so does tmux's update-environment line, appended rather than linked.
     assert_regular "$h" .tmux.conf
     assert_eq "update-environment lines in ~/.tmux.conf" 1 "$(count_matches "$h/.tmux.conf" "$TMUX_LINE")"
     # report_skipped has to name all six, or a user who wanted them never learns the flag exists.
