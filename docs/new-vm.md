@@ -91,9 +91,10 @@ the driver row, start tasks with `wt -H <vm> new -r <repo> -p "…"`.
 Inside tmux, Ctrl+J always gives Claude a newline. Shift+Enter does too, but only with the linked
 `~/.tmux.conf` (`--with-tmux-conf` or `--opinionated-config`), whose `extended-keys` passes the modifier through;
 under tmux's defaults, or in a session started before that file arrived, the modifier is stripped and Shift+Enter
-submits. The same file brings true colour (it sets `COLORTERM=truecolor`, which ssh does not carry over, and `CLAUDE_CODE_TMUX_TRUECOLOR=1`, without which Claude caps itself at 256 colours inside tmux), a 10 ms `escape-time` instead of 500 ms, and focus events. Its
-`default-terminal` reaches only new sessions and panes: a session that was already running keeps `TERM=screen`
-until you start a new one. Ubuntu 22.04's tmux is 3.2a, and the file is written for it; the Ubuntu archive has
+submits. The same file brings true colour (it sets `COLORTERM=truecolor`, which ssh does not carry over, and
+`CLAUDE_CODE_TMUX_TRUECOLOR=1`, without which Claude caps itself at 256 colours inside tmux), a 10 ms
+`escape-time` instead of 500 ms, and focus events. Its `default-terminal` reaches only new sessions and panes: a
+session that was already running keeps `TERM=screen` until you start a new one. Ubuntu 22.04's tmux is 3.2a, and the file is written for it; the Ubuntu archive has
 nothing newer for that release, so options that need 3.3 or later (`allow-passthrough`, for one) are left out
 rather than installed from a PPA or source.
 
@@ -130,7 +131,8 @@ run `exec bash` in that pane or open a new tmux window.
   file is displaced: `install.sh` adds `core.excludesFile` and the `~/.gitconfig.local` include to the
   `~/.gitconfig` you already have, and appends cmux's one `update-environment` line to your `~/.tmux.conf`.
 - **Seeding instead of cloning** (to carry an uncommitted change to a VM). From the Mac:
-  `ssh <vm> 'mkdir -p ~/repos' && rsync -a --exclude .git ~/repos/workstation/ <vm>:~/repos/workstation/`.
+  `ssh <vm> 'mkdir -p ~/repos' && rsync -a --exclude .git --exclude .worktrees ~/repos/workstation/ <vm>:~/repos/workstation/`
+  (`.worktrees` keeps your task worktrees on the Mac, where they belong).
   Block 2's clone line then finds the folder and skips. A seeded copy has no `.git`, so `wt update` and
   `wt -H <vm> update` refuse until it is replaced by a clone; until then re-seed with the same rsync line and
   rerun `bash ~/repos/workstation/install.sh` on the VM.
@@ -159,6 +161,12 @@ run `exec bash` in that pane or open a new tmux window.
   re-attaches it (add `--restart-agent` when the reboot took the tmux session with it, or `--reattach` when a
   dropped connection left the VM holding the old pty, which is the case cmux announces in the row as
   `remote session was lost; starting a new shell`).
+- **`server exited unexpectedly` from every tmux command, `wt new` included,** after a `tmux kill-server`: the
+  server ends its sessions but waits for its clients to leave before it exits, and a control-mode client left
+  behind by a dropped connection (`tmux -CC attach`, parent PID 1, its pty gone) never does. The half-exited
+  server keeps the socket and drops every new connection. `ps -eo pid,ppid,args | grep '[t]mux -CC'` lists
+  them; `kill` those PIDs and the server finishes exiting, so the next tmux command starts a fresh one. Check
+  for them before a `kill-server`, too.
 - **Slow shells on an Azure ML compute instance.** The image's `~/.bashrc` runs a `conda init` block (about
   2.5 s) and `conda activate azureml_py38` (about 1 s) in every shell, which delays each cmux row, each
   `wt -H <vm>` call and the tmux status line. If your repos manage Python with `uv`, comment out the
