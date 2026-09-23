@@ -545,6 +545,9 @@ cmd_new() {
   # means the same thing in every worktree tomorrow, so keep the ref (--symbolic-full-name names it, in the
   # shorthand it was given in) and pin anything else — an expression or a raw sha — to the commit it means now.
   local sym; sym=$(git -C "$REPO" rev-parse --symbolic-full-name "$base" 2>/dev/null || true)
+  # --symbolic-full-name prints the bare word HEAD for a detached checkout, which is not a ref and is exactly
+  # the spelling this block exists to catch: only a refs/… answer names the same thing in every worktree.
+  case "$sym" in refs/*) ;; *) sym="" ;; esac
   case "$base" in
     "$sym"|"${sym#refs/heads/}"|"${sym#refs/remotes/}"|"${sym#refs/tags/}") ;;
     *) base=$(git -C "$REPO" rev-parse "$base^{commit}") ;;

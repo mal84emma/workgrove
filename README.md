@@ -57,7 +57,9 @@ workstation/
 │   ├── settings-snippet.jsonc six keys to paste; Settings Sync owns the rest
 │   └── extensions.txt
 ├── test/
-│   └── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
+│   ├── lib.sh                 the assertion vocabulary both suites speak
+│   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
+│   └── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 └── docs/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
@@ -162,6 +164,14 @@ an unknown flag, every refusal path, which links count as this repo's own, the d
 `configure_git`, retirement of renamed links, and `ZSH_CUSTOM`. Set `INSTALL_BASH=/bin/bash` to run
 `install.sh` itself under bash 3.2, which is what a fresh Mac gives it; `FORCE_OS=Linux` drives the
 Linux-only steps from a Mac.
+
+`bash test/wt-smoke.sh` is the other one: 233 assertions over eleven groups against throwaway git repos, with
+cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
+base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
+worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that `wt prune` keeps
+exactly what `wt rm` refuses, and that `bin/wt` and `bin/cmux-hook` still agree on `tmux_cmd`. Both suites
+carry an expected-total guard, because a scenario that silently skips its assertions is the failure mode a
+green run hides. What neither covers is anything needing ssh, tmux or a live cmux.
 
 **There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
 

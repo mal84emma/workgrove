@@ -43,6 +43,12 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd -P)"   # -P: install.sh records the physical path, so compare like for like
 OS="$(uname -s)"
+# The assertion vocabulary, the counters, the scenario lines and the summary live in test/lib.sh, because
+# test/wt-smoke.sh speaks the same one. LIB_BASE_LABEL is how a <base> <rel> pair reads when an assertion
+# fails: every base this file passes is a scratch HOME, so "~/.zshrc" is the right way to say it.
+LIB_BASE_LABEL='~'
+# shellcheck source=test/lib.sh
+. "$REPO/test/lib.sh"
 # The interpreter install.sh itself is run under; see the header. Resolved to an absolute path here, once,
 # because scenario 14b hands install.sh a PATH with almost nothing on it and `env bash …` would then fail to
 # find bash itself rather than testing what it meant to.
@@ -57,11 +63,7 @@ INSTALL_BASH="$INSTALL_BASH_ABS"
 # against this, so it must be captured before any scenario can have changed HOME.
 REAL_HOME="$(cd "$HOME" && pwd -P)"
 VM_HOST=smoke-vm                     # ask_vm_host refuses on Linux without this; ignored on a Mac
-
-PASS=0
-FAIL=0
-SCENARIO="(startup)"
-SCENARIO_FAILS=0
+KEEP_LABEL="scratch homes"           # what lib_cleanup calls what KEEP=1 leaves behind
 
 # ---------------------------------------------------------------------------- scratch home safety
 
@@ -74,14 +76,7 @@ case "$TEST_ROOT_REAL/" in
     exit 1 ;;
 esac
 
-cleanup() {
-  if [[ -n "${KEEP:-}" || $FAIL -gt 0 ]]; then
-    echo "scratch homes kept in $TEST_ROOT"
-    return 0
-  fi
-  rm -rf "$TEST_ROOT"
-}
-trap cleanup EXIT
+trap lib_cleanup EXIT
 
 # guard_scratch_home <dir>: the check this whole file is built around. install.sh writes dotfiles, runs
 # `git config --global` and moves whatever is in the way into ~/.workstation-backup, so a HOME that
@@ -109,74 +104,8 @@ guard_scratch_home() {
 }
 
 # ---------------------------------------------------------------------------- assertions
-
-# describe <path>: what is actually there, for a failure message that names found as well as expected.
-describe() {
-  if [[ -L "$1" ]]; then
-    echo "a symlink -> $(readlink "$1")"
-  elif [[ -d "$1" ]]; then
-    echo "a directory"
-  elif [[ -f "$1" ]]; then
-    echo "a regular file"
-  elif [[ -e "$1" ]]; then
-    echo "neither a file nor a directory"
-  else
-    echo "nothing"
-  fi
-}
-
-pass() { PASS=$((PASS + 1)); }
-
-fail() {
-  FAIL=$((FAIL + 1))
-  SCENARIO_FAILS=$((SCENARIO_FAILS + 1))
-  echo "  FAIL [$SCENARIO] $*" >&2
-}
-
-# assert_link <home> <home-relative dst> <repo-relative src>: ~/dst is a symlink to <repo>/src.
-assert_link() {
-  local p="$1/$2" want="$REPO/$3" got
-  if [[ ! -L "$p" ]]; then
-    fail "at ~/$2: expected a symlink -> $want, found $(describe "$p")"
-    return 0
-  fi
-  got="$(readlink "$p")"
-  if [[ "$got" != "$want" ]]; then
-    fail "at ~/$2: expected a symlink -> $want, found a symlink -> $got"
-    return 0
-  fi
-  pass
-}
-
-# assert_absent <home> <rel>: nothing there at all, not even a dangling link.
-assert_absent() {
-  local p="$1/$2"
-  if [[ -e "$p" || -L "$p" ]]; then
-    fail "at ~/$2: expected nothing, found $(describe "$p")"
-    return 0
-  fi
-  pass
-}
-
-# assert_regular <home> <rel>: a real file, not a symlink — the shape a stranger's own dotfile must keep.
-assert_regular() {
-  local p="$1/$2"
-  if [[ -L "$p" || ! -f "$p" ]]; then
-    fail "at ~/$2: expected a regular file, found $(describe "$p")"
-    return 0
-  fi
-  pass
-}
-
-# assert_not_link <home> <rel>: weaker than assert_absent, for a path a fallback legitimately creates.
-assert_not_link() {
-  local p="$1/$2"
-  if [[ -L "$p" ]]; then
-    fail "at ~/$2: expected not a symlink, found $(describe "$p")"
-    return 0
-  fi
-  pass
-}
+# describe, pass, fail, assert_eq, assert_grep, assert_link, assert_absent, assert_regular and
+# assert_not_link are in test/lib.sh, sourced above. What follows is what only this suite needs.
 
 # assert_not_link_into_repo <home> <rel>: whatever is there, it is not a link into THIS repo. Weaker than
 # assert_absent on purpose: what matters for a destination install.sh must not take over is only that it did
@@ -191,27 +120,6 @@ assert_not_link_into_repo() {
       fail "at ~/$2: expected NOT a link into $REPO, found a symlink -> $t"
       return 0 ;;
   esac
-  pass
-}
-
-assert_eq() {   # <what> <expected> <actual>
-  if [[ "$2" != "$3" ]]; then
-    fail "$1: expected '$2', found '$3'"
-    return 0
-  fi
-  pass
-}
-
-# assert_grep <what> <file> <fixed string>: the file still carries a line the user wrote.
-assert_grep() {
-  if [[ ! -f "$2" ]]; then
-    fail "$1: expected '$3' in $2, but $2 is $(describe "$2")"
-    return 0
-  fi
-  if ! grep -qF -- "$3" "$2"; then
-    fail "$1: expected '$3' somewhere in $2, not found"
-    return 0
-  fi
   pass
 }
 
@@ -261,19 +169,6 @@ assert_same_bytes() {
     return 0
   fi
   pass
-}
-
-begin_scenario() {
-  SCENARIO="$1"
-  SCENARIO_FAILS=0
-}
-
-end_scenario() {
-  if [[ $SCENARIO_FAILS -eq 0 ]]; then
-    echo "ok   $SCENARIO"
-  else
-    echo "FAIL $SCENARIO ($SCENARIO_FAILS assertion(s) failed)"
-  fi
 }
 
 # ---------------------------------------------------------------------------- fixtures
@@ -1677,7 +1572,6 @@ CMUX_ASSERTIONS=78
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
-  local want
   echo "install.sh smoke test: repo $REPO, scratch root $TEST_ROOT"
   echo "  this suite under bash ${BASH_VERSION}; install.sh under $INSTALL_BASH" \
        "($("$INSTALL_BASH" -c 'echo "$BASH_VERSION"'))"
@@ -1698,16 +1592,7 @@ main() {
   scenario_zsh_custom
   scenario_linux_legs
   scenario_cmux_config
-  echo "$((PASS + FAIL)) assertions: $PASS passed, $FAIL failed"
-  want="$(expected_assertions)"
-  if [[ $((PASS + FAIL)) -ne $want ]]; then
-    echo "FAIL: expected $want assertions, ran $((PASS + FAIL)) — a scenario skipped its assertions" \
-         "instead of failing them, or one was added without updating FIXED_ASSERTIONS" >&2
-    exit 1
-  fi
-  if [[ $FAIL -gt 0 ]]; then
-    exit 1
-  fi
+  lib_summary "$(expected_assertions)"
 }
 
 seed_other_checkout
