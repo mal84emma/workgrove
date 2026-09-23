@@ -23,7 +23,8 @@
 #     # >>> azml-ssh-host <instance>
 #     Host <instance> …
 #     # <<< azml-ssh-host <instance>
-# Everything outside the markers is left byte for byte as it was, and `rm` restores the content
+# Everything outside the markers is left byte for byte as it was — with one caveat: awk truncates a line at
+# the first NUL, which an ssh config cannot contain — and `rm` restores the content
 # exactly as `add` found it; the mode is normalised to 600 whenever the file is written, so a config
 # that was 644 comes back 600. Every write builds the whole file in a temporary file in the same folder
 # and renames it into place, keeping the previous file as <config>.bak, so an interrupted or failed run

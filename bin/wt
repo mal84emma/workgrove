@@ -470,11 +470,15 @@ wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<
   local n="$1" p b base ahead behind dirty last
   p=$(wt_path "$n"); b=$(wt_branch "$n")
   base=$(meta_get "$n" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
-  ahead=$(git -C "$p" rev-list --count "$base..HEAD" 2>/dev/null || echo '?')
-  behind=$(git -C "$p" rev-list --count "HEAD..$base" 2>/dev/null || echo '?')
+  # counted against the BRANCH, not HEAD: the column is labelled with the branch, and inside a worktree that
+  # is mid-bisect or on a detached checkout the two differ — which is the shape of the bug wt rm had.
+  ahead=$(git -C "$p" rev-list --count "$base..$b" 2>/dev/null || echo '?')
+  behind=$(git -C "$p" rev-list --count "$b..$base" 2>/dev/null || echo '?')
   dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
   last=$(git -C "$p" log -1 --format='%cr' 2>/dev/null || echo '-')
-  printf '%s\n' "$n$WT_FS$(git -C "$p" branch --show-current 2>/dev/null || echo "$b")$WT_FS$base$WT_FS$ahead$WT_FS$behind$WT_FS$dirty$WT_FS$last"
+  local cur; cur=$(git -C "$p" branch --show-current 2>/dev/null || true)   # empty, exit 0, on a detached HEAD
+  [[ -n "$cur" ]] || cur="$b (HEAD detached)"
+  printf '%s\n' "$n$WT_FS$cur$WT_FS$base$WT_FS$ahead$WT_FS$behind$WT_FS$dirty$WT_FS$last"
 }
 
 list_names() { # registered worktrees under the wt root
@@ -826,8 +830,10 @@ cmd_driver() { # the session that spawns tasks; its cwd is a repos folder, so `w
 }
 
 cmd_update() { # pull this repo and re-run its installer
-  local refresh=()
-  while [[ $# -gt 0 ]]; do case "$1" in --refresh-config) refresh=(--refresh-config);; -h|--help) usage; exit 0;; *) die "update: unknown option $1";; esac; shift; done
+  # install.sh's own flags are forwarded rather than rejected: the opt-ins are sticky, so a plain update
+  # keeps what this machine chose, but opting IN later has to be possible through the command the docs name.
+  local pass=()
+  while [[ $# -gt 0 ]]; do case "$1" in --refresh-config|--opinionated-config|--with-*) pass+=("$1");; -h|--help) usage; exit 0;; *) die "update: unknown option $1";; esac; shift; done
   local s="$0" dir
   if [[ -L "$s" ]]; then s=$(readlink "$s"); fi            # ~/.local/bin/wt -> <repo>/bin/wt
   [[ "$s" == /* ]] || s="$(dirname "$0")/$s"
@@ -850,7 +856,7 @@ cmd_update() { # pull this repo and re-run its installer
     [[ "$ans" == [yY] || "$ans" == [yY][eE][sS] ]] || die "update: cancelled"
     git -C "$dir" merge --ff-only '@{u}'
   fi
-  bash "$dir/install.sh" "${refresh[@]+"${refresh[@]}"}"
+  bash "$dir/install.sh" "${pass[@]+"${pass[@]}"}"
 }
 
 # ---------------------------------------------------------------- wt -H <host> …
