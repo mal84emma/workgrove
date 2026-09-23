@@ -2,6 +2,13 @@
 #
 # test/install-smoke.sh: run install.sh against throwaway HOMEs and assert what it did.
 #   bash test/install-smoke.sh          (KEEP=1 leaves the scratch homes behind for inspection)
+#   INSTALL_BASH=/bin/bash bash test/install-smoke.sh    (which bash runs install.sh — see below)
+#
+# Two interpreters, and they are not the same question. This file is run by whatever bash invoked it;
+# install.sh is run by $INSTALL_BASH, printed in the header line. They default to the same `bash` from PATH,
+# which on the author's Mac is Homebrew's 5.x — but a fresh Mac has no bash but /bin/bash 3.2.57, and
+# docs/new-mac.md tells the user to run `bash install.sh`, so 3.2 is the only interpreter install.sh ever
+# gets there. Run this file both ways, or the one that matters goes untested under the one that matters.
 #
 # Why this file exists: install.sh's five opinionated files (~/.zshrc, ~/.gitconfig, ~/.tmux.conf,
 # ~/.claude/keybindings.json, ~/.claude/statusline-command.sh) are opt-in, as are the UI keys of
@@ -9,6 +16,14 @@
 # the no-flags path, the one every stranger gets, is the one path the author
 # never runs and the one most likely to rot. These scenarios exercise it, the flags, the stickiness rule
 # and idempotence, and above all they check that a default install leaves a stranger's own dotfiles alone.
+# Beyond that they cover the things install.sh REFUSES to do — the ones that protect a machine it does not
+# own: a dangling symlink it would otherwise write through, a file a dotfile manager owns, a setting the
+# user already made, a link into a second checkout of this repo.
+#
+# The Linux-only steps — hook_bashrc above all, and ask_vm_host, record_repos_dir and copy_config's two
+# platform filters — are unreachable on a Mac, which is where this suite is run. Scenario 16 drives them
+# through install.sh's FORCE_OS variable, which exists for that and for nothing else. Everything else a
+# green run does NOT exercise is the network: install_zsh_plugins' clone, which the fixtures pre-empt.
 #
 # The absolute rule: nothing here may touch anything under the real $HOME. Every scenario runs install.sh
 # with HOME pointed into a fresh mktemp -d, guard_scratch_home refuses at the start of each one if that
@@ -19,10 +34,25 @@
 #
 # Assertions are silent when they hold and loud when they do not; the script prints one line per scenario
 # and a pass/fail count, and exits non-zero if any assertion failed.
+#
+# The count itself is asserted, against expected_assertions below. A mutation once dropped it from 323 to 318
+# without a single failure, because a scenario's loop skipped its assertions instead of failing them: a
+# suite that can quietly stop checking things is not a suite. Every loop over a directory that install.sh
+# was supposed to create therefore asserts rather than `continue`s.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd -P)"   # -P: install.sh records the physical path, so compare like for like
 OS="$(uname -s)"
+# The interpreter install.sh itself is run under; see the header. Resolved to an absolute path here, once,
+# because scenario 14b hands install.sh a PATH with almost nothing on it and `env bash …` would then fail to
+# find bash itself rather than testing what it meant to.
+INSTALL_BASH="${INSTALL_BASH:-bash}"
+INSTALL_BASH_ABS="$(command -v "$INSTALL_BASH" 2>/dev/null || true)"
+if [[ -z "$INSTALL_BASH_ABS" ]]; then
+  echo "ABORT: INSTALL_BASH='$INSTALL_BASH' is not on PATH" >&2
+  exit 1
+fi
+INSTALL_BASH="$INSTALL_BASH_ABS"
 # Resolved before anything else runs, and while HOME is still the real one: everything below compares
 # against this, so it must be captured before any scenario can have changed HOME.
 REAL_HOME="$(cd "$HOME" && pwd -P)"
@@ -148,6 +178,22 @@ assert_not_link() {
   pass
 }
 
+# assert_not_link_into_repo <home> <rel>: whatever is there, it is not a link into THIS repo. Weaker than
+# assert_absent on purpose: what matters for a destination install.sh must not take over is only that it did
+# not take it over, not which of "untouched" or "stashed as a retired link" it ended up as.
+assert_not_link_into_repo() {
+  local p="$1/$2" t=""
+  if [[ -L "$p" ]]; then
+    t="$(readlink "$p")"
+  fi
+  case "$t" in
+    "$REPO"/*)
+      fail "at ~/$2: expected NOT a link into $REPO, found a symlink -> $t"
+      return 0 ;;
+  esac
+  pass
+}
+
 assert_eq() {   # <what> <expected> <actual>
   if [[ "$2" != "$3" ]]; then
     fail "$1: expected '$2', found '$3'"
@@ -174,10 +220,47 @@ count_matches() {
   grep -cF -- "$2" "$1" 2>/dev/null || true
 }
 
+# line_count <file>: lines, not newlines. wc -l counts newlines, so a file whose last line has none reads
+# one short — and that is exactly the file append_line's guard exists for, so counting it wrong is how a
+# suite claims to check the append and does not.
 line_count() {
   local n
   n="$(wc -l <"$1")"
-  echo "$((n))"
+  n=$((n))
+  if [[ -s "$1" && -n "$(tail -c 1 "$1")" ]]; then
+    n=$((n + 1))
+  fi
+  echo "$n"
+}
+
+# assert_mode <home> <rel> <mode>: the permission bits of a file install.sh created. The idempotence
+# manifest cannot do this job — it only ever compares run 1 of an install against run 2 of the same
+# install, so a chmod regression is identical in both and passes.
+assert_mode() {
+  local p="$1/$2"
+  if [[ ! -f "$p" ]]; then
+    fail "at ~/$2: expected a regular file with mode $3, found $(describe "$p")"
+    return 0
+  fi
+  assert_eq "the mode of ~/$2" "$3" "$(file_mode "$p")"
+}
+
+# assert_same_bytes <what> <file a> <file b>: two paths with identical contents. Used for the copies that
+# are installed with a plain `cp`: asserting only that they EXIST passes on a zero-byte file, and on a Mac
+# — the author's own machine — the cp branch is the one both Codex files take.
+assert_same_bytes() {
+  local a b
+  if [[ ! -f "$2" || ! -f "$3" ]]; then
+    fail "$1: expected two regular files, found $(describe "$2") and $(describe "$3")"
+    return 0
+  fi
+  a="$(cksum <"$2")"
+  b="$(cksum <"$3")"
+  if [[ "$a" != "$b" ]]; then
+    fail "$1: $2 and $3 differ"
+    return 0
+  fi
+  pass
 }
 
 begin_scenario() {
@@ -231,9 +314,66 @@ seed_opinionated_originals() {
   printf '%s\n' '# STRANGER ZSHRC' 'alias notmine=true' >"$h/.zshrc"
   printf '%s\n' '[user]' '	name = Stranger' '	email = stranger@example.invalid' \
                 '[alias]' '	lg = log --oneline' >"$h/.gitconfig"
-  printf '%s\n' '# STRANGER TMUX' 'set -g mouse on' >"$h/.tmux.conf"
+  # Deliberately no final newline: a hand-edited ~/.tmux.conf routinely ends that way, and it is the only
+  # shape that exercises append_line's guard. Without the guard the appended line is glued onto this one —
+  # `set -g prefix C-aset -ag update-environment …` — which destroys the user's binding AND is unparseable,
+  # and `grep -c` still reports exactly one update-environment line, so the obvious assertion cannot see it.
+  printf '%s\n%s' '# STRANGER TMUX' 'set -g prefix C-a' >"$h/.tmux.conf"
   printf '%s\n' '{ "stranger": true }' >"$h/.claude/keybindings.json"
   printf '%s\n' '#!/bin/sh' 'echo STRANGER STATUSLINE' >"$h/.claude/statusline-command.sh"
+}
+
+# other_checkout: a SECOND clone of this repo the user deliberately keeps — the live link into it is, in
+# install.sh's own words, "the one link this script must never touch". Only the paths matter, so it is a
+# skeleton rather than a copy, and it lives inside TEST_ROOT: guard_scratch_home constrains $HOME, not where
+# a symlink under it points, so anything a scenario tempts install.sh into writing must be in here too.
+OTHER_CHECKOUT="$TEST_ROOT/other-checkout"
+seed_other_checkout() {
+  mkdir -p "$OTHER_CHECKOUT/home"
+  printf '%s\n' '# THE OTHER CHECKOUT ZSHRC' >"$OTHER_CHECKOUT/home/.zshrc"
+}
+
+# seed_manager <home>: a dotfiles repo of the user's own, with a file at each of the three paths install.sh
+# appends to or edits. One per scenario, inside that scenario's HOME the way ~/dotfiles usually is, so a
+# scenario that provoked a write into it cannot be masked by another scenario's fixture.
+seed_manager() {
+  local h="$1"
+  guard_scratch_home "$h"
+  mkdir -p "$h/dotfiles"
+  printf '%s\n' '# THE MANAGER TMUX CONF' 'set -g mouse on' >"$h/dotfiles/tmux.conf"
+  printf '[core]\n\tpager = delta\n' >"$h/dotfiles/gitconfig"      # a real tab: git has to read this one
+  printf '%s\n' '# THE MANAGER BASHRC' >"$h/dotfiles/bashrc"
+}
+
+# nojq_path: a PATH carrying everything install.sh shells out to EXCEPT jq, built once. require_jq's refusal
+# is otherwise untestable — and with it neutered, copy_config runs jq that is not there and the run dies
+# mid-install instead of before it.
+NOJQ_BIN="$TEST_ROOT/nojq-bin"
+nojq_path() {
+  local c t
+  if [[ ! -d "$NOJQ_BIN" ]]; then
+    mkdir -p "$NOJQ_BIN"
+    for c in awk basename cat chmod cp date dirname find git grep head ln mkdir mktemp mv readlink rm stat tail uname; do
+      t="$(command -v "$c" 2>/dev/null || true)"
+      if [[ -n "$t" ]]; then
+        ln -s "$t" "$NOJQ_BIN/$c"
+      fi
+    done
+  fi
+  printf '%s\n' "$NOJQ_BIN"
+}
+
+# backup_dir <home>: this run's ~/.workstation-backup/<stamp>-<pid>, or "" if nothing needed backing up.
+# install.sh creates it only when it is used, and never more than one per run.
+backup_dir() {
+  local d
+  for d in "$1"/.workstation-backup/*/; do
+    if [[ -d "$d" ]]; then
+      printf '%s\n' "${d%/}"
+      return 0
+    fi
+  done
+  return 0
 }
 
 # ---------------------------------------------------------------------------- running install.sh
@@ -245,14 +385,33 @@ seed_opinionated_originals() {
 # HOME for every `git config` install.sh runs. ZSH_CUSTOM is unset because install_zsh_plugins honours it
 # and an inherited one would make the plugin check look outside the scratch HOME.
 # stdin is /dev/null so ask_vm_host can never block on a read.
+# RUN_EXTRA_ENV adds `env` arguments — an assignment, or a -u — for ONE call, and run_install empties it
+# again, so a scenario that sets it cannot leak a ZSH_CUSTOM or a FORCE_OS into the next one by forgetting.
+# It is spelled ${a[@]+"${a[@]}"} throughout: an empty array under `set -u` is an error in bash 3.2, and
+# 3.2 is an interpreter this suite has to run clean under.
+RUN_EXTRA_ENV=()
 run_install() {
-  local h="$1" log="$2" rc=0
+  local h="$1" log="$2" rc=0 extra
   shift 2
   guard_scratch_home "$h"
+  extra=(${RUN_EXTRA_ENV[@]+"${RUN_EXTRA_ENV[@]}"})
+  RUN_EXTRA_ENV=()
   env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT -u ZSH_CUSTOM \
       HOME="$h" XDG_CONFIG_HOME="$h/.config" WT_HOST="$VM_HOST" \
-      bash "$REPO/install.sh" "$@" >"$log" 2>&1 </dev/null || rc=$?
+      ${extra[@]+"${extra[@]}"} \
+      "$INSTALL_BASH" "$REPO/install.sh" "$@" >"$log" 2>&1 </dev/null || rc=$?
   return "$rc"
+}
+
+# assert_install_fails <home> <log> <expected rc> <fixed string> [args…]: the other half of assert_install_ok.
+# Every refusal install.sh makes is supposed to be made BEFORE anything moves, so each caller also asserts
+# that the HOME is untouched; that is the part a mutation removing require_plain_file would otherwise pass.
+assert_install_fails() {
+  local h="$1" log="$2" want="$3" msg="$4" rc=0
+  shift 4
+  run_install "$h" "$log" "$@" || rc=$?
+  assert_eq "install.sh $* exit status" "$want" "$rc"
+  assert_grep "install.sh said why it refused" "$log" "$msg"
 }
 
 # scratch_git <home> <git args…>: read back what install.sh wrote with `git config --global`, through the
@@ -286,7 +445,8 @@ FIVE_SRC=(home/.zshrc home/.gitconfig home/.tmux.conf home/.claude/keybindings.j
 UI_FLAG=--with-claude-ui             # the sixth flag: keys inside a copied file, so it has no FIVE_DST entry
 THEME_DST=.oh-my-zsh/custom/themes/workstation.zsh-theme
 THEME_SRC=home/.oh-my-zsh/custom/themes/workstation.zsh-theme
-TMUX_LINE='set -ag update-environment'
+TMUX_LINE='set -ag update-environment'                                   # enough to count occurrences
+TMUX_FULL_LINE='set -ag update-environment " CMUX_SOCKET_PATH CMUX_WORKSPACE_ID"'   # the whole line, for -x
 
 # assert_machinery <home>: everything a default install owes every user, opinionated or not. Derived from
 # the repo rather than hard-coded, so a new bin/ script or skill that install.sh forgot to link fails here.
@@ -306,10 +466,24 @@ assert_machinery() {
     assert_link "$h" ".agents/skills/$n" "home/.agents/skills/$n"
     assert_link "$h" ".claude/skills/$n" "home/.agents/skills/$n"
   done
-  # The three machine-local copies: real files, never links, so the apps can write their state into them.
+  # The three machine-local copies: real files, never links, so the apps can write their state into them,
+  # and mode 600, because they hold local state and copy_config chmods them.
   assert_regular "$h" .claude/settings.json
   assert_regular "$h" .codex/config.toml
   assert_regular "$h" .codex/hooks.json
+  assert_mode "$h" .claude/settings.json 600
+  assert_mode "$h" .codex/config.toml 600
+  assert_mode "$h" .codex/hooks.json 600
+  # …and they have to CONTAIN the .base file. Asserting only that the two Codex copies exist passes on a
+  # zero-byte file, and on a Mac both take copy_config's plain `cp` branch, so neither was ever checked.
+  # shellcheck disable=SC2088   # the ~ is the label a failure prints, not a path to expand
+  assert_same_bytes "~/.codex/hooks.json is its .base file" \
+    "$h/.codex/hooks.json" "$REPO/home/.codex/hooks.base.json"
+  if [[ $OS == Darwin ]]; then
+    # shellcheck disable=SC2088
+    assert_same_bytes "~/.codex/config.toml is its .base file" \
+      "$h/.codex/config.toml" "$REPO/home/.codex/config.base.toml"   # off a Mac it is filtered, not copied
+  fi
   if [[ $OS == Darwin ]]; then
     assert_link "$h" .config/cmux/cmux.json home/.config/cmux/cmux.json
   fi
@@ -354,6 +528,22 @@ assert_claude_ui() {
   assert_settings_key "$h" effortLevel no
   assert_settings_key "$h" hooks yes
   assert_settings_key "$h" permissions yes
+  # .env holds one key, CLAUDE_CODE_DISABLE_MOUSE_CLICKS, and it is UI taste in exactly the way .tui is: it
+  # turns mouse clicks off in the Claude Code TUI. It used to be installed unconditionally, so a default
+  # install disabled a stranger's mouse with nothing in the output naming the key. Both halves are asserted:
+  # the key follows the flag, and the object it lived in does not survive it as an empty `{}`.
+  assert_settings_key "$h" env "$want"
+  assert_mouse_key "$h" "$want"
+}
+
+# assert_mouse_key <home> <yes|no>: the one key inside .env, read as a path rather than by name so a key of
+# the same name at the top level could not stand in for it.
+assert_mouse_key() {
+  local h="$1" want="$2" got=no
+  if jq -e '.env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS' "$h/.claude/settings.json" >/dev/null 2>&1; then
+    got=yes
+  fi
+  assert_eq "the ~/.claude/settings.json env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS key present" "$want" "$got"
 }
 
 # assert_only_linked <home> <index>: exactly one of the five is a link into the repo, the other four are
@@ -483,11 +673,17 @@ scenario_default_over_existing() {
     fi
     assert_eq "core.excludesFile added to the stranger's ~/.gitconfig" \
       "$h/.gitignore_global" "$(scratch_git "$h" config --global --get core.excludesFile)"
-    # ~/.tmux.conf gains exactly one line and keeps the one it had.
+    # ~/.tmux.conf gains exactly one line and keeps the one it had — including the last one, which the
+    # fixture deliberately leaves without a newline. `grep -cF` counts LINES, so the count below reads 1
+    # whether the line was appended or glued onto the user's last one; the anchored count is what tells
+    # the two apart, and it is the only assertion here that append_line's guard can fail.
     assert_regular "$h" .tmux.conf
-    assert_grep "the ~/.tmux.conf keeps its own line" "$h/.tmux.conf" "set -g mouse on"
     assert_grep "the ~/.tmux.conf keeps its own comment" "$h/.tmux.conf" "# STRANGER TMUX"
+    assert_eq "the user's unterminated last line survived intact" 1 \
+      "$(grep -cFx -- 'set -g prefix C-a' "$h/.tmux.conf" 2>/dev/null || true)"
     assert_eq "update-environment lines in ~/.tmux.conf" 1 "$(count_matches "$h/.tmux.conf" "$TMUX_LINE")"
+    assert_eq "the appended update-environment line is a line of its own" 1 \
+      "$(grep -cFx -- "$TMUX_FULL_LINE" "$h/.tmux.conf" 2>/dev/null || true)"
     assert_eq "the ~/.tmux.conf line count" "$((tmux_before + 1))" "$(line_count "$h/.tmux.conf")"
     # The two files install.sh never links by default and never rewrites either.
     assert_not_link "$h" .claude/keybindings.json
@@ -505,7 +701,7 @@ scenario_default_over_existing() {
 # 3. --opinionated-config: all five linked, the theme too, and the five originals kept.
 scenario_opinionated() {
   begin_scenario "3. --opinionated-config links all five and stashes the originals"
-  local h log i bk n
+  local h log i bk d n
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -521,20 +717,22 @@ scenario_opinionated() {
     assert_claude_ui "$h" yes                # --opinionated-config is all six, the UI keys included
     # Exactly one backup dir, holding all five originals with their own content.
     n=0
-    for bk in "$h"/.workstation-backup/*/; do
-      [[ -d "$bk" ]] || continue
+    bk=""
+    for d in "$h"/.workstation-backup/*/; do
+      [[ -d "$d" ]] || continue
+      bk="$d"
       n=$((n + 1))
     done
     assert_eq "backup directories under ~/.workstation-backup" 1 "$n"
-    for bk in "$h"/.workstation-backup/*/; do
-      [[ -d "$bk" ]] || continue
-      assert_grep "stashed .zshrc" "$bk/.zshrc" "# STRANGER ZSHRC"
-      assert_grep "stashed .gitconfig" "$bk/.gitconfig" "stranger@example.invalid"
-      assert_grep "stashed .tmux.conf" "$bk/.tmux.conf" "# STRANGER TMUX"
-      assert_grep "stashed .claude/keybindings.json" "$bk/.claude/keybindings.json" '"stranger"'
-      assert_grep "stashed .claude/statusline-command.sh" "$bk/.claude/statusline-command.sh" \
-        "STRANGER STATUSLINE"
-    done
+    # No loop and no `continue` guard around the five below. They used to sit inside the loop above, so a
+    # run that stashed nothing at all skipped five assertions instead of failing them and the suite stayed
+    # green on a smaller total. With $bk empty each of these now fails loudly, which is the point.
+    assert_grep "stashed .zshrc" "$bk/.zshrc" "# STRANGER ZSHRC"
+    assert_grep "stashed .gitconfig" "$bk/.gitconfig" "stranger@example.invalid"
+    assert_grep "stashed .tmux.conf" "$bk/.tmux.conf" "# STRANGER TMUX"
+    assert_grep "stashed .claude/keybindings.json" "$bk/.claude/keybindings.json" '"stranger"'
+    assert_grep "stashed .claude/statusline-command.sh" "$bk/.claude/statusline-command.sh" \
+      "STRANGER STATUSLINE"
     # Nothing was left to skip, so report_skipped must stay quiet.
     assert_eq "'left alone' lines in the output" 0 "$(count_matches "$log" "left alone")"
   fi
@@ -654,7 +852,7 @@ scenario_unknown_flag() {
   err="$h.err"
   env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT -u ZSH_CUSTOM \
       HOME="$h" XDG_CONFIG_HOME="$h/.config" WT_HOST="$VM_HOST" \
-      bash "$REPO/install.sh" --no-such-flag >"$out" 2>"$err" </dev/null || rc=$?
+      "$INSTALL_BASH" "$REPO/install.sh" --no-such-flag >"$out" 2>"$err" </dev/null || rc=$?
   assert_eq "exit status for an unknown flag" 2 "$rc"
   assert_grep "usage printed on stderr" "$err" "usage: install.sh"
   assert_eq "bytes written to stdout" 0 "$(wc -c <"$out" | tr -d ' ')"
@@ -664,10 +862,11 @@ scenario_unknown_flag() {
   end_scenario
 }
 
-# 8. The sixth flag. It is unlike the other five twice over: it installs no file, and it cannot be sticky,
-#    because the keys it keeps live inside a COPIED ~/.claude/settings.json and there is no symlink
-#    destination for opted_in to read an earlier run's answer back out of. Both halves are asserted here —
-#    the second one is the surprising half, and the one a future refactor is most likely to get wrong.
+# 8. The sixth flag. It is unlike the other five in one way — it installs no file, it gates keys inside a
+#    COPIED ~/.claude/settings.json — and like them in the way that matters: it is sticky, and its record is
+#    the keys themselves. The second half is the one a refactor is most likely to get wrong, and the one
+#    that decides whether `wt update --refresh-config`, which cannot forward the flag, keeps a machine's UI
+#    settings or silently deletes them.
 scenario_claude_ui() {
   begin_scenario "8a. --with-claude-ui keeps the UI keys and links no file"
   local h log i f
@@ -690,7 +889,8 @@ scenario_claude_ui() {
   fi
   end_scenario
 
-  begin_scenario "8b. --with-claude-ui is not sticky: the kept copy needs --refresh-config"
+  begin_scenario "8b. --with-claude-ui is sticky: the keys it wrote are the record of it"
+  local h2
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -706,11 +906,469 @@ scenario_claude_ui() {
     if assert_install_ok "$h" "$log.3" "$UI_FLAG" --refresh-config; then
       assert_claude_ui "$h" yes
     fi
-    # And a later refresh without the flag takes them away again — which is what "not sticky" means, and
-    # the inverse of scenario 4a, where an existing link IS the record of an earlier flag.
+    # …and a LATER refresh with no flag keeps them. This is the stickiness rule of scenario 4a in the one
+    # place it cannot be a symlink: the .tui key of the file about to be rewritten is the record of the
+    # earlier flag. Without it, the one documented way to pick up a change to a .base file — which is what
+    # `wt update --refresh-config` runs, and it cannot forward --with-claude-ui — would delete the UI keys
+    # of every machine that has them, while report_skipped called it "left alone".
     if assert_install_ok "$h" "$log.4" --refresh-config; then
-      assert_claude_ui "$h" no
+      assert_claude_ui "$h" yes
+      assert_eq "$UI_FLAG listed as skipped once it is installed" 0 "$(count_matches "$log.4" "$UI_FLAG")"
     fi
+  fi
+  # The inverse, which is what makes it a record rather than a default: a copy written WITHOUT the keys
+  # stays without them through a refresh, exactly as a regular file at ~/.zshrc is not an opt-in.
+  h2="$(new_home)"
+  guard_scratch_home "$h2"
+  if assert_install_ok "$h2" "$h2.log"; then
+    if assert_install_ok "$h2" "$h2.log.2" --refresh-config; then
+      assert_claude_ui "$h2" no
+      assert_grep "$UI_FLAG still listed as skipped" "$h2.log.2" "$UI_FLAG"
+    fi
+  fi
+  end_scenario
+}
+
+# 9. The refusals. require_plain_file is what stands between `git config --global` / append_line's >> and a
+#    dangling symlink pointing anywhere on disk, and every one of its callers was untested: neutering it left
+#    the suite green. Each escape target below is inside TEST_ROOT on purpose — guard_scratch_home constrains
+#    $HOME, not where a symlink under it aims — and each case also asserts that the refusal came BEFORE
+#    anything moved, which is the whole reason the check_… twins exist.
+scenario_refusals() {
+  local h log
+
+  begin_scenario "9a. a dangling ~/.gitconfig is refused, and nothing is written through it"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  ln -s "$TEST_ROOT/escaped-gitconfig" "$h/.gitconfig"
+  assert_install_fails "$h" "$log" 1 "broken symlink at ~/.gitconfig"
+  assert_absent "$TEST_ROOT" escaped-gitconfig      # git config --global would have created it out here
+  assert_absent "$h" .zshenv                        # …and it refused before the first link was made
+  assert_absent "$h" .local/bin
+  end_scenario
+
+  begin_scenario "9b. a dangling ~/.tmux.conf is refused, and the append does not escape"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  ln -s "$TEST_ROOT/escaped-tmux-conf" "$h/.tmux.conf"
+  assert_install_fails "$h" "$log" 1 "broken symlink at ~/.tmux.conf"
+  assert_absent "$TEST_ROOT" escaped-tmux-conf      # append_line's >> would have created it out here
+  assert_absent "$h" .zshenv
+  end_scenario
+
+  begin_scenario "9c. a directory at ~/.tmux.conf is refused"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  mkdir -p "$h/.tmux.conf"
+  assert_install_fails "$h" "$log" 1 "not a regular file: ~/.tmux.conf"
+  assert_absent "$h" .zshenv
+  end_scenario
+
+  begin_scenario "9d. a directory at git's OTHER global file is refused, in this script's voice"
+  # `git config --global` writes ~/.config/git/config whenever that exists and ~/.gitconfig does not, so
+  # that is the file check_gitconfig has to guard. Guarding ~/.gitconfig alone let git take the install
+  # down mid-way instead — "fatal: unknown error occurred while reading the configuration files", exit 128,
+  # after six steps had already moved things.
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  mkdir -p "$h/.config/git/config"
+  assert_install_fails "$h" "$log" 1 "not a regular file: ~/.config/git/config"
+  assert_absent "$h" .zshenv
+  end_scenario
+}
+
+# 10. Who owns a symlink. our_link's own comment calls the live-link-landing-elsewhere rule "the one link
+#     this script must never touch", and opted_in reads the answer as CONSENT — so a wrong yes hands a
+#     stranger the author's shell prompt with nothing in the output saying so. None of it was tested.
+scenario_link_ownership() {
+  local h log
+
+  begin_scenario "10a. a live link into a second checkout is never touched"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_oh_my_zsh "$h"
+  ln -s "$OTHER_CHECKOUT/home/.zshrc" "$h/.zshrc"
+  if assert_install_ok "$h" "$log"; then
+    assert_eq "the ~/.zshrc link still points at the other checkout" \
+      "$OTHER_CHECKOUT/home/.zshrc" "$(readlink "$h/.zshrc")"
+    assert_grep "the other checkout's own file is untouched" \
+      "$OTHER_CHECKOUT/home/.zshrc" "# THE OTHER CHECKOUT ZSHRC"
+    assert_absent "$h" "$THEME_DST"                 # the theme rides with an opt-in that never happened
+    assert_grep "--with-zshrc still listed as skipped" "$log" "--with-zshrc"
+  fi
+  end_scenario
+
+  begin_scenario "10b. a DANGLING foreign link is not consent either"
+  # home/.zshrc is not a distinctive tail: it is what chezmoi, yadm, dotbot, homeshick and a `home` stow
+  # package all produce. A machine whose dotfile links are momentarily dangling — bootstrap ran before the
+  # dotfiles repo was cloned, the repo is on an unmounted volume — used to read as "already opted in" to a
+  # run given no flags, and report_skipped then omitted the flag, so the one line that would have said so
+  # was silent.
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_oh_my_zsh "$h"
+  ln -s "$h/not-cloned-yet/home/.zshrc" "$h/.zshrc"
+  if assert_install_ok "$h" "$log"; then
+    assert_not_link_into_repo "$h" .zshrc
+    assert_absent "$h" "$THEME_DST"
+    assert_grep "--with-zshrc listed as skipped" "$log" "--with-zshrc"
+    assert_eq "install.sh did not report linking ~/.zshrc" 0 "$(count_matches "$log" "linked ~/.zshrc")"
+  fi
+  end_scenario
+
+  begin_scenario "10c. a MOVED clone still heals itself"
+  # The case the dangling-tail rule exists for, and the one that says the stricter opted_in did not simply
+  # turn it off: ~/.zshenv is linked by every run and no dotfile manager owns one, so its own dangling
+  # target names the clone this machine was installed from, and a sibling under that same old root is this
+  # user's earlier answer.
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_oh_my_zsh "$h"
+  ln -s "$h/old-clone/home/.zshenv" "$h/.zshenv"
+  ln -s "$h/old-clone/home/.zshrc" "$h/.zshrc"
+  if assert_install_ok "$h" "$log"; then
+    assert_link "$h" .zshenv home/.zshenv
+    assert_link "$h" .zshrc home/.zshrc
+    assert_link "$h" "$THEME_DST" "$THEME_SRC"
+    assert_eq "--with-zshrc not listed as skipped" 0 "$(count_matches "$log" "--with-zshrc")"
+  fi
+  end_scenario
+
+  begin_scenario "10d. …but only under the root ~/.zshenv itself names"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_oh_my_zsh "$h"
+  ln -s "$h/old-clone/home/.zshenv" "$h/.zshenv"
+  ln -s "$h/some-other-manager/home/.zshrc" "$h/.zshrc"
+  if assert_install_ok "$h" "$log"; then
+    assert_not_link_into_repo "$h" .zshrc
+    assert_absent "$h" "$THEME_DST"
+    assert_grep "--with-zshrc listed as skipped" "$log" "--with-zshrc"
+  fi
+  end_scenario
+}
+
+# 11. configure_git's two don't-clobber branches. Both silently destroy a stranger's configuration when they
+#     regress, and both stayed green when deleted.
+scenario_git_keeps_yours() {
+  begin_scenario "11. configure_git keeps an excludesFile and an include.path you already had"
+  local h log want got
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  mkdir -p "$h/.mine"
+  printf '%s\n' '*.swp' >"$h/.mine/ignore"
+  # Written with a ~ on purpose: configure_git reads both values with --type=path precisely so that a
+  # value spelled this way compares equal to the expanded one, and does not warn about itself forever.
+  printf '[core]\n\texcludesFile = ~/.mine/ignore\n[include]\n\tpath = ~/.my-extra-config\n' >"$h/.gitconfig"
+  if assert_install_ok "$h" "$log"; then
+    assert_eq "the user's core.excludesFile survives" "$h/.mine/ignore" \
+      "$(scratch_git "$h" config --global --get --type=path core.excludesFile)"
+    assert_grep "install.sh says it kept it" "$log" "kept core.excludesFile"
+    assert_grep "…and says what that costs" "$log" "add the lines of ~/.gitignore_global"
+    assert_grep "the user's own spelling is still in the file" "$h/.gitconfig" "excludesFile = ~/.mine/ignore"
+    # include.path is multi-valued: a plain `git config include.path …` would overwrite the user's one
+    # value, and refuse outright once there are two. Ours is --added after theirs.
+    want="$(printf '%s\n%s' "$h/.my-extra-config" "$h/.gitconfig.local")"
+    got="$(scratch_git "$h" config --global --get-all --type=path include.path)"
+    assert_eq "include.path keeps the user's value and gains ours, in that order" "$want" "$got"
+  fi
+  end_scenario
+}
+
+# 12. "A dotfile manager owns it, skip and warn." Three branches, one per file, none of them tested: a
+#     regression writes through somebody's dotfiles repo and reports success. Plus the one place that
+#     deliberately does NOT skip, so the asymmetry is asserted rather than assumed.
+scenario_manager_owned() {
+  local h log sum
+
+  begin_scenario "12a. a ~/.tmux.conf owned by a dotfile manager is left alone and named"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_manager "$h"
+  ln -s "$h/dotfiles/tmux.conf" "$h/.tmux.conf"
+  sum="$(cksum <"$h/dotfiles/tmux.conf")"
+  if assert_install_ok "$h" "$log"; then
+    assert_eq "the ~/.tmux.conf link is still the manager's" "$h/dotfiles/tmux.conf" "$(readlink "$h/.tmux.conf")"
+    assert_eq "the file it points at is byte-identical" "$sum" "$(cksum <"$h/dotfiles/tmux.conf")"
+    assert_grep "install.sh named the skip" "$log" "skipped ~/.tmux.conf:"
+    assert_grep "…and printed the line to add by hand" "$log" "$TMUX_FULL_LINE"
+  fi
+  end_scenario
+
+  begin_scenario "12b. a ~/.gitconfig owned by a dotfile manager is left alone and named"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_manager "$h"
+  ln -s "$h/dotfiles/gitconfig" "$h/.gitconfig"
+  sum="$(cksum <"$h/dotfiles/gitconfig")"
+  if assert_install_ok "$h" "$log"; then
+    assert_eq "the ~/.gitconfig link is still the manager's" "$h/dotfiles/gitconfig" "$(readlink "$h/.gitconfig")"
+    assert_eq "the file it points at is byte-identical" "$sum" "$(cksum <"$h/dotfiles/gitconfig")"
+    assert_grep "install.sh named the skip" "$log" "skipped ~/.gitconfig:"
+    assert_eq "core.excludesFile was not written through the link" "" \
+      "$(scratch_git "$h" config --global --get core.excludesFile)"
+  fi
+  end_scenario
+
+  begin_scenario "12c. …and the same when git's global file is ~/.config/git/config"
+  # No ~/.gitconfig at all, so `git config --global` writes the XDG file — through the manager's symlink,
+  # which is the one thing configure_git promises not to do. It used to do exactly that, and then report
+  # two settings added to a ~/.gitconfig that does not exist.
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_manager "$h"
+  mkdir -p "$h/.config/git"
+  ln -s "$h/dotfiles/gitconfig" "$h/.config/git/config"
+  sum="$(cksum <"$h/dotfiles/gitconfig")"
+  if assert_install_ok "$h" "$log"; then
+    assert_eq "the manager's file is byte-identical" "$sum" "$(cksum <"$h/dotfiles/gitconfig")"
+    assert_grep "install.sh named the skip, and named the right file" "$log" "skipped ~/.config/git/config:"
+    assert_absent "$h" .gitconfig
+  fi
+  end_scenario
+
+
+  begin_scenario "12d. …but a managed ~/.claude/settings.json IS displaced, and the run says so"
+  # copy_config is the one step that does not leave a dotfile manager's link alone, and deliberately: Claude
+  # and Codex write their own state into these three files, so they have to be real files at the path the app
+  # opens. Only the LINK moves — the file it pointed at is untouched — and the run has to name the
+  # displacement rather than fold it into "installed ~/…".
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_manager "$h"
+  printf '%s\n' '{ "manager": true }' >"$h/dotfiles/claude-settings.json"
+  sum="$(cksum <"$h/dotfiles/claude-settings.json")"
+  mkdir -p "$h/.claude"
+  ln -s "$h/dotfiles/claude-settings.json" "$h/.claude/settings.json"
+  if assert_install_ok "$h" "$log"; then
+    assert_regular "$h" .claude/settings.json
+    assert_eq "the manager's file is byte-identical" "$sum" "$(cksum <"$h/dotfiles/claude-settings.json")"
+    assert_grep "the displacement is named" "$log" "replaced the symlink at ~/.claude/settings.json"
+    assert_grep "…and the link itself was kept" \
+      "$log" "the link itself is in the backup dir, its target untouched"
+  fi
+  end_scenario
+}
+
+# 13. remove_retired_links, and install_bins' ~/bin retirement. Both stayed green when neutered, and the
+#     first exists because of a real incident: a renamed oh-my-zsh theme outlived its rename on every
+#     machine, and `wt update` reruns this script constantly.
+scenario_retired_links() {
+  local h log bk
+
+  begin_scenario "13a. links whose source the repo no longer has are retired, whatever named them"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  mkdir -p "$h/.claude/skills" "$h/.agents/skills" "$h/.local/bin"
+  ln -s "$REPO/home/.agents/skills/renamed-away" "$h/.claude/skills/renamed-away"   # made by THIS clone
+  # The same links, made before the clone moved — and these three are the ones whose repo-relative source
+  # is NOT their home-relative path, so inferring one from the other never matched and they were never
+  # retired: ~/.local/bin/<b> comes from bin/<b>, ~/.claude/skills/<n> from home/.agents/skills/<n>.
+  ln -s "$h/old-clone/home/.agents/skills/gone" "$h/.agents/skills/gone"
+  ln -s "$h/old-clone/home/.agents/skills/gone" "$h/.claude/skills/gone"
+  ln -s "$h/old-clone/bin/gone-script" "$h/.local/bin/gone-script"
+  ln -s "$h/their-repo/their-skill" "$h/.claude/skills/theirs"                      # somebody else's
+  if assert_install_ok "$h" "$log"; then
+    assert_absent "$h" .claude/skills/renamed-away
+    assert_absent "$h" .agents/skills/gone
+    assert_absent "$h" .claude/skills/gone
+    assert_absent "$h" .local/bin/gone-script
+    assert_grep "the Claude-side skill retirement is named" "$log" "retired ~/.claude/skills/gone"
+    assert_grep "the retired script is named" "$log" "retired ~/.local/bin/gone-script"
+    # Nothing is ever deleted, here as everywhere else.
+    bk="$(backup_dir "$h")"
+    assert_eq "the retired skill link was stashed, not deleted" "$h/old-clone/home/.agents/skills/gone" \
+      "$(readlink "$bk/.claude/skills/gone" 2>/dev/null || true)"
+    # …and a dangling link that is not ours is left strictly alone.
+    assert_eq "somebody else's dangling link is untouched" "$h/their-repo/their-skill" \
+      "$(readlink "$h/.claude/skills/theirs" 2>/dev/null || true)"
+  fi
+  end_scenario
+
+  begin_scenario "13b. a copy in ~/bin, which shadows ~/.local/bin on PATH, is retired"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  mkdir -p "$h/bin"
+  printf '%s\n' '#!/bin/sh' 'echo OLD WT' >"$h/bin/wt"
+  chmod +x "$h/bin/wt"
+  if assert_install_ok "$h" "$log"; then
+    assert_absent "$h" bin/wt
+    assert_link "$h" .local/bin/wt bin/wt
+    assert_grep "the shadowing copy is named" "$log" "retired ~/bin/wt"
+    bk="$(backup_dir "$h")"
+    assert_grep "…and kept, not deleted" "$bk/bin/wt" "echo OLD WT"
+  fi
+  end_scenario
+}
+
+# 14. The two prerequisites that stop the run before it starts. Both stayed green when neutered.
+scenario_prerequisites() {
+  local h log
+
+  begin_scenario "14a. no git identity anywhere: refused before anything moves"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  rm -f "$h/.gitconfig.local"          # new_home's only fixture is the identity require_git_identity reads
+  assert_install_fails "$h" "$log" 1 "set user.name/user.email in ~/.gitconfig.local"
+  assert_absent "$h" .zshenv
+  end_scenario
+
+  begin_scenario "14b. no jq on PATH: refused before anything moves"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  RUN_EXTRA_ENV=(PATH="$(nojq_path)")
+  assert_install_fails "$h" "$log" 1 "jq not found"
+  assert_absent "$h" .zshenv
+  assert_absent "$h" .claude/settings.json
+  end_scenario
+}
+
+# 15. $ZSH_CUSTOM. oh-my-zsh looks for the theme ~/.zshrc names under $ZSH_CUSTOM/themes and nowhere else,
+#     and install_zsh_plugins has always honoured the variable, so a theme linked into the hardcoded
+#     ~/.oh-my-zsh/custom is a theme oh-my-zsh never finds: every shell start says so while every line of
+#     the install says success. The author hit this for real.
+scenario_zsh_custom() {
+  local h log zc pl
+
+  begin_scenario "15a. the theme follows ZSH_CUSTOM, because that is where oh-my-zsh looks"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_oh_my_zsh "$h"
+  zc="$h/.config/omz-custom"
+  mkdir -p "$zc/themes"
+  for pl in zsh-autosuggestions zsh-syntax-highlighting; do
+    mkdir -p "$zc/plugins/$pl"         # pre-created here too, or install_zsh_plugins would hit the network
+  done
+  RUN_EXTRA_ENV=(ZSH_CUSTOM="$zc")
+  if assert_install_ok "$h" "$log" --with-zshrc; then
+    assert_link "$h" .zshrc home/.zshrc
+    assert_link "$h" .config/omz-custom/themes/workstation.zsh-theme "$THEME_SRC"
+    assert_absent "$h" "$THEME_DST"    # the hardcoded path, where oh-my-zsh would never have looked
+  fi
+  end_scenario
+
+  begin_scenario "15b. a ZSH_CUSTOM outside \$HOME is refused rather than half-installed"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_oh_my_zsh "$h"
+  RUN_EXTRA_ENV=(ZSH_CUSTOM="$TEST_ROOT/omz-outside")
+  assert_install_fails "$h" "$log" 1 "is outside \$HOME" --with-zshrc
+  assert_absent "$h" .zshenv
+  end_scenario
+}
+
+# shellcheck disable=SC2016   # the $HOME in the bashrc line and in the WT_REPOS_DIR line are literal: the
+#                              lines install.sh writes carry the variable, they do not carry its value.
+# 16. The Linux-only legs, driven from a Mac with FORCE_OS. hook_bashrc is the most intricate function in
+#     install.sh and is unreachable on Darwin, as are ask_vm_host, record_repos_dir and the two platform
+#     filters in copy_config; a green run on the author's machine exercised none of them. FORCE_OS exists
+#     in install.sh for exactly this and nothing else.
+scenario_linux_legs() {
+  local h log sum
+  local line='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
+
+  begin_scenario "16a. FORCE_OS=Linux: the VM-only steps run"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  RUN_EXTRA_ENV=(FORCE_OS=Linux)
+  if assert_install_ok "$h" "$log" "$UI_FLAG"; then
+    # hook_bashrc writes the file when there is none, and the line must be the FIRST one: Ubuntu's own
+    # ~/.bashrc returns on its fourth line for a non-interactive shell, and `ssh <vm> '<cmd>'` — which is
+    # how `wt -H <vm> …` works — is exactly that.
+    assert_regular "$h" .bashrc
+    assert_eq "the ~/.zshenv line is the first line of ~/.bashrc" 1 \
+      "$(head -n 1 "$h/.bashrc" | grep -cF -- "$line" || true)"
+    # ask_vm_host and record_repos_dir, the two lines a VM's ~/.zshenv.local gains.
+    assert_grep "WT_HOST recorded" "$h/.zshenv.local" "export WT_HOST=$VM_HOST"
+    assert_grep "WT_REPOS_DIR recorded" "$h/.zshenv.local" 'export WT_REPOS_DIR="$HOME"'
+    # copy_config's two platform filters, both of them Linux-only.
+    assert_settings_key "$h" tui yes            # --with-claude-ui was given…
+    assert_settings_key "$h" voice no           # …and the voice keys go anyway: a VM has no microphone
+    assert_eq "the Keychain line is filtered out of ~/.codex/config.toml" 0 \
+      "$(count_matches "$h/.codex/config.toml" "cli_auth_credentials_store")"
+    assert_absent "$h" .config/cmux/cmux.json   # cmux runs on the Mac only
+  fi
+  end_scenario
+
+  begin_scenario "16b. FORCE_OS=Linux: a line an older run appended is moved to the top"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  printf '%s\n' '# the image bashrc' 'case $- in *i*) ;; *) return;; esac' "$line" 'alias ll="ls -l"' \
+    >"$h/.bashrc"
+  RUN_EXTRA_ENV=(FORCE_OS=Linux)
+  if assert_install_ok "$h" "$log"; then
+    assert_eq "our line is now the first" 1 "$(head -n 1 "$h/.bashrc" | grep -cF -- "$line" || true)"
+    assert_eq "and appears exactly once" 1 "$(count_matches "$h/.bashrc" "$line")"
+    assert_grep "the user's own lines survive" "$h/.bashrc" 'alias ll="ls -l"'
+    assert_grep "the early return survives" "$h/.bashrc" 'case $- in'
+    assert_grep "install.sh says what it did" "$log" "moved the ~/.zshenv line to the top"
+  fi
+  end_scenario
+
+  begin_scenario "16c. FORCE_OS=Linux: a 664 ~/.bashrc that is already hooked is not refused"
+  # An image that ships a group-writable ~/.bashrc (umask 002, user-private groups) is ordinary on a Linux
+  # VM. hook_bashrc returns before it ever reads the mode when our line is already first, so refusing there
+  # failed the install — and therefore every `wt update` — forever, over a file nothing would have touched,
+  # with wording describing a copy that would not happen.
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  printf '%s\n' "$line" '# the image bashrc' >"$h/.bashrc"
+  chmod 664 "$h/.bashrc"
+  sum="$(cksum <"$h/.bashrc")"
+  RUN_EXTRA_ENV=(FORCE_OS=Linux)
+  if assert_install_ok "$h" "$log" ; then
+    assert_eq "the ~/.bashrc contents are byte-identical" "$sum" "$(cksum <"$h/.bashrc")"
+    assert_mode "$h" .bashrc 664       # not rewritten, so not re-moded either
+  fi
+  end_scenario
+
+  begin_scenario "16d. FORCE_OS=Linux: a 664 ~/.bashrc it WOULD rewrite is still refused"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  printf '%s\n' '# the image bashrc' >"$h/.bashrc"
+  chmod 664 "$h/.bashrc"
+  sum="$(cksum <"$h/.bashrc")"
+  RUN_EXTRA_ENV=(FORCE_OS=Linux)
+  assert_install_fails "$h" "$log" 1 "refusing to copy mode 664"
+  assert_eq "the ~/.bashrc contents are byte-identical" "$sum" "$(cksum <"$h/.bashrc")"
+  assert_absent "$h" .zshenv
+  end_scenario
+
+  begin_scenario "16e. FORCE_OS=Linux: a ~/.bashrc a dotfile manager owns is left alone and named"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_manager "$h"
+  ln -s "$h/dotfiles/bashrc" "$h/.bashrc"
+  sum="$(cksum <"$h/dotfiles/bashrc")"
+  RUN_EXTRA_ENV=(FORCE_OS=Linux)
+  if assert_install_ok "$h" "$log"; then
+    assert_eq "the ~/.bashrc link is still the manager's" "$h/dotfiles/bashrc" "$(readlink "$h/.bashrc")"
+    assert_eq "the file it points at is byte-identical" "$sum" "$(cksum <"$h/dotfiles/bashrc")"
+    assert_grep "install.sh named the skip" "$log" "skipped ~/.bashrc:"
   fi
   end_scenario
 }
@@ -718,8 +1376,39 @@ scenario_claude_ui() {
 
 # ---------------------------------------------------------------------------- main
 
+# expected_assertions: what a complete run makes. Asserting the TOTAL is what catches the failure mode a
+# pass/fail count cannot see — a scenario that stops asserting rather than starts failing. One mutation
+# quietly took the suite from 323 to 318 that way, with every scenario still green.
+# It is a formula, not a number, because assert_machinery derives its assertions from the repo: add a bin/
+# script or a skill and the count legitimately moves. Everything else is fixed, and a fixed number that
+# needs editing whenever an assertion is added is the point.
+expected_assertions() {
+  local nbin=0 nskill=0 per d
+  for d in "$REPO"/bin/*; do
+    [[ -e "$d" ]] && nbin=$((nbin + 1))
+  done
+  for d in "$REPO"/home/.agents/skills/*/; do
+    [[ -d "$d" ]] && nskill=$((nskill + 1))
+  done
+  # one assert_machinery call: 5 links + one per bin script + two per skill + 3 regular + 3 modes + the
+  # hooks.json checksum, and on a Mac the cmux.json link and the config.toml checksum as well.
+  per=$((5 + nbin + 2 * nskill + 3 + 3 + 1))
+  if [[ $OS == Darwin ]]; then
+    per=$((per + 2))
+  fi
+  # …called by scenarios 1, 2, 3 and 8a.
+  echo "$((FIXED_ASSERTIONS + 4 * per))"
+}
+
+# Everything that is not assert_machinery. Bump it in the same commit as the assertion you added.
+FIXED_ASSERTIONS=376
+
+# shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
-  echo "install.sh smoke test: repo $REPO, scratch root $TEST_ROOT, bash ${BASH_VERSION}"
+  local want
+  echo "install.sh smoke test: repo $REPO, scratch root $TEST_ROOT"
+  echo "  this suite under bash ${BASH_VERSION}; install.sh under $INSTALL_BASH" \
+       "($("$INSTALL_BASH" -c 'echo "$BASH_VERSION"'))"
   scenario_default_empty
   scenario_default_over_existing
   scenario_opinionated
@@ -728,10 +1417,25 @@ main() {
   scenario_individual_flags
   scenario_unknown_flag
   scenario_claude_ui
+  scenario_refusals
+  scenario_link_ownership
+  scenario_git_keeps_yours
+  scenario_manager_owned
+  scenario_retired_links
+  scenario_prerequisites
+  scenario_zsh_custom
+  scenario_linux_legs
   echo "$((PASS + FAIL)) assertions: $PASS passed, $FAIL failed"
+  want="$(expected_assertions)"
+  if [[ $((PASS + FAIL)) -ne $want ]]; then
+    echo "FAIL: expected $want assertions, ran $((PASS + FAIL)) — a scenario skipped its assertions" \
+         "instead of failing them, or one was added without updating FIXED_ASSERTIONS" >&2
+    exit 1
+  fi
   if [[ $FAIL -gt 0 ]]; then
     exit 1
   fi
 }
 
+seed_other_checkout
 main "$@"

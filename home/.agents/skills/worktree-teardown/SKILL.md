@@ -8,8 +8,10 @@ description: Safely remove task worktrees and their branches, and clean up finis
 Remove only when the user asks, and check for a live agent first.
 
 ```bash
-wt show <name>                       # row: (always), dirty files, unpushed commits
-wt -H <vm> show -r <repo> <name>     # VM: also "session: wt-<repo>-<name> (agent running|shell only|none)"
+wt show <name>                       # row:, dirty files, commits vs base (pushed state is checked by
+                                     # wt rm, not shown here)
+wt -H <vm> show -r <repo> <name>     # VM: also "session: wt-<repo>-<name> (agent running|shell only|none)",
+                                     # with ", detached" appended when no tmux client is attached
 ```
 
 An agent still running means: do not remove. Ask the user to finish or stop it first.

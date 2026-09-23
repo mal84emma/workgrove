@@ -13,7 +13,8 @@ Tool: `wt new` (see `wt help`). One task = one worktree at `<repo>/.worktrees/<n
 wt new <name> -p "<complete task prompt>"            # worktree + cmux row running Claude on the prompt
 wt new <name> -p "<prompt>" -a codex                  # ...running Codex instead
 wt new <name> --no-workspace                          # worktree only; no agent, no cmux row
-wt new <name> -p "<prompt>" --head                    # branch from the current branch instead of origin/main
+wt new <name> -p "<prompt>" --head                    # branch from the current branch instead of the default one
+wt new <name> -p "<prompt>" -b <ref>                  # branch from <ref> instead of the default one
 wt new <name> -r <repo-name-or-path> -p "<prompt>"    # target another repo in $WT_REPOS_DIR
 ```
 

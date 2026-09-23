@@ -4,6 +4,28 @@ set -u
 cat >/dev/null          # drain the envelope: everything acted on comes from the CMUX_NOTIFICATION_* env
 t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; ws=${CMUX_NOTIFICATION_WORKSPACE_ID:-}
 case $t in wt-open|wt-attach) ;; *) exit 0 ;; esac
+: "${HOME:?cmux-hook: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
+LOG="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-hook.log"
+log() { # stdout is the patch and every call site discards stderr, so the reason a jump did not happen
+        # has to land where the user can find it: tail "$LOG"
+  (umask 077; mkdir -p "${LOG%/*}" &&
+    printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOG") 2>/dev/null
+  return 0; }
+PERL=$(command -v perl || true)
+DEADLINE=$(( $(date +%s) + 15 ))   # cmux.json allows this hook 20 s; leave room to print the patch
+capped() { # capped <cmd…>: one cmux call, inside what is left of that budget. Row operations measure
+           # 1.2-2.9 s each, so a hung app would otherwise eat the lot. macOS has no timeout(1), so perl
+           # runs the call in a process group of its own and, on the alarm, kills the group: killing only
+           # the leader would leave a child behind holding open the pipe this call is being read through.
+  local left=$(( DEADLINE - $(date +%s) ))
+  (( left > 0 )) || return 142
+  [[ -n $PERL ]] || { "$@"; return; }      # no perl: uncapped beats not running the call at all
+  # shellcheck disable=SC2016   # this is a perl program, not a shell string: the sigils are perl's
+  "$PERL" -e 'my $t = shift; my $p = fork; defined $p or exit 127;
+              unless ($p) { setpgrp(0, 0); exec @ARGV; exit 127 }   # own group, so nothing it spawns
+              $SIG{ALRM} = sub { kill 9, -$p; waitpid $p, 0; exit 142 };   # survives to hold the pipe open
+              alarm $t; waitpid $p, 0; exit($? >> 8)' "$left" "$@"
+}
 known_host() { awk -v w="$1" '$1=="Host"{for(i=2;i<=NF;i++){if($i~/^#/)break; if($i==w && $i!~/[*?]/)f=1}} END{exit(f?0:1)}' "$HOME/.ssh/config" 2>/dev/null; }
 # A hook response is a patch: cmux merges the keys it is given and leaves the rest alone (the other hook in
 # cmux.json answers `{"effects":{"desktop":false}}` or `{}`). So this prints a fixed literal rather than
@@ -15,12 +37,12 @@ valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 safe_path() { [[ $1 == /* && $1 != *$'\n'* && $1 != *//* && $1 != */ && $1 != *'/../'* && $1 != */.. && $1 != *[\'\"\`\$\\\;]* ]]; }
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
 row_by_title() { # the local row for a VM task; mirrors cmux_row_field <title> <field> <host> in wt
-  "$CMUX" workspace list --json 2>/dev/null \
+  capped "$CMUX" workspace list --json 2>/dev/null \
     | jq -er --arg t "$1" --arg h "$2" 'first((.workspaces // .)[] | select(.title == $t and .remote.enabled and (((.remote.destination // "") == $h) or ((.description // "") == "@" + $h))) | .id) // empty' 2>/dev/null; }
 from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifying row is an SSH row to that host.
   # cmux 0.64 reports CMUX_NOTIFICATION_ORIGIN=local for a `cmux ssh` row's own notifications (only the old
   # mosh-tmux relay said ssh-relay:<uuid>), so the row's remote destination is the check that it came from a VM.
-  [[ -n $1 ]] && "$CMUX" workspace list --json 2>/dev/null \
+  [[ -n $1 ]] && capped "$CMUX" workspace list --json 2>/dev/null \
     | jq -e --arg w "$1" --arg h "$2" 'any((.workspaces // .)[]; .id == $w and .remote.enabled and (.remote.destination // "") == $h)' >/dev/null 2>&1; }
 tmux_cmd() { # tmux_cmd <session> [command] [shared]
   # The body below mirrors tmux_cmd in bin/wt byte for byte, although the hook only ever needs the task form:
@@ -36,26 +58,42 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared]
 }
 attach_row() { # attach_row <host> <session> <title> <command> — bring this task's row forward, or create it
                # first, then write its description (= remote_row in wt: one row per title+host, and an existing
-               # row is only selected, never typed into: its pane may hold an agent that would eat the line)
+               # row is only selected, never typed into: its pane may hold an agent that would eat the line).
+               # Returns non-zero, and says why in $LOG, when no row was reached — same contract as wt, which
+               # dies on both of these. The caller must not quiet a notification that produced nothing.
   local out ref line
   ref=$(row_by_title "$3" "$1")
   if [[ -n $ref ]]; then
-    "$CMUX" workspace select "$ref" >/dev/null 2>&1
+    capped "$CMUX" workspace select "$ref" >/dev/null 2>&1 || { log "cmux workspace select $ref failed"; return 1; }
   else
     line=$(tmux_cmd "$2" "$4")
-    out=$("$CMUX" ssh "$1" --name "$3" --no-focus --command "$line" 2>&1) || return 0
+    out=$(capped "$CMUX" ssh "$1" --name "$3" --no-focus --command "$line" 2>&1) ||
+      { log "cmux ssh $1 --name $3 failed: $out"; return 1; }
     ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1)
-    for _ in 1 2 3; do                     # no workspace:N in the output: the row list lags ~1s behind create
-      [[ -n $ref ]] && break
-      sleep 1; ref=$(row_by_title "$3" "$1")
-    done
+    if [[ -z $ref ]]; then                 # no workspace:N in the output: the row list lags ~1s behind create.
+      sleep 1; ref=$(row_by_title "$3" "$1")   # one look back is enough now that giving up is reported
+    fi
+    [[ -n $ref ]] || { log "cmux reported no row for $3 on $1: $out"; return 1; }
   fi
-  [[ -n $ref ]] && "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1"; }
+  capped "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1" ||
+    log "set-description @$1 failed for $ref"   # cosmetic only: the row is there, so the jump did happen
+  return 0; }
 case $t in
   wt-open)   # body: {"host":…,"path":…}
     h=$(field host || true); p=$(field path || true)
-    if valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && safe_path "$p"; then
-      "$CODE" --folder-uri "vscode-remote://ssh-remote+$h$p/" >/dev/null 2>&1 & quiet; fi ;;
+    # -x $CODE first: the fallback above is a hard-coded path, and on a machine with no VS Code, or with it
+    # installed elsewhere, quieting the row for a window that can never open is the worst of both.
+    if [[ -x $CODE ]] && valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && safe_path "$p"; then
+      "$CODE" --folder-uri "vscode-remote://ssh-remote+$h$p/" >/dev/null 2>&1 &
+      pid=$!; sleep 1                      # the code CLI hands the folder to the app and exits 0 well inside
+      if kill -0 "$pid" 2>/dev/null; then  # a second, so both "still running" and "exited 0" mean it launched;
+        quiet                              # only a non-zero exit is a failure, and that one keeps its banner
+      elif wait "$pid"; then
+        quiet
+      else
+        log "$CODE --folder-uri vscode-remote://ssh-remote+$h$p/ failed; no window opened"
+      fi
+    fi ;;
   wt-attach) # body: {"host":…,"repo":…,"task":…}
     h=$(field host || true); r=$(field repo || true); n=$(field task || true)
     if valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
@@ -64,6 +102,11 @@ case $t in
       # reparented away from the cmux tree the moment this hook exits, which the app then refuses
       # ("Access denied - only processes started inside cmux can connect"). Creating the row costs ~4 s
       # against the hook's 20 s budget in cmux.json.
-      attach_row "$h" "wt-$id-$n" "$id:$n" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; quiet; fi ;;
+      # Only on success: a notification whose jump failed keeps its banner, sound and unread mark, and
+      # printing nothing at all is what cmux reads as "leave the effects alone". $LOG says what went wrong.
+      if attach_row "$h" "wt-$id-$n" "$id:$n" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
+        quiet
+      fi
+    fi ;;
 esac
 exit 0

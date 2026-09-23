@@ -27,17 +27,17 @@ wt -H <vm> list            # the same, on a VM (implies --all)
 wt -H <vm> show -r <repo> <name>
 ```
 
-From inside a VM session, plain `wt open` asks the Mac to open the remote folder and prints the `wt -H <vm> open …` fallback line; report that line if the user sees nothing. On a VM, `wt show` also reports `session: wt-<repo>-<name> (agent running|shell only|none)`.
+From inside a VM session, plain `wt open` asks the Mac to open the remote folder and prints the `wt -H <vm> open …` fallback line; report that line if the user sees nothing. On a VM, `wt show` also reports `session: wt-<repo>-<name> (agent running|shell only|none)`, with `, detached` appended when no tmux client is attached — so `agent running, detached` means the agent is alive but no row is holding its session.
 
-For a single file's changes, stay in the terminal:
+For a single file's changes, stay in the terminal. Use `cd` then `git diff`, not `git -C`: the permission rules deny `Bash(git -c *)`, Bash patterns are matched case-insensitively, so `git -C` matches that deny too, and deny beats allow. A compound command is split on `&&`, and `cd` and `git diff` are both allowed.
 
 ```bash
-git -C "$(wt path <name>)" diff <base>...HEAD -- <file>
+cd "$(wt path <name>)" && git diff <base>...HEAD -- <file>
 ```
 
 ## Rules
 
 1. One command per request; do not chain `wt open` with `wt show`.
 2. Never open VS Code for a status question, and never answer "show me the code" with a status summary or pasted files.
-3. After `wt show`, summarise in your own words: what the task was, how far it is (commits, dirty files), whether it is merged or pushed. Do not paste the whole diff.
+3. After `wt show`, summarise in your own words: what the task was, how far it is (commits vs base, dirty files) and whether it is merged (`+0` vs base). Pushed state is not printed by `wt show`; `wt rm` is what checks it. Do not paste the whole diff.
 4. `wt list`, `wt show` and `wt open` change nothing; safe to run while the task's agent is still working.

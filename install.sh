@@ -32,23 +32,29 @@
 # ~/.tmux.conf with --with-tmux-conf, ~/.claude/keybindings.json with --with-keybindings and
 # ~/.claude/statusline-command.sh with --with-statusline.
 # A sixth flag, --with-claude-ui, gates KEYS rather than a file: ~/.claude/settings.json is installed on every
-# machine because its hooks and permissions are machinery, but .tui, .voice and .theme in it are the author's
-# taste in the same way the five files are, so copy_config deletes them from the copy unless the flag is given.
-# --opinionated-config turns on all six.
-# The five file flags never have to be repeated: a destination that is already a link into this repo counts as
-# asked for, so `wt update`, which reruns this script bare, keeps what an earlier run installed. --with-claude-ui
-# has no such record to read — the keys live inside a COPIED file, not behind a symlink whose target says who
-# made it — so it is not sticky and must be passed again every time the copy is written. That costs nothing in
-# practice: a normal rerun keeps the existing ~/.claude/settings.json untouched, so only --refresh-config
-# rewrites it, and only that run has to repeat the flag.
+# machine because its hooks and permissions are machinery, but .tui, .voice, .theme and the env var that turns
+# mouse clicks off in the Claude Code TUI are the author's taste in the same way the five files are, so
+# copy_config deletes them from the copy unless the flag is given. --opinionated-config turns on all six.
+# None of the six flags ever has to be repeated. For the five files the record is the destination itself: one
+# that is already a link into this repo counts as asked for, so `wt update`, which reruns this script bare,
+# keeps what an earlier run installed. --with-claude-ui has no symlink to read, but it has the same kind of
+# record — an existing ~/.claude/settings.json that still carries a top-level .tui key can only have been
+# written by a run that was given the flag — and claude_ui_opted_in reads it with the very jq probe copy_config
+# already makes for its kept-copy warning. Stickiness is not a nicety here: the one documented way to pick up a
+# change to a .base file is --refresh-config, `wt update --refresh-config` cannot forward --with-claude-ui, and
+# a non-sticky flag would therefore make the prescribed update command silently strip the UI keys off every
+# machine that has them.
 # Two of the five also carry settings the rest of this repo depends on, and declining the file does not
 # decline those: without the linked ~/.gitconfig, `git config` puts core.excludesFile (what git-ignores
 # .worktrees/) and the ~/.gitconfig.local include into the user's own file and changes nothing else; without
 # the linked ~/.tmux.conf, its update-environment line — how cmux's relay variables reach panes in an
 # already-running session — is appended to the user's.
 #
-# Exits 2 on a usage error, 1 if oh-my-zsh (only when ~/.zshrc is opted in), the VM name (Linux) or a git
-# identity is missing.
+# Exits 2 on a usage error. Exits 1 when a prerequisite is missing — jq, oh-my-zsh (only when ~/.zshrc is
+# opted in), the VM name (Linux), a git identity — or when something this script would write to is not
+# something it may write to: a broken symlink or a non-regular file at any of the paths require_plain_file
+# guards, or a group- or other-writable ~/.bashrc it would have to rewrite. Every one of those refusals is
+# made before the first file moves.
 set -euo pipefail
 umask 077
 
@@ -57,7 +63,21 @@ umask 077
 # component would otherwise record one spelling from one entry point and the other from the other, and
 # every link made under the first would read as "not ours" under the second.
 R="$(cd "$(dirname "$0")" && pwd -P)"   # this repo
-OS="$(uname -s)"
+OS="${FORCE_OS:-$(uname -s)}"        # FORCE_OS exists only so test/install-smoke.sh can drive the Linux-only
+                                     # steps — hook_bashrc above all, the most intricate function here — from a
+                                     # Mac. Nothing else ever sets it.
+# ZC: oh-my-zsh's own customisation directory, and the one place BOTH things ~/.zshrc needs from this script
+# have to land: oh-my-zsh looks for the theme ZSH_THEME names, and for the plugins, under $ZSH_CUSTOM alone
+# whenever that is set. install_zsh_plugins always honoured it; link_dotfiles used to hardcode
+# ~/.oh-my-zsh/custom, so on a machine with ZSH_CUSTOM set the plugins arrived, the theme did not, and every
+# shell start said "[oh-my-zsh] theme 'workstation' not found" while every line of the install said success.
+# link() spells its destination relative to $HOME, so a $ZSH_CUSTOM outside $HOME cannot be expressed at all;
+# require_oh_my_zsh refuses --with-zshrc there rather than installing half of it.
+ZC="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
+ZC_REL=""                            # $ZC as a home-relative path; empty when $ZC is not under $HOME
+if [[ $ZC == "$HOME"/* ]]; then
+  ZC_REL="${ZC#"$HOME"/}"
+fi
 REFRESH=0                            # set by --refresh-config
 WITH_ZSHRC=0                         # the five opinionated files, each set by its own --with-… flag
 WITH_GITCONFIG=0
@@ -67,6 +87,10 @@ WITH_STATUSLINE=0
 WITH_CLAUDE_UI=0                     # the sixth: UI keys inside the copied ~/.claude/settings.json, not a file
 BK=""                                # this run's backup dir; filled in by main
 TMPFILES=()                          # half-built files; removed by report, which is the EXIT trap
+ZSHENV_ROOT=""                       # the clone root ~/.zshenv pointed at before this run; read by
+                                     # read_zshenv_root, used by opted_in
+GITRC=""                             # the file `git config --global` actually writes; resolve_git_global
+GITRC_LABEL=""                       # …the same path, spelled for a message
 
 # parse_args <script args…>: flags in any order and any combination — each --with-… adds one opinionated
 # file (or, for --with-claude-ui, one group of keys), --opinionated-config is all six at once,
@@ -105,6 +129,12 @@ parse_args() {
 # The dangling requirement in 3 is what keeps the tail test honest. A LIVE link into a SECOND checkout the
 # user deliberately keeps — the one link this script must never touch — would match on its tail alone, so a
 # link whose target still exists is ours only when it resolves into THIS repo, which that one never does.
+# Case 3 is a statement about LAYOUT, not about consent, and only remove_retired_links may read it as one: the
+# worst it can cost there is a stash. home/.zshrc, home/.gitconfig and home/.tmux.conf are not distinctive
+# tails — they are what chezmoi, yadm, dotbot, homeshick and a `home` stow package all produce — so a machine
+# whose dotfile links merely happen to be dangling (bootstrap ran before the dotfiles repo was cloned, the repo
+# is on an unmounted volume) must not read as "already opted in" to a run given no flags. opted_in therefore
+# does not reuse case 3 as it stands; see the predicate there.
 our_link() {
   local p="$1" t dir
   if [[ ! -L $p ]]; then
@@ -124,19 +154,73 @@ our_link() {
   [[ $t == */"$2" ]]
 }
 
+# read_zshenv_root: the one fact that makes a DANGLING link readable as consent, read once — and it has to be
+# once, at the top of main(), before link_dotfiles re-points ~/.zshenv at $R and every still-dangling sibling
+# stops matching. ~/.zshenv is linked unconditionally by every run of this script and no dotfile manager
+# installs one, so a dangling ~/.zshenv whose target ends in home/.zshenv names, exactly, the clone THIS
+# machine was installed from before it moved. A live ~/.zshenv says nothing extra: our_link's cases 1 and 2
+# already settle every live sibling.
+read_zshenv_root() {
+  local p="$HOME/.zshenv" t
+  ZSHENV_ROOT=""
+  if [[ ! -L $p || -e $p ]]; then
+    return 0
+  fi
+  t="$(readlink "$p")"
+  if [[ $t == */home/.zshenv ]]; then
+    ZSHENV_ROOT="${t%/home/.zshenv}"
+  fi
+}
+
+# consenting_link <absolute path> <repo-relative src>: is that symlink the record of an earlier run's --with-…
+# flag? Stricter than our_link, because this answer is read as CONSENT rather than as ownership, and the price
+# of a wrong yes is handing a stranger the author's shell prompt, git config and tmux bindings with nothing in
+# the output saying so — the precise harm the opt-in above exists to prevent.
+#   A live link: our_link decides, its cases 1 and 2, which are about this repo and nothing else.
+#   A dangling link: ours only when its old root is the old root of a link this script CERTAINLY made, which is
+#   what read_zshenv_root went and got. That still heals a moved clone — every link it made moved together — and
+#   it no longer mistakes a foreign manager's momentarily dangling home/.zshrc for an answer this user gave.
+consenting_link() {
+  local p="$1" t
+  if [[ ! -L $p ]]; then
+    return 1
+  fi
+  t="$(readlink "$p")"
+  if [[ $t == "$R"/* || -e $p ]]; then
+    our_link "$p" "$2"
+    return
+  fi
+  [[ -n $ZSHENV_ROOT && $t == "$ZSHENV_ROOT/$2" ]]
+}
+
 # opted_in <flag> <home-relative dst>: does this run install that opinionated file? Either the flag asked for
-# it, or ~/dst is ALREADY a link this script made, which is the record an earlier run's flag left: `wt update`
-# reruns this script with no arguments, so a choice made once has to survive a run that cannot see it, and no
-# state is stored anywhere for it to disagree with. On a machine where all five are already linked — every
-# machine the author has — every answer is yes, so this whole opt-in changes nothing there.
-# Only the five FILES can be asked this. --with-claude-ui gates keys inside a copied file, where there is no
-# symlink destination to read the earlier answer back out of, so it is tested as a plain flag wherever it is
-# used and no state file is invented to stand in for one.
+# it, or ~/dst is ALREADY a link an earlier run of this script made, which is the record that run's flag left:
+# `wt update` reruns this script with no arguments, so a choice made once has to survive a run that cannot see
+# it, and no state is stored anywhere for it to disagree with. On a machine where all five are already linked —
+# every machine the author has — every answer is yes, so this whole opt-in changes nothing there.
+# Only the five FILES can be asked this. --with-claude-ui gates keys inside a copied file, so its record is the
+# keys themselves; claude_ui_opted_in reads that one.
 opted_in() {
   if [[ $1 -eq 1 ]]; then
     return 0
   fi
-  our_link "$HOME/$2" "home/$2"
+  consenting_link "$HOME/$2" "home/$2"
+}
+
+# claude_ui_opted_in: the same question for the sixth flag. An existing ~/.claude/settings.json that is a real
+# file and still has a top-level .tui key was written by a run that was given --with-claude-ui: copy_config
+# strips that key from every copy written without it. Reading it back here is what keeps `wt update
+# --refresh-config`, which cannot forward the flag, from silently deleting the UI keys of a machine that has
+# them. Probed with the jq call copy_config already makes eleven lines further down, so the two cannot drift.
+claude_ui_opted_in() {
+  local dst="$HOME/.claude/settings.json"
+  if [[ $WITH_CLAUDE_UI -eq 1 ]]; then
+    return 0
+  fi
+  if [[ ! -f $dst || -L $dst ]]; then
+    return 1
+  fi
+  jq -e 'has("tui")' "$dst" >/dev/null 2>&1
 }
 
 # die <message>: stop with a message on stderr. The EXIT trap still reports where anything went.
@@ -169,12 +253,20 @@ link() {
 
 # copy_config <repo-relative .base> <home-relative dst> <claude|codex|plain>: install one machine-local
 # copy, keeping an existing real file unless --refresh-config was given. Kind "claude" drops the
-# voice keys off a Mac, because a VM has no local microphone, and the .tui/.voice/.theme UI keys unless
-# --with-claude-ui asked for them, because those are taste rather than machinery; kind "codex" drops the
-# Keychain credential store off a Mac, because only macOS has one. The new file is built in full before the
-# old one is stashed, so a filter that fails cannot leave a truncated ~/dst behind. A replaced copy is only ever stashed,
-# never merged: a refreshed .codex/config.toml loses the tables Codex wrote into it (hook trust,
-# folder trust), which the old file in the backup dir still holds and /hooks restores.
+# voice keys off a Mac, because a VM has no local microphone, and the UI keys unless --with-claude-ui (or the
+# record of an earlier one) asked for them, because those are taste rather than machinery; kind "codex" drops
+# the Keychain credential store off a Mac, because only macOS has one.
+# A SYMLINK at $dst is displaced, and deliberately so — this is the one place that does not leave a dotfile
+# manager's link alone the way hook_bashrc, hook_tmux_conf and configure_git do. These three files are exactly
+# the ones the apps write their own state into, so they must be real files at the path the app opens; a link
+# would send Claude's and Codex's writes into a synced repo that then fights them. Nothing is lost: only the
+# LINK moves into the backup dir, the file it pointed at is untouched, and the displacement gets a line of its
+# own in the output rather than being folded into "installed ~/…". That is also why this step has no check_…
+# twin in the refuse-before-writes pass: it has nothing to refuse.
+# The new file is built in full before the old one is stashed, so a filter that fails cannot leave a truncated
+# ~/dst behind. A replaced copy is only ever stashed, never merged: a refreshed .codex/config.toml loses the
+# tables Codex wrote into it (hook trust, folder trust), which the old file in the backup dir still holds and
+# /hooks restores.
 copy_config() {
   local src="$R/$1" dst="$HOME/$2" kind="$3"
   if [[ -e "$dst" && ! -L "$dst" && $REFRESH -eq 0 ]]; then
@@ -204,14 +296,21 @@ copy_config() {
     if [[ $OS != Darwin ]]; then
       filter="$filter | del(.voice, .voiceEnabled)"       # no local microphone on a VM, flag or no flag
     fi
-    if [[ $WITH_CLAUDE_UI -eq 0 ]]; then                  # UI taste, not machinery — the hooks and permissions
-      filter="$filter | del(.tui, .voice, .theme)"        # around them stay on every machine. Composed with, not
-    fi                                                    # instead of, the line above: del() of a key another
-                                                          # del() already removed is a no-op, so .voice goes on a
-                                                          # VM either way and the two tests stay independent.
+    # UI taste, not machinery — the hooks and permissions around them stay on every machine. The env var is
+    # in this list for the same reason the three keys are: it turns mouse clicks off in the Claude Code TUI, so
+    # a stranger who never asked for the author's UI would otherwise find their mouse dead with nothing in the
+    # run's output naming the key. Composed with, not instead of, the line above: del() of a key another del()
+    # already removed is a no-op — and so is del() of a nested path that is not there — so .voice goes on a VM
+    # either way and the two tests stay independent.
+    if ! claude_ui_opted_in; then
+      filter="$filter | del(.tui, .voice, .theme, .env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS)"
+    fi
     if ! opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh; then
       filter="$filter | del(.statusLine)"                 # the script it names is opt-in: a command pointing at a
     fi                                                    # file that was never installed breaks the status line
+    # .env holds exactly that one key today, so the del above can empty it: drop the object rather than write
+    # an `"env": {}` no run ever meant to put there.
+    filter="$filter | if (.env | length) == 0 then del(.env) else . end"
     jq "$filter" "$src" >"$tmp" || { rm -f "$tmp"; die "jq failed on $1"; }
   elif [[ $kind == codex && $OS != Darwin ]]; then
     grep -v '^cli_auth_credentials_store' "$src" >"$tmp" || { rm -f "$tmp"; die "failed to filter $1"; }
@@ -219,6 +318,10 @@ copy_config() {
     cp "$src" "$tmp"
   fi
   chmod 600 "$tmp"
+  if [[ -L "$dst" ]]; then                                # see the header: the link goes, its target stays
+    echo "replaced the symlink at ~/$2 (-> $(readlink "$dst")) with a real file: the app writes its own state"
+    echo "into this one, so it cannot be a link; the link itself is in the backup dir, its target untouched"
+  fi
   stash "$dst"                                            # only now is anything moved
   mv "$tmp" "$dst"
   echo "installed ~/$2"
@@ -241,6 +344,11 @@ require_jq() {
 require_oh_my_zsh() {
   if ! opted_in "$WITH_ZSHRC" .zshrc; then
     return 0
+  fi
+  if [[ -z $ZC_REL ]]; then            # see ZC above: link() can only spell a destination under $HOME, and half
+                                       # an install — plugins yes, theme no — is what this used to do silently
+    echo "ZSH_CUSTOM=$ZC is outside \$HOME, so the theme ~/.zshrc names cannot be linked into $ZC/themes" >&2
+    die "unset ZSH_CUSTOM, or point it inside \$HOME, then rerun"
   fi
   if [[ -f "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]]; then
     return 0
@@ -283,7 +391,7 @@ link_dotfiles() {
   done
   if opted_in "$WITH_ZSHRC" .zshrc; then
     link home/.zshrc .zshrc
-    link home/.oh-my-zsh/custom/themes/workstation.zsh-theme .oh-my-zsh/custom/themes/workstation.zsh-theme
+    link home/.oh-my-zsh/custom/themes/workstation.zsh-theme "$ZC_REL/themes/workstation.zsh-theme"
   fi
   if opted_in "$WITH_GITCONFIG" .gitconfig; then
     link home/.gitconfig .gitconfig
@@ -328,25 +436,50 @@ link_cmux_config() {
   fi
 }
 
+# retired_src <home-relative dst>: the repo-relative path the linking steps above point that destination at,
+# which is what our_link's tail test needs to recognise a link made before this clone moved. Five of the eight
+# directories mirror the repo's own layout, so home/<dst> is right there — and this used to be inferred for all
+# of them, which meant the three below could never be retired once the clone had moved: their source is not
+# their destination, the tail never matched, and a renamed skill or script outlived its rename on exactly the
+# machines this function exists for. ~/.oh-my-zsh/custom/themes is a sixth exception whenever ZSH_CUSTOM moves
+# the DESTINATION, because the source under home/ does not move with it.
+retired_src() {
+  local rel="$1"
+  if [[ -n $ZC_REL && $rel == "$ZC_REL"/themes/* ]]; then
+    echo "home/.oh-my-zsh/custom/themes/${rel#"$ZC_REL"/themes/}"
+    return 0
+  fi
+  case "$rel" in
+    .local/bin/*)     echo "bin/${rel#.local/bin/}" ;;                       # install_bins
+    .claude/skills/*) echo "home/.agents/skills/${rel#.claude/skills/}" ;;   # link_skills, the Claude copy
+    .codex/AGENTS.md) echo "home/.claude/AGENTS.md" ;;                       # link_skills, the shared file
+    *)                echo "home/$rel" ;;
+  esac
+}
+
 # remove_retired_links: link() only knows the names the repo uses today, so a link an earlier run made
 # under a name that has since been renamed away is never revisited and dangles forever — a rerun just adds
 # the new link beside it. That is how ~/.oh-my-zsh/custom/themes/max.zsh-theme outlived its rename to
 # workstation.zsh-theme, leaving oh-my-zsh looking for a theme that was already gone; `wt update` reruns
 # this script, so every later rename would litter every machine the same way.
 # Three things together make an entry ours to retire: it is a symlink, its target no longer exists, and it is
-# ours by our_link — into this repo, or into the same home/<name> under a root this clone has since moved
+# ours by our_link — into this repo, or into the same source path under a root this clone has since moved
 # away from, so a rename does not strand the retired names either. Anything else dangling here belongs to the
 # user and is left strictly alone, as is every live link. Depth 1, and only the directories the linking steps
 # above write into: $HOME is never walked recursively.
 remove_retired_links() {
-  local d e rel
-  for d in "$HOME" "$HOME/.claude" "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.codex" \
-           "$HOME/.local/bin" "$HOME/.oh-my-zsh/custom/themes" "$HOME/.config/cmux"; do
+  local d e rel dirs
+  dirs=("$HOME" "$HOME/.claude" "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.codex" \
+        "$HOME/.local/bin" "$HOME/.config/cmux")
+  if [[ -n $ZC_REL ]]; then
+    dirs[${#dirs[@]}]="$ZC/themes"                       # where link_dotfiles actually put the theme; with
+  fi                                                     # ZSH_CUSTOM set that is not ~/.oh-my-zsh/custom
+  for d in "${dirs[@]}"; do
     [[ -d "$d" ]] || continue                            # a directory this machine never got
     while IFS= read -r e; do
       [[ -e "$e" ]] && continue                          # live link: the repo still has the file
       rel="${e#"$HOME"/}"
-      our_link "$e" "home/$rel" || continue              # points outside this repo: not ours to touch
+      our_link "$e" "$(retired_src "$rel")" || continue  # points outside this repo: not ours to touch
       stash "$e"                                         # the backup contract holds here too: nothing is deleted
       echo "retired ~/$rel (the repo no longer has the file it pointed at)"
     done < <(find "$d" -maxdepth 1 -type l)              # -maxdepth 1: never descend into $HOME
@@ -356,14 +489,14 @@ remove_retired_links() {
 # install_zsh_plugins: the two plugins ~/.zshrc enables, cloned once. Only that .zshrc names them, so without
 # it there is nothing to clone — which also means a default install never touches the network at all.
 install_zsh_plugins() {
-  local zc="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}" p
+  local p
   if ! opted_in "$WITH_ZSHRC" .zshrc; then
     return 0
   fi
   for p in zsh-autosuggestions zsh-syntax-highlighting; do
-    if [[ ! -d "$zc/plugins/$p" ]]; then
+    if [[ ! -d "$ZC/plugins/$p" ]]; then                  # $ZC, the same directory the theme was linked under
       echo "cloning the $p plugin that ~/.zshrc enables (needs the network)"
-      git clone -q --depth 1 "https://github.com/zsh-users/$p" "$zc/plugins/$p" \
+      git clone -q --depth 1 "https://github.com/zsh-users/$p" "$ZC/plugins/$p" \
         || die "could not clone $p; rerun when the network is back"
     fi
   done
@@ -419,13 +552,21 @@ record_repos_dir() {
 # device in its place, which nothing below could read. A LIVE symlink is not a refusal here — each caller
 # decides for itself, and the three that leave it to its dotfile manager say so at the point of the skip.
 # Shared so that each step's check_… twin, which makes the same refusals early, cannot drift from its wording.
+# Two entry points for one rule: most callers name a path under $HOME and want it spelled ~/… in the message,
+# but git's global config file can sit at $XDG_CONFIG_HOME/git/config or wherever GIT_CONFIG_GLOBAL points,
+# which need not be under $HOME at all, so that caller passes the absolute path and the label to print.
 require_plain_file() {
-  local p="$HOME/$1"
+  # shellcheck disable=SC2088   # the ~ is literal on purpose: this is the label a message prints, not a path
+  require_plain_path "$HOME/$1" "~/$1"
+}
+
+require_plain_path() {
+  local p="$1" label="$2"
   if [[ -L $p && ! -e $p ]]; then
-    die "broken symlink at ~/$1 (-> $(readlink "$p")): remove or repair it, then rerun"
+    die "broken symlink at $label (-> $(readlink "$p")): remove or repair it, then rerun"
   fi
   if [[ -e $p && ! -L $p && ! -f $p ]]; then
-    die "not a regular file: ~/$1; move it aside, then rerun"
+    die "not a regular file: $label; move it aside, then rerun"
   fi
 }
 
@@ -443,10 +584,29 @@ check_zshenv_local() {
   require_plain_file .zshenv.local
 }
 
+# BASHRC_SRC: the line hook_bashrc puts at the top of ~/.bashrc, without the trailing comment. It lives out
+# here because check_bashrc has to make exactly the test hook_bashrc makes on it, and the two drifting is how
+# check_bashrc came to refuse installs hook_bashrc would never have written to.
+# shellcheck disable=SC2016
+BASHRC_SRC='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
+
+# bashrc_hooked <path>: is our line already the FIRST line of that file? Then hook_bashrc returns having done
+# nothing — it never reads the mode, never builds a temp file and never writes — so nothing downstream of that
+# early return may refuse either.
+bashrc_hooked() {
+  local first
+  [[ -f $1 && -r $1 ]] || return 1
+  first="$(head -n 1 "$1")"
+  [[ $first == "$BASHRC_SRC"* ]]       # whatever comment an older version of this script put after it
+}
+
 # check_bashrc: hook_bashrc runs seventh, long after files have moved, so its three refusals would land on a
 # half-installed machine. They are made here instead, while nothing has been touched, with the same wording.
 # A ~/.bashrc that is a live symlink is not a refusal: hook_bashrc skips it and says so at the point of the
-# skip, so the warning is not buried under the whole install's output.
+# skip, so the warning is not buried under the whole install's output. Nor is a mode hook_bashrc will never
+# copy: an image that ships a 664 ~/.bashrc (umask 002, user-private groups) is ordinary on a Linux VM, and
+# once our line is at the top of it there is nothing left to rewrite — refusing there would fail this install,
+# and so every `wt update`, forever, over a file this script was not going to touch.
 check_bashrc() {
   local rc="$HOME/.bashrc" mode
   if [[ $OS == Darwin ]]; then
@@ -458,6 +618,9 @@ check_bashrc() {
   fi
   if [[ ! -e $rc ]]; then
     return 0                           # nothing there: hook_bashrc writes the file itself
+  fi
+  if bashrc_hooked "$rc"; then
+    return 0                           # already hooked: hook_bashrc returns before it reads the mode
   fi
   mode="$(stat -c %a "$rc" 2>/dev/null || stat -f %Lp "$rc" 2>/dev/null || true)"   # -c is GNU, -f is BSD
   if [[ $mode =~ ^[0-7]+$ ]] && (( 8#$mode & 8#022 )); then
@@ -474,8 +637,8 @@ check_bashrc() {
 # login shell to /bin/bash on every boot, so this one line carries the environment to every bash there.
 # shellcheck disable=SC2016
 hook_bashrc() {
-  local src='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
-  local rc="$HOME/.bashrc" line first mode tmp target moved=0
+  local src="$BASHRC_SRC"
+  local rc="$HOME/.bashrc" line mode tmp target moved=0
   line="$src   # workstation: PATH, WT_HOST, WT_REPOS_DIR in cmux's bash rows"
   if [[ $OS == Darwin ]]; then
     return 0
@@ -498,9 +661,8 @@ hook_bashrc() {
     echo "bash reads ~/.zshenv too (first line of ~/.bashrc): cmux rows on a VM run bash"
     return 0
   fi
-  first="$(head -n 1 "$rc")"
-  if [[ $first == "$src"* ]]; then                 # our line, whatever comment an older version put after it
-    return 0
+  if bashrc_hooked "$rc"; then                     # our line is already first, whatever comment follows it:
+    return 0                                       # check_bashrc made the same test, so the two cannot drift
   fi
   if awk -v s="$src" 'index($0, s) == 1 { found = 1 } END { exit !found }' "$rc"; then
     moved=1                                        # an older run appended it below Ubuntu's early return
@@ -599,34 +761,66 @@ require_git_identity() {
   fi
 }
 
+# resolve_git_global: WHICH file `git config --global` writes, which is not always ~/.gitconfig and so not
+# always the file the two steps below have to guard. git's own order, confirmed against git 2.39: $GIT_CONFIG_GLOBAL
+# if it is set; else ~/.gitconfig if it EXISTS (following the link, so a dangling one does not count); else
+# $XDG_CONFIG_HOME/git/config — default ~/.config/git/config — if that exists; else ~/.gitconfig, created.
+# Guarding ~/.gitconfig alone missed both refusals this script makes about the file: on a machine whose
+# dotfile manager owns ~/.config/git/config and leaves no ~/.gitconfig, configure_git wrote two machine-local
+# absolute paths straight through that manager's symlink — the one thing it promises not to do — and reported
+# it as a change to a ~/.gitconfig that does not exist; and a directory there took the whole install down
+# mid-way in git's voice ("unknown error occurred while reading the configuration files", exit 128), which is
+# precisely what check_gitconfig exists to prevent. Resolved once, in main, before anything moves.
+resolve_git_global() {
+  local xdg="${XDG_CONFIG_HOME:-$HOME/.config}/git/config"
+  if [[ -n ${GIT_CONFIG_GLOBAL:-} ]]; then
+    GITRC="$GIT_CONFIG_GLOBAL"
+  elif [[ -e "$HOME/.gitconfig" ]]; then
+    GITRC="$HOME/.gitconfig"
+  elif [[ -e "$xdg" ]]; then
+    GITRC="$xdg"
+  else
+    GITRC="$HOME/.gitconfig"
+  fi
+  if [[ $GITRC == "$HOME"/* ]]; then
+    # shellcheck disable=SC2088     # literal, as above: $GITRC is the path, $GITRC_LABEL only prints
+    GITRC_LABEL="~/${GITRC#"$HOME"/}"  # the spelling every other message in this script uses
+  else
+    GITRC_LABEL="$GITRC"
+  fi
+}
+
 # check_gitconfig: check_tmux_conf's reasoning, for the third file this script writes into. configure_git
 # runs near the end, and `git config --global` makes its own refusals there in git's voice, mid-install,
-# after everything has moved: a dangling ~/.gitconfig is "error: could not lock config file", exit 255, and
+# after everything has moved: a dangling target is "error: could not lock config file", exit 255, and
 # a directory is "fatal: unknown error occurred while reading the configuration files", exit 128. Made here
-# instead, while the machine is still untouched, in this script's wording.
+# instead, while the machine is still untouched, in this script's wording, and about $GITRC rather than
+# ~/.gitconfig, because that is the file git will open.
 check_gitconfig() {
   if opted_in "$WITH_GITCONFIG" .gitconfig; then
-    return 0                           # ~/.gitconfig is about to become a link into this repo
-  fi
-  require_plain_file .gitconfig
+    return 0                           # ~/.gitconfig is about to become a link into this repo, and git prefers
+  fi                                   # it over the XDG file as soon as it exists
+  require_plain_path "$GITRC" "$GITRC_LABEL"
 }
 
 # configure_git: two settings of home/.gitconfig are machinery, not taste — core.excludesFile, which is what
 # git-ignores .worktrees/ and so what makes `wt` invisible to git, and the ~/.gitconfig.local include, which is
 # where the identity above lives. When that file was not opted in they are written into the user's own
-# ~/.gitconfig with `git config`, which edits in place and leaves every other line of it alone. Silent unless
-# it changes something, so a rerun (and `wt update`) says nothing.
+# global config with `git config`, which edits in place and leaves every other line of it alone. That file is
+# $GITRC, resolved above — usually ~/.gitconfig, but ~/.config/git/config on a machine that keeps it there,
+# and never a path this script simply assumed. Silent unless it changes something, so a rerun (and
+# `wt update`) says nothing.
 configure_git() {
-  local ex="$HOME/.gitignore_global" inc="$HOME/.gitconfig.local" rc="$HOME/.gitconfig" have found=0 v
+  local ex="$HOME/.gitignore_global" inc="$HOME/.gitconfig.local" rc="$GITRC" have found=0 v
   if opted_in "$WITH_GITCONFIG" .gitconfig; then
     return 0                           # the linked home/.gitconfig carries both settings
   fi
   # check_gitconfig made these refusals before anything moved; they stay here to cover the gap between the
-  # two calls, and because `git config` below would write through whatever is at ~/.gitconfig.
-  require_plain_file .gitconfig
+  # two calls, and because `git config` below would write through whatever is at $GITRC.
+  require_plain_path "$rc" "$GITRC_LABEL"
   if [[ -L $rc ]]; then               # a live link into a dotfiles repo: `git config --global` follows it
     {                                 # and edits the file that repo owns and syncs — not ours to edit, and
-      echo "skipped ~/.gitconfig: it is a symlink to $(readlink "$rc"), left alone because a dotfile manager owns it."
+      echo "skipped $GITRC_LABEL: it is a symlink to $(readlink "$rc"), left alone because a dotfile manager owns it."
       echo "add these yourself, in that file (both paths are this machine's, so keep them out of anything you sync):"
       echo "  [core]"
       echo "      excludesFile = $ex"
@@ -641,7 +835,7 @@ configure_git() {
   have="$(git config --global --get --type=path core.excludesFile 2>/dev/null || true)"
   if [[ -z $have ]]; then
     git config --global core.excludesFile "$ex"
-    echo "set core.excludesFile = ~/.gitignore_global in ~/.gitconfig (it is what git-ignores .worktrees/)"
+    echo "set core.excludesFile = ~/.gitignore_global in $GITRC_LABEL (it is what git-ignores .worktrees/)"
   elif [[ $have != "$ex" ]]; then      # the user points it at their own file: replacing it would silently drop
     {                                  # every rule in that file, so say what is missing instead
       echo "kept core.excludesFile = $have: this repo did not change it."
@@ -657,7 +851,7 @@ configure_git() {
   done < <(git config --global --get-all --type=path include.path 2>/dev/null || true)
   if (( ! found )); then
     git config --global --add include.path "$inc"
-    echo "added include.path = ~/.gitconfig.local to ~/.gitconfig (where your git identity lives)"
+    echo "added include.path = ~/.gitconfig.local to $GITRC_LABEL (where your git identity lives)"
   fi
 }
 
@@ -700,7 +894,7 @@ report_skipped() {
   opted_in "$WITH_TMUX_CONF"   .tmux.conf                      || f="$f --with-tmux-conf"
   opted_in "$WITH_KEYBINDINGS" .claude/keybindings.json        || f="$f --with-keybindings"
   opted_in "$WITH_STATUSLINE"  .claude/statusline-command.sh   || f="$f --with-statusline"
-  [[ $WITH_CLAUDE_UI -eq 1 ]]                                  || f="$f --with-claude-ui"
+  claude_ui_opted_in                                           || f="$f --with-claude-ui"
   if [[ -n $f ]]; then
     echo "left alone (the author's own taste, not machinery):$f"
     echo "rerun with those flags, or --opinionated-config for all of them, to install them"
@@ -715,6 +909,11 @@ main() {
   # refusal, including the later steps' check_… twins, therefore comes before the FIRST write of any kind
   # — the two ~/.zshenv.local lines below used to be made in among them, so a run that went on to refuse
   # had already edited a file class 3 promises is never rewritten, and had no trap yet to say so.
+  # Two facts that have to be read while the machine is still as the LAST run left it. ~/.zshenv is re-pointed
+  # by link_dotfiles, after which no dangling sibling can be matched against the root it used to carry; and
+  # which file `git config --global` writes depends on whether ~/.gitconfig exists, which this run may change.
+  read_zshenv_root
+  resolve_git_global
   require_oh_my_zsh
   require_jq
   require_git_identity

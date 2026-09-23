@@ -11,11 +11,12 @@ writes the block with the right port, user and key; for any other VM copy
 task picker use it. Two vCPUs and 8 GB of memory are comfortable.
 
 Open a shell on the VM (`ssh <vm>`) and paste blocks 1, 2 and 4 each as one chunk, in order; run block 3 line by
-line, because its logins and the `codex` TUI take over the terminal. Replace the UPPERCASE placeholders first.
-`sudo` must work without a password, or block 1 asks for one; apt on an Azure ML image prints many repository
-warnings, which are pre-existing and harmless. Blocks 1, 2 and 4 work over plain `ssh <vm>`; block 3 wants a
-VS Code terminal (explained there). Nothing else prompts. To install an uncommitted change, seed the repo from the Mac before
-block 2 (see the Notes).
+line, because its logins and the `codex` TUI take over the terminal. `sudo` must work without a password, or
+block 1 asks for one; apt on an Azure ML image prints many repository warnings, which are pre-existing and
+harmless. Blocks 1, 2 and 4 work over plain `ssh <vm>`; block 3 wants a VS Code terminal (explained there).
+Nothing else prompts. Fill in the placeholders first: `GIT_NAME` and `GIT_EMAIL` in block 2, `<vm>` in block 2's
+`install.sh` line, and `OWNER/REPO` in block 3. To install an uncommitted change, seed the repo from the Mac
+before block 2 (see the Notes).
 
 ```bash
 # 1. packages   (the first line starts this page's clock)
@@ -29,7 +30,7 @@ sudo update-locale LANG=C.UTF-8
 ```
 
 ```bash
-# 2. shell, identity, repo   (edit GIT_NAME / GIT_EMAIL / VM first)
+# 2. shell, identity, repo   (edit GIT_NAME / GIT_EMAIL / <vm> first)
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
 git config --file ~/.gitconfig.local user.name  'GIT_NAME'
 git config --file ~/.gitconfig.local user.email 'GIT_EMAIL'
@@ -44,8 +45,8 @@ mkdir -p ~/repos
 # ~/.tmux.conf, Claude keymap and status line, plus the tui/voice/theme keys of ~/.claude/settings.json;
 # drop it and the install leaves all six to you, machinery intact (README, Install). For the five files it
 # never has to be repeated: once they are links into the repo, the bare rerun behind `wt update` keeps them.
-# The UI keys live in a copied file, which records no choice, so they need the flag again on any later run
-# that passes --refresh-config — the only run that rewrites that copy.
+# The UI keys are remembered by the copy itself — a settings.json carrying a top-level tui key came from a
+# run that was given the flag — so --refresh-config keeps them rather than stripping them.
 WT_HOST=<vm> bash ~/repos/workstation/install.sh --opinionated-config --refresh-config   # replace <vm> with this machine's alias in the Mac's ~/.ssh/config
 sudo chsh -s "$(command -v zsh)" "$(id -un)" && exec zsh -l   # last line: exec replaces the shell
 ```
@@ -93,10 +94,17 @@ Inside tmux, Ctrl+J always gives Claude a newline. Shift+Enter does too, but onl
 under tmux's defaults, or in a session started before that file arrived, the modifier is stripped and Shift+Enter
 submits. The same file brings true colour (it sets `COLORTERM=truecolor`, which ssh does not carry over, and
 `CLAUDE_CODE_TMUX_TRUECOLOR=1`, without which Claude caps itself at 256 colours inside tmux), a 10 ms
-`escape-time` instead of 500 ms, and focus events. Its `default-terminal` reaches only new sessions and panes: a
-session that was already running keeps `TERM=screen` until you start a new one. Ubuntu 22.04's tmux is 3.2a, and the file is written for it; the Ubuntu archive has
-nothing newer for that release, so options that need 3.3 or later (`allow-passthrough`, for one) are left out
-rather than installed from a PPA or source.
+`escape-time` instead of 500 ms, and focus events. None of it reaches a tmux server that was already running
+when the file landed: `~/.tmux.conf` is read only when the server starts, so on that server neither the TERM,
+nor `COLORTERM`, nor `CLAUDE_CODE_TMUX_TRUECOLOR`, nor `escape-time`, nor `extended-keys` is in effect — which
+is exactly the state right after `install.sh` on a VM with live sessions, and the usual reason colours or
+Shift+Enter do not change. Once the server has read the file, the remaining boundary is the **pane**, not the
+session: `default-terminal` is read on every spawn, so a new pane in an old session does get the new `TERM`,
+and only an already-running pane keeps the one it started with. The safe fix is to start a new pane or window,
+or `tmux kill-session -t wt-<repo>-<name>` for one task and let it be re-created — not `tmux kill-server`,
+which takes every task on the VM with it (see the `server exited unexpectedly` note). Ubuntu 22.04's tmux is
+3.2a, and the file is written for it; the Ubuntu archive has nothing newer for that release, so options that
+need 3.3 or later (`allow-passthrough`, for one) are left out rather than installed from a PPA or source.
 
 Check the VM answers:
 
@@ -135,7 +143,9 @@ run `exec bash` in that pane or open a new tmux window.
   (`.worktrees` keeps your task worktrees on the Mac, where they belong).
   Block 2's clone line then finds the folder and skips. A seeded copy has no `.git`, so `wt update` and
   `wt -H <vm> update` refuse until it is replaced by a clone; until then re-seed with the same rsync line and
-  rerun `bash ~/repos/workstation/install.sh` on the VM.
+  rerun `bash ~/repos/workstation/install.sh` on the VM. A VM seeded before the `--exclude .worktrees` was
+  added still carries a stale copy of every Mac worktree, and rsync has no `--delete`, so re-seeding will not
+  remove it: run `ssh <vm> 'rm -rf ~/repos/workstation/.worktrees'` once.
 - **Update the Mac's `wt` and each VM's `wt` together** (`wt update` on the Mac, and for a VM either
   `wt -H <vm> update` from an interactive Mac terminal or `wt update` in a shell on the VM, or the rsync seed
   above for an uncommitted change), because `wt -H <vm> …` runs the VM's copy for the remote half of every
@@ -161,12 +171,22 @@ run `exec bash` in that pane or open a new tmux window.
   re-attaches it (add `--restart-agent` when the reboot took the tmux session with it, or `--reattach` when a
   dropped connection left the VM holding the old pty, which is the case cmux announces in the row as
   `remote session was lost; starting a new shell`).
-- **`server exited unexpectedly` from every tmux command, `wt new` included,** after a `tmux kill-server`: the
-  server ends its sessions but waits for its clients to leave before it exits, and a control-mode client left
-  behind by a dropped connection (`tmux -CC attach`, parent PID 1, its pty gone) never does. The half-exited
-  server keeps the socket and drops every new connection. `ps -eo pid,ppid,args | grep '[t]mux -CC'` lists
-  them; `kill` those PIDs and the server finishes exiting, so the next tmux command starts a fresh one. Check
-  for them before a `kill-server`, too.
+- **`server exited unexpectedly` from every tmux command, `wt new` included,** after a `tmux kill-server`.
+  First, the warning: `tmux kill-server` ends **every session on that socket** — every `wt-<repo>-<name>` task
+  on that VM and every agent running in one. It is almost never what you want; to restart a single task use
+  `tmux kill-session -t wt-<repo>-<name>` (`wt show <name>` prints the session name) and let the row re-create
+  it. What the message means: the server ends its sessions but waits for its clients to leave before it exits,
+  and a control-mode client left behind by a dropped connection (`tmux -CC attach`, parent PID 1, its pty
+  gone) never does. The half-exited server keeps the socket and drops every new connection — including
+  `tmux list-clients`, so you cannot ask tmux which clients are left and have to look at the process table.
+  Match only the orphans, because a plain `grep '[t]mux -CC'` also lists the healthy control-mode clients
+  driving your live cmux rows and killing those drops the rows:
+
+  ```bash
+  ps -eo pid,ppid,tty,args | awk '$2==1 && /[t]mux -CC/'   # ppid 1 only; the tty column shows the lost pty
+  ```
+
+  `kill` those PIDs and the server finishes exiting, so the next tmux command starts a fresh one.
 - **Slow shells on an Azure ML compute instance.** The image's `~/.bashrc` runs a `conda init` block (about
   2.5 s) and `conda activate azureml_py38` (about 1 s) in every shell, which delays each cmux row, each
   `wt -H <vm>` call and the tmux status line. If your repos manage Python with `uv`, comment out the

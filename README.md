@@ -33,6 +33,7 @@ VS Code opens on demand, through `wt open`.
 ```
 workstation/
 ├── README.md
+├── LICENSE
 ├── install.sh                 links this repo into $HOME (Mac and Ubuntu)
 ├── Brewfile                   azure-cli fzf gh jq shellcheck; casks cmux, VS Code, git-credential-manager
 ├── .gitignore
@@ -66,12 +67,24 @@ workstation/
 
 ## Install
 
+**What it needs.** macOS with Homebrew, or Ubuntu 22.04 to 24.04. `git` and `jq` have to be on `PATH` before
+you start: `install.sh` stops with a message naming `jq` when it is missing, and without `git` it cannot get
+past its git-identity check. `bash` 3.2 is the floor — that is macOS's own `/bin/bash`, and the smoke test
+passes under it — so nothing here needs a newer shell. On the VMs the tmux is 3.2a and `home/.tmux.conf` is
+written for it. The cmux integration assumes cmux 0.64 or newer (`bin/cmux-hook` encodes 0.64's notification
+behaviour) and `home/.config/cmux/cmux.json` is `schemaVersion: 1`. The rest — `gh`, `az`, `fzf`, cmux itself,
+Claude Code, Codex — is installed by `Brewfile` on a Mac and by [docs/new-vm.md](docs/new-vm.md) on a VM.
+
 ```bash
 mkdir -p ~/repos && git clone https://github.com/mal84emma/workstation ~/repos/workstation
 bash ~/repos/workstation/install.sh
 ```
 
 Full instructions: [docs/new-mac.md](docs/new-mac.md) and [docs/new-vm.md](docs/new-vm.md).
+
+To see exactly what it would do to your machine without touching your own dotfiles, give it a throwaway home:
+`HOME=$(mktemp -d) bash install.sh`. Every path it writes is `$HOME`-relative — that is what the smoke test
+exercises — so the whole install lands in that directory and you can read it there.
 
 To put a local change on a machine before committing it, seed it with the `rsync` line in the notes of
 [docs/new-vm.md](docs/new-vm.md) instead of the clone. A seeded copy has no `.git`, so `wt update` refuses
@@ -89,7 +102,7 @@ prompt, git config, tmux bindings, Claude keymap, status line and Claude UI.
 | `--with-tmux-conf` | `~/.tmux.conf`: the relay line, plus tuning that makes Claude in tmux feel like a bare terminal (true colour, a 10 ms `escape-time`, Shift+Enter, focus events) | Its one machinery line, appended to your own `~/.tmux.conf` (created if you have none), leaving every line already there in place: that `set -ag update-environment` is how cmux's relay variables reach a pane started in an already-running session |
 | `--with-keybindings` | `~/.claude/keybindings.json` | Nothing; Claude keeps its own keymap |
 | `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing, and `statusLine` is stripped from the `~/.claude/settings.json` copy, because it names a script that would not be there |
-| `--with-claude-ui` | No file of its own: the `tui`, `voice` and `theme` keys, kept in the `~/.claude/settings.json` copy | Those three keys are deleted from the copy, so Claude keeps its own full-screen setting, voice mode and theme; the hooks and permissions in the same file arrive either way |
+| `--with-claude-ui` | No file of its own: the `tui`, `voice` and `theme` keys and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS`, kept in the `~/.claude/settings.json` copy | Those keys are deleted from the copy, so Claude keeps its own full-screen setting, voice mode, theme and mouse handling; the hooks and permissions in the same file arrive either way |
 
 `--opinionated-config` is all six at once; `--refresh-config` is orthogonal to them, and they combine in any
 order. The one deliberate exception to the fallbacks above is a `core.excludesFile` that already points at a
@@ -103,11 +116,11 @@ into this repo counts as opted in, so `wt update` — which re-runs `install.sh`
 yourself once, after which `wt update` carries it. A run that leaves some out names them and the flag that
 would install each.
 
-`--with-claude-ui` is the exception, because what makes the other five sticky is the symlink itself, and keys
-inside a copied file leave no such trace behind. It is not sticky: it has to be given again on every run that
-writes `~/.claude/settings.json`, which is only `--refresh-config`, since an ordinary rerun keeps the copy
-that is already there. Given on its own, on a machine whose copy was written without it, it changes nothing
-and says so rather than reporting success.
+`--with-claude-ui` is sticky too, by a different witness. What makes the other five sticky is the symlink
+itself, and keys inside a copied file leave no such trace — but the copy is its own record: a
+`~/.claude/settings.json` that already carries a top-level `tui` key was written by a run that was given the
+flag, so a later `--refresh-config` keeps those keys instead of stripping them. Given on its own, on a machine
+whose copy was written without it, it changes nothing and says so rather than reporting success.
 
 `~/.zshenv` and `~/.gitignore_global` are not on that list, because they are the contract rather than taste:
 `~/.zshenv` puts `~/.local/bin` on `PATH` and carries `WT_HOST` and `WT_REPOS_DIR`, and `~/.gitignore_global`
@@ -118,7 +131,7 @@ is the file that git-ignores `.worktrees/`.
 | Class | Files | Behaviour |
 |---|---|---|
 | Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, `cmux.json` (Mac only), and every opt-in file you asked for | Edits, including an agent's, land in the repo, so `git diff` is the review |
-| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use or did not ask for: the voice keys and the Keychain credential store off a Mac, `statusLine` without `--with-statusline`, and `tui`, `voice` and `theme` without `--with-claude-ui`. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
+| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use or did not ask for: the voice keys and the Keychain credential store off a Mac, `statusLine` without `--with-statusline`, and `tui`, `voice`, `theme` and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files — `~/.zshrc.local` only when `~/.zshrc` is one of them |
 
 It is idempotent: rerun it after every repo change. Nothing is deleted. Anything in the way is moved into
@@ -131,10 +144,26 @@ message if no git identity is set — `~/.gitconfig.local` first, then your glob
 `~/.zshenv`, because cmux runs its VM rows in bash. At the top because Ubuntu's `~/.bashrc` returns early in a
 non-interactive shell, so the line has to come first to cover `ssh <vm> '<cmd>'` and `wt -H <vm> …` as well.
 
-`bash test/install-smoke.sh` is the repo's smoke test: 323 assertions across eight scenarios, each run
-against a throwaway `$HOME` with no network. They cover the default no-flags install — into an empty home
-and over a stranger's own dotfiles — `--opinionated-config`, each file flag on its own, the stickiness rule,
-idempotence, an unknown flag, and `--with-claude-ui` including the way it is not sticky.
+`bash test/install-smoke.sh` is the repo's smoke test: 496 assertions across sixteen scenario groups
+(thirty-nine runs, since most groups have several cases and one loops over five flags), each run against its
+own throwaway `$HOME` with no network. They cover the default no-flags install — into an empty home and over a
+stranger's own dotfiles — `--opinionated-config`, each file flag on its own, the stickiness rules, idempotence,
+an unknown flag, every refusal path, which links count as this repo's own, the don't-clobber branches of
+`configure_git`, retirement of renamed links, and `ZSH_CUSTOM`. Set `INSTALL_BASH=/bin/bash` to run
+`install.sh` itself under bash 3.2, which is what a fresh Mac gives it; `FORCE_OS=Linux` drives the
+Linux-only steps from a Mac.
+
+**There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
+Delete the symlinks this repo made — `~/.zshenv`, `~/.gitignore_global`, `~/.claude/AGENTS.md`,
+`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, the skills under `~/.agents/skills/` and `~/.claude/skills/`, the
+`~/.local/bin/` entries, `~/.config/cmux/cmux.json`, and whichever opt-in files you asked for (each one points
+into `~/repos/workstation`, so `ls -l` tells you which are ours). Delete the three machine-local copies
+(`~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json`) if you do not want them. Then copy
+your originals back out of the newest `~/.workstation-backup/<timestamp>-<pid>/`, which mirrors `$HOME`.
+Two things `install.sh` edits in place rather than replacing are not in the backup and have to be undone by
+hand: the lines it appended to `~/.zshenv.local` and the `~/.zshenv` line at the top of `~/.bashrc` on a VM,
+and, on a default run, the `set -ag update-environment` line appended to your own `~/.tmux.conf` and the
+`core.excludesFile` and `~/.gitconfig.local` include added with `git config --global`.
 
 ## Daily use
 
@@ -281,7 +310,7 @@ VM left behind answers in a vocabulary this Mac no longer expects.
 ## Security
 
 All of this runs as you, with your keys and your logins, and a good deal of it exists to remove prompts. That
-is the point of it, but four of the choices behind it are worth knowing before you run `install.sh` on your
+is the point of it, but five of the choices behind it are worth knowing before you run `install.sh` on your
 own machine.
 
 - **The Claude permission list auto-approves, and denies.** The twenty-five `permissions.allow` entries in
@@ -309,7 +338,10 @@ own machine.
   `git -c core.fsmonitor=<script> -C <path> push`. So read these lists as intent made legible where the tool
   can act on it: they catch the ordinary spellings an agent actually writes, and they save you a prompt on
   the ones you would always approve. Anything that has to actually hold wants what those docs
-  point at instead: a sandbox, or a `PreToolUse` hook that inspects the command itself.
+  point at instead: a sandbox, or a `PreToolUse` hook that inspects the command itself. For a concrete
+  example of why the allowlist is intent rather than a boundary, three of the entries it calls read-only are
+  not: `Bash(git diff *)`, `Bash(git log *)` and `Bash(git show *)` all accept `--output=<file>`, so any of
+  them will write to any path you can write, with no prompt.
 
 - **The hooks run scripts from this repo on every turn.** `settings.base.json` wires five Claude events
   (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `SessionEnd`) to `agent-notify`, and
@@ -336,6 +368,13 @@ own machine.
   beyond that shape check, `/etc` and a home `.ssh` directory included. The relay socket is loopback TCP on
   the far side, so anyone with an account on such a machine can ask for both: treat any host you keep a row
   to as trusted the way you are, and prefer single-user machines for task rows.
+
+- **Codex approves its own escalations.** [`home/.codex/config.base.toml`](home/.codex/config.base.toml)
+  sets `approval_policy = "on-request"` with `approvals_reviewer = "auto_review"`, so when Codex asks to
+  cross the sandbox boundary the request is reviewed by a model rather than by you and can be approved in
+  seconds with no human prompt. The sandbox boundary is a speed bump, not a consent gate — which is also why
+  a Codex row rarely shows a needs-input state. Set `approvals_reviewer = "user"` in that file (then
+  `install.sh --refresh-config`) to be asked yourself.
 
 - **Two smaller ones.** `wt new` runs the repo's `.wt-setup`, when it is executable, inside the new worktree,
   so starting a task in a repo you have not read is running that repo's script as you. And `azml-ssh-host`

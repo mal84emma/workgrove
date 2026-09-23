@@ -12,7 +12,6 @@
     {
       "context": "Chat",
       "bindings": {
-        "ctrl+v": "chat:imagePaste",
         "shift+enter": "chat:newline"
       }
     },

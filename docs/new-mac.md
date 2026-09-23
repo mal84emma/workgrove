@@ -40,9 +40,9 @@ status line — and the `tui`, `voice` and `theme` keys of `~/.claude/settings.j
 either way for its hooks and permissions. A bare `install.sh` installs the machinery and leaves all six
 alone, which is what a stranger cloning this repo gets; the README's Install section has the per-flag detail
 and what arrives instead. For the five files the flag never has to be repeated: once they are links into this
-repo, a later bare run — `wt update`'s, for instance — keeps them. The UI keys are the exception, because a
-copied file records no such choice: `--with-claude-ui`, or `--opinionated-config` again, has to be given on
-any later run that rewrites that copy, which means any run with `--refresh-config`.
+repo, a later bare run — `wt update`'s, for instance — keeps them. The UI keys are remembered by the copy
+itself: a `~/.claude/settings.json` that already carries a top-level `tui` key came from a run that was given
+the flag, so a later `--refresh-config` keeps those keys rather than stripping them.
 
 `install.sh` prints one line per file it links or installs and says where it put anything it moved out of the
 way. Rerun it whenever the repo changes. It refuses before touching anything if a git identity is missing, or,

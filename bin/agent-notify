@@ -5,18 +5,23 @@
 # UserPromptSubmit stamps the session's start time, SessionEnd removes the stamp. Claude Code sends both; Codex
 # does not, and a Stop with no stamp notifies as usual, so the gate never silences an agent that cannot stamp.
 set -u
+: "${HOME:?agent-notify: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 [[ -t 0 ]] && payload= || payload=$(cat)
 title=${AGENT_NOTIFY_SOURCE:-Claude Code}
 event=$(printf '%s' "$payload" | jq -r '.hook_event_name // empty' 2>/dev/null || true)
 session=$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null | tr -cd 'A-Za-z0-9-' || true)
 stamps="${XDG_STATE_HOME:-$HOME/.local/state}/claude-start-times"   # private state, not /tmp: TMPDIR is empty on the VMs
 quiet_seconds=${AGENT_NOTIFY_MIN_SECONDS:-180}   # a turn shorter than this finishes without a banner
+# Validated for the same reason the stamp is: both land in the (( )) below, where bash expands identifiers
+# and evaluates array subscripts, so a typo aborts the script under set -u and a crafted value runs commands.
+[[ $quiet_seconds =~ ^[0-9]+$ ]] || quiet_seconds=180
 
 case $event in
   UserPromptSubmit)
     [[ -n $session ]] || exit 0
     (umask 077; mkdir -p "$stamps") 2>/dev/null || exit 0          # 700; no stamp dir just means no quiet gate
-    chmod 700 "$stamps" 2>/dev/null || true                        # and 700 even if something else made it
+    chmod 700 "$stamps" 2>/dev/null ||                             # and 700 even if something else made it,
+      echo "agent-notify: cannot chmod 700 $stamps; it is not ours, so the stamps in it are not either" >&2
     find "$stamps" -type f -mtime +2 -delete 2>/dev/null || true   # a session that never ends leaves its stamp
     date +%s > "$stamps/$session"
     exit 0 ;;
@@ -52,14 +57,20 @@ frontmost_terminal() {
   [[ $front == "$t" ]]
 }
 
-# short_turn: true when this session's prompt was submitted less than quiet_seconds ago. No stamp means the
-# agent does not keep one, so the turn is never called short.
+# short_turn: true when this session's prompt was submitted less than quiet_seconds ago. No stamp — or one
+# that is not a plain count of seconds — means the agent does not keep one, so the turn is never called short.
 short_turn() {
-  local start
+  local start now
   [[ -n $session ]] || return 1
   start=$(cat "$stamps/$session" 2>/dev/null || true)
-  [[ -n $start ]] || return 1
-  (( $(date +%s) - start < quiet_seconds ))
+  # Digits only, checked before (( )) ever sees it: bash re-expands identifiers inside arithmetic and
+  # evaluates array subscripts, so a stamp reading `session[$(…)]` would run that command. A partial write
+  # or another tool's file is not a stamp either, and under set -u it would abort the Stop notification here.
+  [[ $start =~ ^[0-9]+$ ]] || return 1
+  now=$(date +%s)
+  (( now >= start )) || return 1   # the clock stepped back (NTP, or a stamp dir shared with a faster host):
+                                   # a stamp in the future must not make every turn look short until it passes
+  (( now - start < quiet_seconds ))
 }
 
 if [[ $socket == *:[0-9]* ]]; then

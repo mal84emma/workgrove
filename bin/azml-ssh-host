@@ -34,6 +34,7 @@
 # that refuses leaves the file alone, mode included. The file is created 600, in a 700 ~/.ssh.
 # UseKeychain is written on macOS only; Linux OpenSSH rejects it.
 set -euo pipefail
+: "${HOME:?azml-ssh-host: HOME is not set}"  # name the script; bash alone says only "HOME: unbound variable"
 
 API=2024-10-01-preview                       # ARM api-version for MachineLearningServices computes
 CONFIG="$HOME/.ssh/config"                   # -F overrides
@@ -340,8 +341,11 @@ write_config() { # write_config <instance> [<block file>]: the block first, then
     || die "could not create a temporary file beside $(tilde "$CONFIG"); check the folder: ls -ld $(tilde "$(parent_dir "$CONFIG")")"
   TMPFILES+=("$new")                         # cleanup removes it if anything below fails
   chmod 600 "$new" || die "could not set the mode of the new $(tilde "$CONFIG")"
-  if [ "$nonl" = 1 ]; then
-    printf '%s' "$(cat "$out")" >"$new" || die "could not write the new $(tilde "$CONFIG")"
+  if [ "$nonl" = 1 ] && [ -s "$out" ]; then
+    # Drop exactly the one newline awk added, by byte count. "$(cat …)" would strip every trailing
+    # newline, silently deleting a run of blank lines at the end of the file, and would lose NUL bytes
+    # on the way through the shell. head -c takes the same count on macOS and GNU.
+    head -c "$(( $(wc -c <"$out") - 1 ))" "$out" >"$new" || die "could not write the new $(tilde "$CONFIG")"
   else
     cat "$out" >"$new" || die "could not write the new $(tilde "$CONFIG")"
   fi
