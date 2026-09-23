@@ -13,8 +13,8 @@ xcode-select -p >/dev/null 2>&1 || xcode-select --install
 # 2. Homebrew, repo, essentials, oh-my-zsh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"
-mkdir -p ~/repos && git clone https://github.com/mal84emma/workstation ~/repos/workstation
-brew bundle --file ~/repos/workstation/Brewfile
+mkdir -p ~/repos && git clone https://github.com/mal84emma/workgrove ~/repos/workgrove
+brew bundle --file ~/repos/workgrove/Brewfile
 [ -f ~/.oh-my-zsh/oh-my-zsh.sh ] || sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
 ```
 
@@ -35,7 +35,7 @@ git config --file ~/.gitconfig.local core.editor 'code --wait'
 # git config --file ~/.gitconfig.local credential.https://dev.azure.com.helper manager
 # optional: repos in more than one folder (searched in order; the file is never versioned)
 # echo 'export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"' >> ~/.zshenv.local
-bash ~/repos/workstation/install.sh --opinionated-config
+bash ~/repos/workgrove/install.sh --opinionated-config
 exec zsh -l     # separate line on purpose: chained with && it is skipped whenever install.sh exits non-zero
 ```
 
@@ -62,7 +62,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 cmux hooks codex install --yes
-xargs -n1 code --install-extension < ~/repos/workstation/vscode/extensions.txt
+xargs -n1 code --install-extension < ~/repos/workgrove/vscode/extensions.txt
 gh auth login --web --git-protocol https
 az login          # Azure: skip unless you installed azure-cli; see docs/azml-compute.md
 claude auth login # browser login; claude auth status must report loggedIn true

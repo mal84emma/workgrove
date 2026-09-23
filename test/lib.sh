@@ -13,7 +13,7 @@
 # test/ is invisible to both: adding this one cannot change what a machine gets or what a rerun retires.
 #
 # What a caller sets before the first call:
-#   REPO             the workstation checkout root — assert_link compares link targets against it
+#   REPO             the workgrove checkout root — assert_link compares link targets against it
 #   TEST_ROOT        this run's scratch directory — lib_cleanup is what removes it, and a suite owns
 #                    checking that it is somewhere safe: lib_cleanup only refuses the roots that could
 #                    never be one ("/", the home directory, or any ancestor of it)

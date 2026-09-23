@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
 # install.sh: install this repo into $HOME.
-#   bash ~/repos/workstation/install.sh [--refresh-config] [--opinionated-config]
+#   bash ~/repos/workgrove/install.sh [--refresh-config] [--opinionated-config]
 #       [--with-zshrc] [--with-gitconfig] [--with-tmux-conf] [--with-keybindings] [--with-statusline]
 #       [--with-claude-ui] [--with-cmux-config]
 #   (on a VM, prefix WT_HOST=<vm>)
 #
 # Idempotent: rerun it whenever the repo changes. Nothing is ever deleted; anything in the way is
-# moved into ~/.workstation-backup/<YYYYmmdd-HHMMSS>-<pid>, created only if it is actually needed
+# moved into ~/.workgrove-backup/<YYYYmmdd-HHMMSS>-<pid>, created only if it is actually needed
 # (a no-op run leaves no empty directory behind).
 #
 # Three classes of file:
@@ -73,7 +73,7 @@ OS="${FORCE_OS:-$(uname -s)}"        # FORCE_OS exists only so test/install-smok
 # have to land: oh-my-zsh looks for the theme ZSH_THEME names, and for the plugins, under $ZSH_CUSTOM alone
 # whenever that is set. install_zsh_plugins always honoured it; link_dotfiles used to hardcode
 # ~/.oh-my-zsh/custom, so on a machine with ZSH_CUSTOM set the plugins arrived, the theme did not, and every
-# shell start said "[oh-my-zsh] theme 'workstation' not found" while every line of the install said success.
+# shell start said "[oh-my-zsh] theme 'workgrove' not found" while every line of the install said success.
 # link() spells its destination relative to $HOME, so a $ZSH_CUSTOM outside $HOME cannot be expressed at all;
 # require_oh_my_zsh refuses --with-zshrc there rather than installing half of it.
 ZC="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
@@ -401,7 +401,7 @@ link_dotfiles() {
   done
   if opted_in "$WITH_ZSHRC" .zshrc; then
     link home/.zshrc .zshrc
-    link home/.oh-my-zsh/custom/themes/workstation.zsh-theme "$ZC_REL/themes/workstation.zsh-theme"
+    link home/.oh-my-zsh/custom/themes/workgrove.zsh-theme "$ZC_REL/themes/workgrove.zsh-theme"
   fi
   if opted_in "$WITH_GITCONFIG" .gitconfig; then
     link home/.gitconfig .gitconfig
@@ -476,9 +476,11 @@ retired_src() {
 
 # remove_retired_links: link() only knows the names the repo uses today, so a link an earlier run made
 # under a name that has since been renamed away is never revisited and dangles forever — a rerun just adds
-# the new link beside it. That is how ~/.oh-my-zsh/custom/themes/max.zsh-theme outlived its rename to
-# workstation.zsh-theme, leaving oh-my-zsh looking for a theme that was already gone; `wt update` reruns
-# this script, so every later rename would litter every machine the same way.
+# the new link beside it. That is how ~/.oh-my-zsh/custom/themes/max.zsh-theme outlived the theme's first
+# rename, leaving oh-my-zsh looking for a theme that was already gone; `wt update` reruns this script, so
+# every later rename would litter every machine the same way — including that same theme's rename to
+# workgrove.zsh-theme, which came with the project's own: this is what retires the stale link on the
+# next run, on every machine that already had the old one.
 # Three things together make an entry ours to retire: it is a symlink, its target no longer exists, and it is
 # ours by our_link — into this repo, or into the same source path under a root this clone has since moved
 # away from, so a rename does not strand the retired names either. Anything else dangling here belongs to the
@@ -656,7 +658,7 @@ check_bashrc() {
 hook_bashrc() {
   local src="$BASHRC_SRC"
   local rc="$HOME/.bashrc" line mode tmp target moved=0
-  line="$src   # workstation: PATH, WT_HOST, WT_REPOS_DIR in cmux's bash rows"
+  line="$src   # workgrove: PATH, WT_HOST, WT_REPOS_DIR in cmux's bash rows"
   if [[ $OS == Darwin ]]; then
     return 0
   fi
@@ -1113,7 +1115,7 @@ report_skipped() {
 
 main() {
   parse_args "$@"
-  BK="$HOME/.workstation-backup/$(date +%Y%m%d-%H%M%S)-$$"   # timestamp+pid: same-second reruns cannot collide
+  BK="$HOME/.workgrove-backup/$(date +%Y%m%d-%H%M%S)-$$"   # timestamp+pid: same-second reruns cannot collide
   # Everything that can refuse runs first, while the machine is still untouched: a half-install that
   # then says "set user.name … and rerun" leaves the user with displaced files and no idea where. Every
   # refusal, including the later steps' check_… twins, therefore comes before the FIRST write of any kind

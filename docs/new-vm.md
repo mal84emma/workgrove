@@ -20,7 +20,7 @@ before block 2 (see the Notes).
 
 ```bash
 # 1. packages   (the first line starts this page's clock)
-date +%s > /tmp/workstation-setup-start
+date +%s > /tmp/workgrove-setup-start
 sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git zsh tmux python3 jq curl rsync build-essential
 (type -p wget >/dev/null || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wget) && sudo mkdir -p -m 755 /etc/apt/keyrings \
   && wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null \
@@ -35,11 +35,11 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/too
 git config --file ~/.gitconfig.local user.name  'GIT_NAME'
 git config --file ~/.gitconfig.local user.email 'GIT_EMAIL'
 mkdir -p ~/repos
-[ -d ~/repos/workstation ] || git clone https://github.com/mal84emma/workstation ~/repos/workstation
+[ -d ~/repos/workgrove ] || git clone https://github.com/mal84emma/workgrove ~/repos/workgrove
 # install.sh writes export WT_REPOS_DIR="$HOME" to ~/.zshenv.local, so repos cloned to ~/<repo> are found.
 # For other folders, or several, edit that line: colon-separated, searched in order, e.g. "$HOME/work:$HOME"
 # --refresh-config installs the portable Claude and Codex configs even when the image shipped its own; the
-# old ones go to ~/.workstation-backup/<stamp>-<pid>/. On a later update never pass it without reading the sync
+# old ones go to ~/.workgrove-backup/<stamp>-<pid>/. On a later update never pass it without reading the sync
 # table in the README, because it also drops Codex's hook and folder trust.
 # --opinionated-config asks for the author's own ~/.zshrc (hence the oh-my-zsh line above), ~/.gitconfig,
 # ~/.tmux.conf, Claude keymap and status line, plus the tui/voice/theme keys of ~/.claude/settings.json;
@@ -47,7 +47,7 @@ mkdir -p ~/repos
 # never has to be repeated: once they are links into the repo, the bare rerun behind `wt update` keeps them.
 # The UI keys are remembered by the copy itself — a settings.json carrying a top-level tui key came from a
 # run that was given the flag — so --refresh-config keeps them rather than stripping them.
-WT_HOST=<vm> bash ~/repos/workstation/install.sh --opinionated-config --refresh-config   # replace <vm> with this machine's alias in the Mac's ~/.ssh/config
+WT_HOST=<vm> bash ~/repos/workgrove/install.sh --opinionated-config --refresh-config   # replace <vm> with this machine's alias in the Mac's ~/.ssh/config
 sudo chsh -s "$(command -v zsh)" "$(id -un)" && exec zsh -l   # last line: exec replaces the shell
 ```
 
@@ -81,7 +81,7 @@ command -v az >/dev/null || { sudo DEBIAN_FRONTEND=noninteractive apt-get instal
 # command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 az account show >/dev/null 2>&1 || az login --use-device-code   # code in the Mac browser, like gh
 az account show --query name -o tsv
-echo "setup took $(( ($(date +%s) - $(cat /tmp/workstation-setup-start)) / 60 )) min"
+echo "setup took $(( ($(date +%s) - $(cat /tmp/workgrove-setup-start)) / 60 )) min"
 ```
 
 ## Then, on the Mac
@@ -130,7 +130,7 @@ run `exec bash` in that pane or open a new tmux window.
 ## Notes
 
 - **A machine that is not fresh** (an Azure ML compute instance usually is not). Skip this on a fresh machine.
-  `install.sh` moves whatever is in the way into `~/.workstation-backup/<stamp>-<pid>/` and prints that path, or
+  `install.sh` moves whatever is in the way into `~/.workgrove-backup/<stamp>-<pid>/` and prints that path, or
   prints `done. nothing needed backing up`. Block 2's `--opinionated-config` is what puts an existing
   `~/.gitconfig` and `~/.tmux.conf` there in the first place, so before running it, copy from an existing
   `~/.gitconfig` only what the linked one does not already cover: the linked `~/.gitconfig` routes github.com
@@ -139,13 +139,13 @@ run `exec bash` in that pane or open a new tmux window.
   file is displaced: `install.sh` adds `core.excludesFile` and the `~/.gitconfig.local` include to the
   `~/.gitconfig` you already have, and appends cmux's one `update-environment` line to your `~/.tmux.conf`.
 - **Seeding instead of cloning** (to carry an uncommitted change to a VM). From the Mac:
-  `ssh <vm> 'mkdir -p ~/repos' && rsync -a --exclude .git --exclude .worktrees ~/repos/workstation/ <vm>:~/repos/workstation/`
+  `ssh <vm> 'mkdir -p ~/repos' && rsync -a --exclude .git --exclude .worktrees ~/repos/workgrove/ <vm>:~/repos/workgrove/`
   (`.worktrees` keeps your task worktrees on the Mac, where they belong).
   Block 2's clone line then finds the folder and skips. A seeded copy has no `.git`, so `wt update` and
   `wt -H <vm> update` refuse until it is replaced by a clone; until then re-seed with the same rsync line and
-  rerun `bash ~/repos/workstation/install.sh` on the VM. A VM seeded before the `--exclude .worktrees` was
+  rerun `bash ~/repos/workgrove/install.sh` on the VM. A VM seeded before the `--exclude .worktrees` was
   added still carries a stale copy of every Mac worktree, and rsync has no `--delete`, so re-seeding will not
-  remove it: run `ssh <vm> 'rm -rf ~/repos/workstation/.worktrees'` once.
+  remove it: run `ssh <vm> 'rm -rf ~/repos/workgrove/.worktrees'` once.
 - **Update the Mac's `wt` and each VM's `wt` together** (`wt update` on the Mac, and for a VM either
   `wt -H <vm> update` from an interactive Mac terminal or `wt update` in a shell on the VM, or the rsync seed
   above for an uncommitted change), because `wt -H <vm> …` runs the VM's copy for the remote half of every

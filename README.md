@@ -1,4 +1,4 @@
-# workstation
+# workgrove
 
 Dotfiles plus a small tool, `wt`, that runs many coding-agent tasks in parallel. Claude Code and Codex
 each get their own git worktree and their own terminal row in [cmux](https://github.com/manaflow-ai/cmux),
@@ -36,14 +36,14 @@ VS Code opens on demand, through `wt open`.
 - **Paths.** Task repos live in the folders `$WT_REPOS_DIR` lists, default `~/Documents/Repositories` on the
   Mac; on a VM `install.sh` records the home folder instead, so every git repo directly under the home folder
   then counts as a task repo, hidden folders such as `~/.oh-my-zsh` excluded. This repo lives at
-  `~/repos/workstation` on every machine, so the same commands work everywhere.
+  `~/repos/workgrove` on every machine, so the same commands work everywhere.
 - **Auth is yours.** The repo carries tools and config only. You log in once per machine with `gh auth login`,
   `az login`, `claude auth login`, and `codex login`; `claude auth status` must report `"loggedIn": true`.
 
 ## Layout
 
 ```
-workstation/
+workgrove/
 ├── README.md
 ├── LICENSE
 ├── install.sh                 links this repo into $HOME (Mac and Ubuntu)
@@ -56,7 +56,7 @@ workstation/
 │   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 ├── home/
 │   ├── .zshenv .gitignore_global   always installed; .zshrc .gitconfig .tmux.conf are opt-in
-│   ├── .oh-my-zsh/custom/themes/workstation.zsh-theme   with the .zshrc opt-in
+│   ├── .oh-my-zsh/custom/themes/workgrove.zsh-theme   with the .zshrc opt-in
 │   ├── .claude/
 │   │   ├── AGENTS.md          the working conventions both agents read
 │   │   ├── CLAUDE.md          one line: @AGENTS.md
@@ -92,8 +92,8 @@ Claude Code, Codex — is installed by `Brewfile` on a Mac and by [docs/new-vm.m
 and on a VM its install block is guarded by `command -v az`.
 
 ```bash
-mkdir -p ~/repos && git clone https://github.com/mal84emma/workstation ~/repos/workstation
-bash ~/repos/workstation/install.sh
+mkdir -p ~/repos && git clone https://github.com/mal84emma/workgrove ~/repos/workgrove
+bash ~/repos/workgrove/install.sh
 ```
 
 Full instructions: [docs/new-mac.md](docs/new-mac.md) and [docs/new-vm.md](docs/new-vm.md).
@@ -159,7 +159,7 @@ is the file that git-ignores `.worktrees/`.
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files — `~/.zshrc.local` only when `~/.zshrc` is one of them |
 
 It is idempotent: rerun it after every repo change. Nothing is deleted. Anything in the way is moved into
-`~/.workstation-backup/<timestamp>-<pid>`, which is created only when it is actually needed. It stops with a
+`~/.workgrove-backup/<timestamp>-<pid>`, which is created only when it is actually needed. It stops with a
 message if no git identity is set — `~/.gitconfig.local` first, then your global git config — or, when
 `~/.zshrc` is opted in, if oh-my-zsh is missing. On Linux it records this VM's alias in the Mac's
 `~/.ssh/config` as a `WT_HOST` line in `~/.zshenv.local`: given in the environment
@@ -208,14 +208,14 @@ delete anything is the cheapest way to get the list.
 Delete the symlinks this repo made — `~/.zshenv`, `~/.gitignore_global`, `~/.claude/AGENTS.md`,
 `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, the skills under `~/.agents/skills/` and `~/.claude/skills/`, the
 `~/.local/bin/` entries, `~/.config/cmux/cmux.json`, and whichever opt-in files you asked for (each one points
-into `~/repos/workstation`, so `ls -l` tells you which are ours). One link is not in `$HOME` itself and so
-never appears in an `ls -l ~`: the oh-my-zsh theme, at `~/.oh-my-zsh/custom/themes/workstation.zsh-theme`, or
+into `~/repos/workgrove`, so `ls -l` tells you which are ours). One link is not in `$HOME` itself and so
+never appears in an `ls -l ~`: the oh-my-zsh theme, at `~/.oh-my-zsh/custom/themes/workgrove.zsh-theme`, or
 under `$ZSH_CUSTOM/themes/` when that variable is set. Two more things in that same directory are not links at
 all: with `~/.zshrc` opted in, `install.sh` *clones* the two plugins it enables, into
 `$ZSH_CUSTOM/plugins/zsh-autosuggestions` and `$ZSH_CUSTOM/plugins/zsh-syntax-highlighting`. They are ordinary
 git checkouts of someone else's repos, yours to delete or keep. Delete the three machine-local copies
 (`~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json`) if you do not want them. Then copy
-your originals back out of the newest `~/.workstation-backup/<timestamp>-<pid>/`, which mirrors `$HOME`. That
+your originals back out of the newest `~/.workgrove-backup/<timestamp>-<pid>/`, which mirrors `$HOME`. That
 is also where a `wt`, `agent-notify`, `cmux-hook` or `azml-ssh-host` of your own went if you had one in
 `~/bin`: `install.sh` retires those, because `~/bin` comes before `~/.local/bin` on `PATH` and a copy there
 would shadow the link.
@@ -356,7 +356,7 @@ always backed up. Per-machine files never enter the loop.
 | Change | Mac | VM |
 |---|---|---|
 | Edit `AGENTS.md`, a skill, `wt` | Skills apply live, `AGENTS.md` at the next session; commit | `wt -H <vm> update` |
-| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file, then `bash ~/repos/workstation/install.sh --refresh-config && cmux hooks codex install --yes`; review the portable handlers with Codex `/hooks`; commit | `wt -H <vm> update --refresh-config`; the refresh rewrites `~/.codex/config.toml` from the `.base` file and drops Codex's hook trust hashes and folder trust, so re-trust in `/hooks` on the VM afterwards; do **not** run the cmux installer there |
+| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file, then `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`; review the portable handlers with Codex `/hooks`; commit | `wt -H <vm> update --refresh-config`; the refresh rewrites `~/.codex/config.toml` from the `.base` file and drops Codex's hook trust hashes and folder trust, so re-trust in `/hooks` on the VM afterwards; do **not** run the cmux installer there |
 | Update cmux, or repair local Codex state tracking | Back up the live `config.toml` and `hooks.json`, run `cmux hooks codex install --yes`, check that one turn returns to `idle` | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit | `wt -H <vm> update` |
 | Change `cmux.json` | Live once cmux reloads or relaunches; commit | n/a |

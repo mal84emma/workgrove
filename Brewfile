@@ -1,4 +1,4 @@
-# workstation essentials only. Personal tools stay out; .zshrc guards whatever you add yourself.
+# workgrove essentials only. Personal tools stay out; .zshrc guards whatever you add yourself.
 # azure-cli: needed only by bin/azml-ssh-host, which puts Azure ML compute instances in ~/.ssh/config
 # (and for ad-hoc data access). Nothing else here uses it, and it drags in its own Python and a large
 # dependency tree, so it is off by default: uncomment it, or `brew install azure-cli` when you want it.

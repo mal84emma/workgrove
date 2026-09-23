@@ -927,7 +927,7 @@ cmd_update() { # pull this repo and re-run its installer
   if [[ -L "$s" ]]; then s=$(readlink "$s"); fi            # ~/.local/bin/wt -> <repo>/bin/wt
   [[ "$s" == /* ]] || s="$(dirname "$0")/$s"
   dir=$(cd "$(dirname "$s")/.." && pwd -P)
-  [[ -d "$dir/.git" ]] || die "$dir is not a git clone; replace the seed: mv $dir $dir.seed && git clone https://github.com/mal84emma/workstation $dir"
+  [[ -d "$dir/.git" ]] || die "$dir is not a git clone; replace the seed: mv $dir $dir.seed && git clone https://github.com/mal84emma/workgrove $dir"
   local ans
   git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 \
     || die "$dir has no upstream branch; set one: git -C $dir branch --set-upstream-to origin/main"

@@ -86,7 +86,7 @@ esac
 trap lib_cleanup EXIT
 
 # guard_scratch_home <dir>: the check this whole file is built around. install.sh writes dotfiles, runs
-# `git config --global` and moves whatever is in the way into ~/.workstation-backup, so a HOME that
+# `git config --global` and moves whatever is in the way into ~/.workgrove-backup, so a HOME that
 # resolved under the real one would rewrite the author's machine. Called at the start of every scenario
 # and again from run_install rather than once at the top, so a future edit that builds a home some other
 # way still trips it. Aborts the run outright — this is not a countable assertion failure.
@@ -265,11 +265,11 @@ nojq_path() {
   printf '%s\n' "$NOJQ_BIN"
 }
 
-# backup_dir <home>: this run's ~/.workstation-backup/<stamp>-<pid>, or "" if nothing needed backing up.
+# backup_dir <home>: this run's ~/.workgrove-backup/<stamp>-<pid>, or "" if nothing needed backing up.
 # install.sh creates it only when it is used, and never more than one per run.
 backup_dir() {
   local d
-  for d in "$1"/.workstation-backup/*/; do
+  for d in "$1"/.workgrove-backup/*/; do
     if [[ -d "$d" ]]; then
       printf '%s\n' "${d%/}"
       return 0
@@ -355,8 +355,8 @@ CMUX_HOOK_ID=wt                                    # the id install.sh keys its 
 # shellcheck disable=SC2088   # the ~ is literal: cmux expands it, and the JSON this compares against spells it so
 CMUX_HOOK_CMD='~/.local/bin/cmux-hook'             # …the command that makes an entry with that id OURS
 CMUX_FRAGMENT='"command": "~/.local/bin/cmux-hook",'   # the paste-me line every refusal has to print
-THEME_DST=.oh-my-zsh/custom/themes/workstation.zsh-theme
-THEME_SRC=home/.oh-my-zsh/custom/themes/workstation.zsh-theme
+THEME_DST=.oh-my-zsh/custom/themes/workgrove.zsh-theme
+THEME_SRC=home/.oh-my-zsh/custom/themes/workgrove.zsh-theme
 TMUX_LINE='set -ag update-environment'                                   # enough to count occurrences
 TMUX_FULL_LINE='set -ag update-environment " CMUX_SOCKET_PATH CMUX_WORKSPACE_ID"'   # the whole line, for -x
 
@@ -490,7 +490,7 @@ assert_only_linked() {
 #
 # Nothing is excluded, and that is deliberate. The manifest records type, target and content only — no
 # mtimes, inodes, uids or pids — so the things that genuinely differ run to run never enter it. The one
-# volatile-looking name, ~/.workstation-backup/<timestamp>-<pid>, is created by the FIRST run, so keeping
+# volatile-looking name, ~/.workgrove-backup/<timestamp>-<pid>, is created by the FIRST run, so keeping
 # it in makes the comparison strictly stronger: a second run that stashed anything would have to invent a
 # second directory beside it, and the diff would say so. If a future change adds something truly volatile
 # (a cache, a log, a lockfile) it belongs on an exclusion list here, with the reason written down.
@@ -639,12 +639,12 @@ scenario_opinionated() {
     # Exactly one backup dir, holding all five originals with their own content.
     n=0
     bk=""
-    for d in "$h"/.workstation-backup/*/; do
+    for d in "$h"/.workgrove-backup/*/; do
       [[ -d "$d" ]] || continue
       bk="$d"
       n=$((n + 1))
     done
-    assert_eq "backup directories under ~/.workstation-backup" 1 "$n"
+    assert_eq "backup directories under ~/.workgrove-backup" 1 "$n"
     # No loop and no `continue` guard around the five below. They used to sit inside the loop above, so a
     # run that stashed nothing at all skipped five assertions instead of failing them and the suite stayed
     # green on a smaller total. With $bk empty each of these now fails loudly, which is the point.
@@ -1181,7 +1181,7 @@ scenario_zsh_custom() {
   RUN_EXTRA_ENV=(ZSH_CUSTOM="$zc")
   if assert_install_ok "$h" "$log" --with-zshrc; then
     assert_link "$h" .zshrc home/.zshrc
-    assert_link "$h" .config/omz-custom/themes/workstation.zsh-theme "$THEME_SRC"
+    assert_link "$h" .config/omz-custom/themes/workgrove.zsh-theme "$THEME_SRC"
     assert_absent "$h" "$THEME_DST"    # the hardcoded path, where oh-my-zsh would never have looked
   fi
   end_scenario
