@@ -421,15 +421,24 @@ own machine.
   What they do not stop — because it is the feature — is that host asking the Mac to open any path on it in
   a VS Code remote window, or to create a row that runs `wt run` there.
 
-  Whether they also stop one host naming a *different* one is an open question rather than a settled yes.
-  `from_row_on_host` compares the workspace id the notification carries against the host named in its body,
-  and both of those come from the sender: it is a consistency check, not a proof of where the message came
-  from. It holds only if cmux binds `--workspace` to the connection the notification arrived on, which nobody
-  here has verified. cmux's own documentation says `--workspace` *is* ignored for cmux Cloud machines — the
-  Mac decides where a machine's notification lands — but these are `cmux ssh` rows, a different transport,
-  and the one signal that would have answered it directly is unusable: on cmux 0.64 a `cmux ssh` row's own
-  notifications report `CMUX_NOTIFICATION_ORIGIN=local` rather than the documented `ssh-relay:<uuid>`. Treat
-  the cross-host case as unknown until someone tests it. Nothing else in this bullet depends on the answer.
+  They do also stop one host naming a *different* one, and that is now measured rather than assumed. cmux
+  authorises a relayed notification against the surface and workspace ids in the sender's environment, and
+  refuses any request whose identity is not the one the relay connection itself holds: naming another
+  workspace is rejected as `remote_relay_workspace_denied`, and a stale or borrowed surface as
+  `remote_relay_surface_denied`. So a VM can only ever speak as its own row, and the workspace id
+  `from_row_on_host` reads is where the message came from rather than a claim about it — which makes that
+  check a proof of origin, not the consistency check it was written as. `--workspace` does not enter into it:
+  it neither authorises the request nor decides which row the notification is recorded against, on `cmux ssh`
+  rows or locally. `wt` still passes it, naming its own row, so it agrees with the environment instead of
+  contradicting it. The signal that would have said this directly is still unusable — on cmux 0.64 a
+  `cmux ssh` row's own notifications report `CMUX_NOTIFICATION_ORIGIN=local` rather than the documented
+  `ssh-relay:<uuid>` — so the relay's own refusals are what answers it.
+
+  That enforcement is also why every one of those six ids has to be current. A tmux pane keeps the identity
+  of whichever cmux connection started it, so after cmux reconnects a row, a pane holding the old ids is
+  refused and `wt new` on a VM can never ask for a row. `~/.tmux.conf`'s `update-environment` line carries all
+  six into the tmux session environment on each attach, and `wt` re-reads them there at call time rather than
+  trusting what this pane was born with.
 
   Within one host the check is deliberately loose anyway: it asks whether the notifying row is a remote row
   whose destination is that host, not whether a task lives there, not whether you ever ran `wt` on it. So the

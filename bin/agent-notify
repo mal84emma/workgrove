@@ -34,12 +34,25 @@ case $event in
   *) body="needs attention"; sound=Glass ;;
 esac
 
-socket=${CMUX_SOCKET_PATH:-}; ws=${CMUX_WORKSPACE_ID:-}
-if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null; then          # prefer the session env: cmux rebinds it on reattach
-  s=$(tmux display-message -p '#S' 2>/dev/null || true)
-  v=$(tmux show-environment -t "=$s" CMUX_SOCKET_PATH 2>/dev/null || true); [[ $v == *=* ]] && socket=${v#*=}
-  v=$(tmux show-environment -t "=$s" CMUX_WORKSPACE_ID 2>/dev/null || true); [[ $v == *=* ]] && ws=${v#*=}
-fi
+# The same list and the same precedence as relay_env in bin/wt, and for the same reason: cmux authorises a
+# relayed notification against the surface and workspace in the environment, and a pane keeps the identity of
+# whichever cmux connection started it. Only the tmux SESSION environment is rebound on reattach, so re-read
+# it here and hand the values to cmux explicitly instead of letting the child inherit this pane's stale ones.
+relay_vars="CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID"
+socket=${CMUX_SOCKET_PATH:-}; ws=${CMUX_WORKSPACE_ID:-}; ident=()
+s=""
+if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null; then s=$(tmux display-message -p '#S' 2>/dev/null || true); fi
+for n in $relay_vars; do
+  v=${!n:-}
+  if [[ -n $s ]]; then
+    t=$(tmux show-environment -t "=$s" "$n" 2>/dev/null || true); [[ $t == *=* ]] && v=${t#*=}
+  fi
+  [[ -n $v ]] && ident+=("$n=$v")
+  case $n in
+    CMUX_SOCKET_PATH) socket=$v ;;
+    CMUX_WORKSPACE_ID) ws=$v ;;
+  esac
+done
 
 # frontmost_terminal: true when the app this agent runs in is the one already on screen, so a banner would
 # tell the user what they are looking at. cmux rows never reach here; this is for a bare terminal window.
@@ -74,7 +87,7 @@ short_turn() {
 }
 
 if [[ $socket == *:[0-9]* ]]; then
-  CMUX_SOCKET_PATH=$socket env -u CMUX_SOCKET "${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}" notify \
+  env -u CMUX_SOCKET "${ident[@]+"${ident[@]}"}" "${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}" notify \
     ${ws:+--workspace "$ws"} --title "$title" --body "$body" >/dev/null 2>&1 ||
     echo 'agent-notify: relay failed; close and reopen this cmux row (wt -H <host> attach …)' >&2
 elif [[ -z ${CMUX_SURFACE_ID:-} && $(uname -s) == Darwin ]]; then

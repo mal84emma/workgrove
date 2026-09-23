@@ -94,19 +94,32 @@ wt_host() { # this VM's alias in the Mac's ~/.ssh/config
   printf '%s' "$WT_HOST"
 }
 
-# How to reach the Mac's cmux: socket and workspace id from this pane, overridden by the tmux session
-# environment (cmux rebinds it there on every attach). bin/agent-notify uses the same precedence.
-RELAY_SOCKET=""; RELAY_WS=""
-relay_env() { # sets RELAY_SOCKET and RELAY_WS; non-zero when this session has no relay socket
-  local s v
-  RELAY_SOCKET="${CMUX_SOCKET_PATH:-}"; RELAY_WS="${CMUX_WORKSPACE_ID:-}"
-  if [[ -n "${TMUX:-}" ]] && have tmux; then
-    s=$(tmux display-message -p '#S' 2>/dev/null || true)
-    v=$(tmux show-environment -t "=$s" CMUX_SOCKET_PATH 2>/dev/null || true)
-    if [[ "$v" == *=* ]]; then RELAY_SOCKET="${v#*=}"; fi
-    v=$(tmux show-environment -t "=$s" CMUX_WORKSPACE_ID 2>/dev/null || true)
-    if [[ "$v" == *=* ]]; then RELAY_WS="${v#*=}"; fi
-  fi
+# How to reach the Mac's cmux: the identity of this pane, overridden by the tmux session environment (cmux
+# rebinds it there on every attach, which ~/.tmux.conf's update-environment line is what carries). All six,
+# because cmux authorises a relayed request against the SURFACE and the WORKSPACE it reads from the
+# environment — a pane holding the ids of the connection that started it is refused after cmux reconnects the
+# row, with remote_relay_surface_denied. A pane's own environment is never rewritten, only the session's, so
+# these are re-read at call time and handed to the cmux child explicitly rather than inherited.
+# bin/agent-notify uses the same precedence over the same list.
+RELAY_VARS="CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID"
+RELAY_SOCKET=""; RELAY_WS=""; RELAY_IDENT=()
+relay_env() { # sets RELAY_SOCKET, RELAY_WS and RELAY_IDENT; non-zero when this session has no relay socket
+  local s="" n v t
+  RELAY_IDENT=(); RELAY_SOCKET=""; RELAY_WS=""
+  if [[ -n "${TMUX:-}" ]] && have tmux; then s=$(tmux display-message -p '#S' 2>/dev/null || true); fi
+  for n in $RELAY_VARS; do          # unquoted on purpose: RELAY_VARS is a word list, not one value
+    v="${!n:-}"
+    if [[ -n "$s" ]]; then
+      t=$(tmux show-environment -t "=$s" "$n" 2>/dev/null || true)
+      # an unset name prints "-NAME", which has no "=" and so leaves the pane's own value in place
+      if [[ "$t" == *=* ]]; then v="${t#*=}"; fi
+    fi
+    if [[ -n "$v" ]]; then RELAY_IDENT+=("$n=$v"); fi
+    case "$n" in
+      CMUX_SOCKET_PATH) RELAY_SOCKET="$v" ;;
+      CMUX_WORKSPACE_ID) RELAY_WS="$v" ;;
+    esac
+  done
   [[ "$RELAY_SOCKET" == *:[0-9]* ]]
 }
 
@@ -123,11 +136,12 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
   body=$(jq -cn "${args[@]+"${args[@]}"}" '$ARGS.named')
   relay_env || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
   c=$(cmux_bin) || { warn "cmux CLI not found here; run the line below on the Mac"; return 1; }
-  # Belt and braces, not the mechanism: on cmux 0.64 --workspace does not change which workspace the
-  # notification is recorded against — the sending surface's own is used whatever is named (measured). It
-  # names this row, which is what the Mac hook's from_row_on_host wants anyway, so it stays right either way.
+  # Belt and braces, not the mechanism: on cmux 0.64 --workspace neither authorises the request nor changes
+  # which workspace it is recorded against — both come from the environment set below, whatever is named
+  # (measured). It names this row, which is what the Mac hook's from_row_on_host wants anyway, so it agrees
+  # with that environment rather than contradicting it, and stays right if a later cmux does read it.
   if [[ -n "$RELAY_WS" ]]; then ws=(--workspace "$RELAY_WS"); fi
-  CMUX_SOCKET_PATH="$RELAY_SOCKET" env -u CMUX_SOCKET "$c" notify "${ws[@]+"${ws[@]}"}" --title "$title" --body "$body" >/dev/null 2>&1 \
+  env -u CMUX_SOCKET "${RELAY_IDENT[@]+"${RELAY_IDENT[@]}"}" "$c" notify "${ws[@]+"${ws[@]}"}" --title "$title" --body "$body" >/dev/null 2>&1 \
     || { warn "cmux notify failed; run the line below on the Mac"; return 1; }
 }
 
