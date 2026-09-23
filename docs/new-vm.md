@@ -91,7 +91,7 @@ the driver row, start tasks with `wt -H <vm> new -r <repo> -p "…"`.
 Inside tmux, Ctrl+J always gives Claude a newline. Shift+Enter does too, but only with the linked
 `~/.tmux.conf` (`--with-tmux-conf` or `--opinionated-config`), whose `extended-keys` passes the modifier through;
 under tmux's defaults, or in a session started before that file arrived, the modifier is stripped and Shift+Enter
-submits. The same file brings true colour (it sets `COLORTERM=truecolor`, which ssh does not carry over), a 10 ms `escape-time` instead of 500 ms, and focus events. Its
+submits. The same file brings true colour (it sets `COLORTERM=truecolor`, which ssh does not carry over, and `CLAUDE_CODE_TMUX_TRUECOLOR=1`, without which Claude caps itself at 256 colours inside tmux), a 10 ms `escape-time` instead of 500 ms, and focus events. Its
 `default-terminal` reaches only new sessions and panes: a session that was already running keeps `TERM=screen`
 until you start a new one. Ubuntu 22.04's tmux is 3.2a, and the file is written for it; the Ubuntu archive has
 nothing newer for that release, so options that need 3.3 or later (`allow-passthrough`, for one) are left out
