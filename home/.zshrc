@@ -121,7 +121,8 @@ source $ZSH/oh-my-zsh.sh
 
 ### !!! previous zsh config
 
-# put a new line before every command except the first
+# put a new line before every command except the first: this body runs once, at the first prompt, and its
+# only effect is to redefine precmd as the inner one, which every prompt after that runs instead.
 precmd() {
     precmd() {
         echo
@@ -134,9 +135,6 @@ case "$(uname -s)" in
     export PATH="/opt/homebrew/bin:$PATH"
     ;;
 esac
-
-# add agent CLIs to path (they live in local bin; also set in .zshenv)
-export PATH="$HOME/.local/bin:$PATH"
 
 # load fuzzy find
 if command -v fzf >/dev/null 2>&1; then

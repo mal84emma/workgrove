@@ -22,9 +22,11 @@ result with one non-interactive login.
 | A local private key | Its public half must be the one registered on the instance | The key sits in `~/.ssh` |
 | SSH enabled at creation | Cannot be turned on afterwards | `sshSettings.sshPublicAccess` is `Enabled` |
 
-The Azure CLI and `jq` come from the `Brewfile` on the Mac, and `az login` is one of the logins in
-[new-mac.md](new-mac.md). On an Azure ML compute instance itself az is preinstalled: the VM page's install
-block is skipped by its own guard, so it only logs in.
+`jq` comes from the `Brewfile` on the Mac. The Azure CLI does not, quite: its `brew "azure-cli"` line is
+commented out, because this helper is the only thing in the repo that needs it. Uncomment it and rerun
+`brew bundle --file ~/repos/workstation/Brewfile`, or just `brew install azure-cli`. Then `az login`, which is
+one of the logins in [new-mac.md](new-mac.md). On an Azure ML compute instance itself az is preinstalled:
+the VM page's install block is skipped by its own guard, so it only logs in.
 
 ## Usage
 

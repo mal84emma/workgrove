@@ -1,9 +1,24 @@
 #!/bin/sh
+# Claude Code status line: "HH:MM  Model (effort) [NN%]  .../last/three/path/components".
+# One jq call, not four: this runs on every refresh, and the old cat/date/4×jq/awk pipeline measured
+# 18.4 ms against 10.7 ms for this — and printed four identical parse errors into Claude Code's log
+# whenever stdin was not JSON. 2>/dev/null now swallows the one that is left.
 input=$(cat)
 time=$(date +%H:%M)
-cwd=$(printf '%s' "$input" | jq -r '.workspace.current_dir // empty' | awk -F/ '{n=NF; if (n>3) printf ".../%s/%s/%s", $(n-2), $(n-1), $n; else print $0}')
-model=$(printf '%s' "$input" | jq -r '.model.display_name // empty')
-effort=$(printf '%s' "$input" | jq -r '.effort.level // empty')
+fields=$(printf '%s' "$input" | jq -j '
+  [ (.workspace.current_dir // "" | split("/")
+      | if length > 3 then ".../" + (.[-3:] | join("/")) else join("/") end),
+    (.model.display_name // ""),
+    (.effort.level // ""),
+    (.context_window.used_percentage // 0 | round | tostring + "%")
+  ] | join("\u001f")' 2>/dev/null)
+# \u001f (unit separator), not @tsv: tab is an IFS whitespace character, so runs of tabs collapse and
+# empty fields vanish — on `{}` the percentage would land in the cwd slot. It also leaves any tab or
+# newline inside a value literal rather than escaped. `jq -j` so there is no trailing newline to strip,
+# and `tostring + "%"` stays inside jq so non-JSON input still prints "[]" and not "[%]".
+# A heredoc, not <<<: /bin/sh is dash on the Ubuntu VMs.
+IFS=$(printf '\037') read -r cwd model effort ctx <<EOF
+$fields
+EOF
 [ -n "$effort" ] && model="$model ($effort)"
-ctx=$(printf '%s' "$input" | jq -r '.context_window.used_percentage // 0 | round | tostring + "%"')
 printf "%s  %s [%s]  %s" "$time" "$model" "$ctx" "$cwd"

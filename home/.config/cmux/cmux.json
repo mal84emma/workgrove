@@ -12,7 +12,7 @@
       "type": "command"
     },
     "wt-diff": {
-      "command": "cmux diff --branch --layout split",
+      "command": "cmux diff --branch --layout split --focus true",
       "icon": {
         "name": "plus.forwardslash.minus",
         "type": "symbol"

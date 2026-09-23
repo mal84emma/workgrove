@@ -6,20 +6,20 @@
 #
 # Usage:
 #   wt new  [name] [-p|--prompt TEXT] [--prompt-stdin] [-b|--base REF] [--head]
-#           [-a|--agent claude|codex|none] [--no-workspace] [--focus] [-r|--repo PATH]
+#           [-a|--agent claude|codex|none] [--no-workspace] [-r|--repo PATH]
 #                                                             create a worktree (+ a cmux row running `wt run`)
 #   wt run  <name> [-r PATH]                                  run the worktree's agent with its brief (cmux runs this)
-#   wt list [--json] [--all] [-r PATH]                        list worktrees (--all: every repo in $WT_REPOS_DIR)
-#   wt show <name> [--diff] [--json] [-r PATH]                status summary; --diff also opens a cmux diff pane
+#   wt list [--all] [-r PATH]                                 list worktrees (--all: every repo in $WT_REPOS_DIR)
+#   wt show <name> [--diff] [-r PATH]                         status summary; --diff also opens a cmux diff pane
 #   wt open [name] [-r PATH]                                  open a worktree in VS Code (default: the one you are in)
 #   wt diff <name>                                            = wt show <name> --diff
-#   wt attach <name> [-a AGENT] [-p TEXT] [--focus] [-r PATH] open a cmux row for an existing worktree
+#   wt attach <name> [-a AGENT] [-p TEXT] [-r PATH]           open a cmux row for an existing worktree
 #   wt sync <name> [--merge]                                  rebase (default) or merge the worktree branch onto its base
 #   wt pr <name> [--draft]                                    push the branch and open a GitHub PR (gh)
 #   wt rm <name> [--force] [--keep-branch]                    remove a worktree; refuses to destroy work — commits on
 #                                                             the branch that are neither merged nor still on a remote,
 #                                                             a HEAD that is not that branch, an edited or newly created
-#                                                             .worktreeinclude file — unless --force
+#                                                             .wt-include file — unless --force
 #   wt prune [--dry-run]                                      remove worktrees whose branch is merged and tree is clean
 #   wt repos [<name>] [--porcelain|--table]                   every git repo in $WT_REPOS_DIR: on a terminal a table of
 #                                                             name, task count and location; piped, "<name><tab><path>"
@@ -58,7 +58,7 @@
 #   git config wt.dir   per-repo override of the worktree folder name                           (default .worktrees)
 #
 # Per-repo hooks:
-#   .worktreeinclude    gitignore-style patterns of *ignored* files to copy into each new worktree (.env etc.)
+#   .wt-include         gitignore-style patterns of *ignored* files to copy into each new worktree (.env etc.)
 #   .wt-setup           executable run inside each new worktree after creation (install deps, etc.)
 set -euo pipefail
 
@@ -70,7 +70,6 @@ die()  { printf 'wt: %s\n' "$*" >&2; exit 1; }
 warn() { printf 'wt: %s\n' "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 usage() { awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; }
-json_escape() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
 shell_join() { local out="" a; for a in "$@"; do printf -v a '%q' "$a"; out="${out:+$out }$a"; done; printf '%s' "$out"; }
 
 cmux_bin() {
@@ -121,7 +120,6 @@ hook_ok_repo() { # both relayed bodies carry $REPO (wt-open sends a path inside 
 notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths with spaces survive
   local title="$1" args=() ws=() c body; shift
   while [[ $# -gt 1 ]]; do args+=(--arg "$1" "$2"); shift 2; done
-  have jq || die "jq not found (sudo apt-get install -y jq)"
   body=$(jq -cn "${args[@]+"${args[@]}"}" '$ARGS.named')
   relay_env || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
   c=$(cmux_bin) || { warn "cmux CLI not found here; run the line below on the Mac"; return 1; }
@@ -229,19 +227,26 @@ default_base() {
   git -C "$REPO" symbolic-ref -q --short HEAD || git -C "$REPO" rev-parse HEAD
 }
 
-meta_get() { # meta_get <name> <key>
+meta_get() { # meta_get <name> <key> — "" for a missing key, and for a key stored as null
+  # `.[$k] // ""` looks right and is not: // also fires on a stored `false`, which would read as "".
+  # has/tojson is exact — and a non-string (a number, a bool) comes back as JSON, so `false` is "false".
   local f; f=$(wt_meta "$1"); [[ -f "$f" ]] || return 1
-  python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2],""); print(v if v is not None else "")' "$f" "$2"
+  jq -r --arg k "$2" 'if has($k) and .[$k] != null then .[$k] else "" end
+                      | if type == "string" then . else tojson end' "$f"
 }
-meta_set() { # meta_set <name> key=value ...
-  local f; f=$(wt_meta "$1"); shift; mkdir -p "$(dirname "$f")"
-  python3 - "$f" "$@" <<'EOF'
-import json,sys,os
-f=sys.argv[1]; d=json.load(open(f)) if os.path.exists(f) else {}
-for kv in sys.argv[2:]:
-    k,_,v=kv.partition('='); d[k]=v
-json.dump(d,open(f,'w'),indent=1)
-EOF
+meta_set() { # meta_set <name> key=value ...  — a key with no '=' is stored with an empty value
+  # jq cannot write the file it is reading, so this goes through a temp file; the mv also makes meta_set
+  # crash-safe, which json.dump(d, open(f,'w')) was not — an interrupted write used to truncate the sidecar.
+  # index("=") is null when there is no '=', and null+1 is 1 in jq, so the no-'=' arm is not optional:
+  # without it `meta_set x bare` would slice the key and store the wrong one.
+  local f t; f=$(wt_meta "$1"); shift; mkdir -p "$(dirname "$f")"; t="$f.new.$$"
+  if ! { if [[ -f "$f" ]]; then cat "$f"; else printf '{}\n'; fi; } \
+       | jq --indent 1 'reduce ($ARGS.positional[]) as $kv (.;
+             ($kv | index("=")) as $i
+             | if $i == null then .[$kv] = "" else .[$kv[0:$i]] = $kv[$i+1:] end)' --args "$@" >"$t" \
+     || ! mv "$t" "$f"; then
+    rm -f "$t"; die "could not write $f"
+  fi
 }
 prompt_line() { local f; f=$(wt_prompt "$1"); if [[ -f "$f" ]]; then head -1 "$f"; fi; }
 
@@ -260,18 +265,16 @@ require_wt() { # require_wt <name>  -> sets P (path), B (branch)
 
 cmux_row_field() { # cmux_row_field <title> <field> [host] -> that field of the row; no host: the local row
   local c; c=$(cmux_bin) || return 0     # a local and a VM row share a title, so the host is what tells them apart
-  CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null | python3 -c '
-import json,sys
-title,k,host=sys.argv[1],sys.argv[2],sys.argv[3]
-ws=json.load(sys.stdin); ws=ws.get("workspaces",ws) if isinstance(ws,dict) else ws
-for w in ws:
-    r=w.get("remote") or {}
-    if w.get("title")!=title: continue
-    if host:
-        if not r.get("enabled"): continue
-        if (r.get("destination") or "")!=host and (w.get("description") or "")!="@"+host: continue
-    elif r.get("enabled"): continue
-    print(w.get(k) or ""); break' "$1" "$2" "${3:-}" 2>/dev/null || true
+  # `.workspaces?` and not `.workspaces`: cmux may hand back a bare array, and jq's `//` does not catch the
+  # error `Cannot index array with "workspaces"` — only the `?` turns that into the empty it can fall back from.
+  CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null \
+    | jq -r --arg t "$1" --arg k "$2" --arg h "${3:-}" '
+        first((.workspaces? // .)[]
+          | select(.title == $t)
+          | select(if $h == "" then ((.remote.enabled // false) | not)
+                   else ((.remote.enabled // false)
+                         and (((.remote.destination // "") == $h) or ((.description // "") == "@" + $h))) end)
+          | .[$k] // "") // empty' 2>/dev/null || true
 }
 
 check_identity() { # refuse a name whose row title is already taken by another repo
@@ -289,12 +292,12 @@ check_identity() { # refuse a name whose row title is already taken by another r
   die "row '$title' already belongs to $other; pick another name (wt new <other-name> -r $REPO)"
 }
 
-open_workspace() { # open_workspace <name> <focus>
-  local n="$1" focus="$2" c out title
+open_workspace() { # open_workspace <name> — always unfocused: a new task row must never steal the window
+  local n="$1" c out title                 # from whatever the user is doing; they select it when they want it
   cmux_ok || { warn "cmux is not running; skipped workspace creation (cd $(wt_path "$n"))"; return 0; }
   c=$(cmux_bin)
   title=$(meta_get "$n" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$n" "$REPO")
-  out=$(CMUX_QUIET=1 "$c" workspace create --name "$title" --description "$(row_tag)" --cwd "$(wt_path "$n")" --focus "$focus" \
+  out=$(CMUX_QUIET=1 "$c" workspace create --name "$title" --description "$(row_tag)" --cwd "$(wt_path "$n")" --focus false \
         --command "$(shell_join "$HOME/.local/bin/wt" run "$n" -r "$REPO")" 2>&1) || die "cmux workspace create failed: $out"
   local ref; ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1 || true)
   meta_set "$n" "title=$title"
@@ -321,8 +324,8 @@ file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shas
   printf '%s' "${h%% *}"
 }
 
-include_match() { # include_match <path relative to a checkout> — 0 when .worktreeinclude covers it
-  local f="$1" inc="$REPO/.worktreeinclude" pat
+include_match() { # include_match <path relative to a checkout> — 0 when .wt-include covers it
+  local f="$1" inc="$REPO/.wt-include" pat
   [[ -f "$inc" ]] || return 1
   while IFS= read -r pat || [[ -n "$pat" ]]; do
     pat="${pat%%#*}"; pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
@@ -334,9 +337,9 @@ include_match() { # include_match <path relative to a checkout> — 0 when .work
   return 1
 }
 
-copy_includes() { # copy gitignored files listed in .worktreeinclude into the new worktree; prints "<path>:<sha256>"
+copy_includes() { # copy gitignored files listed in .wt-include into the new worktree; prints "<path>:<sha256>"
   local dest="$1" f                       # the hash is of what was copied, so rm can tell a copy edited inside
-  [[ -f "$REPO/.worktreeinclude" ]] || return 0   # the worktree from a file changed in the main checkout since
+  [[ -f "$REPO/.wt-include" ]] || return 0   # the worktree from a file changed in the main checkout since
   git -C "$REPO" ls-files --others --ignored --exclude-standard -z | while IFS= read -r -d '' f; do
     if [[ "$f" != "$WT_DIRNAME/"* ]] && include_match "$f"; then
       # errexit does not reach in here (a pipeline inside $( )), so a failed copy has to be caught by
@@ -348,9 +351,9 @@ copy_includes() { # copy gitignored files listed in .worktreeinclude into the ne
   done
 }
 
-worktree_includes() { # worktree_includes <path> — ignored files inside the worktree that .worktreeinclude covers
+worktree_includes() { # worktree_includes <path> — ignored files inside the worktree that .wt-include covers
   local p="$1" f                          # today, whether or not they existed when the worktree was created
-  [[ -f "$REPO/.worktreeinclude" ]] || return 0
+  [[ -f "$REPO/.wt-include" ]] || return 0
   git -C "$p" ls-files --others --ignored --exclude-standard -z 2>/dev/null | while IFS= read -r -d '' f; do
     if [[ "$f" != "$WT_DIRNAME/"* ]] && include_match "$f"; then printf '%s\n' "$f"; fi
   done
@@ -426,7 +429,7 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
     elif [[ "$head_ref" != "$b" ]]; then printf 'HEAD is on %s, not %s\n' "$head_ref" "$b"; fi
   fi
   while IFS= read -r f; do
-    if [[ -n "$f" ]]; then printf '%s was edited or created inside the worktree (.worktreeinclude, not in git)\n' "$f"; fi
+    if [[ -n "$f" ]]; then printf '%s was edited or created inside the worktree (.wt-include, not in git)\n' "$f"; fi
   done <<<"$(changed_includes "$n" "$p")"
   return 0
 }
@@ -465,7 +468,7 @@ session_state() { # session_state <name> — what the VM's tmux holds for this t
 
 # ---------------------------------------------------------------- status
 WT_FS=$'\x1f'   # the status line's field separator: git allows '|' in a branch name, and a base like
-                # 'feat|x' used to shift every field of the line right, poisoning the JSON with it
+                # 'feat|x' used to shift every field of the line right, so the branch column printed the base
 wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<US>last
   local n="$1" p b base ahead behind dirty last
   p=$(wt_path "$n"); b=$(wt_branch "$n")
@@ -494,7 +497,7 @@ list_names() { # registered worktrees under the wt root
 
 # ---------------------------------------------------------------- commands
 cmd_new() {
-  local name="" prompt="" stdin_prompt=0 base="" from_head=0 agent="$DEFAULT_AGENT" workspace=1 focus=false repo=""
+  local name="" prompt="" stdin_prompt=0 base="" from_head=0 agent="$DEFAULT_AGENT" workspace=1 repo=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -p|--prompt) [[ $# -ge 2 ]] || die "new: $1 needs a brief"; prompt="$2"; shift 2 ;;
@@ -503,7 +506,6 @@ cmd_new() {
       --head) from_head=1; shift ;;
       -a|--agent) [[ $# -ge 2 ]] || die "new: $1 needs an agent"; agent="$2"; shift 2 ;;
       --no-workspace) workspace=0; shift ;;
-      --focus) focus=true; shift ;;
       -r|--repo) [[ $# -ge 2 ]] || die "new: $1 needs a repo"; repo="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       -*) die "new: unknown option $1" ;;
@@ -521,8 +523,8 @@ cmd_new() {
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (kept by wt rm --keep-branch, or by a removal git would not call merged, or left behind by a worktree deleted outside wt); inspect it (git -C $REPO log $b), then delete it (git -C $REPO branch -D $b) or pick another name"
   check_identity "$name"
-  if [[ $workspace -eq 1 ]] && is_remote; then   # the row request needs both; fail before anything exists
-    wt_host >/dev/null; have jq || die "jq not found (sudo apt-get install -y jq)"
+  if [[ $workspace -eq 1 ]] && is_remote; then   # the row request needs it; fail before anything exists
+    wt_host >/dev/null
   fi
 
   # --head is this checkout's HEAD: its branch name, or its commit when HEAD is detached (mid-rebase, a
@@ -562,7 +564,7 @@ cmd_new() {
   printf 'created %s\n  path:   %s\n  branch: %s (from %s)\n  repo:   %s\n  session: %s\n' \
     "$name" "$p" "$b" "$base" "$REPO" "$(wt_session "$name" "$REPO")"
   [[ $workspace -eq 1 ]] || return 0
-  if is_remote; then request_row "$name"; else open_workspace "$name" "$focus"; fi   # a VM never starts an agent
+  if is_remote; then request_row "$name"; else open_workspace "$name"; fi   # a VM never starts an agent
   return 0
 }
 
@@ -599,8 +601,8 @@ cmd_run() { # run the worktree's agent here; cmux types this into the row's shel
 }
 
 cmd_list() {
-  local json=0 all=0 repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in --json) json=1;; --all) all=1;; -r|--repo) [[ $# -ge 2 ]] || die "list: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; *) die "list: unknown option $1";; esac; shift; done
+  local all=0 repo=""
+  while [[ $# -gt 0 ]]; do case "$1" in --all) all=1;; -r|--repo) [[ $# -ge 2 ]] || die "list: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; *) die "list: unknown option $1";; esac; shift; done
   local repos=()
   if [[ $all -eq 1 ]]; then
     need_repos_dir
@@ -608,54 +610,38 @@ cmd_list() {
   else
     resolve_repo "$repo"; repos=("$REPO")
   fi
-  local first=1; [[ $json -eq 1 ]] && printf '['
   for r in "${repos[@]+"${repos[@]}"}"; do
     set_repo "$r" || continue
     local names; names=$(list_names); [[ -n "$names" ]] || continue
-    if [[ $json -eq 0 ]]; then
-      printf '\n%s  (%s)\n' "$(basename "$REPO")" "$REPO"
-      printf '  %-28s %-26s %-16s %6s %6s %6s  %s\n' NAME BRANCH BASE AHEAD BEHIND DIRTY LAST
-    fi
+    printf '\n%s  (%s)\n' "$(basename "$REPO")" "$REPO"
+    printf '  %-28s %-26s %-16s %6s %6s %6s  %s\n' NAME BRANCH BASE AHEAD BEHIND DIRTY LAST
     while IFS= read -r n; do
       IFS="$WT_FS" read -r nn br base ah be di last <<<"$(wt_status_line "$n")"
-      # ahead/behind/dirty are the only values JSON prints unquoted, so never print one that is not a number
+      # the columns are numbers: a '?' from a base that no longer resolves must not print as a count
       [[ "$ah" =~ ^[0-9]+$ ]] || ah='?'; [[ "$be" =~ ^[0-9]+$ ]] || be='?'; [[ "$di" =~ ^[0-9]+$ ]] || di=0
-      if [[ $json -eq 1 ]]; then
-        [[ $first -eq 1 ]] || printf ','; first=0
-        printf '{"repo":%s,"name":%s,"path":%s,"branch":%s,"base":%s,"ahead":%s,"behind":%s,"dirty":%s,"last_commit":%s,"task":%s}' \
-          "$(json_escape "$REPO")" "$(json_escape "$nn")" "$(json_escape "$(wt_path "$nn")")" "$(json_escape "$br")" "$(json_escape "$base")" \
-          "${ah/\?/null}" "${be/\?/null}" "$di" "$(json_escape "$last")" "$(json_escape "$(prompt_line "$nn")")"
-      else
-        printf '  %-28s %-26s %-16s %6s %6s %6s  %s\n' "$nn" "$br" "$base" "$ah" "$be" "$di" "$last"
-      fi
+      printf '  %-28s %-26s %-16s %6s %6s %6s  %s\n' "$nn" "$br" "$base" "$ah" "$be" "$di" "$last"
     done <<<"$names"
   done
-  [[ $json -eq 1 ]] && printf ']\n'
   return 0
 }
 
 cmd_show() {
-  local name="" diff=0 json=0 repo=""
+  local name="" diff=0 repo=""
   while [[ $# -gt 0 ]]; do
-    case "$1" in --diff) diff=1;; --json) json=1;; -r|--repo) [[ $# -ge 2 ]] || die "show: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "show: unknown option $1";; *) [[ -z "$name" ]] || die "show: unexpected argument $1"; name="$1";; esac; shift
+    case "$1" in --diff) diff=1;; -r|--repo) [[ $# -ge 2 ]] || die "show: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "show: unknown option $1";; *) [[ -z "$name" ]] || die "show: unexpected argument $1"; name="$1";; esac; shift
   done
   [[ -n "$name" ]] || die "show: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
   IFS="$WT_FS" read -r nn br base ah be di last <<<"$(wt_status_line "$name")"
-  # ahead/behind/dirty are the only values JSON prints unquoted, so never print one that is not a number
+  # the counts are numbers: a '?' from a base that no longer resolves must not print as a count
   [[ "$ah" =~ ^[0-9]+$ ]] || ah='?'; [[ "$be" =~ ^[0-9]+$ ]] || be='?'; [[ "$di" =~ ^[0-9]+$ ]] || di=0
-  if [[ $json -eq 1 ]]; then
-    printf '{"name":%s,"path":%s,"branch":%s,"base":%s,"ahead":%s,"behind":%s,"dirty":%s,"last_commit":%s,"task":%s}\n' \
-      "$(json_escape "$nn")" "$(json_escape "$P")" "$(json_escape "$br")" "$(json_escape "$base")" "${ah/\?/null}" "${be/\?/null}" "$di" "$(json_escape "$last")" "$(json_escape "$(prompt_line "$name")")"
-  else
-    local title; title=$(meta_get "$name" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$name" "$REPO")
-    printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
-      "$nn" "$P" "$REPO" "$br" "$ah" "$be" "$base" "$title $(row_tag)" "$(prompt_line "$name")" "$di" "$last"
-    if is_remote; then printf '  session: %s\n' "$(session_state "$name")"; fi   # `wt -H … attach` reads this line
-    printf '\n--- commits vs %s\n' "$base"; git -C "$P" log --oneline "$base..HEAD" 2>/dev/null | head -20
-    printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$P" diff --stat "$base...HEAD" 2>/dev/null | tail -15
-    printf '\n--- working tree\n'; git -C "$P" status --short 2>/dev/null | head -20
-  fi
+  local title; title=$(meta_get "$name" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$name" "$REPO")
+  printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
+    "$nn" "$P" "$REPO" "$br" "$ah" "$be" "$base" "$title $(row_tag)" "$(prompt_line "$name")" "$di" "$last"
+  if is_remote; then printf '  session: %s\n' "$(session_state "$name")"; fi   # `wt -H … attach` reads this line
+  printf '\n--- commits vs %s\n' "$base"; git -C "$P" log --oneline "$base..HEAD" 2>/dev/null | head -20
+  printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$P" diff --stat "$base...HEAD" 2>/dev/null | tail -15
+  printf '\n--- working tree\n'; git -C "$P" status --short 2>/dev/null | head -20
   if [[ $diff -eq 1 ]]; then
     cmux_ok || die "cmux is not running"
     CMUX_QUIET=1 "$(cmux_bin)" diff --branch --repo "$P" --base "$base" --layout split --title "$name vs $base" --focus true >/dev/null && printf 'opened cmux diff pane\n'
@@ -679,13 +665,13 @@ cmd_open() { # wt open [name] [-r PATH] — no name: the worktree holding $PWD
 }
 
 cmd_attach() {
-  local name="" agent="" prompt="" focus=false repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in -a|--agent) [[ $# -ge 2 ]] || die "attach: $1 needs an agent"; agent="$2"; shift;; -p|--prompt) [[ $# -ge 2 ]] || die "attach: $1 needs a brief"; prompt="$2"; shift;; --focus) focus=true;; -r|--repo) [[ $# -ge 2 ]] || die "attach: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "attach: unknown option $1";; *) [[ -z "$name" ]] || die "attach: unexpected argument $1"; name="$1";; esac; shift; done
+  local name="" agent="" prompt="" repo=""
+  while [[ $# -gt 0 ]]; do case "$1" in -a|--agent) [[ $# -ge 2 ]] || die "attach: $1 needs an agent"; agent="$2"; shift;; -p|--prompt) [[ $# -ge 2 ]] || die "attach: $1 needs a brief"; prompt="$2"; shift;; -r|--repo) [[ $# -ge 2 ]] || die "attach: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "attach: unknown option $1";; *) [[ -z "$name" ]] || die "attach: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "attach: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
   if [[ -n "$agent" ]]; then valid_agent "$agent"; meta_set "$name" "agent=$agent"; fi
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; rm -f "$(wt_started "$name")"; fi
-  if is_remote; then request_row "$name"; else open_workspace "$name" "$focus"; fi
+  if is_remote; then request_row "$name"; else open_workspace "$name"; fi
 }
 
 cmd_sync() {
@@ -937,9 +923,18 @@ remote_row() { # remote_row <host> <session> <title> <command> [shared] [cmux fl
   printf 'row: %s %s\n' "$title" "$(row_tag "$host")"
 }
 
-need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer the repo from
+need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer the repo from, so -r is required.
+  # Presence is all this tests: cmd_host has already normalised the value and refused an empty, relative,
+  # '.' or '..' one, so there is nothing left here that a command would have rejected for itself.
+  # -h wins over the requirement: asking what a command takes must answer, not complain that an argument
+  # it is asking about is missing. Each command's own parser then handles -h.
   local host="$1" sub="$2" a; shift 2
-  for a in "$@"; do if [[ "$a" == -r || "$a" == --repo ]]; then return 0; fi; done
+  for a in "$@"; do
+    case "$a" in
+      -h|--help) return 0 ;;
+      -r|--repo) return 0 ;;
+    esac
+  done
   die "$sub: -r <repo> is required with -H (wt -H $host repos lists them)"
 }
 
@@ -983,7 +978,6 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
     esac
   done
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
-  [[ -n "$repo" ]] || die "attach: -r <repo> is required with -H (wt -H $host repos lists them)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
   local out session state title id path c screen last what=selected
   out=$(remote_wt "$host" show "$name" -r "$repo")
@@ -1053,7 +1047,6 @@ host_open() { # VS Code Remote-SSH on a VM worktree
   local host="$1" name="" repo=""; shift
   while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) [[ $# -ge 2 ]] || die "open: $1 needs a repo"; repo="$2"; shift 2;; -h|--help) usage; exit 0;; -*) die "open: unknown option $1";; *) [[ -z "$name" ]] || die "open: unexpected argument $1"; name="$1"; shift;; esac; done
   [[ -n "$name" ]] || die "open: worktree name required (wt -H $host open -r <repo> <name>)"
-  [[ -n "$repo" ]] || die "open: -r <repo> is required with -H (wt -H $host repos lists them)"
   local p; p=$(remote_wt "$host" path "$name" -r "$repo")
   hook_safe_path "$p" || die "open: refusing an unsafe path from $host ($p)"
   open_code "vscode-remote://ssh-remote+$host$p/" "$host:$p"
@@ -1063,7 +1056,6 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   local host="$1" name="" repo="" args=(); shift
   while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift 2;; -h|--help) usage; exit 0;; -*) args+=("$1"); shift;; *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1"; shift;; esac; done
   [[ -n "$name" ]] || die "rm: worktree name required (wt -H $host rm -r <repo> <name>)"
-  [[ -n "$repo" ]] || die "rm: -r <repo> is required with -H (wt -H $host repos lists them)"
   # the row's identity is built from -r, which cmd_host has already refused unless it is an absolute path or
   # a plain repo name — a relative '.' or '..' would make repo_id '-' and close_row would close nothing
   local session title; session=$(wt_session "$name" "$repo"); title=$(row_title "$name" "$repo")
@@ -1088,9 +1080,9 @@ cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac c
   set -- "${args[@]+"${args[@]}"}"
   case "$sub" in
     new)       host_new "$host" "$@" ;;
-    attach)    host_attach "$host" "$@" ;;
-    open)      host_open "$host" "$@" ;;
-    rm)        host_rm "$host" "$@" ;;
+    attach)    need_r "$host" "$sub" "$@"; host_attach "$host" "$@" ;;
+    open)      need_r "$host" "$sub" "$@"; host_open "$host" "$@" ;;
+    rm)        need_r "$host" "$sub" "$@"; host_rm "$host" "$@" ;;
     list)      remote_wt "$host" list --all "$@" ;;
     show|path) need_r "$host" "$sub" "$@"; remote_wt "$host" "$sub" "$@" ;;
     repos)     if [[ -t 1 ]]; then case " $* " in *" --porcelain "*|*" --table "*) ;; *) set -- "$@" --table ;; esac; fi
@@ -1226,13 +1218,22 @@ cmd_task() {
 }
 
 # ---------------------------------------------------------------- dispatch
+# One guard, not one per caller: jq reads and writes every sidecar (meta_get/meta_set), reads cmux's row list
+# and builds the relay body, so a missing jq is not a per-command problem. Left to fail where it is used it
+# fails quietly — meta_get's error is swallowed at every call site and `base` silently becomes default_base(),
+# which is the base `wt rm` then judges "not merged" against — or halfway through `wt new`, after
+# `git worktree add` has already registered a worktree. So refuse up front, and leave `wt help` readable
+# so the line that fixes it is still one command away.
+need_jq() { have jq || die "jq not found (brew install jq, or sudo apt-get install -y jq)"; }
 if [[ "${1:-}" == -H || "${1:-}" == --host ]]; then
   [[ $# -ge 3 ]] || die "usage: wt -H <host> <command> [args] (wt help)"
   host="$2"; shift 2
+  [[ "${1:-}" == help ]] || need_jq
   cmd_host "$host" "$@"
   exit
 fi
 sub="${1:-help}"; shift || true
+case "$sub" in help|-h|--help) ;; *) need_jq ;; esac
 case "$sub" in
   new)      cmd_new "$@" ;;
   run)      cmd_run "$@" ;;

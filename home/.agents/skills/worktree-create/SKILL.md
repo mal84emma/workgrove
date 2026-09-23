@@ -34,5 +34,5 @@ On a VM, `wt new` prepares the worktree and asks the Mac to open its row; report
 
 ## Per-repo setup (once, on request)
 
-- `.worktreeinclude` in the repo root: gitignore-style patterns of ignored files to copy into each new worktree (`.env`, local configs).
+- `.wt-include` in the repo root: gitignore-style patterns of ignored files to copy into each new worktree (`.env`, local configs).
 - `.wt-setup` executable in the repo root: runs inside every new worktree after creation (`uv sync`, `npm ci`, `conda env` activation notes, etc.).

@@ -1,6 +1,9 @@
 # workstation essentials only. Personal tools stay out; .zshrc guards whatever you add yourself.
-# azure-cli: data access, and the Azure ML compute instances azml-ssh-host puts in ~/.ssh/config.
-brew "azure-cli"
+# azure-cli: needed only by bin/azml-ssh-host, which puts Azure ML compute instances in ~/.ssh/config
+# (and for ad-hoc data access). Nothing else here uses it, and it drags in its own Python and a large
+# dependency tree, so it is off by default: uncomment it, or `brew install azure-cli` when you want it.
+# azml-ssh-host already says so itself — it errors clearly when `az` is not on PATH.
+# brew "azure-cli"
 brew "fzf"
 brew "gh"
 brew "jq"

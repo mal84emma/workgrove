@@ -21,6 +21,11 @@ brew bundle --file ~/repos/workstation/Brewfile
 If Homebrew is already installed for the whole machine, for example in a second account on the same Mac, skip
 the first line of this block and start at `eval "$(...brew shellenv)"`.
 
+One line in the `Brewfile` is commented out: `brew "azure-cli"`. `bin/azml-ssh-host` is the only thing in
+this repo that needs it, so `brew bundle` leaves it out of a machine that will never touch Azure. If you do
+want it — the `az login` in block 4 and [azml-compute.md](azml-compute.md) both do — uncomment that line
+before running `brew bundle`, or install it on its own at any time with `brew install azure-cli`.
+
 ```bash
 # 3. identity, install   (edit GIT_NAME / GIT_EMAIL first)
 git config --file ~/.gitconfig.local user.name  'GIT_NAME'
@@ -34,12 +39,12 @@ bash ~/repos/workstation/install.sh --opinionated-config
 exec zsh -l     # separate line on purpose: chained with && it is skipped whenever install.sh exits non-zero
 ```
 
-`--opinionated-config` is what asks for the six pieces that are the author's taste rather than machinery: the
-five files — `~/.zshrc` (with the oh-my-zsh theme), `~/.gitconfig`, `~/.tmux.conf`, the Claude keymap and the
-status line — and the `tui`, `voice` and `theme` keys of `~/.claude/settings.json`, a file that is installed
-either way for its hooks and permissions. A bare `install.sh` installs the machinery and leaves all six
-alone, which is what a stranger cloning this repo gets; the README's Install section has the per-flag detail
-and what arrives instead. For the five files the flag never has to be repeated: once they are links into this
+`--opinionated-config` is what asks for the seven pieces that are the author's taste rather than machinery: the
+six files — `~/.zshrc` (with the oh-my-zsh theme), `~/.gitconfig`, `~/.tmux.conf`, the Claude keymap, the
+status line and cmux's own `cmux.json` — and the `tui`, `voice` and `theme` keys of `~/.claude/settings.json`,
+a file that is installed either way for its hooks and permissions. A bare `install.sh` installs the machinery
+and leaves all seven alone, which is what a stranger cloning this repo gets; the README's Install section has
+the per-flag detail and what arrives instead. For the six files the flag never has to be repeated: once they are links into this
 repo, a later bare run — `wt update`'s, for instance — keeps them. The UI keys are remembered by the copy
 itself: a `~/.claude/settings.json` that already carries a top-level `tui` key came from a run that was given
 the flag, so a later `--refresh-config` keeps those keys rather than stripping them.
@@ -59,7 +64,7 @@ export PATH="$HOME/.local/bin:$PATH"
 cmux hooks codex install --yes
 xargs -n1 code --install-extension < ~/repos/workstation/vscode/extensions.txt
 gh auth login --web --git-protocol https
-az login          # Azure: data access and compute instances; see docs/azml-compute.md
+az login          # Azure: skip unless you installed azure-cli; see docs/azml-compute.md
 claude auth login # browser login; claude auth status must report loggedIn true
 codex login
 codex             # /hooks -> review and trust the two portable hooks, run one test turn, then exit

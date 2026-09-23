@@ -22,7 +22,7 @@ Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish
 - Worktrees: `<repo>/.worktrees/<name>` (git-ignored globally). Branches: `wt/<name>`. Base: the repo's default branch (`origin/HEAD`, falling back to `origin/main` or `origin/master`, then a local `main`/`master`, then the current branch) unless `--head` or `-b <ref>` was given.
 - Names are short kebab-case slugs describing the task; no `.` in a name.
 - Each task has a cmux row titled `<repo>:<name>`, whose second line reads `@local` or `@<host>`, and, on a VM, a tmux session `wt-<repo>-<name>`; `wt show <name>` reports them.
-- Per-repo hooks: `.worktreeinclude` (ignored files to copy in) and `.wt-setup` (runs in each new worktree).
+- Per-repo hooks: `.wt-include` (ignored files to copy in) and `.wt-setup` (runs in each new worktree).
 
 ## Local and remote
 

@@ -13,8 +13,10 @@ log() { # stdout is the patch and every call site discards stderr, so the reason
   return 0; }
 PERL=$(command -v perl || true)
 DEADLINE=$(( $(date +%s) + 15 ))   # cmux.json allows this hook 20 s; leave room to print the patch
-capped() { # capped <cmd…>: one cmux call, inside what is left of that budget. Row operations measure
-           # 1.2-2.9 s each, so a hung app would otherwise eat the lot. macOS has no timeout(1), so perl
+capped() { # capped <cmd…>: one cmux call, inside what is left of that budget. `workspace list --json`
+           # answers in ~0.02 s and `cmux ssh` in ~4 s; the 1.2-2.9 s quoted in the notes is how long a row
+           # takes to *paint*, UI work that happens after the CLI has already returned. So the cap is here
+           # for an app that has hung, not for ordinary latency. macOS has no timeout(1), so perl
            # runs the call in a process group of its own and, on the alarm, kills the group: killing only
            # the leader would leave a child behind holding open the pipe this call is being read through.
   local left=$(( DEADLINE - $(date +%s) ))
@@ -36,14 +38,34 @@ CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmu
 valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 safe_path() { [[ $1 == /* && $1 != *$'\n'* && $1 != *//* && $1 != */ && $1 != *'/../'* && $1 != */.. && $1 != *[\'\"\`\$\\\;]* ]]; }
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
+WS_JSON=""; WS_RC=""
+ws_load() { # ws_load [fresh] — one shared `workspace list --json`, kept in $WS_JSON with its status in $WS_RC.
+            # Both queries below used to make their own capped call and pipe it straight into jq, which threw
+            # away capped's exit status: a list that timed out then looked exactly like "no such row", so
+            # attach_row took its create branch and gave a task that already had a row a second one. One
+            # snapshot, status checked, fixes both halves of that — and a failure now propagates, so the
+            # caller creates nothing and the notification keeps its ordinary banner.
+  [[ ${1:-} == fresh ]] && WS_RC=""       # the post-create lookup wants the list as it is now, not as it was
+  [[ -n $WS_RC ]] && return "$WS_RC"
+  WS_JSON=$(capped "$CMUX" workspace list --json 2>/dev/null); WS_RC=$?
+  case $WS_RC in
+    0) ;;
+    142) log "cmux workspace list --json hit the hook deadline (capped exit 142)" ;;   # "did it time out": yes
+    *)   log "cmux workspace list --json failed (exit $WS_RC)" ;;
+  esac
+  return "$WS_RC"; }
 row_by_title() { # the local row for a VM task; mirrors cmux_row_field <title> <field> <host> in wt
-  capped "$CMUX" workspace list --json 2>/dev/null \
-    | jq -er --arg t "$1" --arg h "$2" 'first((.workspaces // .)[] | select(.title == $t and .remote.enabled and (((.remote.destination // "") == $h) or ((.description // "") == "@" + $h))) | .id) // empty' 2>/dev/null; }
+  ws_load || return                       # callers load first; this is only here so the filter never runs blind
+  printf '%s' "$WS_JSON" \
+    | jq -er --arg t "$1" --arg h "$2" 'first((.workspaces? // .)[] | select(.title == $t and .remote.enabled and (((.remote.destination // "") == $h) or ((.description // "") == "@" + $h))) | .id) // empty' 2>/dev/null; }
 from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifying row is an SSH row to that host.
   # cmux 0.64 reports CMUX_NOTIFICATION_ORIGIN=local for a `cmux ssh` row's own notifications (only the old
   # mosh-tmux relay said ssh-relay:<uuid>), so the row's remote destination is the check that it came from a VM.
-  [[ -n $1 ]] && capped "$CMUX" workspace list --json 2>/dev/null \
-    | jq -e --arg w "$1" --arg h "$2" 'any((.workspaces // .)[]; .id == $w and .remote.enabled and (.remote.destination // "") == $h)' >/dev/null 2>&1; }
+  # Runs in the caller's shell, not a subshell, so the snapshot it loads is the one attach_row goes on to use.
+  [[ -n $1 ]] || return 1
+  ws_load || return 1
+  printf '%s' "$WS_JSON" \
+    | jq -e --arg w "$1" --arg h "$2" 'any((.workspaces? // .)[]; .id == $w and .remote.enabled and (.remote.destination // "") == $h)' >/dev/null 2>&1; }
 tmux_cmd() { # tmux_cmd <session> [command] [shared]
   # The body below mirrors tmux_cmd in bin/wt byte for byte, although the hook only ever needs the task form:
   # diff <(sed -n '/^tmux_cmd()/,/^}/p' bin/wt | grep -v '^ *#') <(sed -n '/^tmux_cmd()/,/^}/p' bin/cmux-hook |
@@ -62,6 +84,7 @@ attach_row() { # attach_row <host> <session> <title> <command> — bring this ta
                # Returns non-zero, and says why in $LOG, when no row was reached — same contract as wt, which
                # dies on both of these. The caller must not quiet a notification that produced nothing.
   local out ref line
+  ws_load || { log "no row list for $3 on $1: not creating a row on a lookup that failed"; return 1; }
   ref=$(row_by_title "$3" "$1")
   if [[ -n $ref ]]; then
     capped "$CMUX" workspace select "$ref" >/dev/null 2>&1 || { log "cmux workspace select $ref failed"; return 1; }
@@ -71,7 +94,7 @@ attach_row() { # attach_row <host> <session> <title> <command> — bring this ta
       { log "cmux ssh $1 --name $3 failed: $out"; return 1; }
     ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1)
     if [[ -z $ref ]]; then                 # no workspace:N in the output: the row list lags ~1s behind create.
-      sleep 1; ref=$(row_by_title "$3" "$1")   # one look back is enough now that giving up is reported
+      sleep 1; ws_load fresh; ref=$(row_by_title "$3" "$1")   # one look back is enough now that giving up is reported
     fi
     [[ -n $ref ]] || { log "cmux reported no row for $3 on $1: $out"; return 1; }
   fi

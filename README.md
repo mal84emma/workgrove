@@ -19,7 +19,7 @@ VS Code opens on demand, through `wt open`.
   it keeps `<repo>/.git/wt/<name>.json` (base ref, agent, row title, tmux session, copied files),
   `<name>.prompt` (the brief, handed to the agent by `wt run`) and `<name>.started` (after which Claude
   resumes with `-c`). None of this is ever committed.
-- **Per-repo hooks.** `.worktreeinclude` lists gitignore-style patterns of *ignored* files (`.env` and
+- **Per-repo hooks.** `.wt-include` lists gitignore-style patterns of *ignored* files (`.env` and
   friends) to copy into each new worktree. `.wt-setup`, if executable, runs inside each new worktree.
 - **Paths.** Task repos live in the folders `$WT_REPOS_DIR` lists, default `~/Documents/Repositories` on the
   Mac; on a VM `install.sh` records the home folder instead, so every git repo directly under the home folder
@@ -35,7 +35,7 @@ workstation/
 ├── README.md
 ├── LICENSE
 ├── install.sh                 links this repo into $HOME (Mac and Ubuntu)
-├── Brewfile                   azure-cli fzf gh jq shellcheck; casks cmux, VS Code, git-credential-manager
+├── Brewfile                   fzf gh jq shellcheck (azure-cli commented out); casks cmux, VS Code, GCM
 ├── .gitignore
 ├── bin/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
@@ -72,8 +72,10 @@ you start: `install.sh` stops with a message naming `jq` when it is missing, and
 past its git-identity check. `bash` 3.2 is the floor — that is macOS's own `/bin/bash`, and the smoke test
 passes under it — so nothing here needs a newer shell. On the VMs the tmux is 3.2a and `home/.tmux.conf` is
 written for it. The cmux integration assumes cmux 0.64 or newer (`bin/cmux-hook` encodes 0.64's notification
-behaviour) and `home/.config/cmux/cmux.json` is `schemaVersion: 1`. The rest — `gh`, `az`, `fzf`, cmux itself,
+behaviour) and `home/.config/cmux/cmux.json` is `schemaVersion: 1`. The rest — `gh`, `fzf`, cmux itself,
 Claude Code, Codex — is installed by `Brewfile` on a Mac and by [docs/new-vm.md](docs/new-vm.md) on a VM.
+`az` is optional on both: only `azml-ssh-host` needs it, so on the Mac its `Brewfile` line is commented out
+and on a VM its install block is guarded by `command -v az`.
 
 ```bash
 mkdir -p ~/repos && git clone https://github.com/mal84emma/workstation ~/repos/workstation
@@ -90,10 +92,10 @@ To put a local change on a machine before committing it, seed it with the `rsync
 [docs/new-vm.md](docs/new-vm.md) instead of the clone. A seeded copy has no `.git`, so `wt update` refuses
 until it is replaced by a clone.
 
-That bare run installs the machinery and leaves your own shell, git and tmux alone. Five of the files here
+That bare run installs the machinery and leaves your own shell, git and tmux alone. Six of the files here
 are the author's taste rather than machinery, and so is one group of keys inside a file that is installed
 either way, so each waits for its own flag: installing a task tool should not hand a stranger someone else's
-prompt, git config, tmux bindings, Claude keymap, status line and Claude UI.
+prompt, git config, tmux bindings, Claude keymap, status line, Claude UI and cmux layout.
 
 | Flag | Asks for | What arrives instead when you leave it out |
 |---|---|---|
@@ -103,8 +105,16 @@ prompt, git config, tmux bindings, Claude keymap, status line and Claude UI.
 | `--with-keybindings` | `~/.claude/keybindings.json` | Nothing; Claude keeps its own keymap |
 | `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing, and `statusLine` is stripped from the `~/.claude/settings.json` copy, because it names a script that would not be there |
 | `--with-claude-ui` | No file of its own: the `tui`, `voice` and `theme` keys and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS`, kept in the `~/.claude/settings.json` copy | Those keys are deleted from the copy, so Claude keeps its own full-screen setting, voice mode, theme and mouse handling; the hooks and permissions in the same file arrive either way |
+| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only): the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, the tab-bar buttons — and the one entry that is machinery | That one entry only, merged into your own `~/.config/cmux/cmux.json` (created if you have none): the `notifications.hooks` entry naming `~/.local/bin/cmux-hook`, appended last so any hook of yours that suppresses a notification still runs first. Keyed on its `id`, so a rerun changes nothing, and `schemaVersion` and every other key are left as they are |
 
-`--opinionated-config` is all six at once; `--refresh-config` is orthogonal to them, and they combine in any
+The cmux merge is the one fallback that can decline. It does nothing, says why, and prints the exact JSON to
+paste when your `cmux.json` is a symlink a dotfile manager owns, when `jq` cannot parse it — `//` comments
+are the common case, since cmux accepts JSONC and `jq` does not — when `notifications.hooks` is not the shape
+it expects, or when a hook with that `id` already runs something else. The install still succeeds; what does
+not work until you paste it is the relay, so a `wt` row on a VM never attaches or opens. Either way a running
+cmux does not reread the file: `cmux reload-config`, or relaunch it.
+
+`--opinionated-config` is all seven at once; `--refresh-config` is orthogonal to them, and they combine in any
 order. The one deliberate exception to the fallbacks above is a `core.excludesFile` that already points at a
 file of your own: that is kept, not overwritten, with a message asking you to add `.gitignore_global`'s lines
 to it, because overwriting it would silently drop every global ignore you had — which is the harm this whole
@@ -116,7 +126,7 @@ into this repo counts as opted in, so `wt update` — which re-runs `install.sh`
 yourself once, after which `wt update` carries it. A run that leaves some out names them and the flag that
 would install each.
 
-`--with-claude-ui` is sticky too, by a different witness. What makes the other five sticky is the symlink
+`--with-claude-ui` is sticky too, by a different witness. What makes the other six sticky is the symlink
 itself, and keys inside a copied file leave no such trace — but the copy is its own record: a
 `~/.claude/settings.json` that already carries a top-level `tui` key was written by a run that was given the
 flag, so a later `--refresh-config` keeps those keys instead of stripping them. Given on its own, on a machine
@@ -130,7 +140,7 @@ is the file that git-ignores `.worktrees/`.
 
 | Class | Files | Behaviour |
 |---|---|---|
-| Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, `cmux.json` (Mac only), and every opt-in file you asked for | Edits, including an agent's, land in the repo, so `git diff` is the review |
+| Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, and every opt-in file you asked for — `cmux.json` among them, Mac only, under `--with-cmux-config` | Edits, including an agent's, land in the repo, so `git diff` is the review |
 | Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use or did not ask for: the voice keys and the Keychain credential store off a Mac, `statusLine` without `--with-statusline`, and `tui`, `voice`, `theme` and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files — `~/.zshrc.local` only when `~/.zshrc` is one of them |
 
@@ -144,8 +154,8 @@ message if no git identity is set — `~/.gitconfig.local` first, then your glob
 `~/.zshenv`, because cmux runs its VM rows in bash. At the top because Ubuntu's `~/.bashrc` returns early in a
 non-interactive shell, so the line has to come first to cover `ssh <vm> '<cmd>'` and `wt -H <vm> …` as well.
 
-`bash test/install-smoke.sh` is the repo's smoke test: 496 assertions across sixteen scenario groups
-(thirty-nine runs, since most groups have several cases and one loops over five flags), each run against its
+`bash test/install-smoke.sh` is the repo's smoke test: 634 assertions across seventeen scenario groups
+(fifty runs, since most groups have several cases and one loops over five flags), each run against its
 own throwaway `$HOME` with no network. They cover the default no-flags install — into an empty home and over a
 stranger's own dotfiles — `--opinionated-config`, each file flag on its own, the stickiness rules, idempotence,
 an unknown flag, every refusal path, which links count as this repo's own, the don't-clobber branches of
@@ -154,12 +164,29 @@ an unknown flag, every refusal path, which links count as this repo's own, the d
 Linux-only steps from a Mac.
 
 **There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
+
+Write down which opt-ins this machine has before you start, because deleting the links destroys the record of
+them: the symlink *is* the record — there is no state file to consult — so a later bare `install.sh`, and
+therefore `wt update`, would quietly install the default set rather than what this machine had chosen. The
+same goes for `--with-claude-ui`, whose record is the `tui` key inside the `~/.claude/settings.json` copy.
+A run of `install.sh` names every file it links and every opt-in it left out, so one more run before you
+delete anything is the cheapest way to get the list.
+
 Delete the symlinks this repo made — `~/.zshenv`, `~/.gitignore_global`, `~/.claude/AGENTS.md`,
 `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, the skills under `~/.agents/skills/` and `~/.claude/skills/`, the
 `~/.local/bin/` entries, `~/.config/cmux/cmux.json`, and whichever opt-in files you asked for (each one points
-into `~/repos/workstation`, so `ls -l` tells you which are ours). Delete the three machine-local copies
+into `~/repos/workstation`, so `ls -l` tells you which are ours). One link is not in `$HOME` itself and so
+never appears in an `ls -l ~`: the oh-my-zsh theme, at `~/.oh-my-zsh/custom/themes/workstation.zsh-theme`, or
+under `$ZSH_CUSTOM/themes/` when that variable is set. Two more things in that same directory are not links at
+all: with `~/.zshrc` opted in, `install.sh` *clones* the two plugins it enables, into
+`$ZSH_CUSTOM/plugins/zsh-autosuggestions` and `$ZSH_CUSTOM/plugins/zsh-syntax-highlighting`. They are ordinary
+git checkouts of someone else's repos, yours to delete or keep. Delete the three machine-local copies
 (`~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json`) if you do not want them. Then copy
-your originals back out of the newest `~/.workstation-backup/<timestamp>-<pid>/`, which mirrors `$HOME`.
+your originals back out of the newest `~/.workstation-backup/<timestamp>-<pid>/`, which mirrors `$HOME`. That
+is also where a `wt`, `agent-notify`, `cmux-hook` or `azml-ssh-host` of your own went if you had one in
+`~/bin`: `install.sh` retires those, because `~/bin` comes before `~/.local/bin` on `PATH` and a copy there
+would shadow the link.
+
 Two things `install.sh` edits in place rather than replacing are not in the backup and have to be undone by
 hand: the lines it appended to `~/.zshenv.local` and the `~/.zshenv` line at the top of `~/.bashrc` on a VM,
 and, on a default run, the `set -ag update-environment` line appended to your own `~/.tmux.conf` and the
@@ -196,8 +223,8 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 |---|---|
 | `wt new [name] [-p TEXT] [-a claude\|codex\|none] [-r PATH] [-b REF]` | Create the worktree and a cmux row running the agent with the brief |
 | `wt run <name>` | Run that worktree's agent with its brief. cmux runs this for you |
-| `wt list [--all] [--json]` | Worktrees, with branch, base, ahead/behind, dirty count, last commit |
-| `wt show <name> [--diff] [--json]` | Path, branch, row, brief, dirty files, commits and diffstat vs base; on a VM also the tmux session and whether its agent is running |
+| `wt list [--all]` | Worktrees, with branch, base, ahead/behind, dirty count, last commit |
+| `wt show <name> [--diff]` | Path, branch, row, brief, dirty files, commits and diffstat vs base; on a VM also the tmux session and whether its agent is running |
 | `wt open [name]` | Open the worktree in VS Code. No name means the one you are in |
 | `wt attach <name>` | Open a cmux row for a worktree that already exists |
 | `wt sync <name> [--merge]` | Rebase (or merge) the branch onto its base |
@@ -212,7 +239,7 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 | `wt -H <host> <sub> …` | Run a subcommand on a VM over ssh while the cmux row stays local. `show`, `rm`, `path`, `open` and `attach` need `-r <repo>` |
 
 `wt rm` refuses, with exit status 3, to destroy work: uncommitted changes, commits that are neither merged
-into the base nor pushed, a file copied in through `.worktreeinclude` that no longer matches its source
+into the base nor pushed, a file copied in through `.wt-include` that no longer matches its source
 in the main checkout, or a base ref it cannot compare the worktree against — deleted since, or a sidecar from
 an older `wt` holding the literal `HEAD`, which resolves to the worktree's own tip and would make every other
 count read as nothing to lose. It names what blocked it. `--force` overrides. `wt prune` is stricter still:
@@ -365,13 +392,27 @@ own machine.
   look like a hostname (`valid_host`) and be a literal, wildcard-free `Host` entry in `~/.ssh/config`
   (`known_host`); the notifying row must itself be a cmux SSH row pointed at that same host
   (`from_row_on_host`); a path must be absolute with no `..`, no `//`, no trailing slash and no shell
-  metacharacters (`safe_path`); and a task name must match `^[a-z0-9][a-z0-9_-]{0,62}$`. Those checks stop
-  one host from naming a different one, and stop shell being smuggled through a path or a name. What they do
-  not stop — because it is the feature — is that host asking the Mac to open any path on it in a VS Code
-  remote window, or to create a row that runs `wt run` there. And `from_row_on_host` asks only whether the
-  notifying row is a remote row whose destination is that host: not whether a task lives there, not whether
-  you ever ran `wt` on it. So the set that can ask is every `cmux ssh` row you have open to any aliased host:
-  a task VM, but equally a shared bastion, a customer's jump host, a build box. The path is unconstrained
+  metacharacters (`safe_path`); and a task name must match `^[a-z0-9][a-z0-9_-]{0,62}$`. What those checks
+  bound is real but narrower than it first reads. They bound the destination — only a host already aliased in
+  your own `~/.ssh/config` can be named at all, so nothing sends the Mac at a machine you never configured —
+  and they bound the shape of a path and a name, so no shell is smuggled through either.
+  What they do not stop — because it is the feature — is that host asking the Mac to open any path on it in
+  a VS Code remote window, or to create a row that runs `wt run` there.
+
+  Whether they also stop one host naming a *different* one is an open question rather than a settled yes.
+  `from_row_on_host` compares the workspace id the notification carries against the host named in its body,
+  and both of those come from the sender: it is a consistency check, not a proof of where the message came
+  from. It holds only if cmux binds `--workspace` to the connection the notification arrived on, which nobody
+  here has verified. cmux's own documentation says `--workspace` *is* ignored for cmux Cloud machines — the
+  Mac decides where a machine's notification lands — but these are `cmux ssh` rows, a different transport,
+  and the one signal that would have answered it directly is unusable: on cmux 0.64 a `cmux ssh` row's own
+  notifications report `CMUX_NOTIFICATION_ORIGIN=local` rather than the documented `ssh-relay:<uuid>`. Treat
+  the cross-host case as unknown until someone tests it. Nothing else in this bullet depends on the answer.
+
+  Within one host the check is deliberately loose anyway: it asks whether the notifying row is a remote row
+  whose destination is that host, not whether a task lives there, not whether you ever ran `wt` on it. So the
+  set that can ask is at least every `cmux ssh` row you have open to any aliased host: a task VM, but equally
+  a shared bastion, a customer's jump host, a build box. The path is unconstrained
   beyond that shape check, `/etc` and a home `.ssh` directory included. The relay socket is loopback TCP on
   the far side, so anyone with an account on such a machine can ask for both: treat any host you keep a row
   to as trusted the way you are, and prefer single-user machines for task rows.
