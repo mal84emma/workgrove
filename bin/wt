@@ -123,6 +123,9 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
   body=$(jq -cn "${args[@]+"${args[@]}"}" '$ARGS.named')
   relay_env || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
   c=$(cmux_bin) || { warn "cmux CLI not found here; run the line below on the Mac"; return 1; }
+  # Belt and braces, not the mechanism: on cmux 0.64 --workspace does not change which workspace the
+  # notification is recorded against — the sending surface's own is used whatever is named (measured). It
+  # names this row, which is what the Mac hook's from_row_on_host wants anyway, so it stays right either way.
   if [[ -n "$RELAY_WS" ]]; then ws=(--workspace "$RELAY_WS"); fi
   CMUX_SOCKET_PATH="$RELAY_SOCKET" env -u CMUX_SOCKET "$c" notify "${ws[@]+"${ws[@]}"}" --title "$title" --body "$body" >/dev/null 2>&1 \
     || { warn "cmux notify failed; run the line below on the Mac"; return 1; }

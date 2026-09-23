@@ -61,6 +61,12 @@ row_by_title() { # the local row for a VM task; mirrors cmux_row_field <title> <
 from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifying row is an SSH row to that host.
   # cmux 0.64 reports CMUX_NOTIFICATION_ORIGIN=local for a `cmux ssh` row's own notifications (only the old
   # mosh-tmux relay said ssh-relay:<uuid>), so the row's remote destination is the check that it came from a VM.
+  # What makes that check worth anything: the workspace id is assigned by cmux from the SENDING surface, not
+  # taken from the sender's --workspace. Measured on 0.64 — `cmux notify --workspace <other id>` from one row
+  # is still recorded against the row it was typed in, whichever id is named. So this asks where the
+  # notification actually came from. Were it sender-chosen, a VM could name any ssh row to the host it claims
+  # and this would be checking the VM's own assertion; notify_mac still passes --workspace (naming the VM's
+  # own row, so it stays correct if a later cmux honours it), but nothing here may lean on it.
   # Runs in the caller's shell, not a subshell, so the snapshot it loads is the one attach_row goes on to use.
   [[ -n $1 ]] || return 1
   ws_load || return 1
