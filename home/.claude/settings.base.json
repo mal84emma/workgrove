@@ -16,6 +16,15 @@
       "Bash(git branch -a)",
       "Bash(git branch -r)",
       "Bash(git branch -v)",
+      "Bash(git -C * status)",
+      "Bash(git -C * status *)",
+      "Bash(git -C * diff)",
+      "Bash(git -C * diff *)",
+      "Bash(git -C * log)",
+      "Bash(git -C * log *)",
+      "Bash(git -C * show)",
+      "Bash(git -C * show *)",
+      "Bash(git -C * branch)",
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(wt list *)",
@@ -23,9 +32,10 @@
     ],
     "deny": [
       "Bash(git -c *)",
-      "Bash(git -C *)",
       "Bash(git config *)",
       "Bash(git push *)",
+      "Bash(git -C * push)",
+      "Bash(git -C * push *)",
       "Bash(git remote add *)",
       "Bash(git filter-branch *)",
       "Bash(gh api *)",
@@ -36,7 +46,6 @@
       "Bash(wt pr *)"
     ]
   },
-  "model": "fable",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -103,7 +112,6 @@
     "type": "command",
     "command": "sh ~/.claude/statusline-command.sh"
   },
-  "effortLevel": "high",
   "tui": "fullscreen",
   "voice": {
     "enabled": true,

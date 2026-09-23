@@ -4,8 +4,9 @@
 #   bash test/install-smoke.sh          (KEEP=1 leaves the scratch homes behind for inspection)
 #
 # Why this file exists: install.sh's five opinionated files (~/.zshrc, ~/.gitconfig, ~/.tmux.conf,
-# ~/.claude/keybindings.json, ~/.claude/statusline-command.sh) are opt-in, and every machine the author
-# owns is fully opted in — so the no-flags path, the one every stranger gets, is the one path the author
+# ~/.claude/keybindings.json, ~/.claude/statusline-command.sh) are opt-in, as are the UI keys of
+# ~/.claude/settings.json behind --with-claude-ui, and every machine the author owns is fully opted in — so
+# the no-flags path, the one every stranger gets, is the one path the author
 # never runs and the one most likely to rot. These scenarios exercise it, the flags, the stickiness rule
 # and idempotence, and above all they check that a default install leaves a stranger's own dotfiles alone.
 #
@@ -282,6 +283,7 @@ assert_install_ok() {
 FIVE_FLAG=(--with-zshrc --with-gitconfig --with-tmux-conf --with-keybindings --with-statusline)
 FIVE_DST=(.zshrc .gitconfig .tmux.conf .claude/keybindings.json .claude/statusline-command.sh)
 FIVE_SRC=(home/.zshrc home/.gitconfig home/.tmux.conf home/.claude/keybindings.json home/.claude/statusline-command.sh)
+UI_FLAG=--with-claude-ui             # the sixth flag: keys inside a copied file, so it has no FIVE_DST entry
 THEME_DST=.oh-my-zsh/custom/themes/workstation.zsh-theme
 THEME_SRC=home/.oh-my-zsh/custom/themes/workstation.zsh-theme
 TMUX_LINE='set -ag update-environment'
@@ -321,6 +323,37 @@ assert_status_line() {
     got=yes
   fi
   assert_eq "the ~/.claude/settings.json statusLine key present" "$want" "$got"
+}
+
+# assert_settings_key <home> <key> <yes|no>: one top-level key of the ~/.claude/settings.json copy, read the
+# same way assert_status_line reads its own — jq rather than grep, so a key mentioned inside a string or a
+# nested object is never mistaken for the top-level one this is about.
+assert_settings_key() {
+  local h="$1" key="$2" want="$3" got=no
+  if jq -e --arg k "$key" 'has($k)' "$h/.claude/settings.json" >/dev/null 2>&1; then
+    got=yes
+  fi
+  assert_eq "the ~/.claude/settings.json $key key present" "$want" "$got"
+}
+
+# assert_claude_ui <home> <yes|no>: the whole settings.json contract in one call. .tui and .theme follow
+# --with-claude-ui exactly. .voice has TWO independent reasons to be absent — the flag, and a machine with no
+# microphone — so off a Mac it is gone even when the flag was given, which is what checks that the two strips
+# compose rather than replace one another. .model and .effortLevel are gone from the repo altogether, so no
+# path may produce them. And .hooks and .permissions are machinery: they are what makes installing this file
+# unconditional in the first place, so they must survive every combination, or the gating has overreached.
+assert_claude_ui() {
+  local h="$1" want="$2" voice="$2"
+  if [[ $OS != Darwin ]]; then
+    voice=no
+  fi
+  assert_settings_key "$h" tui "$want"
+  assert_settings_key "$h" theme "$want"
+  assert_settings_key "$h" voice "$voice"
+  assert_settings_key "$h" model no
+  assert_settings_key "$h" effortLevel no
+  assert_settings_key "$h" hooks yes
+  assert_settings_key "$h" permissions yes
 }
 
 # assert_only_linked <home> <index>: exactly one of the five is a link into the repo, the other four are
@@ -400,6 +433,7 @@ scenario_default_empty() {
     assert_absent "$h" "$THEME_DST"
     assert_regular "$h" .gitconfig           # configure_git makes a real file here; never a link
     assert_status_line "$h" no
+    assert_claude_ui "$h" no                 # …and no UI taste in the settings.json copy either
     # The two settings that are machinery rather than taste have to arrive anyway, via configure_git.
     assert_eq "core.excludesFile in the scratch ~/.gitconfig" \
       "$h/.gitignore_global" "$(scratch_git "$h" config --global --get core.excludesFile)"
@@ -408,11 +442,12 @@ scenario_default_empty() {
     # ... and so does tmux's one line, appended rather than linked.
     assert_regular "$h" .tmux.conf
     assert_eq "update-environment lines in ~/.tmux.conf" 1 "$(count_matches "$h/.tmux.conf" "$TMUX_LINE")"
-    # report_skipped has to name all five, or a user who wanted them never learns the flag exists.
+    # report_skipped has to name all six, or a user who wanted them never learns the flag exists.
     local f
     for f in "${FIVE_FLAG[@]}"; do
       assert_grep "install.sh output names $f as skipped" "$log" "$f"
     done
+    assert_grep "install.sh output names $UI_FLAG as skipped" "$log" "$UI_FLAG"
   fi
   end_scenario
 }
@@ -462,6 +497,7 @@ scenario_default_over_existing() {
     assert_grep "the ~/.claude/statusline-command.sh is still the stranger's" \
       "$h/.claude/statusline-command.sh" "STRANGER STATUSLINE"
     assert_status_line "$h" no
+    assert_claude_ui "$h" no
   fi
   end_scenario
 }
@@ -482,6 +518,7 @@ scenario_opinionated() {
     done
     assert_link "$h" "$THEME_DST" "$THEME_SRC"
     assert_status_line "$h" yes
+    assert_claude_ui "$h" yes                # --opinionated-config is all six, the UI keys included
     # Exactly one backup dir, holding all five originals with their own content.
     n=0
     for bk in "$h"/.workstation-backup/*/; do
@@ -601,6 +638,7 @@ scenario_individual_flags() {
       else
         assert_status_line "$h" no
       fi
+      assert_claude_ui "$h" no      # none of the five carries the UI keys: only --with-claude-ui does
     fi
     end_scenario
   done
@@ -626,6 +664,58 @@ scenario_unknown_flag() {
   end_scenario
 }
 
+# 8. The sixth flag. It is unlike the other five twice over: it installs no file, and it cannot be sticky,
+#    because the keys it keeps live inside a COPIED ~/.claude/settings.json and there is no symlink
+#    destination for opted_in to read an earlier run's answer back out of. Both halves are asserted here —
+#    the second one is the surprising half, and the one a future refactor is most likely to get wrong.
+scenario_claude_ui() {
+  begin_scenario "8a. --with-claude-ui keeps the UI keys and links no file"
+  local h log i f
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  if assert_install_ok "$h" "$log" "$UI_FLAG"; then
+    assert_machinery "$h"
+    for i in 0 1 2 3 4; do            # it gates keys, not files: none of the five may ride in with it
+      assert_not_link "$h" "${FIVE_DST[$i]}"
+    done
+    assert_absent "$h" "$THEME_DST"
+    assert_status_line "$h" no        # the statusline script is still its own flag's business
+    assert_claude_ui "$h" yes
+    # report_skipped still names the five it did not install, and no longer names this one.
+    for f in "${FIVE_FLAG[@]}"; do
+      assert_grep "install.sh output names $f as skipped" "$log" "$f"
+    done
+    assert_eq "$UI_FLAG listed as skipped" 0 "$(count_matches "$log" "$UI_FLAG")"
+  fi
+  end_scenario
+
+  begin_scenario "8b. --with-claude-ui is not sticky: the kept copy needs --refresh-config"
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  if assert_install_ok "$h" "$log"; then
+    assert_claude_ui "$h" no
+    # A rerun WITH the flag keeps the existing settings.json, so nothing changes and nothing can: the flag
+    # only ever reaches the file being written. install.sh has to say so rather than report plain success.
+    if assert_install_ok "$h" "$log.2" "$UI_FLAG"; then
+      assert_claude_ui "$h" no
+      assert_grep "the kept-copy warning names $UI_FLAG" "$log.2" "$UI_FLAG changed nothing"
+    fi
+    # --refresh-config rewrites the copy, and only then do the keys arrive.
+    if assert_install_ok "$h" "$log.3" "$UI_FLAG" --refresh-config; then
+      assert_claude_ui "$h" yes
+    fi
+    # And a later refresh without the flag takes them away again — which is what "not sticky" means, and
+    # the inverse of scenario 4a, where an existing link IS the record of an earlier flag.
+    if assert_install_ok "$h" "$log.4" --refresh-config; then
+      assert_claude_ui "$h" no
+    fi
+  fi
+  end_scenario
+}
+
+
 # ---------------------------------------------------------------------------- main
 
 main() {
@@ -637,6 +727,7 @@ main() {
   scenario_idempotent
   scenario_individual_flags
   scenario_unknown_flag
+  scenario_claude_ui
   echo "$((PASS + FAIL)) assertions: $PASS passed, $FAIL failed"
   if [[ $FAIL -gt 0 ]]; then
     exit 1

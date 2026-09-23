@@ -3,6 +3,7 @@
 # install.sh: install this repo into $HOME.
 #   bash ~/repos/workstation/install.sh [--refresh-config] [--opinionated-config]
 #       [--with-zshrc] [--with-gitconfig] [--with-tmux-conf] [--with-keybindings] [--with-statusline]
+#       [--with-claude-ui]
 #   (on a VM, prefix WT_HOST=<vm>)
 #
 # Idempotent: rerun it whenever the repo changes. Nothing is ever deleted; anything in the way is
@@ -29,9 +30,17 @@
 # arrive only when asked for — ~/.zshrc (and with it the oh-my-zsh theme, the oh-my-zsh prerequisite and the
 # plugin clone that exist only to serve it) with --with-zshrc, ~/.gitconfig with --with-gitconfig,
 # ~/.tmux.conf with --with-tmux-conf, ~/.claude/keybindings.json with --with-keybindings and
-# ~/.claude/statusline-command.sh with --with-statusline; --opinionated-config turns on all five.
-# The flag never has to be repeated: a destination that is already a link into this repo counts as asked for,
-# so `wt update`, which reruns this script bare, keeps what an earlier run installed.
+# ~/.claude/statusline-command.sh with --with-statusline.
+# A sixth flag, --with-claude-ui, gates KEYS rather than a file: ~/.claude/settings.json is installed on every
+# machine because its hooks and permissions are machinery, but .tui, .voice and .theme in it are the author's
+# taste in the same way the five files are, so copy_config deletes them from the copy unless the flag is given.
+# --opinionated-config turns on all six.
+# The five file flags never have to be repeated: a destination that is already a link into this repo counts as
+# asked for, so `wt update`, which reruns this script bare, keeps what an earlier run installed. --with-claude-ui
+# has no such record to read — the keys live inside a COPIED file, not behind a symlink whose target says who
+# made it — so it is not sticky and must be passed again every time the copy is written. That costs nothing in
+# practice: a normal rerun keeps the existing ~/.claude/settings.json untouched, so only --refresh-config
+# rewrites it, and only that run has to repeat the flag.
 # Two of the five also carry settings the rest of this repo depends on, and declining the file does not
 # decline those: without the linked ~/.gitconfig, `git config` puts core.excludesFile (what git-ignores
 # .worktrees/) and the ~/.gitconfig.local include into the user's own file and changes nothing else; without
@@ -55,11 +64,13 @@ WITH_GITCONFIG=0
 WITH_TMUX_CONF=0
 WITH_KEYBINDINGS=0
 WITH_STATUSLINE=0
+WITH_CLAUDE_UI=0                     # the sixth: UI keys inside the copied ~/.claude/settings.json, not a file
 BK=""                                # this run's backup dir; filled in by main
 TMPFILES=()                          # half-built files; removed by report, which is the EXIT trap
 
 # parse_args <script args…>: flags in any order and any combination — each --with-… adds one opinionated
-# file, --opinionated-config is all five at once, --refresh-config is orthogonal to all of them.
+# file (or, for --with-claude-ui, one group of keys), --opinionated-config is all six at once,
+# --refresh-config is orthogonal to all of them.
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -68,13 +79,14 @@ parse_args() {
       --with-tmux-conf)     WITH_TMUX_CONF=1 ;;
       --with-keybindings)   WITH_KEYBINDINGS=1 ;;
       --with-statusline)    WITH_STATUSLINE=1 ;;
+      --with-claude-ui)     WITH_CLAUDE_UI=1 ;;
       --opinionated-config) WITH_ZSHRC=1; WITH_GITCONFIG=1; WITH_TMUX_CONF=1
-                            WITH_KEYBINDINGS=1; WITH_STATUSLINE=1 ;;
+                            WITH_KEYBINDINGS=1; WITH_STATUSLINE=1; WITH_CLAUDE_UI=1 ;;
       --refresh-config)     REFRESH=1 ;;
       *)
         { echo "usage: install.sh [--refresh-config] [--opinionated-config]"
           echo "                  [--with-zshrc] [--with-gitconfig] [--with-tmux-conf]"
-          echo "                  [--with-keybindings] [--with-statusline]"
+          echo "                  [--with-keybindings] [--with-statusline] [--with-claude-ui]"
         } >&2
         exit 2 ;;
     esac
@@ -117,6 +129,9 @@ our_link() {
 # reruns this script with no arguments, so a choice made once has to survive a run that cannot see it, and no
 # state is stored anywhere for it to disagree with. On a machine where all five are already linked — every
 # machine the author has — every answer is yes, so this whole opt-in changes nothing there.
+# Only the five FILES can be asked this. --with-claude-ui gates keys inside a copied file, where there is no
+# symlink destination to read the earlier answer back out of, so it is tested as a plain flag wherever it is
+# used and no state file is invented to stand in for one.
 opted_in() {
   if [[ $1 -eq 1 ]]; then
     return 0
@@ -154,8 +169,9 @@ link() {
 
 # copy_config <repo-relative .base> <home-relative dst> <claude|codex|plain>: install one machine-local
 # copy, keeping an existing real file unless --refresh-config was given. Kind "claude" drops the
-# voice keys off a Mac, because a VM has no local microphone; kind "codex" drops the Keychain
-# credential store off a Mac, because only macOS has one. The new file is built in full before the
+# voice keys off a Mac, because a VM has no local microphone, and the .tui/.voice/.theme UI keys unless
+# --with-claude-ui asked for them, because those are taste rather than machinery; kind "codex" drops the
+# Keychain credential store off a Mac, because only macOS has one. The new file is built in full before the
 # old one is stashed, so a filter that fails cannot leave a truncated ~/dst behind. A replaced copy is only ever stashed,
 # never merged: a refreshed .codex/config.toml loses the tables Codex wrote into it (hook trust,
 # folder trust), which the old file in the backup dir still holds and /hooks restores.
@@ -171,6 +187,13 @@ copy_config() {
       echo "…but the kept ~/$2 has no statusLine key, so the status line will not appear:" >&2
       echo "rerun with --refresh-config to rewrite it (the old copy goes to the backup dir)" >&2
     fi
+    # The same trap for the keys --with-claude-ui asks for: the flag only ever reaches the file being
+    # WRITTEN, so on an already-installed machine it changes nothing and every line of the run says success.
+    if [[ $kind == claude && $WITH_CLAUDE_UI -eq 1 ]] \
+       && ! jq -e 'has("tui")' "$dst" >/dev/null 2>&1; then
+      echo "…but the kept ~/$2 has no tui key, so --with-claude-ui changed nothing:" >&2
+      echo "rerun with --refresh-config to rewrite it (the old copy goes to the backup dir)" >&2
+    fi
     return 0
   fi
   mkdir -p "$(dirname "$dst")"
@@ -179,8 +202,13 @@ copy_config() {
   if [[ $kind == claude ]]; then
     local filter='.'
     if [[ $OS != Darwin ]]; then
-      filter="$filter | del(.voice, .voiceEnabled)"
+      filter="$filter | del(.voice, .voiceEnabled)"       # no local microphone on a VM, flag or no flag
     fi
+    if [[ $WITH_CLAUDE_UI -eq 0 ]]; then                  # UI taste, not machinery — the hooks and permissions
+      filter="$filter | del(.tui, .voice, .theme)"        # around them stay on every machine. Composed with, not
+    fi                                                    # instead of, the line above: del() of a key another
+                                                          # del() already removed is a no-op, so .voice goes on a
+                                                          # VM either way and the two tests stay independent.
     if ! opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh; then
       filter="$filter | del(.statusLine)"                 # the script it names is opt-in: a command pointing at a
     fi                                                    # file that was never installed breaks the status line
@@ -661,9 +689,10 @@ report() {
 
 # report_skipped: name the opinionated files this run did not install, and the flag that would. A default
 # install deliberately leaves the user's own shell, git and tmux alone, and someone who wanted the author's
-# prompt should not have to read this script to find out why it never arrived. Deliberately not part of
-# report(): that one is the EXIT trap and so also runs after a die(), where a list of optional extras would
-# sit under a failure message and say nothing about it.
+# prompt should not have to read this script to find out why it never arrived. --with-claude-ui is listed the
+# same way, though what it leaves out is three keys of ~/.claude/settings.json rather than a file of its own.
+# Deliberately not part of report(): that one is the EXIT trap and so also runs after a die(), where a list of
+# optional extras would sit under a failure message and say nothing about it.
 report_skipped() {
   local f=""
   opted_in "$WITH_ZSHRC"       .zshrc                          || f="$f --with-zshrc"
@@ -671,6 +700,7 @@ report_skipped() {
   opted_in "$WITH_TMUX_CONF"   .tmux.conf                      || f="$f --with-tmux-conf"
   opted_in "$WITH_KEYBINDINGS" .claude/keybindings.json        || f="$f --with-keybindings"
   opted_in "$WITH_STATUSLINE"  .claude/statusline-command.sh   || f="$f --with-statusline"
+  [[ $WITH_CLAUDE_UI -eq 1 ]]                                  || f="$f --with-claude-ui"
   if [[ -n $f ]]; then
     echo "left alone (the author's own taste, not machinery):$f"
     echo "rerun with those flags, or --opinionated-config for all of them, to install them"

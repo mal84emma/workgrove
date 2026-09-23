@@ -5,6 +5,7 @@
     {
       "context": "Global",
       "bindings": {
+        "ctrl+t": null,
         "ctrl+shift+t": "app:toggleTodos"
       }
     },
