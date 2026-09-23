@@ -164,7 +164,11 @@ stranger's own dotfiles — `--opinionated-config`, each file flag on its own, t
 an unknown flag, every refusal path, which links count as this repo's own, the don't-clobber branches of
 `configure_git`, retirement of renamed links, and `ZSH_CUSTOM`. Set `INSTALL_BASH=/bin/bash` to run
 `install.sh` itself under bash 3.2, which is what a fresh Mac gives it; `FORCE_OS=Linux` drives the
-Linux-only steps from a Mac.
+Linux-only steps from a Mac. Run on a VM it makes 488, because scenario 17 is about a Mac file and does not
+run there — and running it there is worth doing, because `FORCE_OS` cannot fake everything a real Linux box
+differs in. It was a VM that caught the suite building its fixtures at whatever the machine's umask happened
+to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
+that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
 `bash test/wt-smoke.sh` is the other one: 242 assertions over eleven groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a

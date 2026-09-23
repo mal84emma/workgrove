@@ -41,6 +41,13 @@
 # expected_assertions below, because a scenario that quietly stops checking things still prints "ok".
 set -euo pipefail
 
+# Fixtures are created with plain redirection, so their modes come from the ambient umask unless a scenario
+# sets one on purpose. Ubuntu with user-private groups defaults to 002 and macOS to 022, which made the two
+# platforms build DIFFERENT fixtures from the same line and test different things: install.sh refuses to
+# rewrite a group-writable dotfile, so a ~/.bashrc scenario that meant to exercise the rewrite exercised the
+# refusal instead, and only on Linux. Pin it. The scenarios that are about the mode chmod it themselves.
+umask 022
+
 REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
 OS="$(uname -s)"
 WT="$REPO/bin/wt"

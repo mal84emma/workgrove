@@ -41,6 +41,13 @@
 # was supposed to create therefore asserts rather than `continue`s.
 set -euo pipefail
 
+# Fixtures are created with plain redirection, so their modes come from the ambient umask unless a scenario
+# sets one on purpose. Ubuntu with user-private groups defaults to 002 and macOS to 022, which made the two
+# platforms build DIFFERENT fixtures from the same line and test different things: install.sh refuses to
+# rewrite a group-writable dotfile, so a ~/.bashrc scenario that meant to exercise the rewrite exercised the
+# refusal instead, and only on Linux. Pin it. The scenarios that are about the mode chmod it themselves.
+umask 022
+
 REPO="$(cd "$(dirname "$0")/.." && pwd -P)"   # -P: install.sh records the physical path, so compare like for like
 OS="$(uname -s)"
 # The assertion vocabulary, the counters, the scenario lines and the summary live in test/lib.sh, because
@@ -1555,12 +1562,16 @@ expected_assertions() {
   # hooks.json checksum, and on a Mac one cmux.json assertion — link or not-link, one either way — and the
   # config.toml checksum as well.
   per=$((5 + nbin + 2 * nskill + 3 + 3 + 1))
+  # …called by scenarios 1, 2, 3 and 8a everywhere, and by 17a and 17j on a Mac only. Counting those two
+  # unconditionally made the guard demand 2 * per assertions that a Linux run never had the scenarios to
+  # make, so the suite could not pass on a VM however correct the code was.
+  local calls=4
   if [[ $OS == Darwin ]]; then
     per=$((per + 2))
     fixed=$((fixed + CMUX_ASSERTIONS))
+    calls=6
   fi
-  # …called by scenarios 1, 2, 3, 8a and 17a/17j.
-  echo "$((fixed + 6 * per))"
+  echo "$((fixed + calls * per))"
 }
 
 # Everything that is not assert_machinery. Bump it in the same commit as the assertion you added.
