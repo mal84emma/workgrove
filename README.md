@@ -15,6 +15,17 @@ VS Code opens on demand, through `wt open`.
   tmux session `wt-<repo>-<name>`, which keeps the agent alive across disconnects: the row is a plain `cmux ssh`
   row, and the shell it opens creates that session (running the agent) or takes over the one already there.
   Other rows: `<repo> shell` for a repo shell, `shell` for a VM shell, `driver` for the driver session.
+- **Rows are found by title, in every window.** A cmux window shows one workspace at a time, so putting two
+  tasks side by side on screen means two windows and dragging one task's row across. `cmux workspace list
+  --json` answers for a single window — the caller's — so a row moved out of it used to read as a row that
+  had been closed: `wt rm` removed the worktree and left the row behind, `wt -H <vm> attach` built a second
+  row beside the one already there, `wt new` stopped noticing a title another repo had taken, and the
+  notification hook could not prove a VM's `wt open` came from that VM, so it did nothing. Only the listing
+  is scoped that way. Measured on cmux 0.64, a workspace keeps its id, its title and its `workspace:N` ref
+  when it moves, and every command that acts on a row — select, send, close, set-description — reaches it by
+  id in any window. So `rows_json` in `bin/wt` and `ws_load` in `bin/cmux-hook` enumerate the windows and
+  merge their lists, and nothing else had to change. They enumerate by window uuid, never by the index
+  `cmux list-windows` prints first, because opening a window renumbers the rest.
 - **Git owns the worktree; sidecar files own the launch metadata.** `wt` reads `git worktree list`. Per task
   it keeps `<repo>/.git/wt/<name>.json` (base ref, agent, row title, tmux session, copied files, and what
   `.wt-setup` left behind),
@@ -170,11 +181,14 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 242 assertions over eleven groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 253 assertions over eleven groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
 base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
 worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that `wt prune` keeps
-exactly what `wt rm` refuses, and that `bin/wt` and `bin/cmux-hook` still agree on `tmux_cmd`. Both suites
+exactly what `wt rm` refuses, that a row sitting in a second cmux window is still found and still closed, and
+that `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd` and on how they merge the windows' row lists. Run on a VM
+it makes 232: scenario 8 is about the Mac's row list, and `bin/wt` has no `FORCE_OS` to lie to `is_remote()`
+with, so there `wt new` asks the Mac for a row over the relay and never consults cmux at all. Both suites
 carry an expected-total guard, because a scenario that silently skips its assertions is the failure mode a
 green run hides. What neither covers is anything needing ssh, tmux or a live cmux.
 
@@ -433,6 +447,13 @@ own machine.
   contradicting it. The signal that would have said this directly is still unusable — on cmux 0.64 a
   `cmux ssh` row's own notifications report `CMUX_NOTIFICATION_ORIGIN=local` rather than the documented
   `ssh-relay:<uuid>` — so the relay's own refusals are what answers it.
+
+  That proof is only as good as the row list it reads, which is where the window scoping above bit hardest.
+  A hook has no caller surface, so its list answered for whichever window happened to be current, and a task
+  row the user had moved into another one could not be shown to belong to the host that was asking: the check
+  failed closed and the VM's `wt open` did nothing but write a line to `~/.local/state/cmux-hook.log`.
+  `ws_load` merges every window's list now. That widens what the check can see, not what it will accept — it
+  still matches the sending workspace's own id against that row's ssh destination.
 
   That enforcement is also why every one of those six ids has to be current. A tmux pane keeps the identity
   of whichever cmux connection started it, so after cmux reconnects a row, a pane holding the old ids is

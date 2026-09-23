@@ -39,19 +39,45 @@ valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 safe_path() { [[ $1 == /* && $1 != *$'\n'* && $1 != *//* && $1 != */ && $1 != *'/../'* && $1 != */.. && $1 != *[\'\"\`\$\\\;]* ]]; }
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
 WS_JSON=""; WS_RC=""
-ws_load() { # ws_load [fresh] — one shared `workspace list --json`, kept in $WS_JSON with its status in $WS_RC.
+ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in every window, kept in $WS_JSON
+            # with its status in $WS_RC.
             # Both queries below used to make their own capped call and pipe it straight into jq, which threw
             # away capped's exit status: a list that timed out then looked exactly like "no such row", so
             # attach_row took its create branch and gave a task that already had a row a second one. One
             # snapshot, status checked, fixes both halves of that — and a failure now propagates, so the
             # caller creates nothing and the notification keeps its ordinary banner.
+            # `workspace list --json` covers ONE window, and a hook has no caller surface, so it answered for
+            # whichever window happened to be current. A task row the user had moved into a second window to
+            # work on two tasks side by side was invisible here, and the consequence is worse than a missing
+            # row: from_row_on_host could not show the notification came from that host, so it failed closed
+            # and a VM's `wt open` did nothing but write a line to $LOG. Windows are enumerated and their
+            # lists merged, exactly as rows_json does in wt — by uuid, never by the index list-windows prints
+            # first, because opening a window renumbers the others while the uuid stays put.
   [[ ${1:-} == fresh ]] && WS_RC=""       # the post-create lookup wants the list as it is now, not as it was
   [[ -n $WS_RC ]] && return "$WS_RC"
-  WS_JSON=$(capped "$CMUX" workspace list --json 2>/dev/null); WS_RC=$?
+  local wins w out docs="" rc=0
+  wins=$(capped "$CMUX" list-windows 2>/dev/null) || wins=""      # cannot enumerate: the fallback below stands in
+  wins=$(printf '%s\n' "$wins" | awk '{print $2}' | grep -Ex '[0-9A-Fa-f-]{36}') || wins=""
+  for w in $wins; do
+    out=$(capped "$CMUX" workspace list --json --window "$w" 2>/dev/null); rc=$?
+    [[ $rc -eq 0 ]] || break               # a window whose list timed out must not pass for one holding no rows
+    docs="$docs$out"
+  done
+  # Nothing enumerated — an older cmux with no list-windows, or output this could not parse — falls back to
+  # the single-window call that was here before, so that cmux keeps the reach it had instead of losing the hook.
+  if [[ $rc -eq 0 && -z $docs ]]; then
+    docs=$(capped "$CMUX" workspace list --json 2>/dev/null); rc=$?
+  fi
+  WS_RC=$rc
+  # `.workspaces?` and not `.workspaces`: cmux may hand back a bare array, and jq's `//` does not catch the
+  # error `Cannot index array with "workspaces"` — only the `?` turns that into the empty it can fall back from.
+  if [[ $WS_RC -eq 0 ]]; then
+    WS_JSON=$(printf '%s' "$docs" | jq -s -c '{workspaces: (map(.workspaces? // .) | add // [])}' 2>/dev/null) || WS_RC=1
+  fi
   case $WS_RC in
     0) ;;
-    142) log "cmux workspace list --json hit the hook deadline (capped exit 142)" ;;   # "did it time out": yes
-    *)   log "cmux workspace list --json failed (exit $WS_RC)" ;;
+    142) log "the cmux row list hit the hook deadline (capped exit 142)" ;;   # "did it time out": yes
+    *)   log "the cmux row list failed (exit $WS_RC)" ;;
   esac
   return "$WS_RC"; }
 row_by_title() { # the local row for a VM task; mirrors cmux_row_field <title> <field> <host> in wt

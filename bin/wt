@@ -280,11 +280,35 @@ require_wt() { # require_wt <name>  -> sets P (path), B (branch)
   die "no worktree named '$n' in $REPO (see: wt list)"
 }
 
-cmux_row_field() { # cmux_row_field <title> <field> [host] -> that field of the row; no host: the local row
-  local c; c=$(cmux_bin) || return 0     # a local and a VM row share a title, so the host is what tells them apart
+rows_json() { # rows_json — every cmux row, in every window, as one {"workspaces":[…]} document.
+  # `workspace list --json` answers for ONE window: the caller's, or --window's. A row the user dragged into
+  # a second window — which is the only way cmux can show two tasks side by side, since a window displays one
+  # workspace at a time — is then simply absent, and every lookup built on this reads that as "no such row":
+  # `wt rm` leaves the row open, remote_row builds a second row beside the one already there, check_identity
+  # misses a title clash, and the hook's from_row_on_host fails closed so a VM's `wt open` does nothing.
+  # Only the LISTING is window-scoped, which is why merging the lists is the whole fix and nothing that acts
+  # on a row changes. Measured on cmux 0.64: a workspace keeps its uuid, its title and even its workspace:N
+  # ref when it is moved between windows, refs are allocated globally so two windows cannot collide, and
+  # read-screen, send, workspace-action and workspace close each reach a row in another window with no
+  # --window. Windows are enumerated by uuid and never by the index list-windows prints first: opening a
+  # window renumbers the rest — a new window took index 0 and pushed the existing one to 1 — the uuid is fixed.
   # `.workspaces?` and not `.workspaces`: cmux may hand back a bare array, and jq's `//` does not catch the
   # error `Cannot index array with "workspaces"` — only the `?` turns that into the empty it can fall back from.
-  CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null \
+  local c w out docs=""
+  c=$(cmux_bin) || return 0
+  for w in $(CMUX_QUIET=1 "$c" list-windows 2>/dev/null | awk '{print $2}' | grep -Ex '[0-9A-Fa-f-]{36}' || true); do
+    out=$(CMUX_QUIET=1 "$c" workspace list --json --window "$w" 2>/dev/null) || continue   # a window closed mid-loop
+    docs="$docs$out"
+  done
+  # No window list at all — an older cmux without the subcommand, or output this cannot parse — falls back to
+  # the single-window call that was here before, so such a cmux behaves exactly as it did rather than not at all.
+  [[ -n "$docs" ]] || docs=$(CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null) || true
+  printf '%s' "$docs" | jq -s -c '{workspaces: (map(.workspaces? // .) | add // [])}' 2>/dev/null || true
+}
+
+cmux_row_field() { # cmux_row_field <title> <field> [host] -> that field of the row; no host: the local row
+  cmux_bin >/dev/null || return 0        # a local and a VM row share a title, so the host is what tells them apart
+  rows_json \
     | jq -r --arg t "$1" --arg k "$2" --arg h "${3:-}" '
         first((.workspaces? // .)[]
           | select(.title == $t)

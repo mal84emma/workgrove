@@ -262,7 +262,9 @@ CMUX_DEAD="$TEST_ROOT/cmux-dead/cmux"
 CMUX_ALIVE="$TEST_ROOT/cmux-alive/cmux"
 WT_STUB="$CMUX_DEAD"
 WT_ROWS="$TEST_ROOT/rows.json"
-mkdir -p "$(dirname "$CMUX_DEAD")" "$(dirname "$CMUX_ALIVE")"
+WT_WINDOWS="$TEST_ROOT/windows.txt"          # what `cmux list-windows` prints; empty = a one-window cmux
+WT_ROWS_DIR="$TEST_ROOT/rows-by-window"      # <window uuid>.json: the rows `workspace list --window` serves
+mkdir -p "$(dirname "$CMUX_DEAD")" "$(dirname "$CMUX_ALIVE")" "$WT_ROWS_DIR"
 cat >"$CMUX_DEAD" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CMUX_STUB_LOG"
@@ -272,7 +274,19 @@ cat >"$CMUX_ALIVE" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CMUX_STUB_LOG"
 if [ "$1" = ping ]; then exit 0; fi
-if [ "$1" = workspace ] && [ "$2" = list ]; then cat "$CMUX_STUB_ROWS"; exit 0; fi
+if [ "$1" = list-windows ]; then
+  if [ -s "$CMUX_STUB_WINDOWS" ]; then cat "$CMUX_STUB_WINDOWS"; fi
+  exit 0
+fi
+if [ "$1" = workspace ] && [ "$2" = list ]; then
+  w=""; prev=""
+  for a in "$@"; do if [ "$prev" = --window ]; then w="$a"; fi; prev="$a"; done
+  if [ -z "$w" ]; then cat "$CMUX_STUB_ROWS"
+  elif [ -f "$CMUX_STUB_ROWS_DIR/$w.json" ]; then cat "$CMUX_STUB_ROWS_DIR/$w.json"
+  else echo '{"workspaces":[]}'
+  fi
+  exit 0
+fi
 echo "workspace:99"
 exit 0
 STUB
@@ -285,6 +299,23 @@ stub_cmux() {
     *) echo "ABORT: stub_cmux takes dead or alive, not '$1'" >&2; exit 1 ;;
   esac
   : >"$CMUX_LOG"
+  : >"$WT_WINDOWS"; rm -f "$WT_ROWS_DIR"/*.json     # back to a one-window cmux; stub_windows opts in again
+}
+
+# stub_windows <window uuid…>: what `cmux list-windows` prints, in cmux's own format, and an empty row list
+# for each window named. A scenario then fills "$WT_ROWS_DIR/<uuid>.json" for the window it cares about.
+# Called after stub_cmux, which resets this: with no call, list-windows prints nothing, rows_json falls back
+# to the single-window call it made before windows were merged, and every other scenario sees the same cmux
+# it always saw. The uuids must LOOK like uuids — rows_json takes only 36-character ones from that output,
+# so that a cmux which prints something else entirely is treated as one that cannot be enumerated.
+stub_windows() {
+  local u i=0
+  : >"$WT_WINDOWS"
+  for u in "$@"; do
+    printf '  %d: %s selected_workspace=%s workspaces=0\n' "$i" "$u" "$u" >>"$WT_WINDOWS"
+    printf '{"workspaces":[]}\n' >"$WT_ROWS_DIR/$u.json"
+    i=$((i + 1))
+  done
 }
 
 # The agent `wt run` starts. It is first on wt_run's PATH so the real claude can never be reached, and it
@@ -323,6 +354,7 @@ wt_run() {
            HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" \
            WT_REPOS_DIR="$REPOS_DIR" CMUX_BUNDLED_CLI_PATH="$WT_STUB" \
            CMUX_STUB_LOG="$CMUX_LOG" CMUX_STUB_ROWS="$WT_ROWS" AGENT_ARGV_LOG="$AGENT_LOG" \
+           CMUX_STUB_WINDOWS="$WT_WINDOWS" CMUX_STUB_ROWS_DIR="$WT_ROWS_DIR" \
            PATH="$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
   return 0
@@ -831,6 +863,47 @@ ROWS
 ROWS
   assert_wt_fails 1 "row '$id:swap' already belongs to" new swap --no-workspace -r "$r"
   assert_gone "…and again refuses before it makes anything" "$r/.worktrees/swap"
+
+  # The same two lookups with the row sitting in a SECOND cmux window, which is how two tasks are put side
+  # by side: a cmux window shows one workspace at a time. `workspace list --json` answers for one window, so
+  # until rows_json merged them both assertions below quietly went the other way — the clash was not seen,
+  # and `wt rm` closed no row while still reporting the worktree removed.
+  local w1=AAAAAAAA-0000-0000-0000-00000000000A w2=BBBBBBBB-0000-0000-0000-00000000000B
+  stub_cmux alive
+  stub_windows "$w1" "$w2"
+  printf '{"workspaces":[]}\n' >"$WT_ROWS"     # empty: a one-window list is what this scenario must NOT rely on
+  cat >"$WT_ROWS_DIR/$w2.json" <<ROWS
+{"workspaces":[
+  {"id":"row-in-window-two","title":"$id:moved","description":"@local","current_directory":"$REPOS_DIR"}
+]}
+ROWS
+  assert_wt_fails 1 "row '$id:moved' already belongs to" new moved --no-workspace -r "$r"
+  assert_gone "…and makes nothing, though the row is in the other window" "$r/.worktrees/moved"
+  assert_has "…having enumerated the windows to find it" "$(cat "$CMUX_LOG")" "list-windows"
+
+  # and the row `wt rm` has to close is reached there too
+  stub_cmux alive
+  stub_windows "$w1" "$w2"
+  printf '{"workspaces":[]}\n' >"$WT_ROWS"
+  assert_wt_ok "a worktree whose row is in the other window" new elsewhere --no-workspace -r "$r"
+  cat >"$WT_ROWS_DIR/$w2.json" <<ROWS
+{"workspaces":[
+  {"id":"row-in-window-two","title":"$id:elsewhere","description":"@local","current_directory":"$r"}
+]}
+ROWS
+  assert_wt_ok "wt rm removes it" rm elsewhere -r "$r"
+  assert_has "…and closed the row it could not have seen before" "$(cat "$CMUX_LOG")" \
+             "workspace close row-in-window-two"
+
+  # A cmux that cannot be enumerated — no list-windows, or output that is not a window list — must keep the
+  # single-window behaviour rather than lose the lookup altogether. stub_cmux has just reset it to that.
+  stub_cmux alive
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[
+  {"id":"workspace:1","title":"$id:onewin","description":"@local","current_directory":"$REPOS_DIR"}
+]}
+ROWS
+  assert_wt_fails 1 "row '$id:onewin' already belongs to" new onewin --no-workspace -r "$r"
   stub_cmux dead
   end_scenario
 }
@@ -870,16 +943,25 @@ scenario_host_args() {
   end_scenario
 }
 
-# 10. The one invariant two files promise each other in comments and nothing enforced: bin/cmux-hook's copy
-# of tmux_cmd must match bin/wt's line for line. The command is the one bin/cmux-hook's own comment gives.
+# 10. The invariants two files promise each other in comments and nothing enforced: bin/cmux-hook's copy
+# of tmux_cmd must match bin/wt's line for line (the command is the one bin/cmux-hook's own comment gives), and
+# the two must merge the per-window row lists identically.
 scenario_shared_tmux_cmd() {
-  begin_scenario "10. bin/wt and bin/cmux-hook agree on tmux_cmd"
+  begin_scenario "10. bin/wt and bin/cmux-hook agree on tmux_cmd and on the row list"
   local a b
   a="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt" | grep -v '^ *#')"
   b="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/cmux-hook" | grep -v '^ *#')"
   assert_has "bin/wt has a tmux_cmd" "$a" "tmux new-session"
   assert_has "bin/cmux-hook has one too" "$b" "tmux new-session"
   assert_eq "the two bodies are identical" "$a" "$b"
+  # The second promise: rows_json in wt and ws_load in the hook both merge the per-window row lists, and a
+  # row the two disagreed about would be one wt could act on and the hook could not, or the reverse. They
+  # cannot share the body — the hook wraps every cmux call in its deadline — so what is compared is the jq
+  # program that does the merging.
+  a="$(sed -n "s/.*| jq -s -c '\(.*\)'.*/\1/p" "$REPO/bin/wt")"
+  b="$(sed -n "s/.*| jq -s -c '\(.*\)'.*/\1/p" "$REPO/bin/cmux-hook")"
+  assert_has "bin/wt merges the windows' row lists" "$a" "workspaces"
+  assert_eq "bin/cmux-hook merges them the same way" "$a" "$b"
   end_scenario
 }
 
@@ -896,7 +978,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=230
+FIXED_ASSERTIONS=232
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
@@ -904,7 +986,7 @@ FIXED_ASSERTIONS=230
 # row over the relay and never consults cmux, and check_identity asks tmux instead of the row list, so
 # neither the "row belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable),
 # and scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
-DARWIN_ASSERTIONS=12
+DARWIN_ASSERTIONS=21
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
