@@ -9,7 +9,7 @@ Decide the intent first, then run one command:
 
 | The user says | Run | Then |
 |---|---|---|
-| "show me the code", "show me the worktree (code)", "open the worktree", "let me see it", "open VS Code" | `wt open` | report the printed `opened in VS Code: <path>` line, nothing else |
+| "show me the code", "show me the worktree (code)", "open the worktree", "let me see it", "open VS Code" | `wt open` | exit 0: report the printed `opened in VS Code: <path>` line, nothing else; otherwise see below |
 | "what changed", "how far is it", "status of <task>" | `wt show <name>` | summarise in a few sentences |
 | "what tasks are running", "list the worktrees" | `wt list` | summarise |
 
@@ -26,6 +26,8 @@ wt list --all              # every repo in every folder of $WT_REPOS_DIR
 wt -H <vm> list            # the same, on a VM (implies --all)
 wt -H <vm> show -r <repo> <name>
 ```
+
+`wt open` prints `opened in VS Code` only when `code` succeeded; a non-zero exit means no window opened. Inside Codex's sandbox it refuses up front, because app launches are blocked there and `code` would exit 0 anyway: rerun the same `wt open` with escalation (see `AGENTS.md`, Opening apps). Any other failure: report the error it printed.
 
 From inside a VM session, plain `wt open` asks the Mac to open the remote folder and prints the `wt -H <vm> open …` fallback line; report that line if the user sees nothing. On a VM, `wt show` also reports `session: wt-<repo>-<name> (agent running|shell only|none)`, with `, detached` appended when no tmux client is attached — so `agent running, detached` means the agent is alive but no row is holding its session.
 

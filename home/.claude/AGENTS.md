@@ -32,6 +32,10 @@ Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish
 
 Never run interactive `wt attach`, `wt task` or `wt driver` from a task session; they belong to the user's own session on the Mac.
 
+## Opening apps
+
+When the user asks you to open something on the Mac, use `wt open` for a worktree and `/usr/bin/open` for any other file. Codex's sandbox blocks app launches, and a blocked launch reads like a missing app (`Unable to find application`, `-10661`, `-10827`): rerun the same command with escalation before saying the app is missing or cannot open it. Say it opened only once the command exits 0, and never ask for broader sandbox or network access for this.
+
 ## cmux
 
 Each task worktree normally has a cmux row showing its branch, agent state and notifications. Use `cmux` commands only for creating, inspecting, or closing task workspaces; do not rearrange the user's other workspaces. Never steal focus: `wt new` creates workspaces unfocused by default.

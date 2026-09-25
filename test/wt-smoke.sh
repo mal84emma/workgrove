@@ -29,7 +29,7 @@
 #
 # What a green run does NOT exercise: ssh (scenario 9 asserts only the paths that return before remote_sh is
 # reached — every one of them refuses in cmd_host or need_r), cmux itself (a stub answers for it), tmux, the
-# `wt task`/`wt driver` pickers, `wt pr`, `wt sync`, `wt update` and `wt open` (it launches VS Code).
+# `wt task`/`wt driver` pickers, `wt pr`, `wt sync`, `wt update` and VS Code (`wt open` runs a stub `code`).
 #
 # is_remote() is true on anything that is not a Mac, and bin/wt has no FORCE_OS to lie to it with the way
 # install.sh does — adding one would be a change to the code under test. So the assertions that depend on
@@ -344,10 +344,13 @@ chmod +x "$FAKE_BIN/claude"
 #   CMUX_WORKSPACE_ID is unset because relay_env would otherwise address a real row on this machine.
 #   WT_AGENT, WT_AGENT_ARGS and WT_HOST are unset because the author's shell exports them and each one
 #   changes what `wt new` records or which branch `wt new` takes.
+#   CODEX_SANDBOX is pinned to $WT_SANDBOX, empty unless a scenario sets it: Codex sets it inside its
+#   sandbox, and `wt open` refuses there — so a run of this suite from a Codex session would fail otherwise.
 #   stdin is /dev/null so nothing can block on a read.
 WT_OUT=""
 WT_RC=0
 WT_CWD=""          # where the next wt_run runs; empty means the scratch root, which is not a git repo
+WT_SANDBOX=""      # CODEX_SANDBOX for the next wt_run; empty means not inside Codex's sandbox
 wt_run() {
   WT_RC=0
   WT_OUT="$(cd "${WT_CWD:-$TEST_ROOT}" \
@@ -358,7 +361,7 @@ wt_run() {
            WT_REPOS_DIR="$REPOS_DIR" CMUX_BUNDLED_CLI_PATH="$WT_STUB" \
            CMUX_STUB_LOG="$CMUX_LOG" CMUX_STUB_ROWS="$WT_ROWS" AGENT_ARGV_LOG="$AGENT_LOG" \
            CMUX_STUB_WINDOWS="$WT_WINDOWS" CMUX_STUB_ROWS_DIR="$WT_ROWS_DIR" \
-           PATH="$FAKE_BIN:$PATH" \
+           CODEX_SANDBOX="$WT_SANDBOX" PATH="$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
   return 0
 }
@@ -580,7 +583,7 @@ scenario_names_and_collisions() {
 # 4. The read-only commands. --json was removed in b317fbc; it must now be refused like any other
 # unknown option rather than silently ignored.
 scenario_list_show_path() {
-  begin_scenario "4. wt list / show / path"
+  begin_scenario "4. wt list / show / path / open"
   local saved="$REPOS_DIR" ra rb base
   REPOS_DIR="$TEST_ROOT/two-repos"        # --all walks every repo on the search path, so give it exactly two
   mkdir -p "$REPOS_DIR"
@@ -627,6 +630,21 @@ scenario_list_show_path() {
     # DARWIN-ONLY: is_remote() is true anywhere else, and wt show then adds a session: line by asking tmux
     assert_eq "no session line on the Mac side" "0" \
               "$(printf '%s\n' "$WT_OUT" | grep -c 'session:' || true)"
+    # …and wt open is the one command here that launches an app, so it must not claim a launch that did not
+    # happen. The stub `code` is first on PATH, so the real VS Code is never started. It exits 0 first,
+    # which is what the real one does inside Codex's sandbox while no window opens.
+    printf '#!/bin/sh\nexit 0\n' >"$FAKE_BIN/code"
+    chmod +x "$FAKE_BIN/code"
+    WT_SANDBOX=seatbelt
+    assert_wt_fails 1 "the Codex sandbox blocks app launches" open a1 -r "$ra"
+    assert_eq "…and does not claim VS Code opened" "0" \
+              "$(printf '%s\n' "$WT_OUT" | grep -c 'opened in VS Code' || true)"
+    WT_SANDBOX=""
+    assert_wt_ok "wt open outside the sandbox" open a1 -r "$ra"
+    assert_has "…says it opened" "$WT_OUT" "opened in VS Code: $ra/.worktrees/a1"
+    printf '#!/bin/sh\necho "launch refused" >&2\nexit 7\n' >"$FAKE_BIN/code"
+    assert_wt_fails 1 "VS Code did not open $ra/.worktrees/a1: code exited 7: launch refused" open a1 -r "$ra"
+    rm -f "$FAKE_BIN/code"
   fi
   REPOS_DIR="$saved"
   end_scenario
@@ -1022,8 +1040,9 @@ FIXED_ASSERTIONS=237
 # test. So on Linux: scenario 8 is skipped whole (there, `wt new` without --no-workspace asks the Mac for a
 # row over the relay and never consults cmux, and check_identity asks tmux instead of the row list, so
 # neither the "row belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable),
-# and scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
-DARWIN_ASSERTIONS=21
+# and scenario 4 does not assert that `wt show` prints no session: line, because there it prints one, nor
+# run `wt open`, which there asks the Mac over the relay instead of running `code`.
+DARWIN_ASSERTIONS=28
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {

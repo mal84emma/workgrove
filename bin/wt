@@ -533,7 +533,12 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
 
 open_code() { # open_code <folder uri> <label>   (no --new-window: a repeat call focuses the window)
   have code || die "VS Code CLI 'code' not found (install it from VS Code: Shell Command: Install 'code' command in PATH)"
-  code --folder-uri "$1" >/dev/null 2>&1
+  # On the Mac, code hands the launch to a detached `open` and exits 0 whatever that does, and Codex's sandbox
+  # (which sets CODEX_SANDBOX) blocks Launch Services, so from there no window opens and nothing says so.
+  [[ -z "${CODEX_SANDBOX:-}" ]] \
+    || die "the Codex sandbox blocks app launches, so VS Code cannot open $2 from here; rerun this command with escalation"
+  local err
+  err=$(code --folder-uri "$1" 2>&1 >/dev/null) || die "VS Code did not open $2: code exited $?${err:+: $err}"
   printf 'opened in VS Code: %s\n' "$2"
 }
 
