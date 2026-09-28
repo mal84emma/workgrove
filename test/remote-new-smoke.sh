@@ -135,6 +135,15 @@ run_wt wt-demo claude
 check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'row: repo:task @fakevm'* ]] && echo yes)" 'healthy remote creation failed'
 rm "$TEST_ROOT/remote-new"
 
+# An installed Mac hook enables the bridge without reloading all cmux settings during task creation.
+mkdir -p "$TEST_ROOT/local/.local/bin" "$TEST_ROOT/local/.config/cmux"
+printf 'CMUX_NOTIFICATION_SUBTITLE\n' > "$TEST_ROOT/local/.local/bin/cmux-hook"
+printf '{"notifications":{"hooks":[{"id":"wt","command":"~/.local/bin/cmux-hook"}]}}\n' > "$TEST_ROOT/local/.config/cmux/cmux.json"
+: > "$TEST_ROOT/cmux.log"
+run_wt wt-demo claude
+check "$([[ $WT_RC -eq 0 ]] && grep -qF 'WT_STATUS_BRIDGE=1' "$TEST_ROOT/cmux.log" && ! grep -qF 'reload-config' "$TEST_ROOT/cmux.log" && echo yes)" 'installed hook did not enable bridge cleanly'
+rm "$TEST_ROOT/remote-new" "$TEST_ROOT/local/.local/bin/cmux-hook" "$TEST_ROOT/local/.config/cmux/cmux.json"
+
 # A normal remote refusal is definite and should not claim an uncertain SSH outcome.
 SSH_MODE=refuse
 run_wt wt-demo claude
@@ -175,4 +184,4 @@ check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task
 check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex ]] && echo yes)" 'interrupted setup lost brief or agent choice'
 end_scenario
 
-lib_summary 15
+lib_summary 16

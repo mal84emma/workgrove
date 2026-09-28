@@ -9,8 +9,27 @@ event_seq=''
 [[ $(uname -s) == Linux ]] && event_seq=$(date +%s%N)  # capture before tmux or relay latency can reorder hooks
 title=${AGENT_NOTIFY_SOURCE:-Claude Code}
 status=''; status_only=''; body=''; sound=''
-if [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -n ${WT_STATUS_FILE:-} && -r $WT_STATUS_FILE ]]; then
-  payload=$(cat "$WT_STATUS_FILE")
+interrupted=0
+if [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -z $payload ]]; then
+  [[ -n ${WT_STATUS_FILE:-} && -r $WT_STATUS_FILE ]] || exit 0
+  # The file is also written by lifecycle hooks. Read and, if needed, update it under one lock.
+  exec 9>"$WT_STATUS_FILE.lock"
+  if command -v flock >/dev/null; then flock -w 1 9 || exit 0; fi
+  payload=$(cat "$WT_STATUS_FILE" 2>/dev/null) || exit 0
+  path=$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)
+  offset=$(printf '%s' "$payload" | jq -r '.offset // empty' 2>/dev/null)
+  start=$(printf '%s' "$payload" | jq -r '.start // empty' 2>/dev/null)
+  if [[ $path == "$HOME/.claude/projects/"*.jsonl && $offset =~ ^[0-9]+$ && $start =~ ^[0-9]+$ && -r $path ]]; then
+    size=$(wc -c < "$path")
+    if { (( size > offset )) && tail -c "+$((offset + 1))" "$path" | jq -e 'select(.type == "user" and ((.message.content | tostring) | contains("[Request interrupted by user]")))' >/dev/null 2>&1; } ||
+       { (( size == offset && $(date +%s) - start >= 180 )); }; then
+      payload=$(printf '%s' "$payload" | jq -c '.state = "idle" | del(.transcript_path, .offset, .start)')
+      printf '%s\n' "$payload" > "$WT_STATUS_FILE"
+      interrupted=1
+    fi
+  fi
+  if command -v flock >/dev/null; then flock -u 9; fi
+  exec 9>&-
 fi
 event=$(printf '%s' "$payload" | jq -r '.hook_event_name // empty' 2>/dev/null || true)
 session=$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null | tr -cd 'A-Za-z0-9-' || true)
@@ -31,16 +50,22 @@ case $event in
     status=running; status_only=1 ;;
   SessionEnd)
     [[ -n $session ]] && rm -f "$stamps/$session"
-    status=clear; status_only=1 ;;
+    if [[ $title == 'Claude Code' && $(printf '%s' "$payload" | jq -r '.reason // empty' 2>/dev/null) == clear ]]; then
+      status=idle
+    else
+      status=clear
+    fi
+    status_only=1 ;;
   Stop) body="finished"; sound=Funk; status=idle ;;
   StopFailure|Interrupt) status=idle; status_only=1 ;;
-  Heartbeat) status=$(printf '%s' "$payload" | jq -r '.state // empty' 2>/dev/null); status_only=1 ;;
+  Heartbeat) status=renew; status_only=1 ;;
   PermissionRequest) body="needs approval"; sound=Glass ;;
   Notification)
     body=$(printf '%s' "$payload" | jq -r '.message // "needs input"' 2>/dev/null || echo "needs input"); sound=Glass
     [[ $title == 'Claude Code' && $(printf '%s' "$payload" | jq -r '.notification_type // empty' 2>/dev/null) == idle_prompt ]] && status=idle ;;
   *) body="needs attention"; sound=Glass ;;
 esac
+[[ $interrupted == 1 ]] && status=idle
 
 # The same list and the same precedence as relay_env in bin/wt, and for the same reason: cmux authorises a
 # relayed notification against the surface and workspace in the environment, and a pane keeps the identity of
@@ -80,8 +105,12 @@ status_owner() {
 }
 
 relay_notify() {
-  env -u CMUX_SOCKET CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC=0.5 "${ident[@]+"${ident[@]}"}" \
-    "${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}" notify ${ws:+--workspace "$ws"} "$@" >/dev/null 2>&1
+  local cli="${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}"
+  if command -v timeout >/dev/null; then
+    timeout 1 env -u CMUX_SOCKET "${ident[@]+"${ident[@]}"}" "$cli" notify ${ws:+--workspace "$ws"} "$@" >/dev/null 2>&1
+  else
+    env -u CMUX_SOCKET "${ident[@]+"${ident[@]}"}" "$cli" notify ${ws:+--workspace "$ws"} "$@" >/dev/null 2>&1
+  fi
 }
 
 # frontmost_terminal: true when the app this agent runs in is the one already on screen, so a banner would
@@ -122,14 +151,27 @@ if [[ $socket == *:[0-9]* ]]; then
   # It verifies that cmux assigned the notification to a row on WT_HOST before changing that row.
   case $title in 'Claude Code') agent=claude ;; Codex) agent=codex ;; *) agent= ;; esac
   send_status=0
-  if [[ $status == running || $status == idle || $status == clear ]] && [[ -n $agent && ${WT_HOST:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] &&
+  if [[ $status == running || $status == idle || $status == clear || $status == renew ]] && [[ -n $agent && ${WT_HOST:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] &&
      { { [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -n ${WT_STATUS_OWNER_PID:-} &&
            ${TMUX_PANE:-} == "${WT_STATUS_OWNER_PANE:-}" ]] && kill -0 "$WT_STATUS_OWNER_PID" 2>/dev/null; } || status_owner; }; then
     send_status=1
     if [[ -n ${WT_STATUS_FILE:-} && ${WT_STATUS_HEARTBEAT:-} != 1 ]]; then
-      if [[ $status == clear ]]; then rm -f "$WT_STATUS_FILE"; else
-        printf '{"hook_event_name":"Heartbeat","session_id":"%s","state":"%s"}\n' "$session" "$status" > "$WT_STATUS_FILE"
+      exec 9>"$WT_STATUS_FILE.lock"
+      if ! command -v flock >/dev/null || flock -w 1 9; then
+        if [[ $status == clear ]]; then rm -f "$WT_STATUS_FILE"; else
+          transcript=''; offset=0; start=0
+          if [[ $event == UserPromptSubmit && $title == 'Claude Code' ]]; then
+            transcript=$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)
+            if [[ $transcript == "$HOME/.claude/projects/"*.jsonl && -r $transcript ]]; then
+              offset=$(wc -c < "$transcript"); start=$(date +%s)
+            else transcript=''; fi
+          fi
+          jq -nc --arg s "$session" --arg st "$status" --arg p "$transcript" --argjson o "$offset" --argjson t "$start" \
+            '{hook_event_name:"Heartbeat",session_id:$s,state:$st} + (if $p == "" then {} else {transcript_path:$p,offset:$o,start:$t} end)' > "$WT_STATUS_FILE"
+        fi
+        if command -v flock >/dev/null; then flock -u 9; fi
       fi
+      exec 9>&-
     fi
   fi
   # Record the new state before a heartbeat can read it; send completion before sidebar network work.

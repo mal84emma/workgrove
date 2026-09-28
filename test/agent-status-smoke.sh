@@ -10,6 +10,7 @@ SCRATCH_BASE=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 # shellcheck disable=SC2034  # read by the sourced cleanup helper
 KEEP_LABEL='agent status fixtures'
 # shellcheck source=test/lib.sh
+# shellcheck disable=SC1091
 source "$REPO/test/lib.sh"
 trap 'HOME=$ORIGINAL_HOME lib_cleanup' EXIT
 mkdir -p "$TEST_ROOT/home/.ssh" "$TEST_ROOT/home/.local/state"
@@ -26,12 +27,14 @@ esac
 CMUX
 chmod +x "$TEST_ROOT/cmux"
 export HOME="$TEST_ROOT/home" XDG_STATE_HOME="$TEST_ROOT/home/.local/state" CMUX_LOG="$TEST_ROOT/cmux.log"
-export CMUX_BUNDLED_CLI_PATH="$TEST_ROOT/cmux" WT_STATUS_LEASE_SECONDS=1
+export CMUX_BUNDLED_CLI_PATH="$TEST_ROOT/cmux" WT_STATUS_LEASE_SECONDS=30
 # A test started inside tmux must not inherit a real session's identity.
 unset TMUX TMUX_PANE CMUX_SOCKET CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID
 export AGENT_NOTIFY_SOURCE=Codex WT_HOST=test-vm CMUX_SOCKET_PATH=127.0.0.1:12345
 export CMUX_WORKSPACE_ID=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB
 export WT_STATUS_HEARTBEAT=1 WT_STATUS_OWNER_PID=$$
+export WT_STATUS_FILE="$XDG_STATE_HOME/wt-agent-status/test"
+mkdir -p "${WT_STATUS_FILE%/*}"
 check_contains() { if grep -qF -- "$2" "$1"; then pass; else fail "missing '$2' in $1"; fi; }
 check_missing() { if grep -qF -- "$2" "$1"; then fail "unexpected '$2' in $1"; else pass; fi; }
 status_hook() {
@@ -40,7 +43,7 @@ status_hook() {
   export CMUX_NOTIFICATION_WORKSPACE_ID="${2:-$CMUX_WORKSPACE_ID}"
   printf '{}\n' | bash "$REPO/bin/cmux-hook"
 }
-event() { printf '{"hook_event_name":"%s","session_id":"test-session"}\n' "$1" | bash "$REPO/bin/agent-notify"; }
+event() { printf '{"hook_event_name":"%s","session_id":"test-session"}\n' "$1" > "$WT_STATUS_FILE"; bash "$REPO/bin/agent-notify" </dev/null; }
 control() { printf 'wt-agent-status|%s|codex|%s|%s|test-session' "$1" "$2" "$3"; }
 
 begin_scenario 'VM event mapping and relay order'
@@ -62,6 +65,10 @@ check_missing "$CMUX_LOG" '--title Codex --body'
 event SessionEnd
 check_contains "$CMUX_LOG" '|codex|clear|'
 AGENT_NOTIFY_SOURCE='Claude Code' event StopFailure
+check_contains "$CMUX_LOG" '|claude|idle|'
+: > "$CMUX_LOG"
+printf '%s\n' '{"hook_event_name":"SessionEnd","session_id":"test-session","reason":"clear"}' > "$WT_STATUS_FILE"
+AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
 check_contains "$CMUX_LOG" '|claude|idle|'
 : > "$CMUX_LOG"
 status=running status_only=1 event PermissionRequest
@@ -90,29 +97,53 @@ status_hook "$(control test-vm running 1000000000000000002)" >/dev/null
 check_missing "$CMUX_LOG" 'set-status'
 end_scenario
 
+begin_scenario 'renewal preserves the latest lifecycle state'
+: > "$CMUX_LOG"
+status_hook "$(control test-vm running 1000000000000000010)" >/dev/null
+status_hook "$(control test-vm idle 1000000000000000011)" >/dev/null
+status_hook "$(control test-vm renew 1000000000000000012)" >/dev/null
+check_contains "$CMUX_LOG" 'set-status vm-codex Idle'
+check_missing "$CMUX_LOG" 'set-status vm-codex Running --workspace CCCCCCCC'
+assert_eq 'renewed state stays idle' idle "$(awk '{print $4}' "$XDG_STATE_HOME/cmux-agent-status/$CMUX_WORKSPACE_ID-codex")"
+end_scenario
+
 begin_scenario 'control failures stay quiet'
 : > "$CMUX_LOG"
-out=$(status_hook "$(control test-vm running 1000000000000000004)" CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC)
+out=$(status_hook "$(control test-vm running 1000000000000000014)" CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC)
 if [[ $out == *'"record":false'* ]]; then pass; else fail 'wrong-host control was visible'; fi
 check_missing "$CMUX_LOG" 'set-status'
-out=$(status_hook "$(control unknown-vm running 1000000000000000004)")
+out=$(status_hook "$(control unknown-vm running 1000000000000000014)")
 if [[ $out == *'"record":false'* ]]; then pass; else fail 'unknown-host control was visible'; fi
 check_missing "$CMUX_LOG" 'set-status'
 export CMUX_FAIL=workspace
-out=$(status_hook "$(control test-vm running 1000000000000000004)")
+out=$(status_hook "$(control test-vm running 1000000000000000014)")
 if [[ $out == *'"record":false'* ]]; then pass; else fail 'row-list failure was visible'; fi
 check_missing "$CMUX_LOG" 'set-status'
 unset CMUX_FAIL
 export CMUX_FAIL=set-status
-out=$(status_hook "$(control test-vm running 1000000000000000004)")
+out=$(status_hook "$(control test-vm running 1000000000000000014)")
 if [[ $out == *'"record":false'* ]]; then pass; else fail 'set-status failure was visible'; fi
 unset CMUX_FAIL
-status_hook "$(control test-vm running 1000000000000000004)" >/dev/null
+status_hook "$(control test-vm running 1000000000000000014)" >/dev/null
 check_contains "$CMUX_LOG" 'set-status vm-codex Running'
 end_scenario
 
-begin_scenario 'a missing heartbeat clears a stale status'
-sleep 3
-check_contains "$CMUX_LOG" 'clear-status vm-codex --workspace BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
+begin_scenario 'locked status work keeps the parent hook deadline'
+: > "$CMUX_LOG"
+WT_STATUS_DEADLINE=1 bash "$REPO/bin/cmux-hook" --apply "$CMUX_WORKSPACE_ID" codex idle 1000000000000000015 test-session || true
+check_missing "$CMUX_LOG" 'set-status'
 end_scenario
-lib_summary 29
+
+begin_scenario 'a missing heartbeat clears a stale status'
+f="$XDG_STATE_HOME/cmux-agent-status/$CMUX_WORKSPACE_ID-codex"
+read -r seq lease session state _ < "$f"
+printf '%s %s %s %s 0\n' "$seq" "$lease" "$session" "$state" > "$f"
+export CMUX_FAIL=clear-status
+CMUX_NOTIFICATION_TITLE='unrelated' CMUX_NOTIFICATION_SUBTITLE='' bash "$REPO/bin/cmux-hook" </dev/null >/dev/null
+assert_eq 'failed expiry remains retryable' running "$(awk '{print $4}' "$f")"
+unset CMUX_FAIL
+CMUX_NOTIFICATION_TITLE='unrelated' CMUX_NOTIFICATION_SUBTITLE='' bash "$REPO/bin/cmux-hook" </dev/null >/dev/null
+check_contains "$CMUX_LOG" 'clear-status vm-codex --workspace BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
+assert_eq 'retry clears the expired state' clear "$(awk '{print $4}' "$f")"
+end_scenario
+lib_summary 36
