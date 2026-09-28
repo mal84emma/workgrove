@@ -698,8 +698,8 @@ session_state() { # session_state <name> — what the VM's tmux holds for this t
 # ---------------------------------------------------------------- status
 WT_FS=$'\x1f'   # the status line's field separator: git allows '|' in a branch name, and a base like
                 # 'feat|x' used to shift every field of the line right, so the branch column printed the base
-wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<US>last
-  local n="$1" p b base ahead behind dirty last
+wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<US>last<US>merged<US>why
+  local n="$1" p b base ahead behind dirty last merged='?' why=""
   p=$(wt_path "$n"); b=$(wt_branch "$n")
   base=$(meta_get "$n" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
   # counted against the BRANCH, not HEAD: the column is labelled with the branch, and inside a worktree that
@@ -710,7 +710,20 @@ wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<
   last=$(git -C "$p" log -1 --format='%cr' 2>/dev/null || echo '-')
   local cur; cur=$(git -C "$p" branch --show-current 2>/dev/null || true)   # empty, exit 0, on a detached HEAD
   [[ -n "$cur" ]] || cur="$b (HEAD detached)"
-  printf '%s\n' "$n$WT_FS$cur$WT_FS$base$WT_FS$ahead$WT_FS$behind$WT_FS$dirty$WT_FS$last"
+  # merged, the way `wt rm` will judge it: "yes" when every commit is in the base (an ahead of 0 is exactly
+  # that), "squash" when the commits are not but their work is (branch_landed, the check rm makes), "no"
+  # with the reason otherwise, "?" when there is no base to compare with. A squash-merged branch used to
+  # show as 2 ahead here, which reads as unmerged work, and the worktree-show skill told agents to judge
+  # merged by a 0. This never fetches — `wt list` is offline — so right after a PR merges it says "no"
+  # until something refreshes the base, which `wt rm`, `wt prune` and `wt new` all do; the same caveat the
+  # AHEAD and BEHIND columns have always carried. The literal HEAD as a base resolves to the worktree's own
+  # tip and would read as 0 ahead, so it is a "?" here as it is a refusal in rm_reasons.
+  if [[ "$base" != HEAD && "$ahead" =~ ^[0-9]+$ ]]; then
+    if [[ "$ahead" -eq 0 ]]; then merged=yes
+    elif branch_landed "$b" "$base"; then merged=squash
+    else merged=no; why="$LANDED_WHY"; fi
+  fi
+  printf '%s\n' "$n$WT_FS$cur$WT_FS$base$WT_FS$ahead$WT_FS$behind$WT_FS$dirty$WT_FS$last$WT_FS$merged$WT_FS$why"
 }
 
 list_names() { # registered worktrees under the wt root
@@ -853,12 +866,12 @@ cmd_list() {
     set_repo "$r" || continue
     local names; names=$(list_names); [[ -n "$names" ]] || continue
     printf '\n%s  (%s)\n' "$(basename "$REPO")" "$REPO"
-    printf '  %-28s %-26s %-16s %6s %6s %6s  %s\n' NAME BRANCH BASE AHEAD BEHIND DIRTY LAST
+    printf '  %-28s %-26s %-16s %6s %6s %6s %6s  %s\n' NAME BRANCH BASE AHEAD BEHIND MERGED DIRTY LAST
     while IFS= read -r n; do
-      IFS="$WT_FS" read -r nn br base ah be di last <<<"$(wt_status_line "$n")"
+      IFS="$WT_FS" read -r nn br base ah be di last mg why <<<"$(wt_status_line "$n")"
       # the columns are numbers: a '?' from a base that no longer resolves must not print as a count
       [[ "$ah" =~ ^[0-9]+$ ]] || ah='?'; [[ "$be" =~ ^[0-9]+$ ]] || be='?'; [[ "$di" =~ ^[0-9]+$ ]] || di=0
-      printf '  %-28s %-26s %-16s %6s %6s %6s  %s\n' "$nn" "$br" "$base" "$ah" "$be" "$di" "$last"
+      printf '  %-28s %-26s %-16s %6s %6s %6s %6s  %s\n' "$nn" "$br" "$base" "$ah" "$be" "$mg" "$di" "$last"
     done <<<"$names"
   done
   return 0
@@ -871,12 +884,17 @@ cmd_show() {
   done
   [[ -n "$name" ]] || die "show: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
-  IFS="$WT_FS" read -r nn br base ah be di last <<<"$(wt_status_line "$name")"
+  IFS="$WT_FS" read -r nn br base ah be di last mg why <<<"$(wt_status_line "$name")"
   # the counts are numbers: a '?' from a base that no longer resolves must not print as a count
   [[ "$ah" =~ ^[0-9]+$ ]] || ah='?'; [[ "$be" =~ ^[0-9]+$ ]] || be='?'; [[ "$di" =~ ^[0-9]+$ ]] || di=0
   local title; title=$(meta_get "$name" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$name" "$REPO")
-  printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
-    "$nn" "$P" "$REPO" "$br" "$ah" "$be" "$base" "$title $(row_tag)" "$(prompt_line "$name")" "$di" "$last"
+  case "$mg" in   # the list column, with room here for what it rests on
+    squash) mg="squash (every change on $br is in $base, though no commit is)" ;;
+    no)     mg="no ($why)" ;;
+    '?')    mg="? (no base to compare with)" ;;
+  esac
+  printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  merged:  %s\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
+    "$nn" "$P" "$REPO" "$br" "$ah" "$be" "$base" "$mg" "$title $(row_tag)" "$(prompt_line "$name")" "$di" "$last"
   if is_remote; then printf '  session: %s\n' "$(session_state "$name")"; fi   # `wt -H … attach` reads this line
   printf '\n--- commits vs %s\n' "$base"; git -C "$P" log --oneline "$base..HEAD" 2>/dev/null | head -20
   printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$P" diff --stat "$base...HEAD" 2>/dev/null | tail -15

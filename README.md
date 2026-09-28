@@ -183,7 +183,7 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 342 assertions over thirteen groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 359 assertions over thirteen groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
 base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
 worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that a squash-merged
@@ -194,7 +194,7 @@ that `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the win
 field of `cmux list-windows` is a window. The last group is the odd one out: it tests `test/lib.sh`'s own
 `rm -rf`, which no real run reaches, because both suites build their scratch root with `mktemp -d` and refuse
 one inside the real home before arming the trap that calls it — and a branch nothing exercises is a branch
-nobody knows is broken. Run on a VM it makes 314: scenario 8 is about the Mac's row list, and `bin/wt` has no
+nobody knows is broken. Run on a VM it makes 331: scenario 8 is about the Mac's row list, and `bin/wt` has no
 `FORCE_OS` to lie to `is_remote()` with, so there `wt new` asks the Mac for a row over the relay and never
 consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
 assertions is the failure mode a green run hides. What neither covers is anything needing ssh, tmux or a live
@@ -269,8 +269,8 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 |---|---|
 | `wt new [name] [-p TEXT] [-a claude\|codex\|none] [-r PATH] [-b REF]` | Create the worktree and a cmux row running the agent with the brief |
 | `wt run <name>` | Run that worktree's agent with its brief. cmux runs this for you |
-| `wt list [--all]` | Worktrees, with branch, base, ahead/behind, dirty count, last commit |
-| `wt show <name> [--diff]` | Path, branch, row, brief, dirty files, commits and diffstat vs base; on a VM also the tmux session and whether its agent is running |
+| `wt list [--all]` | Worktrees, with branch, base, ahead/behind, merged (`yes`, `squash`, `no`), dirty count, last commit |
+| `wt show <name> [--diff]` | Path, branch, whether and how it is merged, row, brief, dirty files, commits and diffstat vs base; on a VM also the tmux session and whether its agent is running |
 | `wt open [name]` | Open the worktree in VS Code. No name means the one you are in |
 | `wt attach <name>` | Open a cmux row for a worktree that already exists |
 | `wt sync <name> [--merge]` | Rebase (or merge) the branch onto its base |
@@ -315,7 +315,10 @@ offline first; when it says no and the base is a remote's branch, that one branc
 is otherwise whatever the last fetch left, from before the merge) and the question asked once more, and
 offline the refusal says the base could not be refreshed. `--discard-commits` waives that one reason and
 nothing else, for the cases the check refuses on purpose — a squash the base then edited or reverted —
-while the dirty-tree, `.wt-include` and HEAD checks still stand; `--force` waives them all.
+while the dirty-tree, `.wt-include` and HEAD checks still stand; `--force` waives them all. `wt list` shows
+the same verdict in its `MERGED` column, `yes` for an ancestor, `squash` for work that landed without its
+commits, `no` otherwise, and `wt show` prints the reason behind a `no`; both are offline, so against a
+base nobody has fetched since the PR merged they read `no` until `wt rm`, `wt prune` or `wt new` refresh it.
 
 What a repo's own `.wt-setup` wrote is not counted against it. A hook that runs `uv sync` or `npm ci`
 regenerates a *tracked* lockfile, which would otherwise leave the worktree dirty from the moment it was
