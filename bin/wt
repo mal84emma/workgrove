@@ -658,17 +658,21 @@ cmd_new() {
 
   mkdir -p "$(wt_root)"
   git -C "$REPO" worktree add -q -b "$b" "$p" "$base" || die "git worktree add failed"
-  local includes; includes=$(copy_includes "$p")
-  local setup=""
-  if [[ -x "$REPO/.wt-setup" ]]; then
-    ( cd "$p" && WT_NAME="$name" WT_REPO="$REPO" "$REPO/.wt-setup" ) || warn ".wt-setup exited non-zero"
-    setup=$(setup_dirt "$p")               # recorded even when the hook failed: it may have written half of it
-  fi
+  # The worktree is now registered. Persist its brief and agent before slow copy/setup work: if the
+  # SSH channel closes during a hook, attach --restart-agent must still know what to run.
   mkdir -p "$REPO/.git/wt"
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; fi
   meta_set "$name" "base=$base" "created=$(date -u +%FT%TZ)" "agent=$agent" \
     "title=$(row_title "$name" "$REPO")" "session=$(wt_session "$name" "$REPO")" \
-    "includes=$includes" "setup=$setup"
+    "includes=" "setup="
+  local includes; includes=$(copy_includes "$p")
+  meta_set "$name" "includes=$includes"
+  local setup=""
+  if [[ -x "$REPO/.wt-setup" ]]; then
+    ( cd "$p" && WT_NAME="$name" WT_REPO="$REPO" "$REPO/.wt-setup" ) || warn ".wt-setup exited non-zero"
+    setup=$(setup_dirt "$p")               # recorded even when the hook failed: it may have written half of it
+    meta_set "$name" "setup=$setup"
+  fi
 
   printf 'created %s\n  path:   %s\n  branch: %s (from %s)\n  repo:   %s\n  session: %s\n' \
     "$name" "$p" "$b" "$base" "$REPO" "$(wt_session "$name" "$REPO")"
@@ -955,13 +959,17 @@ cmd_update() { # pull this repo and re-run its installer
 }
 
 # ---------------------------------------------------------------- wt -H <host> …
-remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means we never reached the VM
+remote_sh_raw() { # leave SSH's exit status intact for callers that must distinguish a refusal from a drop
+  ssh -o BatchMode=yes -o ConnectTimeout=5 "$1" "$2"
+}
+remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means transport failure
   local host="$1" cmd="$2" rc=0
-  ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "$cmd" || rc=$?
+  remote_sh_raw "$host" "$cmd" || rc=$?
   if [[ $rc -eq 255 ]]; then die "host unreachable: is the VM running? (ssh $host)"; fi
   return $rc
 }
 remote_wt() { local host="$1"; shift; remote_sh "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_wt_raw() { local host="$1"; shift; remote_sh_raw "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
 remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the VM this terminal when we have one,
                   # so a command that asks before it acts (wt update) can read the answer. Never for a caller
                   # that captures stdout: a pty folds stderr into it and turns every \n into \r\n. Without a
@@ -1082,20 +1090,28 @@ host_new() { # create the worktree on the VM, then the cmux row here
   inspect="wt -H $host list"
   [[ -z "$repo_request" ]] || inspect+=" -r $(shell_join "$repo_request")"
   local out name repo session rc
-  if out=$(printf '%s' "$prompt" | remote_wt "$host" new "${args[@]+"${args[@]}"}" --no-workspace --prompt-stdin); then
+  if out=$(printf '%s' "$prompt" | remote_wt_raw "$host" new "${args[@]+"${args[@]}"}" --no-workspace --prompt-stdin 2>&1); then
     :
   else
     rc=$?
-    warn "could not confirm whether a worktree was created on $host; inspect with: $inspect"
-    warn "a disconnected create may still be finishing; recheck before starting the same task elsewhere"
+    [[ -z "$out" ]] || printf '%s\n' "$out" >&2
+    if [[ $rc -eq 255 ]]; then
+      warn "SSH disconnected during creation on $host; could not confirm whether a worktree was created; inspect with: $inspect"
+      warn "a disconnected create may still be finishing; recheck before starting the same task elsewhere"
+    fi
     return "$rc"
   fi
   printf '%s\n' "$out"
   name=$(printf '%s\n' "$out" | sed -n 's/^created //p' | head -1)
   repo=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
   session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
-  [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session; inspect with: $inspect before retrying"
-  valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$repo")" ]] || die "unexpected output from $host"
+  [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session; the worktree may exist; inspect with: $inspect before retrying"
+  valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$repo")" ]] || die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying"
+  if [[ -n "$(cmux_row_field "$(row_title "$name" "$repo")" id "$host")" ]]; then
+    warn "the worktree was created on $host, but a row with this title is already open; do not run new again"
+    warn "close the stale row in cmux, then recover with: wt -H $host attach --restart-agent -r $(shell_join "$repo") $(shell_join "$name")"
+    return 1
+  fi
   if ! (remote_row "$host" "$session" "$(row_title "$name" "$repo")" "$(remote_run_cmd "$name" "$repo")" --no-focus); then
     warn "the worktree was created on $host; do not run new again"
     warn "inspect: wt -H $host show -r $(shell_join "$repo") $(shell_join "$name")"
@@ -1247,17 +1263,18 @@ task_exit() { # the launcher row closes on exit, so let a message be read first
   if [[ $rc -ne 0 && -t 0 ]]; then read -r -p 'press return' _ || true; fi
 }
 ssh_hosts() { # non-wildcard Host aliases, read as bin/cmux-hook reads them
-  { awk '$1=="Host"{for(i=2;i<=NF;i++){if($i ~ /^#/)break; if($i !~ /[*?]/) print $i}}' "$HOME/.ssh/config" 2>/dev/null || true; } | sort -u
+  { awk '$1=="Host"{for(i=2;i<=NF;i++){if($i ~ /^#/)break; if($i !~ /^[!]/ && $i !~ /[*?]/) print $i}}' "$HOME/.ssh/config" 2>/dev/null || true; } | sort -u
 }
 
-probe_host() { # one SSH login proves remote-command access and gathers installed Linux hardware
+probe_host() { # one SSH login proves remote-command access and gathers Linux hardware
   ssh -T -o BatchMode=yes -o NumberOfPasswordPrompts=0 -o StrictHostKeyChecking=yes \
-      -o ConnectTimeout=5 -o ConnectionAttempts=1 "$1" 'sh -s' <<'PROBE'
+      -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=5 \
+      -o ServerAliveCountMax=2 "$1" 'sh -s' <<'PROBE'
 cpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
 mem_kib=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)
 printf 'cpu\t%s\nmem_kib\t%s\n' "$cpu" "$mem_kib"
 if command -v nvidia-smi >/dev/null 2>&1 &&
-   gpu_rows=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null); then
+   gpu_rows=$(timeout 10 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null); then
   printf 'gpu_status\tok\n'
   if [ -n "$gpu_rows" ]; then
     printf '%s\n' "$gpu_rows" | while IFS=, read -r model vram; do
@@ -1290,17 +1307,21 @@ PROBE
 }
 
 host_record() { # stable JSON for agents; unknown hardware never becomes a false zero
-  local host="$1" report="" rc=0
+  local host="$1" report="" rc=0 err_file err=""
   if ! valid_host "$host"; then
     jq -nc --arg host "$host" '{host:$host,status:"unavailable",cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:"invalid SSH alias"}'
     return
   fi
-  report=$(probe_host "$host" 2>/dev/null) || rc=$?
+  err_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-error.XXXXXX") || return 1
+  report=$(probe_host "$host" 2>"$err_file") || rc=$?
   if [[ $rc -ne 0 ]]; then
-    jq -nc --arg host "$host" --arg error "SSH probe failed (exit $rc)" \
+    err=$(sed -n '1p' "$err_file" | LC_ALL=C tr -d '\r' | cut -c1-180)
+    rm -f "$err_file"
+    jq -nc --arg host "$host" --arg error "SSH probe failed (exit $rc)${err:+: $err}" \
       '{host:$host,status:"unavailable",cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:$error}'
     return
   fi
+  rm -f "$err_file"
   printf '%s' "$report" | jq -Rsc --arg host "$host" '
     def field($rows; $key): [ $rows[] | select(.[0] == $key) | .[1] ][0] // "";
     def unsigned: if type == "string" and test("^[0-9]+$") then tonumber else null end;
@@ -1308,11 +1329,13 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
     | (field($rows; "cpu") | unsigned) as $cpu
     | (field($rows; "mem_kib") | unsigned) as $mem
     | [ $rows[] | select(.[0] == "gpu") ] as $raw_gpus
-    | [ $raw_gpus[] | select(length == 3 and (.[1] | gsub("^ +| +$"; "") | length > 0))
+    | [ $raw_gpus[] | select(length == 3 and (.[1] | gsub("^ +| +$"; "") | length > 0)
+           and (.[2] | gsub(" "; "") | test("^[0-9]+$|^\\[N/A\\]$")))
         | {name:(.[1] | gsub("^ +| +$"; "")),
            memory_mib:(.[2] | gsub(" "; "") | unsigned)} ] as $gpus
     | (if field($rows; "gpu_status") == "ok" and ($raw_gpus | length) == ($gpus | length)
-       then "ok" elif field($rows; "gpu_status") == "none" and ($raw_gpus | length) == 0
+       then (if ($gpus | length) == 0 then "none" else "ok" end)
+       elif field($rows; "gpu_status") == "none" and ($raw_gpus | length) == 0
        then "none" else "unknown" end) as $gpu_status
     | {host:$host,status:"available",cpu_logical:(if $cpu != null and $cpu > 0 then $cpu else null end),
        memory_mib:(if $mem != null and $mem > 0 then ($mem / 1024 | floor) else null end),
@@ -1322,25 +1345,41 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
 
 cmd_hosts() {
   mac_only hosts
-  local format=table records
+  local format=table records host f pid failed=0 files=() pids=()
   case "${1:-}" in
     "") ;;
     --json) format=json; shift ;;
+    -h|--help) usage; return 0 ;;
     *) die "hosts: usage: wt hosts [--json]" ;;
   esac
   [[ $# -eq 0 ]] || die "hosts: usage: wt hosts [--json]"
-  records=$(while IFS= read -r host; do host_record "$host"; done < <(ssh_hosts))
+  while IFS= read -r host; do
+    f=$(mktemp "${TMPDIR:-/tmp}/wt-host-record.XXXXXX") || die "hosts: could not create a temporary file"
+    files+=("$f")
+    WT_TMPFILES+=("$f")
+    (host_record "$host" >"$f") &
+    pids+=("$!")
+  done < <(ssh_hosts)
+  for pid in "${pids[@]+"${pids[@]}"}"; do wait "$pid" || failed=1; done
+  if [[ $failed -ne 0 ]]; then
+    rm -f "${files[@]+"${files[@]}"}"
+    die "hosts: one or more probes could not be recorded"
+  fi
+  records=""
+  if [[ ${#files[@]} -gt 0 ]]; then records=$(cat "${files[@]}"); fi
+  rm -f "${files[@]+"${files[@]}"}"
   if [[ $format == json ]]; then
     printf '%s\n' "$records" | jq -s '.'
   else
     printf '%s\n' "$records" | jq -sr '
-      (["HOST","SSH","CPU","RAM GiB","GPU"],
+      (["HOST","SSH","CPU","RAM GiB","GPU","ERROR"],
        (.[] | [ .host, .status, (.cpu_logical // "?" | tostring),
          (if .memory_mib == null then "?" else (.memory_mib / 1024 * 10 | round / 10 | tostring) end),
          (if .gpu_status == "none" then "none" elif .gpu_status != "ok" then "unknown"
           elif (.gpus | length) == 0 then "none"
           else (.gpus | map(if .memory_mib == null then "\(.name) (memory unknown)"
-                            else "\(.name) (\(.memory_mib) MiB)" end) | join("; ")) end) ])) | @tsv' \
+                            else "\(.name) (\(.memory_mib) MiB)" end) | join("; ")) end),
+         (.error // "") ])) | @tsv' \
       | { if have column; then column -t -s $'\t'; else cat; fi; }
   fi
 }
