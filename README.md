@@ -200,7 +200,8 @@ cmux.
 
 `bash test/hosts-smoke.sh` checks the SSH inventory's JSON, table, alias filtering, concurrent probes and
 failure states with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake hardware
-commands, including malformed GPU output. It does not contact any configured host.
+commands, including malformed GPU output, and verifies the client deadline against a hanging SSH process.
+It does not contact any configured host.
 
 `bash test/remote-new-smoke.sh` uses scratch SSH and cmux stubs to check remote task preflight, a row failure
 after worktree creation, and an SSH disconnect after creation but before the Mac receives the result. It also
@@ -319,11 +320,13 @@ than one folder is refused with both paths, so pass the path instead. Set it in
 
 `wt hosts` probes the same literal, wildcard-free, non-exclusion `Host` aliases in the Mac's `~/.ssh/config`
 that the task picker lists. Probes run concurrently, each using a noninteractive SSH login with a five-second
-connection timeout, SSH keepalives, and strict host key checking. `available` means a remote shell command
-succeeded; it does not mean `wt` or a particular repo is installed there. CPU is the number of online logical
-processors. RAM comes from Linux `MemTotal`, the kernel's usable total, which can be below the machine's label.
-GPU rows report NVIDIA model and driver-reported total memory when `nvidia-smi` finishes within ten seconds;
-that can likewise be below the label. `memory_mib` is null when the GPU reports
+connection timeout, SSH keepalives, a 20-second client deadline, and strict host key checking. `available`
+means a remote shell command succeeded; it does not mean `wt` or a particular repo is installed there. CPU is
+the number of online logical processors. RAM comes from Linux `MemTotal`, the kernel's usable total, which can
+be below the machine's label.
+GPU rows report NVIDIA model and driver-reported total memory when `nvidia-smi` finishes within ten seconds
+(with a two-second force-kill grace period). The GPU index must be numeric and unique. Driver-reported memory
+can also be below the label. `memory_mib` is null when the GPU reports
 `[N/A]` for memory. If `nvidia-smi` fails, a complete scan of Linux PCI devices with no NVIDIA display
 device reports `gpu_status: "none"`; an incomplete scan or a present GPU with a failed driver reports
 `"unknown"`. A successful empty GPU query reports `"none"`; malformed GPU rows report `"unknown"`, so they
