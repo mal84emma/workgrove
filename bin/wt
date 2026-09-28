@@ -24,6 +24,7 @@
 #   wt repos [<name>] [--porcelain|--table]                   every git repo in $WT_REPOS_DIR: on a terminal a table of
 #                                                             name, task count and location; piped, "<name><tab><path>"
 #                                                             per repo. Given a name or path, just that repo's path
+#   wt hosts [--json]                                         probe SSH aliases for reachability, CPU, RAM and GPUs
 #   wt task [--where local|<host>] [-a claude|codex|repo-shell|vm-shell] [-r REPO] [-p TEXT]
 #                                                             pick where/kind/repo/name/brief, then start it (Mac, needs fzf)
 #   wt driver                                                 open (or select) the driver row (@local)
@@ -1209,6 +1210,81 @@ task_exit() { # the launcher row closes on exit, so let a message be read first
 ssh_hosts() { # non-wildcard Host aliases, read as bin/cmux-hook reads them
   { awk '$1=="Host"{for(i=2;i<=NF;i++){if($i ~ /^#/)break; if($i !~ /[*?]/) print $i}}' "$HOME/.ssh/config" 2>/dev/null || true; } | sort -u
 }
+
+probe_host() { # one SSH login proves remote-command access and gathers installed Linux hardware
+  ssh -T -o BatchMode=yes -o NumberOfPasswordPrompts=0 -o StrictHostKeyChecking=yes \
+      -o ConnectTimeout=5 -o ConnectionAttempts=1 "$1" 'sh -s' <<'PROBE'
+cpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
+mem_kib=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)
+printf 'cpu\t%s\nmem_kib\t%s\n' "$cpu" "$mem_kib"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if gpu_rows=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null); then
+    printf 'gpu_status\tok\n'
+    if [ -n "$gpu_rows" ]; then
+      printf '%s\n' "$gpu_rows" | while IFS=, read -r model vram; do
+        printf 'gpu\t%s\t%s\n' "$model" "$vram"
+      done
+    fi
+  else
+    printf 'gpu_status\tunknown\n'
+  fi
+else
+  printf 'gpu_status\tunknown\n'
+fi
+PROBE
+}
+
+host_record() { # stable JSON for agents; unknown hardware never becomes a false zero
+  local host="$1" report="" rc=0
+  if ! valid_host "$host"; then
+    jq -nc --arg host "$host" '{host:$host,status:"unavailable",cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:"invalid SSH alias"}'
+    return
+  fi
+  report=$(probe_host "$host" 2>/dev/null) || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    jq -nc --arg host "$host" --arg error "SSH probe failed (exit $rc)" \
+      '{host:$host,status:"unavailable",cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:$error}'
+    return
+  fi
+  printf '%s' "$report" | jq -Rsc --arg host "$host" '
+    def field($rows; $key): [ $rows[] | select(.[0] == $key) | .[1] ][0] // "";
+    def unsigned: if type == "string" and test("^[0-9]+$") then tonumber else null end;
+    [split("\n")[] | select(length > 0) | split("\t")] as $rows
+    | (field($rows; "cpu") | unsigned) as $cpu
+    | (field($rows; "mem_kib") | unsigned) as $mem
+    | [ $rows[] | select(.[0] == "gpu") ] as $raw_gpus
+    | [ $raw_gpus[] | select(length == 3 and (.[1] | length > 0) and (.[2] | test("^ *[0-9]+ *$")))
+        | {name:(.[1] | gsub("^ +| +$"; "")),memory_mib:(.[2] | gsub(" "; "") | tonumber)} ] as $gpus
+    | (if field($rows; "gpu_status") == "ok" and ($raw_gpus | length) == ($gpus | length)
+       then "ok" else "unknown" end) as $gpu_status
+    | {host:$host,status:"available",cpu_logical:(if $cpu != null and $cpu > 0 then $cpu else null end),
+       memory_mib:(if $mem != null and $mem > 0 then ($mem / 1024 | floor) else null end),
+       gpu_status:$gpu_status,gpus:$gpus,
+       error:(if $cpu == null or $cpu == 0 or $mem == null or $mem == 0 then "incomplete CPU/RAM report" else null end)}'
+}
+
+cmd_hosts() {
+  mac_only hosts
+  local format=table records
+  case "${1:-}" in
+    "") ;;
+    --json) format=json; shift ;;
+    *) die "hosts: usage: wt hosts [--json]" ;;
+  esac
+  [[ $# -eq 0 ]] || die "hosts: usage: wt hosts [--json]"
+  records=$(while IFS= read -r host; do host_record "$host"; done < <(ssh_hosts))
+  if [[ $format == json ]]; then
+    printf '%s\n' "$records" | jq -s '.'
+  else
+    printf '%s\n' "$records" | jq -sr '
+      (["HOST","SSH","CPU","RAM GiB","GPU"],
+       (.[] | [ .host, .status, (.cpu_logical // "?" | tostring),
+         (if .memory_mib == null then "?" else (.memory_mib / 1024 * 10 | round / 10 | tostring) end),
+         (if .gpu_status != "ok" then "unknown" elif (.gpus | length) == 0 then "none"
+          else (.gpus | map("\(.name) (\(.memory_mib) MiB)") | join("; ")) end) ])) | @tsv' \
+      | { if have column; then column -t -s $'\t'; else cat; fi; }
+  fi
+}
 repo_menu() { # repo_menu [table] — lays out cmd_repos' "<name><tab><path>[<tab><tasks>]" lines. Default: picker
               # rows "<name><tab><path><tab><display>", the display being the name padded to the widest, then a
               # grey location. "table": the terminal listing, a grey header then name, task count ("-" for none)
@@ -1357,6 +1433,7 @@ case "$sub" in
   prune)    cmd_prune "$@" ;;
   path)     cmd_path "$@" ;;
   repos)    cmd_repos "$@" ;;
+  hosts)    cmd_hosts "$@" ;;
   task)     cmd_task "$@" ;;
   driver)   cmd_driver "$@" ;;
   update)   cmd_update "$@" ;;

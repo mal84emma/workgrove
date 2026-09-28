@@ -71,7 +71,8 @@ workgrove/
 ├── test/
 │   ├── lib.sh                 the assertion vocabulary both suites speak
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
-│   └── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
+│   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
+│   └── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 └── docs/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
@@ -181,7 +182,7 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 258 assertions over twelve groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 265 assertions over twelve groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
 base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
 worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that `wt prune` keeps
@@ -195,6 +196,9 @@ nobody knows is broken. Run on a VM it makes 237: scenario 8 is about the Mac's 
 consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
 assertions is the failure mode a green run hides. What neither covers is anything needing ssh, tmux or a live
 cmux.
+
+`bash test/hosts-smoke.sh` checks the SSH inventory's JSON, table, alias filtering and failure states with
+a fake `ssh` on a scratch `PATH`. It does not contact any configured host.
 
 **There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
 
@@ -268,6 +272,7 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 | `wt driver` | Open or select the `driver` row |
 | `wt update [--refresh-config]` | `git pull --ff-only` this repo, then re-run `install.sh` |
 | `wt repos [<name>] [--porcelain\|--table]` | List every repo (name, task count, location on a terminal; `name<TAB>path` when piped), or print one repo's path |
+| `wt hosts [--json]` | Probe the Mac's configured SSH aliases for remote-command access and installed CPU, RAM and GPU hardware |
 | `wt path <name>`, `wt current`, `wt diff <name>`, `wt help` | Small helpers |
 | `wt -H <host> <sub> …` | Run a subcommand on a VM over ssh while the cmux row stays local. `show`, `rm`, `path`, `open` and `attach` need `-r <repo>` |
 
@@ -298,6 +303,14 @@ shows the same name and location columns. Piped, or with `--porcelain`, it print
 the picker read; `--table` forces the table, which is what `wt -H <vm> repos` sends to a VM. A name is looked up along the list; a name found in more
 than one folder is refused with both paths, so pass the path instead. Set it in
 `~/.zshenv.local`, for example `export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"`.
+
+`wt hosts` probes the same literal, wildcard-free `Host` aliases in the Mac's `~/.ssh/config` that the task
+picker lists. Each probe is a noninteractive SSH login with a five-second connection timeout and strict host
+key checking. `available` means a remote shell command succeeded; it does not mean `wt` or a particular repo
+is installed there. CPU is the number of online logical processors, RAM is total installed memory, and GPU
+rows report NVIDIA model and memory when `nvidia-smi` works. An unknown GPU result is not evidence of no GPU.
+`wt hosts --json` gives agents structured results (`cpu_logical`, `memory_mib`, `gpu_status`, `gpus`) to match
+against a request. Probes are fresh each run; a host can stop or become busy after listing it.
 
 ## Agents
 
