@@ -1217,19 +1217,35 @@ probe_host() { # one SSH login proves remote-command access and gathers installe
 cpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
 mem_kib=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)
 printf 'cpu\t%s\nmem_kib\t%s\n' "$cpu" "$mem_kib"
-if command -v nvidia-smi >/dev/null 2>&1; then
-  if gpu_rows=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null); then
-    printf 'gpu_status\tok\n'
-    if [ -n "$gpu_rows" ]; then
-      printf '%s\n' "$gpu_rows" | while IFS=, read -r model vram; do
-        printf 'gpu\t%s\t%s\n' "$model" "$vram"
-      done
-    fi
-  else
-    printf 'gpu_status\tunknown\n'
+if command -v nvidia-smi >/dev/null 2>&1 &&
+   gpu_rows=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null); then
+  printf 'gpu_status\tok\n'
+  if [ -n "$gpu_rows" ]; then
+    printf '%s\n' "$gpu_rows" | while IFS=, read -r model vram; do
+      printf 'gpu\t%s\t%s\n' "$model" "$vram"
+    done
   fi
 else
-  printf 'gpu_status\tunknown\n'
+  # A failed nvidia-smi is not proof of absent hardware. A complete PCI scan with no
+  # NVIDIA display device is; keep unknown if sysfs is missing or any entry is unreadable.
+  gpu_status=unknown
+  if [ -d /sys/bus/pci/devices ]; then
+    pci_seen=0 pci_readable=1 nvidia_gpu=0
+    for pci in /sys/bus/pci/devices/*; do
+      [ -d "$pci" ] || continue
+      pci_seen=1
+      if [ ! -r "$pci/vendor" ] || [ ! -r "$pci/class" ] ||
+         ! IFS= read -r vendor <"$pci/vendor" || ! IFS= read -r class <"$pci/class"; then
+        pci_readable=0
+        break
+      fi
+      case "$vendor:$class" in 0x10de:0x03*) nvidia_gpu=1 ;; esac
+    done
+    if [ "$pci_seen" -eq 1 ] && [ "$pci_readable" -eq 1 ] && [ "$nvidia_gpu" -eq 0 ]; then
+      gpu_status=none
+    fi
+  fi
+  printf 'gpu_status\t%s\n' "$gpu_status"
 fi
 PROBE
 }
@@ -1257,7 +1273,8 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
         | {name:(.[1] | gsub("^ +| +$"; "")),
            memory_mib:(.[2] | gsub(" "; "") | unsigned)} ] as $gpus
     | (if field($rows; "gpu_status") == "ok" and ($raw_gpus | length) == ($gpus | length)
-       then "ok" else "unknown" end) as $gpu_status
+       then "ok" elif field($rows; "gpu_status") == "none" and ($raw_gpus | length) == 0
+       then "none" else "unknown" end) as $gpu_status
     | {host:$host,status:"available",cpu_logical:(if $cpu != null and $cpu > 0 then $cpu else null end),
        memory_mib:(if $mem != null and $mem > 0 then ($mem / 1024 | floor) else null end),
        gpu_status:$gpu_status,gpus:$gpus,
@@ -1281,7 +1298,8 @@ cmd_hosts() {
       (["HOST","SSH","CPU","RAM GiB","GPU"],
        (.[] | [ .host, .status, (.cpu_logical // "?" | tostring),
          (if .memory_mib == null then "?" else (.memory_mib / 1024 * 10 | round / 10 | tostring) end),
-         (if .gpu_status != "ok" then "unknown" elif (.gpus | length) == 0 then "none"
+         (if .gpu_status == "none" then "none" elif .gpu_status != "ok" then "unknown"
+          elif (.gpus | length) == 0 then "none"
           else (.gpus | map(if .memory_mib == null then "\(.name) (memory unknown)"
                             else "\(.name) (\(.memory_mib) MiB)" end) | join("; ")) end) ])) | @tsv' \
       | { if have column; then column -t -s $'\t'; else cat; fi; }
