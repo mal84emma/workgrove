@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Agent lifecycle hook → notification. Remote cmux pane: relay to the Mac. Local cmux pane: no-op. Elsewhere on a Mac: banner.
 #
-# Two events carry no notification of their own, they only keep the turn timer that the Stop banner below reads:
-# UserPromptSubmit stamps the session's start time, SessionEnd removes the stamp. Claude Code sends both; Codex
-# does not, and a Stop with no stamp notifies as usual, so the gate never silences an agent that cannot stamp.
+# Claude prompt timestamps gate short local Mac banners. VM lifecycle events also update the cmux row.
 set -u
 : "${HOME:?agent-notify: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 [[ -t 0 ]] && payload= || payload=$(cat)
+event_seq=''
+[[ $(uname -s) == Linux ]] && event_seq=$(date +%s%N)  # capture before tmux or relay latency can reorder hooks
 title=${AGENT_NOTIFY_SOURCE:-Claude Code}
+status=''; status_only=''; body=''; sound=''
+if [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -n ${WT_STATUS_FILE:-} && -r $WT_STATUS_FILE ]]; then
+  payload=$(cat "$WT_STATUS_FILE")
+fi
 event=$(printf '%s' "$payload" | jq -r '.hook_event_name // empty' 2>/dev/null || true)
 session=$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null | tr -cd 'A-Za-z0-9-' || true)
 stamps="${XDG_STATE_HOME:-$HOME/.local/state}/claude-start-times"   # private state, not /tmp: TMPDIR is empty on the VMs
@@ -18,7 +22,7 @@ quiet_seconds=${AGENT_NOTIFY_MIN_SECONDS:-180}   # a turn shorter than this fini
 
 case $event in
   UserPromptSubmit)
-    if [[ -n $session ]] && (umask 077; mkdir -p "$stamps") 2>/dev/null; then
+    if [[ $title == 'Claude Code' && -n $session ]] && (umask 077; mkdir -p "$stamps") 2>/dev/null; then
       chmod 700 "$stamps" 2>/dev/null ||
         echo "agent-notify: cannot chmod 700 $stamps; it is not ours, so the stamps in it are not either" >&2
       find "$stamps" -type f -mtime +2 -delete 2>/dev/null || true
@@ -29,9 +33,12 @@ case $event in
     [[ -n $session ]] && rm -f "$stamps/$session"
     status=clear; status_only=1 ;;
   Stop) body="finished"; sound=Funk; status=idle ;;
-  Interrupt) status=idle; status_only=1 ;;
+  StopFailure|Interrupt) status=idle; status_only=1 ;;
+  Heartbeat) status=$(printf '%s' "$payload" | jq -r '.state // empty' 2>/dev/null); status_only=1 ;;
   PermissionRequest) body="needs approval"; sound=Glass ;;
-  Notification) body=$(printf '%s' "$payload" | jq -r '.message // "needs input"' 2>/dev/null || echo "needs input"); sound=Glass ;;
+  Notification)
+    body=$(printf '%s' "$payload" | jq -r '.message // "needs input"' 2>/dev/null || echo "needs input"); sound=Glass
+    [[ $title == 'Claude Code' && $(printf '%s' "$payload" | jq -r '.notification_type // empty' 2>/dev/null) == idle_prompt ]] && status=idle ;;
   *) body="needs attention"; sound=Glass ;;
 esac
 
@@ -43,10 +50,12 @@ relay_vars="CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMU
 socket=${CMUX_SOCKET_PATH:-}; ws=${CMUX_WORKSPACE_ID:-}; ident=()
 s=""
 if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null; then s=$(tmux display-message -p '#S' 2>/dev/null || true); fi
+tmux_env=''
+[[ -n $s ]] && tmux_env=$(tmux show-environment -t "=$s" 2>/dev/null || true)
 for n in $relay_vars; do
   v=${!n:-}
   if [[ -n $s ]]; then
-    t=$(tmux show-environment -t "=$s" "$n" 2>/dev/null || true); [[ $t == *=* ]] && v=${t#*=}
+    t=$(printf '%s\n' "$tmux_env" | sed -n "s/^$n=//p" | head -1); [[ -n $t ]] && v=$t
   fi
   [[ -n $v ]] && ident+=("$n=$v")
   case $n in
@@ -54,6 +63,26 @@ for n in $relay_vars; do
     CMUX_WORKSPACE_ID) ws=$v ;;
   esac
 done
+
+# Only the agent started by `wt run` owns a VM row. Hooks from other panes, nested agents, and
+# a child `wt new -p` before its own row exists must not change the parent's status.
+status_owner() {
+  [[ -n ${WT_STATUS_OWNER_PID:-} && ${TMUX_PANE:-} == "${WT_STATUS_OWNER_PANE:-}" ]] || return 1
+  local pid=$PPID parent comm agents=0
+  while [[ $pid =~ ^[0-9]+$ && $pid -gt 1 && $pid != "$WT_STATUS_OWNER_PID" ]]; do
+    [[ -r /proc/$pid/status ]] || return 1
+    comm=$(cat "/proc/$pid/comm" 2>/dev/null || true)
+    [[ $comm == claude || $comm == codex ]] && agents=$((agents + 1))
+    parent=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$pid/status")
+    pid=$parent
+  done
+  [[ $pid == "$WT_STATUS_OWNER_PID" && $agents -eq 1 ]]
+}
+
+relay_notify() {
+  env -u CMUX_SOCKET CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC=0.5 "${ident[@]+"${ident[@]}"}" \
+    "${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}" notify ${ws:+--workspace "$ws"} "$@" >/dev/null 2>&1
+}
 
 # frontmost_terminal: true when the app this agent runs in is the one already on screen, so a banner would
 # tell the user what they are looking at. cmux rows never reach here; this is for a bare terminal window.
@@ -92,17 +121,28 @@ if [[ $socket == *:[0-9]* ]]; then
   # cmux-hook turns this private control notification into the same status pill local agent hooks show.
   # It verifies that cmux assigned the notification to a row on WT_HOST before changing that row.
   case $title in 'Claude Code') agent=claude ;; Codex) agent=codex ;; *) agent= ;; esac
-  if [[ -n ${status:-} && -n $agent && -n ${WT_HOST:-} ]]; then
-    control=$(jq -nc --arg host "$WT_HOST" --arg agent "$agent" --arg state "$status" \
-      '{host:$host,agent:$agent,state:$state}')
-    env -u CMUX_SOCKET "${ident[@]+"${ident[@]}"}" "${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}" notify \
-      ${ws:+--workspace "$ws"} --title wt-agent-status --body "$control" >/dev/null 2>&1 ||
+  send_status=0
+  if [[ $status == running || $status == idle || $status == clear ]] && [[ -n $agent && ${WT_HOST:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] &&
+     { { [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -n ${WT_STATUS_OWNER_PID:-} &&
+           ${TMUX_PANE:-} == "${WT_STATUS_OWNER_PANE:-}" ]] && kill -0 "$WT_STATUS_OWNER_PID" 2>/dev/null; } || status_owner; }; then
+    send_status=1
+    if [[ -n ${WT_STATUS_FILE:-} && ${WT_STATUS_HEARTBEAT:-} != 1 ]]; then
+      if [[ $status == clear ]]; then rm -f "$WT_STATUS_FILE"; else
+        printf '{"hook_event_name":"Heartbeat","session_id":"%s","state":"%s"}\n' "$session" "$status" > "$WT_STATUS_FILE"
+      fi
+    fi
+  fi
+  # Record the new state before a heartbeat can read it; send completion before sidebar network work.
+  if [[ -z $status_only ]]; then
+    relay_notify --title "$title" --body "$body" ||
+      echo 'agent-notify: relay failed; close and reopen this cmux row (wt -H <host> attach …)' >&2
+  fi
+  if [[ $send_status -eq 1 ]]; then
+    relay_notify --title "$title status" --body "$title: $status on $WT_HOST" \
+      --subtitle "wt-agent-status|$WT_HOST|$agent|$status|$event_seq|$session" ||
       echo 'agent-notify: status relay failed; close and reopen this cmux row (wt -H <host> attach …)' >&2
   fi
   [[ -n ${status_only:-} ]] && exit 0
-  env -u CMUX_SOCKET "${ident[@]+"${ident[@]}"}" "${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}" notify \
-    ${ws:+--workspace "$ws"} --title "$title" --body "$body" >/dev/null 2>&1 ||
-    echo 'agent-notify: relay failed; close and reopen this cmux row (wt -H <host> attach …)' >&2
 elif [[ -z ${CMUX_SURFACE_ID:-} && $(uname -s) == Darwin ]]; then
   [[ -n ${status_only:-} ]] && exit 0
   # A row in the sidebar is passive and costs nothing, but a banner interrupts, so only this path is gated.

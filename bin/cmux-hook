@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # cmux notification hook. Handles wt row requests and VM agent status; otherwise leaves notifications unchanged.
 set -u
-cat >/dev/null          # drain the envelope: everything acted on comes from the CMUX_NOTIFICATION_* env
+mode=${1:-hook}
+if [[ $mode == hook ]]; then cat >/dev/null; fi   # drain the envelope
 t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; ws=${CMUX_NOTIFICATION_WORKSPACE_ID:-}
-case $t in wt-open|wt-attach|wt-agent-status) ;; *) exit 0 ;; esac
+if [[ $mode == hook && ${CMUX_NOTIFICATION_SUBTITLE:-} == wt-agent-status\|* ]]; then
+  t=wt-agent-status; b=${CMUX_NOTIFICATION_SUBTITLE}
+fi
+case $mode:$t in hook:wt-open|hook:wt-attach|hook:wt-agent-status|--apply:*|--expire:*) ;; *) exit 0 ;; esac
 : "${HOME:?cmux-hook: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-hook.log"
 log() { # stdout is the patch and every call site discards stderr, so the reason a jump did not happen
@@ -39,6 +43,40 @@ CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmu
 valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 safe_path() { [[ $1 == /* && $1 != *$'\n'* && $1 != *//* && $1 != */ && $1 != *'/../'* && $1 != */.. && $1 != *[\'\"\`\$\\\;]* ]]; }
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
+status_dir="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-agent-status"
+status_file() { printf '%s/%s-%s' "$status_dir" "$1" "$2"; }
+status_locked() { # called under lockf: workspace agent state sequence session
+  local f old_seq=0 old_session='' old_state='' key label icon color
+  f=$(status_file "$1" "$2"); key="vm-$2"
+  [[ -r $f ]] && read -r old_seq old_session old_state < "$f"
+  # shellcheck disable=SC2071  # fixed-width decimal strings; avoid signed 64-bit overflow in arithmetic
+  [[ $4 == "$old_seq" || $4 < $old_seq ]] && return 0  # retain clear tombstones; delayed hooks cannot resurrect them
+  case $3 in
+    running) label=Running; icon=bolt.fill; color='#4C8DFF' ;;
+    idle) label=Idle; icon=pause.fill; color='#8E8E93' ;;
+  esac
+  if [[ $3 == clear ]]; then
+    capped "$CMUX" clear-status "$key" --workspace "$1" >/dev/null 2>&1 || { log "clear-status $key failed on $1"; return 1; }
+  else
+    capped "$CMUX" set-status "$key" "$label" --workspace "$1" --icon "$icon" --color "$color" >/dev/null 2>&1 ||
+      { log "set-status $key failed on $1"; return 1; }
+  fi
+  printf '%s %s %s\n' "$4" "${5:--}" "$3" > "$f"
+  if [[ $3 != clear ]]; then
+    nohup bash "$0" --expire "$1" "$2" "$4" >/dev/null 2>&1 </dev/null &
+  fi
+}
+status_apply() {
+  (umask 077; mkdir -p "$status_dir") || { log "cannot create $status_dir"; return 1; }
+  local f; f=$(status_file "$1" "$2")
+  if command -v lockf >/dev/null; then
+    lockf -t 5 "$f.lock" "$0" --apply "$@"
+  elif command -v flock >/dev/null; then
+    flock -w 5 "$f.lock" "$0" --apply "$@"
+  else
+    log 'no file lock command for VM status'; return 1
+  fi
+}
 WS_JSON=""; WS_RC=""
 ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in every window, kept in $WS_JSON
             # with its status in $WS_RC.
@@ -134,24 +172,33 @@ attach_row() { # attach_row <host> <session> <title> <command> — bring this ta
   capped "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1" ||
     log "set-description @$1 failed for $ref"   # cosmetic only: the row is there, so the jump did happen
   return 0; }
+case $mode in
+  --apply)
+    [[ $# -eq 6 && $2 =~ ^[A-Fa-f0-9-]{36}$ && ( $3 == claude || $3 == codex ) &&
+       ( $4 == running || $4 == idle || $4 == clear ) && $5 =~ ^[0-9]{19}$ ]] || exit 1
+    status_locked "$2" "$3" "$4" "$5" "$6"; exit $? ;;
+  --expire)
+    [[ $# -eq 4 && $2 =~ ^[A-Fa-f0-9-]{36}$ && ( $3 == claude || $3 == codex ) && $4 =~ ^[0-9]{19}$ ]] || exit 1
+    sleep "${WT_STATUS_LEASE_SECONDS:-120}"
+    DEADLINE=$(( $(date +%s) + 15 ))
+    f=$(status_file "$2" "$3")
+    [[ -r $f ]] || exit 0
+    read -r old_seq old_session old_state < "$f"
+    [[ $old_seq == "$4" && $old_state != clear ]] || exit 0
+    status_apply "$2" "$3" clear "$((10#$4 + 1))" "$old_session"
+    exit $? ;;
+esac
 case $t in
-  wt-agent-status) # body: {"host":…,"agent":"claude|codex","state":"running|idle|clear"}
-    h=$(field host || true); agent=$(field agent || true); state=$(field state || true)
+  wt-agent-status) # subtitle: wt-agent-status|host|agent|state|sequence|session
+    quiet_control  # control traffic is never a user notification, even if validation or cmux fails
+    IFS='|' read -r marker h agent state seq session extra <<< "$b"
     if valid_host "$h" && known_host "$h" && [[ $agent == claude || $agent == codex ]] &&
        [[ $state == running || $state == idle || $state == clear ]] &&
-       from_row_on_host "$ws" "$h"; then
-      # cmux owns the plain agent keys and removes them when it sees no local agent process in an SSH pane.
-      # A separate key survives that cleanup while rendering the same label and icon in the row.
-      key="vm-$agent"
-      case $state in
-        running) label=Running; icon=bolt.fill; color='#4C8DFF' ;;
-        idle) label=Idle; icon=pause.fill; color='#8E8E93' ;;
-      esac
-      if [[ $state == clear ]]; then
-        capped "$CMUX" clear-status "$key" --workspace "$ws" >/dev/null 2>&1 && quiet_control
-      else
-        capped "$CMUX" set-status "$key" "$label" --workspace "$ws" --icon "$icon" --color "$color" >/dev/null 2>&1 && quiet_control
-      fi
+       [[ $marker == wt-agent-status && -z ${extra:-} && $seq =~ ^[0-9]{19}$ && $session =~ ^[A-Za-z0-9-]*$ ]] &&
+       [[ $ws =~ ^[A-Fa-f0-9-]{36}$ ]] && from_row_on_host "$ws" "$h"; then
+      status_apply "$ws" "$agent" "$state" "$seq" "${session:--}" || log "status $state for $agent on $ws failed"
+    else
+      log "ignored invalid VM agent status for workspace $ws"
     fi ;;
   wt-open)   # body: {"host":…,"path":…}
     h=$(field host || true); p=$(field path || true)
@@ -178,7 +225,7 @@ case $t in
       # against the hook's 20 s budget in cmux.json.
       # Only on success: a notification whose jump failed keeps its banner, sound and unread mark, and
       # printing nothing at all is what cmux reads as "leave the effects alone". $LOG says what went wrong.
-      if attach_row "$h" "wt-$id-$n" "$id:$n" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
+      if attach_row "$h" "wt-$id-$n" "$id:$n" "WT_STATUS_BRIDGE=1 \"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
         quiet
       fi
     fi ;;

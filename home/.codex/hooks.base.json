@@ -50,7 +50,7 @@
           {
             "type": "command",
             "command": "AGENT_NOTIFY_SOURCE=Codex agent-notify",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
