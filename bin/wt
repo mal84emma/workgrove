@@ -1253,8 +1253,9 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
     | (field($rows; "cpu") | unsigned) as $cpu
     | (field($rows; "mem_kib") | unsigned) as $mem
     | [ $rows[] | select(.[0] == "gpu") ] as $raw_gpus
-    | [ $raw_gpus[] | select(length == 3 and (.[1] | length > 0) and (.[2] | test("^ *[0-9]+ *$")))
-        | {name:(.[1] | gsub("^ +| +$"; "")),memory_mib:(.[2] | gsub(" "; "") | tonumber)} ] as $gpus
+    | [ $raw_gpus[] | select(length == 3 and (.[1] | gsub("^ +| +$"; "") | length > 0))
+        | {name:(.[1] | gsub("^ +| +$"; "")),
+           memory_mib:(.[2] | gsub(" "; "") | unsigned)} ] as $gpus
     | (if field($rows; "gpu_status") == "ok" and ($raw_gpus | length) == ($gpus | length)
        then "ok" else "unknown" end) as $gpu_status
     | {host:$host,status:"available",cpu_logical:(if $cpu != null and $cpu > 0 then $cpu else null end),
@@ -1281,7 +1282,8 @@ cmd_hosts() {
        (.[] | [ .host, .status, (.cpu_logical // "?" | tostring),
          (if .memory_mib == null then "?" else (.memory_mib / 1024 * 10 | round / 10 | tostring) end),
          (if .gpu_status != "ok" then "unknown" elif (.gpus | length) == 0 then "none"
-          else (.gpus | map("\(.name) (\(.memory_mib) MiB)") | join("; ")) end) ])) | @tsv' \
+          else (.gpus | map(if .memory_mib == null then "\(.name) (memory unknown)"
+                            else "\(.name) (\(.memory_mib) MiB)" end) | join("; ")) end) ])) | @tsv' \
       | { if have column; then column -t -s $'\t'; else cat; fi; }
   fi
 }
