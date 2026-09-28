@@ -7,7 +7,12 @@ TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/wt-remote-new.XXXXXX")
 TEST_ROOT=$(cd "$TEST_ROOT" && pwd -P)
 case "$TEST_ROOT" in */wt-remote-new.*) ;; *) echo "unsafe test root: $TEST_ROOT" >&2; exit 1 ;; esac
 case "$TEST_ROOT/" in "$HOME/"*) echo "test root is inside HOME" >&2; exit 1 ;; esac
-trap 'rm -rf "$TEST_ROOT"' EXIT
+# shellcheck source=test/lib.sh
+# shellcheck disable=SC1091
+source "$REPO/test/lib.sh"
+# shellcheck disable=SC2034
+KEEP_LABEL='remote task test files'
+trap lib_cleanup EXIT
 mkdir -p "$TEST_ROOT/local/bin" "$TEST_ROOT/remote/.local/bin" "$TEST_ROOT/remote/repo"
 
 cat >"$TEST_ROOT/local/bin/uname" <<'UNAME'
@@ -20,7 +25,9 @@ printf '%s\n' "$*" >>"$CMUX_LOG"
 case "$1" in
   ping) [ "$CMUX_MODE" != down ] ;;
   list-windows) ;;
-  workspace) printf '{"workspaces":[]}\n' ;;
+  workspace) if [ "$CMUX_MODE" = existing ]; then
+               printf '{"workspaces":[{"id":"workspace:123","title":"repo:task","description":"@fakevm","remote":{"enabled":true,"destination":"fakevm"}}]}\n'
+             else printf '{"workspaces":[]}\n'; fi ;;
   ssh) [ "$CMUX_MODE" != ssh-fail ] || { echo 'row connection failed' >&2; exit 1; }
        echo 'workspace:123' ;;
   workspace-action) ;;
@@ -35,8 +42,13 @@ if [[ "$SSH_MODE" == lost && "$cmd" == *' new '* ]]; then
     REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" bash -c "$cmd" >/dev/null
   exit 255
 fi
+if [[ "$SSH_MODE" == refuse && "$cmd" == *' new '* ]]; then
+  echo "worktree 'task' already exists" >&2
+  exit 1
+fi
 HOME="$REMOTE_HOME" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
-  REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" bash -c "$cmd"
+  REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" \
+  REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" bash -c "$cmd"
 SSH
 cat >"$TEST_ROOT/remote/.local/bin/wt" <<'WT'
 #!/bin/sh
@@ -45,6 +57,7 @@ case "$1" in
          printf '%s\n' "$REMOTE_REPO" ;;
   new) cat >/dev/null
        : >"$REMOTE_NEW_MARKER"
+       [ "$REMOTE_OUTPUT_MODE" != bad ] || { echo 'created ???'; exit 0; }
        printf 'created task\n  path:   %s/.worktrees/task\n  branch: wt/task (from main)\n  repo:   %s\n  session: wt-repo-task\n' "$REMOTE_REPO" "$REMOTE_REPO" ;;
   list) case "$2" in -r|--repo) printf 'scoped: %s\n' "$3" ;; *) echo 'all repos' ;; esac ;;
   show) [ -e "$REMOTE_NEW_MARKER" ] || exit 1
@@ -64,6 +77,7 @@ invoke_wt() {
     HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
     CMUX_BUNDLED_CLI_PATH="$TEST_ROOT/local/bin/cmux" CMUX_LOG="$TEST_ROOT/cmux.log" \
     SSH_LOG="$TEST_ROOT/ssh.log" CMUX_MODE="$CMUX_MODE" SSH_MODE="$SSH_MODE" \
+    REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" \
     REMOTE_HOME="$TEST_ROOT/remote" REMOTE_REPO="$TEST_ROOT/remote/repo" \
     REMOTE_NEW_MARKER="$TEST_ROOT/remote-new" REMOTE_DEFAULT_AGENT="$REMOTE_DEFAULT_AGENT" \
     "${WT_BASH:-bash}" "$REPO/bin/wt" "$@" 2>&1) || WT_RC=$?
@@ -74,7 +88,9 @@ run_wt() {
   args+=(-p 'test brief')
   invoke_wt "${args[@]}"
 }
-check() { [[ "$1" ]] || { echo "FAIL: $2; output: $WT_OUT" >&2; exit 1; }; }
+check() { if [[ "$1" ]]; then pass; else fail "$2; output: $WT_OUT"; fi; }
+
+begin_scenario 'remote preflight and recovery'
 
 # Local cmux failure must stop before the first SSH command.
 CMUX_MODE=down
@@ -117,4 +133,46 @@ rm "$TEST_ROOT/remote-new"
 SSH_MODE=ok
 run_wt wt-demo claude
 check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'row: repo:task @fakevm'* ]] && echo yes)" 'healthy remote creation failed'
-echo 'remote new smoke test: ok'
+rm "$TEST_ROOT/remote-new"
+
+# A normal remote refusal is definite and should not claim an uncertain SSH outcome.
+SSH_MODE=refuse
+run_wt wt-demo claude
+check "$([[ $WT_RC -eq 1 && "$WT_OUT" == *"worktree 'task' already exists"* && "$WT_OUT" != *'could not confirm'* && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'VM refusal was described as a disconnect'
+SSH_MODE=ok
+
+# Success with malformed output may still have created the task: print an inspection path.
+REMOTE_OUTPUT_MODE=bad
+run_wt wt-demo claude
+check "$([[ $WT_RC -ne 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'inspect with: wt -H fakevm list -r wt-demo'* ]] && echo yes)" 'malformed success omitted inspection advice'
+REMOTE_OUTPUT_MODE=normal
+rm "$TEST_ROOT/remote-new"
+
+# A row left after an older task was removed must not make the new task look started.
+CMUX_MODE=existing
+run_wt wt-demo claude
+check "$([[ $WT_RC -ne 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'row with this title is already open'* && "$WT_OUT" == *'attach --restart-agent'* ]] && echo yes)" 'leftover row falsely reported success'
+end_scenario
+
+begin_scenario 'interrupted setup retains the brief and agent'
+SCRATCH_REPO="$TEST_ROOT/local-repo"
+git init -q "$SCRATCH_REPO"
+git -C "$SCRATCH_REPO" config user.name Test
+git -C "$SCRATCH_REPO" config user.email test@example.invalid
+git -C "$SCRATCH_REPO" commit -q --allow-empty -m initial
+cat >"$SCRATCH_REPO/.wt-setup" <<'SETUP'
+#!/bin/sh
+printf 'setup began\n'
+sleep .2
+printf 'setup output after reader closes\n'
+SETUP
+chmod +x "$SCRATCH_REPO/.wt-setup"
+set +o pipefail
+printf 'the brief' | env HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
+  "${WT_BASH:-bash}" "$REPO/bin/wt" new task -r "$SCRATCH_REPO" -a codex --no-workspace --prompt-stdin 2>&1 | head -n 1 >/dev/null || true
+set -o pipefail
+check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task.json" && -f "$SCRATCH_REPO/.git/wt/task.prompt" ]] && echo yes)" 'interrupted setup lost task metadata'
+check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex ]] && echo yes)" 'interrupted setup lost brief or agent choice'
+end_scenario
+
+lib_summary 15

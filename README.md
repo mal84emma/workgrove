@@ -198,11 +198,13 @@ consults cmux at all. Both suites carry an expected-total guard, because a scena
 assertions is the failure mode a green run hides. What neither covers is anything needing ssh, tmux or a live
 cmux.
 
-`bash test/hosts-smoke.sh` checks the SSH inventory's JSON, table, alias filtering and failure states with
-a fake `ssh` on a scratch `PATH`. It does not contact any configured host.
+`bash test/hosts-smoke.sh` checks the SSH inventory's JSON, table, alias filtering, concurrent probes and
+failure states with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake hardware
+commands, including malformed GPU output. It does not contact any configured host.
 
 `bash test/remote-new-smoke.sh` uses scratch SSH and cmux stubs to check remote task preflight, a row failure
-after worktree creation, and an SSH disconnect after creation but before the Mac receives the result.
+after worktree creation, and an SSH disconnect after creation but before the Mac receives the result. It also
+checks that a brief and agent choice survive an interrupted `.wt-setup`.
 
 **There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
 
@@ -315,16 +317,22 @@ the picker read; `--table` forces the table, which is what `wt -H <vm> repos` se
 than one folder is refused with both paths, so pass the path instead. Set it in
 `~/.zshenv.local`, for example `export WT_REPOS_DIR="$HOME/work/repos:$HOME/Documents/Repositories"`.
 
-`wt hosts` probes the same literal, wildcard-free `Host` aliases in the Mac's `~/.ssh/config` that the task
-picker lists. Each probe is a noninteractive SSH login with a five-second connection timeout and strict host
-key checking. `available` means a remote shell command succeeded; it does not mean `wt` or a particular repo
-is installed there. CPU is the number of online logical processors, RAM is total installed memory, and GPU
-rows report NVIDIA model and memory when `nvidia-smi` works; `memory_mib` is null when the GPU reports
+`wt hosts` probes the same literal, wildcard-free, non-exclusion `Host` aliases in the Mac's `~/.ssh/config`
+that the task picker lists. Probes run concurrently, each using a noninteractive SSH login with a five-second
+connection timeout, SSH keepalives, and strict host key checking. `available` means a remote shell command
+succeeded; it does not mean `wt` or a particular repo is installed there. CPU is the number of online logical
+processors. RAM comes from Linux `MemTotal`, the kernel's usable total, which can be below the machine's label.
+GPU rows report NVIDIA model and driver-reported total memory when `nvidia-smi` finishes within ten seconds;
+that can likewise be below the label. `memory_mib` is null when the GPU reports
 `[N/A]` for memory. If `nvidia-smi` fails, a complete scan of Linux PCI devices with no NVIDIA display
 device reports `gpu_status: "none"`; an incomplete scan or a present GPU with a failed driver reports
-`"unknown"`. This inventory concerns NVIDIA GPUs, as used by the task machines.
+`"unknown"`. A successful empty GPU query reports `"none"`; malformed GPU rows report `"unknown"`, so they
+cannot inflate a task's matching GPU count. Failed SSH probes include a short error reason. This inventory
+concerns NVIDIA GPUs, as used by the task machines.
 `wt hosts --json` gives agents structured results (`cpu_logical`, `memory_mib`, `gpu_status`, `gpus`) to match
-against a request. Probes are fresh each run; a host can stop or become busy after listing it.
+against a request. When matching a request stated in GB, agents convert decimal GB to MiB before comparing;
+an explicit GiB request uses 1024 MiB per GiB. Probes are fresh each run; a host can stop or become busy
+after listing it.
 
 ## Agents
 
