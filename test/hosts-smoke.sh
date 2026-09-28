@@ -30,8 +30,9 @@ cat >"$TEST_ROOT/bin/ssh" <<'SSH'
 printf '%s\n' "$*" >>"$SSH_LOG"
 host=''
 for arg do
-  case "$arg" in alpha|beta|down|broken|nogpu|unified|slow1|slow2|warning|empty|stuck|pci) host=$arg ;; esac
+  case "$arg" in alpha|beta|down|broken|nogpu|unified|slow1|slow2|warning|numericwarning|duplicate|empty|stuck|pci|hang) host=$arg ;; esac
 done
+if [[ "$host" == hang ]]; then cat >/dev/null; exec /bin/sleep 60; fi
 if [[ "$PROBE_MODE" == actual ]]; then
   script=$(mktemp "$TEST_ROOT/probe.XXXXXX")
   sed -e "s|/proc/meminfo|$TEST_ROOT/fixtures/meminfo|g" \
@@ -43,12 +44,12 @@ if [[ "$PROBE_MODE" == actual ]]; then
 fi
 cat >/dev/null
 case "$host" in
-  alpha) printf 'cpu\t16\nmem_kib\t33554432\ngpu_status\tok\ngpu\tNVIDIA A100\t40960\ngpu\tNVIDIA A100\t40960\n' ;;
+  alpha) printf 'cpu\t16\nmem_kib\t33554432\ngpu_status\tok\ngpu\t0\tNVIDIA A100\t40960\ngpu\t1\tNVIDIA A100\t40960\n' ;;
   beta) printf 'cpu\t4\nmem_kib\t8388608\ngpu_status\tunknown\n' ;;
   down) echo 'Permission denied (publickey).' >&2; exit 255 ;;
-  broken) printf 'cpu\tnot-a-number\nmem_kib\t\ngpu_status\tok\ngpu\tbroken\tunknown\n' ;;
+  broken) printf 'cpu\tnot-a-number\nmem_kib\t\ngpu_status\tok\ngpu\tbad-index\tbroken\tunknown\n' ;;
   nogpu) printf 'cpu\t4\nmem_kib\t14680064\ngpu_status\tnone\n' ;;
-  unified) printf 'cpu\t20\nmem_kib\t127631360\ngpu_status\tok\ngpu\tNVIDIA GB10\t[N/A]\n' ;;
+  unified) printf 'cpu\t20\nmem_kib\t127631360\ngpu_status\tok\ngpu\t0\tNVIDIA GB10\t[N/A]\n' ;;
   slow1|slow2)
     : >"$TEST_ROOT/$host.start"
     other=slow1; [[ "$host" == slow1 ]] && other=slow2
@@ -60,8 +61,10 @@ SSH
 cat >"$TEST_ROOT/bin/nvidia-smi" <<'NVIDIA'
 #!/bin/sh
 case "$PROBE_HOST" in
-  warning) printf 'WARNING: infoROM is corrupted at gpu 0000:00:04.0\nTesla V100-SXM2-16GB, 16160\n' ;;
-  unified) printf 'NVIDIA GB10, [N/A]\n' ;;
+  warning) printf 'WARNING: infoROM is corrupted at gpu 0000:00:04.0\n0, Tesla V100-SXM2-16GB, 16160\n' ;;
+  numericwarning) printf 'WARNING: bogus diagnostic, 123\n0, Tesla V100-SXM2-16GB, 16160\n' ;;
+  duplicate) printf '0, Tesla V100-SXM2-16GB, 16160\n0, Tesla V100-SXM2-16GB, 16160\n' ;;
+  unified) printf '0, NVIDIA GB10, [N/A]\n' ;;
   empty) : ;;
   stuck) exit 1 ;;
   *) exit 1 ;;
@@ -69,9 +72,9 @@ esac
 NVIDIA
 cat >"$TEST_ROOT/bin/timeout" <<'TIMEOUT'
 #!/bin/sh
-printf '%s\n' "$1" >>"$TIMEOUT_LOG"
-[ "$1" = 10 ] || exit 2
-shift
+printf '%s\n' "$*" >>"$TIMEOUT_LOG"
+[ "$1" = -k ] && [ "$2" = 2 ] && [ "$3" = 10 ] || exit 2
+shift 3
 [ "$PROBE_HOST" = stuck ] && exit 124
 "$@"
 TIMEOUT
@@ -106,17 +109,27 @@ end_scenario
 begin_scenario 'execute the real probe script with fake hardware commands'
 PROBE_MODE=actual
 cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
-Host warning empty unified stuck pci
+Host warning numericwarning duplicate empty unified stuck pci
 CONFIG
 json=$(run_wt hosts --json)
 assert_eq 'warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "warning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1 and .gpus[0].name == "Tesla V100-SXM2-16GB"')"
+assert_eq 'numeric warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "numericwarning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1')"
+assert_eq 'duplicate GPU index cannot inflate count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "duplicate")][0] | .gpu_status == "unknown" and (.gpus | length) == 2')"
 assert_eq 'successful empty query is no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "empty")][0] | .gpu_status == "none" and .gpus == []')"
 assert_eq 'PCI scan confirms no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "pci")][0] | .gpu_status == "none" and .gpus == []')"
 assert_eq 'N/A VRAM from probe' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "unified")][0] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
 assert_eq 'stalled nvidia-smi fails closed' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "stuck")][0] | .gpu_status == "none"')"
-assert_eq 'nvidia-smi has a time limit' '5' "$(wc -l <"$TEST_ROOT/timeout.log" | tr -d ' ')"
+assert_eq 'nvidia-smi has a kill deadline' '7' "$(wc -l <"$TEST_ROOT/timeout.log" | tr -d ' ')"
+end_scenario
+
+begin_scenario 'client deadline bounds an unresponsive SSH session'
+cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
+Host hang
+CONFIG
+json=$(run_wt hosts --json)
+assert_eq 'hung SSH probe returns unavailable' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .host == "hang" and .status == "unavailable" and (.error | contains("timed out after 20 seconds"))')"
 end_scenario
 
 : >"$TEST_ROOT/home/.ssh/config"
 assert_eq 'no aliases' '[]' "$(run_wt hosts --json)"
-lib_summary 18
+lib_summary 21

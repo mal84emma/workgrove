@@ -1267,18 +1267,24 @@ ssh_hosts() { # non-wildcard Host aliases, read as bin/cmux-hook reads them
 }
 
 probe_host() { # one SSH login proves remote-command access and gathers Linux hardware
+  local out_file err_file ssh_pid rc=0 tick
+  out_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stdout.XXXXXX") || return 1
+  err_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stderr.XXXXXX") || { rm -f "$out_file"; return 1; }
+  # Remote timeout bounds nvidia-smi that ignores TERM. The client deadline also bounds a remote
+  # command stuck in uninterruptible I/O: SSH may remain connected and answer keepalives forever.
+  # Redirect SSH to files so an unkillable child cannot hold open this function's output pipes.
   ssh -T -o BatchMode=yes -o NumberOfPasswordPrompts=0 -o StrictHostKeyChecking=yes \
       -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=5 \
-      -o ServerAliveCountMax=2 "$1" 'sh -s' <<'PROBE'
+      -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" <<'PROBE' &
 cpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
 mem_kib=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)
 printf 'cpu\t%s\nmem_kib\t%s\n' "$cpu" "$mem_kib"
 if command -v nvidia-smi >/dev/null 2>&1 &&
-   gpu_rows=$(timeout 10 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null); then
+   gpu_rows=$(timeout -k 2 10 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits 2>/dev/null); then
   printf 'gpu_status\tok\n'
   if [ -n "$gpu_rows" ]; then
-    printf '%s\n' "$gpu_rows" | while IFS=, read -r model vram; do
-      printf 'gpu\t%s\t%s\n' "$model" "$vram"
+    printf '%s\n' "$gpu_rows" | while IFS=, read -r index model vram; do
+      printf 'gpu\t%s\t%s\t%s\n' "$index" "$model" "$vram"
     done
   fi
 else
@@ -1304,6 +1310,22 @@ else
   printf 'gpu_status\t%s\n' "$gpu_status"
 fi
 PROBE
+  ssh_pid=$!
+  for ((tick=0; tick<200; tick++)); do
+    kill -0 "$ssh_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$ssh_pid" 2>/dev/null; then
+    kill -KILL "$ssh_pid" 2>/dev/null || true
+    printf 'SSH probe timed out after 20 seconds\n' >&2
+    rc=124
+  else
+    wait "$ssh_pid" || rc=$?
+  fi
+  cat "$out_file"
+  cat "$err_file" >&2
+  rm -f "$out_file" "$err_file"
+  return "$rc"
 }
 
 host_record() { # stable JSON for agents; unknown hardware never becomes a false zero
@@ -1329,11 +1351,14 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
     | (field($rows; "cpu") | unsigned) as $cpu
     | (field($rows; "mem_kib") | unsigned) as $mem
     | [ $rows[] | select(.[0] == "gpu") ] as $raw_gpus
-    | [ $raw_gpus[] | select(length == 3 and (.[1] | gsub("^ +| +$"; "") | length > 0)
-           and (.[2] | gsub(" "; "") | test("^[0-9]+$|^\\[N/A\\]$")))
-        | {name:(.[1] | gsub("^ +| +$"; "")),
-           memory_mib:(.[2] | gsub(" "; "") | unsigned)} ] as $gpus
+    | [ $raw_gpus[] | select(length == 4 and (.[1] | gsub(" "; "") | unsigned) != null
+           and (.[2] | gsub("^ +| +$"; "") | length > 0)
+           and (.[3] | gsub(" "; "") | test("^[0-9]+$|^\\[N/A\\]$"))) ] as $valid_gpus
+    | [ $valid_gpus[] | {name:(.[2] | gsub("^ +| +$"; "")),
+           memory_mib:(.[3] | gsub(" "; "") | unsigned)} ] as $gpus
+    | ([ $valid_gpus[] | .[1] | gsub(" "; "") ] | unique | length) as $unique_indices
     | (if field($rows; "gpu_status") == "ok" and ($raw_gpus | length) == ($gpus | length)
+         and $unique_indices == ($gpus | length)
        then (if ($gpus | length) == 0 then "none" else "ok" end)
        elif field($rows; "gpu_status") == "none" and ($raw_gpus | length) == 0
        then "none" else "unknown" end) as $gpu_status
