@@ -183,16 +183,18 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 265 assertions over twelve groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 342 assertions over thirteen groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
 base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
-worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that `wt prune` keeps
-exactly what `wt rm` refuses, that a row sitting in a second cmux window is still found and still closed, and
+worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that a squash-merged
+branch is not one of them while a commit made after the squash, a partial revert and a later edit to the same
+lines still are (against a bare "origin" and a second clone that plays GitHub, and once more under a `git`
+that claims to be 2.34), that `wt prune` keeps exactly what `wt rm` refuses, that a row sitting in a second cmux window is still found and still closed, and
 that `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists and on which
 field of `cmux list-windows` is a window. The last group is the odd one out: it tests `test/lib.sh`'s own
 `rm -rf`, which no real run reaches, because both suites build their scratch root with `mktemp -d` and refuse
 one inside the real home before arming the trap that calls it — and a branch nothing exercises is a branch
-nobody knows is broken. Run on a VM it makes 237: scenario 8 is about the Mac's row list, and `bin/wt` has no
+nobody knows is broken. Run on a VM it makes 314: scenario 8 is about the Mac's row list, and `bin/wt` has no
 `FORCE_OS` to lie to `is_remote()` with, so there `wt new` asks the Mac for a row over the relay and never
 consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
 assertions is the failure mode a green run hides. What neither covers is anything needing ssh, tmux or a live
@@ -273,8 +275,8 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 | `wt attach <name>` | Open a cmux row for a worktree that already exists |
 | `wt sync <name> [--merge]` | Rebase (or merge) the branch onto its base |
 | `wt pr <name> [--draft]` | Push the branch and open a GitHub pull request |
-| `wt rm <name> [--force] [--keep-branch]` | Remove a worktree; see below |
-| `wt prune [--dry-run]` | Remove worktrees whose branch is merged and whose tree is clean |
+| `wt rm <name> [--force] [--keep-branch] [--discard-commits]` | Remove a worktree; see below |
+| `wt prune [--dry-run]` | Remove worktrees whose branch is merged, by ancestry or by content, and whose tree is clean |
 | `wt task` | The picker on ⌃⌥⌘T (Mac, needs fzf) |
 | `wt driver` | Open or select the `driver` row |
 | `wt update [--refresh-config]` | `git pull --ff-only` this repo, then re-run `install.sh` |
@@ -296,6 +298,24 @@ in the main checkout, or a base ref it cannot compare the worktree against — d
 an older `wt` holding the literal `HEAD`, which resolves to the worktree's own tip and would make every other
 count read as nothing to lose. It names what blocked it. `--force` overrides. `wt prune` is stricter still:
 it only removes worktrees whose branch is merged and whose tree is clean.
+
+"Merged" is either of two things. The branch is an ancestor of the base: a merge commit or a fast-forward.
+Or its work is all in the base without its commits being there, which is what GitHub's "squash and merge"
+leaves — one new commit on `main` carrying the whole diff, the head branch deleted — and equally what a
+rebase-merge or a cherry-pick into a branch that then merged leaves. For that second kind `wt rm` asks git
+the exact question rather than a heuristic: would merging the branch into the base's tip change anything?
+(`git merge-tree --write-tree`, in memory, hunk by hunk; git older than 2.38, which Ubuntu 22.04 ships,
+gets a file-level `read-tree` instead, which is stricter in the safe direction.) A merge that would change
+nothing means every change the branch made is already there, and the worktree and its branch go. A merge
+that would change something is a refusal that says so — `merging wt/x into origin/main would still change
+1 path(s)` — and that is what a commit made after the PR merged looks like, or a squash the base later
+partially reverted; a squash whose lines the base edited again reads `would conflict`. A branch whose net
+change is empty passes any merge and proves nothing, so it is refused as it always was. The check runs
+offline first; when it says no and the base is a remote's branch, that one branch is fetched (`origin/main`
+is otherwise whatever the last fetch left, from before the merge) and the question asked once more, and
+offline the refusal says the base could not be refreshed. `--discard-commits` waives that one reason and
+nothing else, for the cases the check refuses on purpose — a squash the base then edited or reverted —
+while the dirty-tree, `.wt-include` and HEAD checks still stand; `--force` waives them all.
 
 What a repo's own `.wt-setup` wrote is not counted against it. A hook that runs `uv sync` or `npm ci`
 regenerates a *tracked* lockfile, which would otherwise leave the worktree dirty from the moment it was
@@ -357,7 +377,7 @@ The six skills in `home/.agents/skills/` are linked into both `~/.agents/skills/
 | `azml-compute` | "add compute instance X to my ssh config", "which compute instances can I ssh to" |
 
 What agents never do on their own: `git push`, `wt pr`, `gh pr create`, create a remote repository, publish,
-remove a worktree you did not ask them to remove, pass `--force`, open VS Code unasked, or run the
+remove a worktree you did not ask them to remove, pass `--force` or `--discard-commits`, open VS Code unasked, or run the
 interactive `wt attach`, `wt task` and `wt driver`, which belong to your own session.
 
 ## cmux notes
