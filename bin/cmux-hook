@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# cmux notification hook. Acts only on wt-open / wt-attach sent from a VM row; otherwise prints nothing (= unchanged).
+# cmux notification hook. Handles wt row requests and VM agent status; otherwise leaves notifications unchanged.
 set -u
 cat >/dev/null          # drain the envelope: everything acted on comes from the CMUX_NOTIFICATION_* env
 t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; ws=${CMUX_NOTIFICATION_WORKSPACE_ID:-}
-case $t in wt-open|wt-attach) ;; *) exit 0 ;; esac
+case $t in wt-open|wt-attach|wt-agent-status) ;; *) exit 0 ;; esac
 : "${HOME:?cmux-hook: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-hook.log"
 log() { # stdout is the patch and every call site discards stderr, so the reason a jump did not happen
@@ -33,6 +33,7 @@ known_host() { awk -v w="$1" '$1=="Host"{for(i=2;i<=NF;i++){if($i~/^#/)break; if
 # cmux.json answers `{"effects":{"desktop":false}}` or `{}`). So this prints a fixed literal rather than
 # echoing the envelope back, which carries whatever the agent session was working on.
 quiet() { printf '%s\n' '{"effects":{"desktop":false,"sound":false,"markUnread":false,"paneFlash":false}}'; }
+quiet_control() { printf '%s\n' '{"effects":{"record":false,"markUnread":false,"reorderWorkspace":false,"desktop":false,"sound":false,"command":false,"paneFlash":false}}'; }
 CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
 CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
 valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
@@ -134,6 +135,24 @@ attach_row() { # attach_row <host> <session> <title> <command> — bring this ta
     log "set-description @$1 failed for $ref"   # cosmetic only: the row is there, so the jump did happen
   return 0; }
 case $t in
+  wt-agent-status) # body: {"host":…,"agent":"claude|codex","state":"running|idle|clear"}
+    h=$(field host || true); agent=$(field agent || true); state=$(field state || true)
+    if valid_host "$h" && known_host "$h" && [[ $agent == claude || $agent == codex ]] &&
+       [[ $state == running || $state == idle || $state == clear ]] &&
+       from_row_on_host "$ws" "$h"; then
+      # cmux owns the plain agent keys and removes them when it sees no local agent process in an SSH pane.
+      # A separate key survives that cleanup while rendering the same label and icon in the row.
+      key="vm-$agent"
+      case $state in
+        running) label=Running; icon=bolt.fill; color='#4C8DFF' ;;
+        idle) label=Idle; icon=pause.fill; color='#8E8E93' ;;
+      esac
+      if [[ $state == clear ]]; then
+        capped "$CMUX" clear-status "$key" --workspace "$ws" >/dev/null 2>&1 && quiet_control
+      else
+        capped "$CMUX" set-status "$key" "$label" --workspace "$ws" --icon "$icon" --color "$color" >/dev/null 2>&1 && quiet_control
+      fi
+    fi ;;
   wt-open)   # body: {"host":…,"path":…}
     h=$(field host || true); p=$(field path || true)
     # -x $CODE first: the fallback above is a hard-coded path, and on a machine with no VS Code, or with it
