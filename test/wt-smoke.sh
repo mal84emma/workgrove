@@ -10,12 +10,13 @@
 # but /bin/bash 3.2.57, so 3.2 is the interpreter bin/wt gets there until Homebrew arrives. Run this file
 # both ways, or the one that matters goes untested under the one that matters.
 #
-# Why this file exists: bin/wt is 1200 lines that create and DESTROY work — `wt rm` deletes a worktree, its
+# Why this file exists: bin/wt is 1500 lines that create and DESTROY work — `wt rm` deletes a worktree, its
 # branch and its uncommitted files, and `wt prune` does it in a loop without being asked twice. Everything
-# standing between a task and a lost afternoon is rm_reasons, whose six branches are each a bug that was
-# found the hard way: a base stored as the literal "HEAD" that compares a worktree with itself, a commit
-# count taken from a detached HEAD instead of from the branch, an .env copied in by .wt-include that is in
-# no git and no backup. None of that was covered by anything. These scenarios cover the refusals first, then
+# standing between a task and a lost afternoon is rm_reasons, whose branches are each a bug that was found
+# the hard way: a base stored as the literal "HEAD" that compares a worktree with itself, a commit count
+# taken from a detached HEAD instead of from the branch, an .env copied in by .wt-include that is in no git
+# and no backup — and, the other way round, a squash-merged branch that only --force could remove, which
+# waived the other checks too. None of that was covered by anything. These scenarios cover the refusals first, then
 # what `wt new` records (the sidecar every later command reads), how a base is canonicalised (the invariant
 # the refusals rest on), the name rules, the read-only commands, and the argument handling of `wt -H`.
 #
@@ -130,6 +131,15 @@ assert_has() {
   case "$2" in
     *"$3"*) pass ;;
     *) fail "$1: expected '$3' in the output, got: $(printf '%s' "$2" | tr '\n' '|' | cut -c1-200)" ;;
+  esac
+}
+
+# assert_lacks <what> <haystack> <fixed string>: the string is nowhere in the text — for the line a run must
+# NOT print, such as a second fetch of a base that was refreshed a moment ago.
+assert_lacks() {
+  case "$2" in
+    *"$3"*) fail "$1: did not expect '$3' in the output, got: $(printf '%s' "$2" | tr '\n' '|' | cut -c1-200)" ;;
+    *) pass ;;
   esac
 }
 
@@ -249,6 +259,53 @@ sha256_of() {
   else sha256sum "$1" | cut -d' ' -f1; fi
 }
 
+# add_origin <repo>: give a scratch repo a bare "origin" under the scratch root, push main to it and set
+# origin/HEAD, so that default_base answers origin/main the way it does for a real clone. Prints the path
+# of a second clone, the "editor": the machine on which PRs get squash-merged and head branches deleted,
+# which is what GitHub does and what the repo under test then has to notice from a stale origin/main.
+add_origin() {
+  local r="$1" o e
+  guard_scratch_root "$r"
+  mkdir -p "$TEST_ROOT/origins" "$TEST_ROOT/editors"
+  o="$TEST_ROOT/origins/$(basename "$r").git"; e="$TEST_ROOT/editors/$(basename "$r")"
+  fixture_git "$r" init -q --bare --initial-branch=main "$o"
+  fixture_git "$r" remote add origin "$o"
+  fixture_git "$r" push -q -u origin main
+  fixture_git "$r" remote set-head origin main
+  fixture_git "$r" clone -q "$o" "$e"
+  fixture_git "$e" config user.name 'Upstream Editor'
+  fixture_git "$e" config user.email 'editor@example.invalid'
+  printf '%s\n' "$e"
+}
+
+# land_squash <editor> <branch> <message>: what "Squash and merge" plus "delete branch" does on GitHub —
+# one new commit on main carrying the branch's whole diff, the head branch gone from the remote. The repo
+# under test has fetched nothing: its origin/main and origin/<branch> are exactly as they were.
+land_squash() {
+  fixture_git "$1" fetch -q origin
+  fixture_git "$1" checkout -q main
+  fixture_git "$1" merge -q --ff-only origin/main
+  fixture_git "$1" merge -q --squash "origin/$2" >/dev/null 2>&1
+  fixture_git "$1" commit -q -m "$3"
+  fixture_git "$1" push -q origin main
+  fixture_git "$1" push -q origin --delete "$2"
+}
+
+# editor_commit <editor> <file> <text|"">: one more commit on main after a squash, pushed. An empty text
+# deletes the file, which is how a squash gets partially reverted.
+editor_commit() {
+  if [[ -n "$3" ]]; then printf '%s\n' "$3" >"$1/$2"; fixture_git "$1" add -- "$2"
+  else fixture_git "$1" rm -q -- "$2"; fi
+  fixture_git "$1" commit -q -m "editor: $2"
+  fixture_git "$1" push -q origin main
+}
+
+# set_line <file> <n> <text>: replace line n of a file, portably (BSD and GNU sed disagree about -i).
+set_line() {
+  local tmp="$1.tmp"
+  awk -v n="$2" -v t="$3" 'NR == n { print t; next } { print }' "$1" >"$tmp" && mv "$tmp" "$1"
+}
+
 # The brief scenario 1 writes and reads back. Quotes, a '$', backticks, a backslash, a newline and
 # non-ASCII: `wt new` writes it with printf '%s' and `wt run` reads it back with read -r -d '', and every
 # one of those characters is a way for a shell to mangle a string it is only supposed to carry.
@@ -351,6 +408,7 @@ WT_OUT=""
 WT_RC=0
 WT_CWD=""          # where the next wt_run runs; empty means the scratch root, which is not a git repo
 WT_SANDBOX=""      # CODEX_SANDBOX for the next wt_run; empty means not inside Codex's sandbox
+WT_PATH_PREFIX=""  # a directory put before $FAKE_BIN on wt_run's PATH; scenario 6b's old-git shim lives in one
 wt_run() {
   WT_RC=0
   WT_OUT="$(cd "${WT_CWD:-$TEST_ROOT}" \
@@ -361,7 +419,7 @@ wt_run() {
            WT_REPOS_DIR="$REPOS_DIR" CMUX_BUNDLED_CLI_PATH="$WT_STUB" \
            CMUX_STUB_LOG="$CMUX_LOG" CMUX_STUB_ROWS="$WT_ROWS" AGENT_ARGV_LOG="$AGENT_LOG" \
            CMUX_STUB_WINDOWS="$WT_WINDOWS" CMUX_STUB_ROWS_DIR="$WT_ROWS_DIR" \
-           CODEX_SANDBOX="$WT_SANDBOX" PATH="$FAKE_BIN:$PATH" \
+           CODEX_SANDBOX="$WT_SANDBOX" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
   return 0
 }
@@ -795,6 +853,172 @@ scenario_rm_refusals() {
   end_scenario
 }
 
+# 6b. The reason scenario 6 could not provoke the other way round: a branch whose work has landed on the
+# base without any of its commits becoming an ancestor of it. GitHub's "squash and merge" — the default on
+# most repos — lands a PR as one new commit and deletes the head branch, after which every commit on
+# wt/<name> is unmerged by ancestry and gone from the remote, and `wt rm` used to leave --force as the only
+# way out, which waives the dirty-tree and .wt-include checks too. branch_landed asks git whether merging
+# the branch into the base would change anything; these cases are the shapes that answer yes and no.
+# Each squash happens on a second clone, the "editor", and the repo under test has not fetched: its
+# origin/main is from before the merge, as it is when the next thing typed after merging a PR is `wt rm`.
+scenario_squash_merge() {
+  begin_scenario "6b. wt rm after a squash merge: work that landed is not a reason, work that did not still is"
+  local r e stale fresh dry n verdict want shim hunks=no
+  r="$(new_repo squash)"
+  stub_cmux dead
+  printf 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n' >"$r/lines.txt"   # for the cases about a later edit
+  fixture_git "$r" add lines.txt
+  fixture_git "$r" commit -q -m lines
+  e="$(add_origin "$r")"
+  # whether the real git merges hunk by hunk, judged by bin/wt's own function, lifted out of it
+  if "$WT_BASH" -c "$(sed -n '/^git_merges_trees()/,/^}/p' "$WT"); git_merges_trees" 2>/dev/null; then hunks=yes; fi
+
+  # every worktree first: `wt new` fetches its base, so all of the landing below has to come after the last
+  # of them for origin/main to be stale when wt is asked, which is the shape this scenario is about
+  for n in sq sq2 past picked stack rev conf hunk zero; do
+    assert_wt_ok "wt new $n" new "$n" --no-workspace -r "$r"
+  done
+  # a) two commits, pushed, squash-merged, head branch deleted: the case this scenario exists for
+  fixture_commit "$r/.worktrees/sq" one.txt 'one'
+  fixture_commit "$r/.worktrees/sq" two.txt 'two'
+  fixture_git "$r/.worktrees/sq" push -q -u origin wt/sq
+  land_squash "$e" wt/sq 'sq (#1)'
+  # b) the same, with the stale origin/wt/sq2 gone as well (a fetch with fetch.prune): git's own `branch -d`
+  # then has nothing to call the branch merged into, and it is wt's finding that has to delete it
+  fixture_commit "$r/.worktrees/sq2" three.txt 'three'
+  fixture_git "$r/.worktrees/sq2" push -q -u origin wt/sq2
+  land_squash "$e" wt/sq2 'sq2 (#2)'
+  fixture_git "$r" update-ref -d refs/remotes/origin/wt/sq2
+  # c) a commit made after the squash: in no base, on no remote
+  fixture_commit "$r/.worktrees/past" four.txt 'four'
+  fixture_git "$r/.worktrees/past" push -q -u origin wt/past
+  land_squash "$e" wt/past 'past (#3)'
+  fixture_commit "$r/.worktrees/past" five.txt 'five'
+  # d) a stack: picked's one commit was cherry-picked into stack, stack was squash-merged, picked never pushed
+  fixture_commit "$r/.worktrees/picked" six.txt 'six'
+  fixture_commit "$r/.worktrees/stack" seven.txt 'seven'
+  fixture_git "$r/.worktrees/stack" cherry-pick wt/picked >/dev/null
+  fixture_git "$r/.worktrees/stack" push -q -u origin wt/stack
+  land_squash "$e" wt/stack 'stack (#4)'
+  # e) a squash the base then partially reverted: merging the branch again would put nine.txt back
+  fixture_commit "$r/.worktrees/rev" eight.txt 'eight'
+  fixture_commit "$r/.worktrees/rev" nine.txt 'nine'
+  fixture_git "$r/.worktrees/rev" push -q -u origin wt/rev
+  land_squash "$e" wt/rev 'rev (#5)'
+  editor_commit "$e" nine.txt ''
+  # f) a squash whose lines the base edited again: the merge conflicts
+  set_line "$r/.worktrees/conf/lines.txt" 5 'l5 by conf'
+  fixture_git "$r/.worktrees/conf" commit -q -am conf
+  fixture_git "$r/.worktrees/conf" push -q -u origin wt/conf
+  land_squash "$e" wt/conf 'conf (#6)'
+  set_line "$e/lines.txt" 5 'l5 by the editor'
+  fixture_git "$e" commit -q -am 'editor: line 5 again'
+  fixture_git "$e" push -q origin main
+  # g) a squash after which the base edited ANOTHER line of the same file: landed to a hunk-level merge
+  # (git 2.38+), not to the file-level fallback older git gets
+  set_line "$r/.worktrees/hunk/lines.txt" 1 'l1 by hunk'
+  fixture_git "$r/.worktrees/hunk" commit -q -am hunk
+  fixture_git "$r/.worktrees/hunk" push -q -u origin wt/hunk
+  land_squash "$e" wt/hunk 'hunk (#7)'
+  set_line "$e/lines.txt" 10 'l10 by the editor'
+  fixture_git "$e" commit -q -am 'editor: line 10'
+  fixture_git "$e" push -q origin main
+  # h) two commits that cancel out: merging changes nothing, which proves nothing, so it is refused as ever
+  fixture_commit "$r/.worktrees/zero" ten.txt 'ten'
+  fixture_git "$r/.worktrees/zero" rm -q ten.txt
+  fixture_git "$r/.worktrees/zero" commit -q -m 'undo ten'
+
+  # prune --dry-run first: every verdict at once, with the base refreshed once for all of them — the offline
+  # check comes first, and once the fetch has happened nothing is left to go online for
+  stale="$(fixture_git "$r" rev-parse origin/main)"
+  assert_wt_ok "wt prune --dry-run" prune --dry-run -r "$r"
+  dry="$WT_OUT"
+  fresh="$(fixture_git "$r" rev-parse origin/main)"
+  assert_eq "origin/main is the editor's main after the run" "$(fixture_git "$e" rev-parse main)" "$fresh"
+  if [[ "$stale" == "$fresh" ]]; then fail "origin/main was already fresh before wt ran, so the fetch was not tested"; else pass; fi
+  assert_eq "the base is fetched once, not once per worktree" 1 "$(printf '%s\n' "$dry" | grep -c 'fetching origin/main')"
+  for n in sq sq2 past picked stack rev conf hunk zero; do
+    verdict=keep
+    case "$n" in sq|sq2|picked|stack) verdict=would-remove ;; hunk) [[ $hunks == yes ]] && verdict=would-remove ;; esac
+    if [[ "$verdict" == keep ]]; then want="keep $n ("; else want="would remove $n ("; fi
+    assert_has "prune's verdict on $n" "$dry" "$want"
+  done
+  # …and the reasons say what was checked, not just that it failed
+  assert_has "past: a commit past the squash" "$dry" \
+    "keep past (2 commit(s) on wt/past not merged into origin/main and not on a remote (merging wt/past into origin/main would still change 1 path(s)))"
+  assert_has "rev: a partial revert" "$dry" \
+    "keep rev (2 commit(s) on wt/rev not merged into origin/main and not on a remote (merging wt/rev into origin/main would still change 1 path(s)))"
+  assert_has "conf: the base edited the same lines" "$dry" "not on a remote (merging wt/conf into origin/main would"
+  assert_has "zero: nothing to show" "$dry" "(the net change of wt/zero since"
+
+  # the real prune removes exactly the landed ones, branches included
+  assert_wt_ok "wt prune" prune -r "$r"
+  for n in sq sq2 picked stack; do
+    assert_gone "prune removed $n" "$r/.worktrees/$n"
+    assert_branch "$r" "wt/$n" no
+  done
+  if [[ $hunks == yes ]]; then assert_gone "prune removed hunk (hunk-level merge)" "$r/.worktrees/hunk"
+  else assert_dir "prune kept hunk (file-level merge)" "$r/.worktrees/hunk"; fi
+  for n in past rev conf zero; do assert_dir "prune kept $n" "$r/.worktrees/$n"; done
+
+  # --discard-commits waives the commit reason and nothing else: a dirty tree still refuses, without a word
+  # about commits, and once the tree is clean the worktree and the branch go
+  printf 'unsaved\n' >"$r/.worktrees/past/scratch.txt"
+  assert_wt_fails 3 "1 uncommitted change(s)" rm past -r "$r" --discard-commits
+  assert_lacks "…and the waived reason is not among them" "$WT_OUT" "commit(s) on wt/past"
+  assert_dir "…and the worktree stays" "$r/.worktrees/past"
+  guard_scratch_root "$r/.worktrees/past"; rm -f "$r/.worktrees/past/scratch.txt"
+  assert_wt_ok "wt rm past --discard-commits" rm past -r "$r" --discard-commits
+  assert_gone "…removed the worktree" "$r/.worktrees/past"
+  assert_branch "$r" wt/past no
+  # the plain refusal carries the same check, and its hint names the narrower flag
+  refuses "$r" rev "2 commit(s) on wt/rev not merged into origin/main and not on a remote (merging wt/rev into origin/main would still change 1 path(s))"
+  assert_has "…and the hint names --discard-commits" "$WT_OUT" "--discard-commits waives only the commit reason"
+  forced "$r" rev
+  refuses "$r" zero "is empty, which proves nothing"
+  forced "$r" zero
+  refuses "$r" conf "(merging wt/conf into origin/main would"
+  forced "$r" conf
+
+  # older git: a `git` that says it is 2.34 and hands everything else to the real one drives the file-level
+  # fallback, which lands a plain squash and refuses one whose file the base edited again, hunks or not
+  shim="$TEST_ROOT/oldgit"; mkdir -p "$shim"
+  # shellcheck disable=SC2016   # the $1 and $@ are for the shim's own sh to expand
+  printf '#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.34.1"; exit 0; fi\nexec %s "$@"\n' \
+         "$(command -v git)" >"$shim/git"
+  chmod +x "$shim/git"
+  assert_wt_ok "wt new old1" new old1 --no-workspace -r "$r"
+  assert_wt_ok "wt new old2" new old2 --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/old1" eleven.txt 'eleven'
+  fixture_git "$r/.worktrees/old1" push -q -u origin wt/old1
+  land_squash "$e" wt/old1 'old1 (#8)'
+  set_line "$r/.worktrees/old2/lines.txt" 2 'l2 by old2'
+  fixture_git "$r/.worktrees/old2" commit -q -am old2
+  fixture_git "$r/.worktrees/old2" push -q -u origin wt/old2
+  land_squash "$e" wt/old2 'old2 (#9)'
+  set_line "$e/lines.txt" 9 'l9 by the editor'
+  fixture_git "$e" commit -q -am 'editor: line 9'
+  fixture_git "$e" push -q origin main
+  WT_PATH_PREFIX="$shim"
+  assert_wt_ok "wt rm old1 under git 2.34" rm old1 -r "$r"
+  assert_gone "…removed the worktree" "$r/.worktrees/old1"
+  assert_branch "$r" wt/old1 no
+  refuses "$r" old2 "(merging wt/old2 into origin/main would touch a file origin/main changed since (git 2.34.1 compares whole files; 2.38 compares hunks))"
+  WT_PATH_PREFIX=""
+  if [[ $hunks == yes ]]; then    # the real git, hunk by hunk, sees old2's line 2 in the base
+    assert_wt_ok "wt rm old2 under the real git" rm old2 -r "$r"
+    assert_gone "…removed the worktree" "$r/.worktrees/old2"
+  else forced "$r" old2; fi
+
+  # a remote that cannot be reached: the offline verdict stands, and the refusal says the base is as last fetched
+  assert_wt_ok "wt new off" new off --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/off" twelve.txt 'twelve'
+  fixture_git "$r" remote set-url origin "$TEST_ROOT/no-such-origin.git"
+  refuses "$r" off "(merging wt/off into origin/main would still change 1 path(s); origin/main could not be refreshed from its remote)"
+  fixture_git "$r" remote set-url origin "$TEST_ROOT/origins/$(basename "$r").git"
+  end_scenario
+}
+
 # 7. rm_reasons has two callers and bin/wt's comment says "the two can never disagree". Nothing checked it.
 scenario_prune_agrees() {
   begin_scenario "7. wt prune --dry-run keeps exactly what wt rm refuses"
@@ -1033,7 +1257,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=237
+FIXED_ASSERTIONS=314
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
@@ -1056,6 +1280,7 @@ main() {
   scenario_list_show_path
   scenario_include_and_setup
   scenario_rm_refusals
+  scenario_squash_merge
   scenario_prune_agrees
   scenario_cmux
   scenario_host_args

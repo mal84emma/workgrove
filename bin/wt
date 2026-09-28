@@ -16,11 +16,16 @@
 #   wt attach <name> [-a AGENT] [-p TEXT] [-r PATH]           open a cmux row for an existing worktree
 #   wt sync <name> [--merge]                                  rebase (default) or merge the worktree branch onto its base
 #   wt pr <name> [--draft]                                    push the branch and open a GitHub PR (gh)
-#   wt rm <name> [--force] [--keep-branch]                    remove a worktree; refuses to destroy work — commits on
-#                                                             the branch that are neither merged nor still on a remote,
-#                                                             a HEAD that is not that branch, an edited or newly created
-#                                                             .wt-include file — unless --force
-#   wt prune [--dry-run]                                      remove worktrees whose branch is merged and tree is clean
+#   wt rm <name> [--force] [--keep-branch] [--discard-commits]
+#                                                             remove a worktree; refuses to destroy work — uncommitted
+#                                                             changes, commits on the branch that are neither merged
+#                                                             (as ancestors, or as a squash merge whose changes are all
+#                                                             in the base) nor still on a remote, a HEAD that is not
+#                                                             that branch, an edited or newly created .wt-include file
+#                                                             — unless --force; --discard-commits waives the commit
+#                                                             reason alone (a squash the base later edited or reverted)
+#   wt prune [--dry-run]                                      remove worktrees whose branch is merged (either way) and
+#                                                             tree is clean
 #   wt repos [<name>] [--porcelain|--table]                   every git repo in $WT_REPOS_DIR: on a terminal a table of
 #                                                             name, task count and location; piped, "<name><tab><path>"
 #                                                             per repo. Given a name or path, just that repo's path
@@ -496,6 +501,112 @@ branch_pushed() { # branch_pushed <branch> — 0 only when the remote still has 
     git -C "$REPO" ls-remote --exit-code --heads "$remote" "refs/heads/$b" >/dev/null 2>&1
 }
 
+git_merges_trees() { # 0 when this git has `merge-tree --write-tree` (2.38, September 2022). Ubuntu 22.04's
+                     # apt git is 2.34, so a VM can be on either side; the answer is cached for the process.
+  if [[ -z "${WT_MERGE_TREE:-}" ]]; then
+    local v maj min; v=$(git version 2>/dev/null | awk '{print $3}'); maj="${v%%.*}"; min="${v#*.}"; min="${min%%.*}"
+    WT_MERGE_TREE=0
+    if [[ "$maj" =~ ^[0-9]+$ && "$min" =~ ^[0-9]+$ ]] && { [[ $maj -gt 2 ]] || [[ $maj -eq 2 && $min -ge 38 ]]; }; then
+      WT_MERGE_TREE=1
+    fi
+  fi
+  [[ $WT_MERGE_TREE -eq 1 ]]
+}
+
+LANDED_WHY=""      # set by branch_landed when it says no: what it checked, for the refusal to repeat
+branch_landed() { # branch_landed <branch> <base> — 0 when every change the branch made since it left the
+                  # base is already in the base's tip, the shape a squash merge leaves behind.
+  # A PR merged with GitHub's "squash and merge" (the default on most repos) lands as ONE new commit on
+  # main whose tree is the merge's tree, and the head branch is deleted. Nothing on wt/<name> is then an
+  # ancestor of anything, branch_pushed finds the remote branch gone, and the only way past `wt rm` was
+  # --force, which also waives the dirty-tree and .wt-include checks — for a worktree that had, in fact,
+  # nothing left to lose. This is the check that tells that worktree apart from one that really does.
+  #
+  # What it asks git is exact, not a heuristic: would merging the branch into the base's tip change
+  # anything? A three-way merge takes, for every region of every file, the base's side where only the base
+  # changed it, the branch's side where only the branch changed it, and either where both made the same
+  # change. So the merged tree equals the base's tree precisely when every change the branch made is
+  # already there — landed by a squash, a rebase-merge, a cherry-pick into another branch that then merged,
+  # or by hand, it does not matter how. What is NOT taken as landed: a change the base later undid (the
+  # merge would put it back, so the tree differs: a squash later reverted, in whole or in part), a change
+  # the base later edited again on the same lines (the merge conflicts), a commit whose change is not in
+  # the base at all (a commit pushed after the PR merged, or never merged). Each of those is a refusal, and
+  # the refusal says which. A branch whose net change is empty — a commit undone by a later one on the
+  # same branch — passes the merge trivially and proves nothing, so it is refused too, as it always was.
+  #
+  # `git merge-tree --write-tree` (2.38+) does the merge in memory, hunk by hunk, without touching any
+  # index or working tree, and exits 1 with conflicts. Older git gets `read-tree -m` into a throwaway
+  # index, which merges file by file: a file both sides changed is unmerged whatever the hunks say, and
+  # `write-tree` refuses an unmerged index, which reads here as not landed. Stricter, and safe in the
+  # same direction: a merge that would change nothing is the only thing either path ever calls landed.
+  local b="$1" base="$2" m tree_b tree_t="" out rc=0 n idx
+  LANDED_WHY=""
+  m=$(git -C "$REPO" merge-base "$b" "$base" 2>/dev/null) || { LANDED_WHY="$b has no common history with $base"; return 1; }
+  if git -C "$REPO" diff-tree --quiet "$m" "$b" 2>/dev/null; then
+    LANDED_WHY="the net change of $b since $(git -C "$REPO" rev-parse --short "$m") is empty, which proves nothing"; return 1
+  fi
+  tree_b=$(git -C "$REPO" rev-parse "$base^{tree}" 2>/dev/null) || { LANDED_WHY="$base has no tree"; return 1; }
+  if git_merges_trees; then
+    out=$(git -C "$REPO" merge-tree --write-tree "$base" "$b" 2>/dev/null) || rc=$?
+    case $rc in
+      0) tree_t="${out%%$'\n'*}" ;;
+      1) LANDED_WHY="merging $b into $base would conflict: $base changed the same lines again"; return 1 ;;
+      *) LANDED_WHY="git merge-tree could not compare $b with $base"; return 1 ;;
+    esac
+  else
+    # read-tree refuses an index file that is empty, so hand it a name that does not exist yet
+    idx=$(mktemp "${TMPDIR:-/tmp}/wt-index.XXXXXX") || { LANDED_WHY="no temp file for a merge index"; return 1; }
+    WT_TMPFILES+=("$idx"); rm -f "$idx"
+    if GIT_INDEX_FILE="$idx" git -C "$REPO" read-tree -m -i --aggressive "$m" "$base" "$b" >/dev/null 2>&1; then
+      tree_t=$(GIT_INDEX_FILE="$idx" git -C "$REPO" write-tree 2>/dev/null) || tree_t=""
+    fi
+    rm -f "$idx"
+    if [[ -z "$tree_t" ]]; then
+      LANDED_WHY="merging $b into $base would touch a file $base changed since (git $(git version | awk '{print $3}') compares whole files; 2.38 compares hunks)"
+      return 1
+    fi
+  fi
+  [[ "$tree_t" == "$tree_b" ]] && return 0
+  n=$(git -C "$REPO" diff-tree -r --name-only "$tree_b" "$tree_t" 2>/dev/null | wc -l | tr -d ' ')
+  LANDED_WHY="merging $b into $base would still change $n path(s)"
+  return 1
+}
+
+WT_FETCHED="${TMPDIR:-/tmp}/wt-fetched.$$"   # which bases fetch_base has tried this run; see there
+fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as origin/main. 0 when it was,
+               # 1 when the fetch failed (now, or earlier this run), 2 when the base is not a remote's branch
+               # and there was nothing to do, 3 when it was already refreshed this run.
+  # A squash merge lands on GitHub, and the next thing typed is `wt rm`: origin/main here is whatever the
+  # last fetch left, which is from before the merge, and branch_landed compares against that. So when the
+  # offline checks say no and the base is a remote's branch, fetch that one branch and ask again. Offline
+  # this fails quietly — the same 5-second ceiling branch_pushed already accepts — and the offline verdict
+  # stands, with the refusal saying the base could not be refreshed. A local base (`main`) is never fetched.
+  # Once per run: `wt prune` asks rm_reasons about every worktree, and asks again through cmd_rm for the
+  # ones it removes, each time in a command substitution — a subshell, whose variables never reach back.
+  # So the record of what was fetched is a file, named after this process and removed on exit; cmd_rm and
+  # cmd_prune clear it before their first question, so a file a killed run left behind cannot answer.
+  local base="$1" remote
+  [[ "$base" == */* ]] || return 2
+  remote="${base%%/*}"
+  git -C "$REPO" remote 2>/dev/null | grep -qxF "$remote" || return 2
+  if [[ -f "$WT_FETCHED" ]]; then
+    grep -qxF "ok $base" "$WT_FETCHED" && return 3
+    grep -qxF "failed $base" "$WT_FETCHED" && return 1
+  fi
+  warn "fetching $base from $remote to see whether the branch landed (ctrl-c and use --force if it hangs)"
+  if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}" \
+       git -C "$REPO" fetch -q "$remote" "${base#*/}" >/dev/null 2>&1; then
+    printf 'ok %s\n' "$base" >>"$WT_FETCHED"; return 0
+  fi
+  printf 'failed %s\n' "$base" >>"$WT_FETCHED"; return 1
+}
+
+reset_fetched() { # start the run's record of fetched bases afresh; the first of cmd_rm and cmd_prune to run does it
+  if [[ $WT_FETCHED_RESET -eq 0 ]]; then rm -f "$WT_FETCHED"; WT_TMPFILES+=("$WT_FETCHED"); WT_FETCHED_RESET=1; fi
+}
+WT_FETCHED_RESET=0
+
+RM_DISCARD_COMMITS=0   # `wt rm --discard-commits`: waive the unmerged-commit reason, and only that one
 rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this worktree would destroy work,
                # one reason per line; nothing at all when there is nothing to lose. `wt rm` and `wt prune`
                # (dry run included) both read this, so the two can never disagree.
@@ -503,7 +614,7 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
   # or `--detach` the HEAD is usually an ancestor of the base, so a HEAD-based check reads "clean, 0 ahead,
   # merged" while `branch -D` still destroys every commit the branch holds, its reflog with it. $B resolves
   # whether or not it is checked out; refs are shared with the main checkout, so ask $REPO about it.
-  local n="$1" p="$2" b="$3" base="$4" dirty ahead=0 merged=0 base_ok=0 head_ref f
+  local n="$1" p="$2" b="$3" base="$4" dirty ahead=0 merged=0 base_ok=0 head_ref f why="" rc
   dirty=$(unexplained_dirt "$n" "$p" | wc -l | tr -d ' ')      # what .wt-setup itself wrote is not a reason
   [[ "$dirty" -gt 0 ]] && printf '%s uncommitted change(s)\n' "$dirty"
   # a base that no longer resolves fails both checks below, and each failure reads as "nothing to lose"; the
@@ -511,12 +622,27 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
   # worktree's own tip and reads the same way. So settle the base first and let either case be a refusal.
   if [[ "$base" != HEAD ]] && git -C "$REPO" rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1; then
     base_ok=1
-    git -C "$REPO" merge-base --is-ancestor "$b" "$base" 2>/dev/null && merged=1
+    # merged is either of two things: the branch is an ancestor of the base (a merge commit, a fast-forward),
+    # or its work is all in the base's tip without the commits being there (a squash merge; see
+    # branch_landed). The second is asked offline first, then once more after refreshing a remote base, in
+    # case the merge is newer than the last fetch. With --discard-commits neither is asked: the reason is
+    # waived whatever the answer, and there is nothing to go online for.
+    if git -C "$REPO" merge-base --is-ancestor "$b" "$base" 2>/dev/null; then merged=1
+    elif [[ $RM_DISCARD_COMMITS -eq 1 ]]; then merged=0
+    elif branch_landed "$b" "$base"; then merged=1
+    else
+      why=" ($LANDED_WHY)"
+      fetch_base "$base" && rc=0 || rc=$?
+      if [[ $rc -eq 0 ]]; then
+        if branch_landed "$b" "$base"; then merged=1; else why=" ($LANDED_WHY)"; fi
+      elif [[ $rc -eq 1 ]]; then why=" ($LANDED_WHY; $base could not be refreshed from its remote)"
+      fi
+    fi
     ahead=$(git -C "$REPO" rev-list --count "$base..$b" 2>/dev/null || echo 0)
   fi
   [[ $base_ok -eq 1 ]] || printf "base '%s' cannot be compared with %s (gone, or the literal HEAD)\n" "$base" "$b"
-  if [[ "$ahead" -gt 0 && $merged -eq 0 ]] && ! branch_pushed "$b"; then
-    printf '%s commit(s) on %s not merged into %s and not on a remote\n' "$ahead" "$b" "$base"
+  if [[ "$ahead" -gt 0 && $merged -eq 0 && $RM_DISCARD_COMMITS -eq 0 ]] && ! branch_pushed "$b"; then
+    printf '%s commit(s) on %s not merged into %s and not on a remote%s\n' "$ahead" "$b" "$base" "$why"
   fi
   # the checks above are about $b, so a HEAD that is not $b is its own reason: the worktree holds a state
   # (a bisect, a detached checkout) that removing it throws away, and that no branch is keeping
@@ -812,12 +938,13 @@ cmd_pr() {
 
 cmd_rm() {
   local name="" force=0 keep=0 repo=""
-  while [[ $# -gt 0 ]]; do case "$1" in --force|-f) force=1;; --keep-branch) keep=1;; -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "rm: unknown option $1";; *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1";; esac; shift; done
+  while [[ $# -gt 0 ]]; do case "$1" in --force|-f) force=1;; --keep-branch) keep=1;; --discard-commits) RM_DISCARD_COMMITS=1;; -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "rm: unknown option $1";; *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "rm: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
   local here there; here=$(pwd -P); there=$(cd "$P" 2>/dev/null && pwd -P) || there="$P"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
   local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  reset_fetched
   if [[ $force -eq 0 ]]; then
     local reasons=() r
     while IFS= read -r r; do
@@ -826,6 +953,7 @@ cmd_rm() {
     if [[ ${#reasons[@]} -gt 0 ]]; then
       printf 'wt: refusing to remove %s: %s\n' "$name" "$(IFS=';'; echo "${reasons[*]}")" >&2
       printf 'wt: inspect with: wt show %s — then push/merge, check the branch out again or copy the file back, or re-run with --force to discard.\n' "$name" >&2
+      case "${reasons[*]}" in *' not merged into '*) printf 'wt: --discard-commits waives only the commit reason (a squash merge the base later edited or reverted); the other checks stay.\n' >&2 ;; esac
       exit 3
     fi
   fi
@@ -836,10 +964,15 @@ cmd_rm() {
     git -C "$REPO" worktree prune          # the directory went away outside wt; drop the registration
   fi
   if [[ $keep -eq 0 ]]; then
-    # branch -d, so git's own merged-check is the last line of defence behind the reasons above; --force
-    # stays the one deliberate way to discard commits, and otherwise the branch is kept and said to be kept
+    # branch -d, so git's own merged-check is the last line of defence behind the reasons above; --force and
+    # --discard-commits are the deliberate ways to discard commits, and otherwise the branch is kept and
+    # said to be kept. One more case gets -D: git's -d knows nothing of squash merges, so a branch whose
+    # work branch_landed found in the base is one git declines to delete (unless a stale remote-tracking
+    # ref still equals it, which -d takes as merged upstream). The reasons above already let the worktree
+    # go on exactly that finding, and the base is where the check was made, so the branch goes with it.
     if ! git -C "$REPO" branch -d "$B" >/dev/null 2>&1; then
-      if [[ $force -eq 1 ]]; then git -C "$REPO" branch -D "$B" >/dev/null 2>&1 || true
+      if [[ $force -eq 1 || $RM_DISCARD_COMMITS -eq 1 ]] || { [[ "$base" != HEAD ]] && branch_landed "$B" "$base"; }; then
+        git -C "$REPO" branch -D "$B" >/dev/null 2>&1 || true
       else keep=1; warn "kept branch $B: git will not delete it as merged (git -C $REPO branch -D $B discards it)"; fi
     fi
   fi
@@ -855,6 +988,7 @@ cmd_prune() {
   while [[ $# -gt 0 ]]; do case "$1" in --dry-run|-n) dry=1;; -r|--repo) [[ $# -ge 2 ]] || die "prune: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; *) die "prune: unknown option $1";; esac; shift; done
   resolve_repo "$repo"
   local names n p base why
+  reset_fetched           # one fetch per base for the whole run, cmd_rm's questions included; see fetch_base
   names=$(list_names)     # before `git worktree prune`: a directory deleted by hand would otherwise lose its
                           # registration here and never be examined, leaving its branch and metadata forever
   while IFS= read -r n; do
