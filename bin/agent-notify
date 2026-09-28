@@ -18,17 +18,18 @@ quiet_seconds=${AGENT_NOTIFY_MIN_SECONDS:-180}   # a turn shorter than this fini
 
 case $event in
   UserPromptSubmit)
-    [[ -n $session ]] || exit 0
-    (umask 077; mkdir -p "$stamps") 2>/dev/null || exit 0          # 700; no stamp dir just means no quiet gate
-    chmod 700 "$stamps" 2>/dev/null ||                             # and 700 even if something else made it,
-      echo "agent-notify: cannot chmod 700 $stamps; it is not ours, so the stamps in it are not either" >&2
-    find "$stamps" -type f -mtime +2 -delete 2>/dev/null || true   # a session that never ends leaves its stamp
-    date +%s > "$stamps/$session"
-    exit 0 ;;
+    if [[ -n $session ]] && (umask 077; mkdir -p "$stamps") 2>/dev/null; then
+      chmod 700 "$stamps" 2>/dev/null ||
+        echo "agent-notify: cannot chmod 700 $stamps; it is not ours, so the stamps in it are not either" >&2
+      find "$stamps" -type f -mtime +2 -delete 2>/dev/null || true
+      date +%s > "$stamps/$session"
+    fi
+    status=running; status_only=1 ;;
   SessionEnd)
     [[ -n $session ]] && rm -f "$stamps/$session"
-    exit 0 ;;
-  Stop) body="finished"; sound=Funk ;;
+    status=clear; status_only=1 ;;
+  Stop) body="finished"; sound=Funk; status=idle ;;
+  Interrupt) status=idle; status_only=1 ;;
   PermissionRequest) body="needs approval"; sound=Glass ;;
   Notification) body=$(printf '%s' "$payload" | jq -r '.message // "needs input"' 2>/dev/null || echo "needs input"); sound=Glass ;;
   *) body="needs attention"; sound=Glass ;;
@@ -87,10 +88,23 @@ short_turn() {
 }
 
 if [[ $socket == *:[0-9]* ]]; then
+  # cmux 0.64's SSH relay accepts notifications but has no sidebar or agent lifecycle method. The Mac-side
+  # cmux-hook turns this private control notification into the same status pill local agent hooks show.
+  # It verifies that cmux assigned the notification to a row on WT_HOST before changing that row.
+  case $title in 'Claude Code') agent=claude ;; Codex) agent=codex ;; *) agent= ;; esac
+  if [[ -n ${status:-} && -n $agent && -n ${WT_HOST:-} ]]; then
+    control=$(jq -nc --arg host "$WT_HOST" --arg agent "$agent" --arg state "$status" \
+      '{host:$host,agent:$agent,state:$state}')
+    env -u CMUX_SOCKET "${ident[@]+"${ident[@]}"}" "${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}" notify \
+      ${ws:+--workspace "$ws"} --title wt-agent-status --body "$control" >/dev/null 2>&1 ||
+      echo 'agent-notify: status relay failed; close and reopen this cmux row (wt -H <host> attach …)' >&2
+  fi
+  [[ -n ${status_only:-} ]] && exit 0
   env -u CMUX_SOCKET "${ident[@]+"${ident[@]}"}" "${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}" notify \
     ${ws:+--workspace "$ws"} --title "$title" --body "$body" >/dev/null 2>&1 ||
     echo 'agent-notify: relay failed; close and reopen this cmux row (wt -H <host> attach …)' >&2
 elif [[ -z ${CMUX_SURFACE_ID:-} && $(uname -s) == Darwin ]]; then
+  [[ -n ${status_only:-} ]] && exit 0
   # A row in the sidebar is passive and costs nothing, but a banner interrupts, so only this path is gated.
   if [[ $event == Stop ]] && short_turn; then
     exit 0

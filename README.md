@@ -52,7 +52,7 @@ workgrove/
 ├── bin/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
 │   ├── agent-notify           agent lifecycle hook, relays to cmux or posts a banner
-│   ├── cmux-hook              Mac-side cmux notification hook: remote wt open / wt attach
+│   ├── cmux-hook              Mac-side cmux notification hook: remote row requests and agent status
 │   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 ├── home/
 │   ├── .zshenv .gitignore_global   always installed; .zshrc .gitconfig .tmux.conf are opt-in
@@ -396,10 +396,15 @@ interactive `wt attach`, `wt task` and `wt driver`, which belong to your own ses
 - **Notifications.** On the Mac, cmux tracks Claude rows itself, and `cmux hooks codex install --yes` merges
   its generated Codex lifecycle handlers into `~/.codex/hooks.json` so a Codex row goes from `running` to
   `idle` when a turn ends. The portable hooks in `settings.base.json` and `hooks.base.json` call
-  `bin/agent-notify`, which is a no-op inside a local cmux pane, relays over the cmux socket from a VM pane so
-  the right row lights up on the Mac, and otherwise posts a desktop banner on a Mac. `bin/cmux-hook` is the Mac side of
-  that relay: it runs for every cmux notification, ignores everything except a relayed `wt-open` or
-  `wt-attach`, and then opens the remote folder in VS Code or creates the row for the new VM task.
+  `bin/agent-notify`, which leaves local cmux lifecycle tracking to cmux, relays over the cmux socket from a
+  VM pane, and otherwise posts a desktop banner on a Mac. On a VM, prompt submission, completion,
+  interruption, and session end also send a private `wt-agent-status` notification. `bin/cmux-hook`
+  checks that cmux assigned it to a row connected to the named host, then sets that row's `vm-claude` or
+  `vm-codex` status to Running or Idle, or clears it. cmux 0.64's remote CLI has no sidebar
+  status method or agent lifecycle relay, and cmux clears its reserved `claude`/`codex` status keys when an
+  SSH pane has no local agent process; the VM-specific keys avoid that cleanup. The control notification is
+  hidden from history and banners. The same Mac hook handles `wt-open` and `wt-attach`, opening the remote
+  folder in VS Code or creating the row for the new VM task.
 - Codex runs with `approvals_reviewer = "auto_review"`, so sandbox escalations are approved automatically and
   a Codex row rarely shows a needs-input state. Expect it only when Codex really does prompt.
 - VM rows are bash with cmux's shell integration, not zsh, which is why `install.sh` gives `~/.bashrc` a first
@@ -480,7 +485,8 @@ own machine.
 
 - **The hooks run scripts from this repo on every turn.** `settings.base.json` wires five Claude events
   (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `SessionEnd`) to `agent-notify`, and
-  `cmux.json` hands cmux `~/.local/bin/cmux-hook` as a notification hook. Both are symlinks into this repo's
+  `hooks.base.json` wires Codex's prompt, permission, completion, interruption, and session-end events.
+  `cmux.json` hands cmux `~/.local/bin/cmux-hook` as a notification hook. Both scripts are symlinks into this repo's
   `bin/`, and both run as you. So `wt update` is a code-execution event rather than a data update: pulling
   changes the scripts that then run by themselves, with nothing to restart. That is why `wt update` prints
   the incoming commits and a diffstat and asks before it fast-forwards and re-runs `install.sh`, and why it
