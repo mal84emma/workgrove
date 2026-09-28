@@ -86,6 +86,12 @@ shell_join() { local out="" a; for a in "$@"; do printf -v a '%q' "$a"; out="${o
 # inside command strings sent to a VM, where they belong to that shell and not to this one.
 WT_TMPFILES=()
 wt_cleanup() {
+  if [[ -n ${WT_STATUS_FILE:-} ]]; then
+    [[ -n ${WT_STATUS_HEARTBEAT_PID:-} ]] && kill "$WT_STATUS_HEARTBEAT_PID" 2>/dev/null || true
+    rm -f "$WT_STATUS_FILE"
+    printf '{"hook_event_name":"SessionEnd"}\n' | WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE="$WT_STATUS_SOURCE" agent-notify || true
+    WT_STATUS_FILE=''
+  fi
   if [[ ${#WT_TMPFILES[@]} -gt 0 ]]; then
     rm -f "${WT_TMPFILES[@]}"          # already moved into place: rm -f on a gone path is a no-op
   fi
@@ -847,7 +853,22 @@ cmd_run() { # run the worktree's agent here; cmux types this into the row's shel
     args=(-- "$brief")                           # codex always restarts from the brief
   fi
   : > "$(wt_started "$name")"
+  if is_remote && [[ ${WT_STATUS_BRIDGE:-} == 1 && -n ${TMUX:-} && ${CMUX_SOCKET_PATH:-} == *:[0-9]* ]]; then
+    WT_STATUS_OWNER_PID=$$ WT_STATUS_OWNER_PANE=${TMUX_PANE:-}
+    WT_STATUS_SOURCE=$([[ $agent == claude ]] && echo 'Claude Code' || echo Codex)
+    WT_STATUS_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/wt-agent-status/$(wt_session "$name" "$REPO")"
+    (umask 077; mkdir -p "${WT_STATUS_FILE%/*}")
+    rm -f "$WT_STATUS_FILE"
+    export WT_STATUS_OWNER_PID WT_STATUS_OWNER_PANE WT_STATUS_FILE
+    ( while kill -0 "$WT_STATUS_OWNER_PID" 2>/dev/null; do
+        sleep 45
+        kill -0 "$WT_STATUS_OWNER_PID" 2>/dev/null || break
+        [[ -r $WT_STATUS_FILE ]] && WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE="$WT_STATUS_SOURCE" agent-notify </dev/null || true
+      done ) >/dev/null 2>&1 &
+    WT_STATUS_HEARTBEAT_PID=$!
+  fi
   "$agent" "${extra[@]+"${extra[@]}"}" "${args[@]+"${args[@]}"}" || rc=$?
+  [[ -n ${WT_STATUS_FILE:-} ]] && wt_cleanup
   [[ $rc -eq 0 ]] || warn "$agent exited with status $rc"
   return 0
 }
@@ -1134,7 +1155,17 @@ remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the 
 }
 remote_wt_tty() { local host="$1"; shift; remote_sh_tty "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
 # shellcheck disable=SC2016   # $HOME must reach the VM unexpanded
-remote_run_cmd() { printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"; }
+status_bridge_ready() {
+  [[ -f $HOME/.local/bin/cmux-hook ]] && grep -qF 'CMUX_NOTIFICATION_SUBTITLE' "$HOME/.local/bin/cmux-hook" &&
+    jq -e 'any(.notifications.hooks[]?; .id == "wt" and .command == "~/.local/bin/cmux-hook")' \
+      "$HOME/.config/cmux/cmux.json" >/dev/null 2>&1 &&
+    CMUX_QUIET=1 "$(cmux_bin)" reload-config >/dev/null 2>&1
+}
+remote_run_cmd() {
+  status_bridge_ready && printf 'WT_STATUS_BRIDGE=1 '
+  # shellcheck disable=SC2016  # $HOME belongs to the VM shell, not this Mac
+  printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"
+}
 
 tag_row() { # tag_row <workspace ref or ""> <title> <host> — write the row's description
   local ref="$1"
