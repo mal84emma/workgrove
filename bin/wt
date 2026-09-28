@@ -1047,25 +1047,62 @@ need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer
   die "$sub: -r <repo> is required with -H (wt -H $host repos lists them)"
 }
 
+host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
+  local host="$1" repo="$2" agent="$3" cmd
+  # shellcheck disable=SC2016   # $HOME and $PATH must expand on the VM
+  cmd='PATH="$HOME/.local/bin:$PATH"; export PATH;'
+  # shellcheck disable=SC2016
+  cmd+=' test -x "$HOME/.local/bin/wt" || { echo "remote wt is missing" >&2; exit 1; };'
+  if [[ -n "$repo" ]]; then
+    cmd+=" \"\$HOME/.local/bin/wt\" repos $(shell_join "$repo") >/dev/null || exit 1;"
+  fi
+  cmd+=' command -v tmux >/dev/null 2>&1 || { echo "remote tmux is missing" >&2; exit 1; };'
+  cmd+=" agent=$(shell_join "$agent");"
+  # shellcheck disable=SC2016   # $agent and $WT_AGENT must expand on the VM
+  cmd+=' [ -n "$agent" ] || agent=${WT_AGENT:-claude};'
+  # shellcheck disable=SC2016
+  cmd+=' case "$agent" in none) ;; claude|codex) command -v "$agent" >/dev/null 2>&1 || { echo "remote agent is missing: $agent" >&2; exit 1; } ;; *) echo "invalid remote agent: $agent" >&2; exit 1 ;; esac'
+  remote_sh "$host" "$cmd"
+}
+
 host_new() { # create the worktree on the VM, then the cmux row here
-  local host="$1" prompt="" args=(); shift
+  local host="$1" prompt="" repo_request="" requested_agent="" inspect="" args=(); shift
   # both ways of giving a brief are consumed HERE and relayed the same way: forwarding --prompt-stdin to the
   # VM instead would read nothing locally and pipe an empty prompt into ssh, creating the task with no brief
   while [[ $# -gt 0 ]]; do case "$1" in
     -p|--prompt) [[ $# -ge 2 ]] || die "new: $1 needs a brief"; prompt="$2"; shift 2 ;;
     --prompt-stdin) IFS= read -r -d '' prompt || true; shift ;;
+    -r|--repo) [[ $# -ge 2 ]] || die "new: $1 needs a repo"; repo_request="$2"; args+=("$1" "$2"); shift 2 ;;
+    -a|--agent) [[ $# -ge 2 ]] || die "new: $1 needs an agent"; requested_agent="$2"; valid_agent "$requested_agent"; args+=("$1" "$2"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) args+=("$1"); shift ;;
   esac; done
-  local out name repo session
-  out=$(printf '%s' "$prompt" | remote_wt "$host" new "${args[@]+"${args[@]}"}" --no-workspace --prompt-stdin)
+  cmux_ok || die "cmux is not running; start cmux before creating a task on $host"
+  host_new_preflight "$host" "$repo_request" "$requested_agent"
+  inspect="wt -H $host list"
+  [[ -z "$repo_request" ]] || inspect+=" -r $(shell_join "$repo_request")"
+  local out name repo session rc
+  if out=$(printf '%s' "$prompt" | remote_wt "$host" new "${args[@]+"${args[@]}"}" --no-workspace --prompt-stdin); then
+    :
+  else
+    rc=$?
+    warn "could not confirm whether a worktree was created on $host; inspect with: $inspect"
+    warn "a disconnected create may still be finishing; recheck before starting the same task elsewhere"
+    return "$rc"
+  fi
   printf '%s\n' "$out"
   name=$(printf '%s\n' "$out" | sed -n 's/^created //p' | head -1)
   repo=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
   session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
-  [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session (try: wt -H $host list)"
+  [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session; inspect with: $inspect before retrying"
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$repo")" ]] || die "unexpected output from $host"
-  remote_row "$host" "$session" "$(row_title "$name" "$repo")" "$(remote_run_cmd "$name" "$repo")" --no-focus
+  if ! (remote_row "$host" "$session" "$(row_title "$name" "$repo")" "$(remote_run_cmd "$name" "$repo")" --no-focus); then
+    warn "the worktree was created on $host; do not run new again"
+    warn "inspect: wt -H $host show -r $(shell_join "$repo") $(shell_join "$name")"
+    warn "if an agent is running: wt -H $host attach -r $(shell_join "$repo") $(shell_join "$name")"
+    warn "if no agent pane exists: wt -H $host attach --restart-agent -r $(shell_join "$repo") $(shell_join "$name")"
+    return 1
+  fi
 }
 
 agent_on_vm() { # agent_on_vm <host> <session> — 0 when claude or codex holds a pane tty of that tmux session;
@@ -1174,7 +1211,7 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
 }
 
 cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac caches nothing about VMs
-  local host="$1" sub="${2:-}" args=() v; shift 2
+  local host="$1" sub="${2:-}" args=() v scoped=0; shift 2
   valid_host "$host" || die "invalid host '$host' (an ssh alias: letters, digits, '.', '_' and '-')"
   while [[ $# -gt 0 ]]; do   # normalise -r once: a trailing '/' would change repo_id, and so the identity
     case "$1" in
@@ -1192,7 +1229,9 @@ cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac c
     attach)    need_r "$host" "$sub" "$@"; host_attach "$host" "$@" ;;
     open)      need_r "$host" "$sub" "$@"; host_open "$host" "$@" ;;
     rm)        need_r "$host" "$sub" "$@"; host_rm "$host" "$@" ;;
-    list)      remote_wt "$host" list --all "$@" ;;
+    list)      for v in "$@"; do case "$v" in -r|--repo) scoped=1 ;; esac; done
+               if [[ $scoped -eq 1 ]]; then remote_wt "$host" list "$@"
+               else remote_wt "$host" list --all "$@"; fi ;;
     show|path) need_r "$host" "$sub" "$@"; remote_wt "$host" "$sub" "$@" ;;
     repos)     if [[ -t 1 ]]; then case " $* " in *" --porcelain "*|*" --table "*) ;; *) set -- "$@" --table ;; esac; fi
                remote_wt "$host" repos "$@" ;;     # ssh gives the VM no terminal, so ask for the table explicitly

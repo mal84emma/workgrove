@@ -72,7 +72,8 @@ workgrove/
 │   ├── lib.sh                 the assertion vocabulary both suites speak
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
-│   └── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
+│   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
+│   └── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
 └── docs/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
@@ -200,6 +201,9 @@ cmux.
 `bash test/hosts-smoke.sh` checks the SSH inventory's JSON, table, alias filtering and failure states with
 a fake `ssh` on a scratch `PATH`. It does not contact any configured host.
 
+`bash test/remote-new-smoke.sh` uses scratch SSH and cmux stubs to check remote task preflight, a row failure
+after worktree creation, and an SSH disconnect after creation but before the Mac receives the result.
+
 **There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
 
 Write down which opt-ins this machine has before you start, because deleting the links destroys the record of
@@ -275,6 +279,13 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 | `wt hosts [--json]` | Probe the Mac's configured SSH aliases for remote-command access and installed CPU, RAM and GPU hardware |
 | `wt path <name>`, `wt current`, `wt diff <name>`, `wt help` | Small helpers |
 | `wt -H <host> <sub> …` | Run a subcommand on a VM over ssh while the cmux row stays local. `show`, `rm`, `path`, `open` and `attach` need `-r <repo>` |
+
+`wt -H <host> new` checks local cmux and the VM's repo, `wt`, `tmux` and selected agent before creating the
+worktree. If row creation then fails, it keeps the remote worktree and prints commands to inspect and attach
+it. If SSH fails during creation, the result is uncertain: wait and use `wt -H <host> list -r <repo>` (or
+`wt -H <host> list` for all configured repos) before retrying or choosing another host. A disconnected create
+may still be finishing when the first list runs. The checks cannot guarantee that `.wt-setup` or the agent
+itself will run successfully.
 
 `wt rm` refuses, with exit status 3, to destroy work: uncommitted changes, commits that are neither merged
 into the base nor pushed, a file copied in through `.wt-include` that no longer matches its source
