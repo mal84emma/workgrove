@@ -308,7 +308,8 @@ than one folder is refused with both paths, so pass the path instead. Set it in
 picker lists. Each probe is a noninteractive SSH login with a five-second connection timeout and strict host
 key checking. `available` means a remote shell command succeeded; it does not mean `wt` or a particular repo
 is installed there. CPU is the number of online logical processors, RAM is total installed memory, and GPU
-rows report NVIDIA model and memory when `nvidia-smi` works. An unknown GPU result is not evidence of no GPU.
+rows report NVIDIA model and memory when `nvidia-smi` works; `memory_mib` is null when the GPU reports
+`[N/A]` for memory. An unknown GPU result is not evidence of no GPU.
 `wt hosts --json` gives agents structured results (`cpu_logical`, `memory_mib`, `gpu_status`, `gpus`) to match
 against a request. Probes are fresh each run; a host can stop or become busy after listing it.
 
