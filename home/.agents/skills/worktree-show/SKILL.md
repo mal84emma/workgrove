@@ -41,5 +41,5 @@ cd "$(wt path <name>)" && git diff <base>...HEAD -- <file>
 
 1. One command per request; do not chain `wt open` with `wt show`.
 2. Never open VS Code for a status question, and never answer "show me the code" with a status summary or pasted files.
-3. After `wt show`, summarise in your own words: what the task was, how far it is (commits vs base, dirty files) and whether it is merged (`+0` vs base). Pushed state is not printed by `wt show`; `wt rm` is what checks it. Do not paste the whole diff.
+3. After `wt show`, summarise in your own words: what the task was, how far it is (commits vs base, dirty files) and whether it is merged: the `merged:` line, which is `yes` (every commit is in the base), `squash (…)` (the commits are not, but every change is — a squash merge), or `no (…)` with the reason, the same one `wt rm` would refuse with. `wt list` shows the same as its `MERGED` column. Both are offline: right after a PR merges they read `no` until something fetches the base. Pushed state is not printed by `wt show`; `wt rm` is what checks it. Do not paste the whole diff.
 4. `wt list`, `wt show` and `wt open` change nothing; safe to run while the task's agent is still working.

@@ -464,7 +464,12 @@ forced() {
 # wt_line <name>: the columns wt list printed for one worktree, whitespace normalised, without the
 # relative-time column (which has spaces in it and says nothing this suite can pin down).
 wt_line() {
-  printf '%s\n' "$WT_OUT" | awk -v n="$1" '$1 == n { print $1, $2, $3, $4, $5, $6; exit }'
+  printf '%s\n' "$WT_OUT" | awk -v n="$1" '$1 == n { print $1, $2, $3, $4, $5, $6, $7; exit }'
+}
+
+# merged_of <name>: the MERGED column alone, for a row whose branch column is one word.
+merged_of() {
+  printf '%s\n' "$WT_OUT" | awk -v n="$1" '$1 == n { print $6; exit }'
 }
 
 # ---------------------------------------------------------------------------- scenarios
@@ -590,7 +595,7 @@ scenario_base_resolution() {
   assert_wt_ok "wt new -b 'feat|x'" new b-pipe --no-workspace -r "$r" -b 'feat|x'
   assert_meta "$r" b-pipe base 'feat|x'
   assert_wt_ok "wt list" list -r "$r"
-  assert_eq "a base with a '|' keeps wt list's columns straight" "b-pipe wt/b-pipe feat|x 0 0 0" "$(wt_line b-pipe)"
+  assert_eq "a base with a '|' keeps wt list's columns straight" "b-pipe wt/b-pipe feat|x 0 0 yes 0" "$(wt_line b-pipe)"
   assert_wt_ok "wt show b-pipe" show b-pipe -r "$r"
   assert_has "…and wt show's too" "$WT_OUT" "(+0 / -0 vs feat|x)"
   end_scenario
@@ -652,17 +657,17 @@ scenario_list_show_path() {
   assert_wt_ok "wt new b1" new b1 --no-workspace -r "$rb"
 
   assert_wt_ok "wt list" list -r "$ra"
-  assert_eq "the columns" "NAME BRANCH BASE AHEAD BEHIND DIRTY LAST" \
+  assert_eq "the columns" "NAME BRANCH BASE AHEAD BEHIND MERGED DIRTY LAST" \
             "$(printf '%s\n' "$WT_OUT" | awk '$1 == "NAME" { $1 = $1; print; exit }')"
-  assert_eq "the row" "a1 wt/a1 main 0 0 0" "$(wt_line a1)"
+  assert_eq "the row" "a1 wt/a1 main 0 0 yes 0" "$(wt_line a1)"
   assert_eq "one repo means one repo" "1" \
             "$(printf '%s\n' "$WT_OUT" | grep -c '^[^ ].*  (' || true)"
 
   assert_wt_ok "wt list --all" list --all
   assert_eq "--all walks both repos on the search path" "2" \
             "$(printf '%s\n' "$WT_OUT" | grep -c '^[^ ].*  (' || true)"
-  assert_eq "…the first repo's task" "a1 wt/a1 main 0 0 0" "$(wt_line a1)"
-  assert_eq "…and the second repo's" "b1 wt/b1 main 0 0 0" "$(wt_line b1)"
+  assert_eq "…the first repo's task" "a1 wt/a1 main 0 0 yes 0" "$(wt_line a1)"
+  assert_eq "…and the second repo's" "b1 wt/b1 main 0 0 yes 0" "$(wt_line b1)"
 
   assert_wt_ok "wt path a1" path a1 -r "$ra"
   assert_eq "wt path prints the worktree path" "$ra/.worktrees/a1" "$WT_OUT"
@@ -682,8 +687,9 @@ scenario_list_show_path() {
   assert_wt_ok "wt show det" show det -r "$ra"
   assert_has "wt show says the HEAD is detached" "$WT_OUT" "wt/det (HEAD detached)"
   assert_has "…and counts against the branch, not HEAD" "$WT_OUT" "(+1 / -0 vs main)"
+  assert_has "…and says why the branch is not merged" "$WT_OUT" "merged:  no (merging wt/det into main would still change 1 path(s))"
   assert_wt_ok "wt list" list -r "$ra"
-  assert_eq "wt list agrees" "det wt/det (HEAD detached) main 1" "$(wt_line det)"
+  assert_eq "wt list agrees" "det wt/det (HEAD detached) main 1 0" "$(wt_line det)"
   if [[ $OS == Darwin ]]; then
     # DARWIN-ONLY: is_remote() is true anywhere else, and wt show then adds a session: line by asking tmux
     assert_eq "no session line on the Mac side" "0" \
@@ -928,6 +934,10 @@ scenario_squash_merge() {
   fixture_git "$r/.worktrees/zero" rm -q ten.txt
   fixture_git "$r/.worktrees/zero" commit -q -m 'undo ten'
 
+  # `wt list` never fetches, so against the stale base the squash reads as unmerged work — for now
+  assert_wt_ok "wt list before anything fetched" list -r "$r"
+  assert_eq "sq against a stale origin/main" no "$(merged_of sq)"
+
   # prune --dry-run first: every verdict at once, with the base refreshed once for all of them — the offline
   # check comes first, and once the fetch has happened nothing is left to go online for
   stale="$(fixture_git "$r" rev-parse origin/main)"
@@ -950,6 +960,17 @@ scenario_squash_merge() {
     "keep rev (2 commit(s) on wt/rev not merged into origin/main and not on a remote (merging wt/rev into origin/main would still change 1 path(s)))"
   assert_has "conf: the base edited the same lines" "$dry" "not on a remote (merging wt/conf into origin/main would"
   assert_has "zero: nothing to show" "$dry" "(the net change of wt/zero since"
+
+  # with the base refreshed, list and show say what rm is about to do, in rm's own words
+  assert_wt_ok "wt list after the fetch" list -r "$r"
+  for n in sq sq2 picked stack; do assert_eq "list's MERGED for $n" squash "$(merged_of "$n")"; done
+  for n in past rev conf zero; do assert_eq "list's MERGED for $n" no "$(merged_of "$n")"; done
+  if [[ $hunks == yes ]]; then assert_eq "list's MERGED for hunk" squash "$(merged_of hunk)"
+  else assert_eq "list's MERGED for hunk" no "$(merged_of hunk)"; fi
+  assert_wt_ok "wt show sq" show sq -r "$r"
+  assert_has "show: squash, and what that rests on" "$WT_OUT" "merged:  squash (every change on wt/sq is in origin/main, though no commit is)"
+  assert_wt_ok "wt show past" show past -r "$r"
+  assert_has "show: no, and why" "$WT_OUT" "merged:  no (merging wt/past into origin/main would still change 1 path(s))"
 
   # the real prune removes exactly the landed ones, branches included
   assert_wt_ok "wt prune" prune -r "$r"
@@ -1257,7 +1278,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=314
+FIXED_ASSERTIONS=331
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
