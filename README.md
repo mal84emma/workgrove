@@ -309,7 +309,9 @@ picker lists. Each probe is a noninteractive SSH login with a five-second connec
 key checking. `available` means a remote shell command succeeded; it does not mean `wt` or a particular repo
 is installed there. CPU is the number of online logical processors, RAM is total installed memory, and GPU
 rows report NVIDIA model and memory when `nvidia-smi` works; `memory_mib` is null when the GPU reports
-`[N/A]` for memory. An unknown GPU result is not evidence of no GPU.
+`[N/A]` for memory. If `nvidia-smi` fails, a complete scan of Linux PCI devices with no NVIDIA display
+device reports `gpu_status: "none"`; an incomplete scan or a present GPU with a failed driver reports
+`"unknown"`. This inventory concerns NVIDIA GPUs, as used by the task machines.
 `wt hosts --json` gives agents structured results (`cpu_logical`, `memory_mib`, `gpu_status`, `gpus`) to match
 against a request. Probes are fresh each run; a host can stop or become busy after listing it.
 
