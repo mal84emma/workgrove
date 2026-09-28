@@ -73,7 +73,9 @@ workgrove/
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
-│   └── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
+│   ├── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
+│   ├── agent-status-smoke.sh  VM status relay and Mac row lifecycle with fake cmux
+│   └── agent-status-linux-smoke.sh  Linux owner gate, heartbeat and Esc watcher
 └── docs/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
@@ -211,6 +213,8 @@ checks that a brief and agent choice survive an interrupted `.wt-setup`.
 
 `bash test/agent-status-smoke.sh` checks the VM lifecycle relay and Mac row status handler with a fake cmux:
 Running, Idle, clear, interruption, delayed events, stale-status expiry, and quiet failure paths. It needs no VM.
+On a Linux VM, `bash test/agent-status-linux-smoke.sh` checks the real process owner gate, transcript interruption,
+heartbeat state and relay timeout against scratch files and a fake cmux.
 
 **There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
 
@@ -404,20 +408,24 @@ interactive `wt attach`, `wt task` and `wt driver`, which belong to your own ses
   prompt, completion, interruption, and session-end status updates. `bin/cmux-hook` checks that cmux assigned
   each update to a row connected to the named host, then sets that row's `vm-claude` or `vm-codex` status to
   Running or Idle, or clears it. Events carry a sequence number so delayed updates cannot revive old state.
-  While `wt run` is alive it renews a two-minute status lease; a dead process or reboot stops renewals and
-  clears the pill after the lease expires. cmux 0.64's remote CLI has no sidebar
-  status method or agent lifecycle relay, and cmux clears its reserved `claude`/`codex` status keys when an
+  While `wt run` is alive it renews a two-minute status lease. A dead process or reboot stops renewals;
+  the Mac hook clears an expired pill when cmux next delivers a notification. Its background timer also
+  attempts the clear, but cmux may reject that detached process after the hook exits. cmux 0.64's remote CLI
+  has no sidebar status method or agent lifecycle relay, and cmux clears its reserved `claude`/`codex` status keys when an
   SSH pane has no local agent process; the VM-specific keys avoid that cleanup. The control notification is
   hidden from history and banners when the Mac hook is active. If the hook is missing, the fallback is a
-  readable status notification. Claude's `StopFailure` and later `idle_prompt` events return its row to Idle
-  after errors or cancellation; an Esc cancellation may take about a minute to produce `idle_prompt`.
+  readable status notification. Claude's `StopFailure` and `idle_prompt` events return its row to Idle.
+  After Esc, the heartbeat also detects Claude's interruption marker in the transcript; if Claude writes no
+  further transcript data, it falls back to Idle after roughly three minutes, on the next heartbeat.
+  `/clear` leaves the agent at Idle.
   The same Mac hook handles `wt-open` and `wt-attach`, opening the remote
   folder in VS Code or creating the row for the new VM task.
   To enable this on an existing VM, update the Mac first and ensure its `notifications.hooks` entry for
   `cmux-hook` is loaded (`cmux reload-config` after changing `cmux.json`). Then run
   `wt -H <vm> update --refresh-config`, review and trust the changed Codex hooks with `/hooks` on that VM,
-  and restart the agent in its task row. The Mac enables status relay only when it finds the installed hook
-  and its `cmux.json` entry; an old Mac install therefore cannot make an updated VM post status traffic.
+  then exit the agent and run `wt -H <vm> attach --restart-agent -r <repo> <name>`. The Mac enables status
+  relay only when it finds the installed hook and its `cmux.json` entry; an old Mac install therefore cannot
+  make an updated VM post status traffic.
   A plain `wt update` does not replace the machine-local `hooks.json`.
 - Codex runs with `approvals_reviewer = "auto_review"`, so sandbox escalations are approved automatically and
   a Codex row rarely shows a needs-input state. Expect it only when Codex really does prompt.
@@ -497,8 +505,8 @@ own machine.
   not: `Bash(git diff *)`, `Bash(git log *)` and `Bash(git show *)` all accept `--output=<file>`, so any of
   them will write to any path you can write, with no prompt.
 
-- **The hooks run scripts from this repo on every turn.** `settings.base.json` wires five Claude events
-  (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `SessionEnd`) to `agent-notify`, and
+- **The hooks run scripts from this repo on every turn.** `settings.base.json` wires six Claude events
+  (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `StopFailure`, `SessionEnd`) to `agent-notify`, and
   `hooks.base.json` wires Codex's prompt, permission, completion, interruption, and session-end events.
   `cmux.json` hands cmux `~/.local/bin/cmux-hook` as a notification hook. Both scripts are symlinks into this repo's
   `bin/`, and both run as you. So `wt update` is a code-execution event rather than a data update: pulling
