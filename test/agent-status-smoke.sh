@@ -21,7 +21,7 @@ printf '%s\n' "$*" >> "$CMUX_LOG"
 [[ ${CMUX_FAIL:-} == "$1" ]] && exit 142
 case $1 in
   list-windows) echo 'window:1 AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' ;;
-  workspace) echo '{"workspaces":[{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}}]}' ;;
+  workspace) echo '{"workspaces":[{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}]}' ;;
   set-status|clear-status|notify) echo OK ;;
 esac
 CMUX
@@ -151,7 +151,29 @@ assert_eq 'failed expiry remains retryable' running "$(awk '{print $4}' "$f")"
 unset CMUX_FAIL
 CMUX_NOTIFICATION_TITLE='unrelated' CMUX_NOTIFICATION_SUBTITLE='' bash "$REPO/bin/cmux-hook" </dev/null >/dev/null
 check_contains "$CMUX_LOG" 'clear-status vm-codex --workspace BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
-assert_eq 'retry clears the expired state' clear "$(awk '{print $4}' "$f")"
+assert_eq 'expiry retains the transition sequence' "$seq" "$(awk '{print $1}' "$f")"
+assert_eq 'expiry retains the owning session' "$session" "$(awk '{print $3}' "$f")"
+assert_eq 'retry marks the state expired' expired-running "$(awk '{print $4}' "$f")"
+: > "$CMUX_LOG"
+status_hook "$(control test-vm running "$seq")" >/dev/null
+check_contains "$CMUX_LOG" 'set-status vm-codex Running'
+assert_eq 'heartbeat restores expired state' running "$(awk '{print $4}' "$f")"
+status_hook "$(control test-vm clear 1000000000000000016)" >/dev/null
+: > "$CMUX_LOG"
+status_hook "$(control test-vm running "$seq")" >/dev/null
+check_missing "$CMUX_LOG" 'set-status vm-codex'
+end_scenario
+
+begin_scenario 'one restored row does not expire another'
+f2="$XDG_STATE_HOME/cmux-agent-status/DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD-codex"
+printf '%s %s %s %s 0\n' 1000000000000000017 1 test-session idle > "$f2"
+status_hook "$(control test-vm idle 1000000000000000018)" >/dev/null
+assert_eq 'first row stays Idle after sweep' idle "$(awk '{print $4}' "$f")"
+assert_eq 'second row is marked expired' expired-idle "$(awk '{print $4}' "$f2")"
+assert_eq 'second row keeps its sequence' 1000000000000000017 "$(awk '{print $1}' "$f2")"
+status_hook "$(control test-vm idle 1000000000000000017)" DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD >/dev/null
+assert_eq 'second row heartbeat restores its status' idle "$(awk '{print $4}' "$f2")"
+assert_eq 'first row stays Idle after second recovery' idle "$(awk '{print $4}' "$f")"
 end_scenario
 
 begin_scenario 'an orphan timer does not recreate removed test state'
@@ -159,4 +181,4 @@ rm -rf "$XDG_STATE_HOME/cmux-agent-status"
 WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
 if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
 end_scenario
-lib_summary 38
+lib_summary 48

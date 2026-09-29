@@ -21,12 +21,14 @@ if [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -z $payload ]]; then
   start=$(printf '%s' "$payload" | jq -r '.start // empty' 2>/dev/null)
   if [[ $path == "$HOME/.claude/projects/"*.jsonl && $offset =~ ^[0-9]+$ && $start =~ ^[0-9]+$ && -r $path ]]; then
     size=$(wc -c < "$path")
-    if { (( size > offset )) && tail -c "+$((offset + 1))" "$path" | jq -e '
-      select(.type == "user" and
+    if { (( size > offset )) && tail -c "+$((offset + 1))" "$path" | jq -n -e '
+      any(inputs; .type == "user" and
         (.message.content | if type == "string" then startswith("[Request interrupted by user")
          elif type == "array" then any(.[]; .type == "text" and (.text | startswith("[Request interrupted by user")))
          else false end))' >/dev/null 2>&1; } ||
        { (( size == offset && $(date +%s) - start >= 180 )); }; then
+      prompt_seq=$(printf '%s' "$payload" | jq -r '.seq // empty' 2>/dev/null)
+      [[ $prompt_seq =~ ^[0-9]{19}$ ]] && event_seq=$((10#$prompt_seq + 1))
       payload=$(printf '%s' "$payload" | jq -c --arg q "$event_seq" '.state = "idle" | .seq = $q | del(.transcript_path, .offset, .start)')
       printf '%s\n' "$payload" > "$WT_STATUS_FILE"
       interrupted=1
