@@ -53,6 +53,7 @@ workgrove/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
 │   ├── agent-notify           agent lifecycle hook, relays to cmux or posts a banner
 │   ├── cmux-hook              Mac-side cmux notification hook: remote wt open / wt attach
+│   ├── github-guard           Claude PreToolUse hook: GitHub reads anywhere, PR pushes and comments on a VM
 │   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 ├── home/
 │   ├── .zshenv .gitignore_global   always installed; .zshrc .gitconfig .tmux.conf are opt-in
@@ -73,6 +74,7 @@ workgrove/
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
+│   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with fake uname/gh
 │   └── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
 └── docs/
     ├── new-mac.md             set up a Mac
@@ -170,14 +172,14 @@ message if no git identity is set — `~/.gitconfig.local` first, then your glob
 `~/.zshenv`, because cmux runs its VM rows in bash. At the top because Ubuntu's `~/.bashrc` returns early in a
 non-interactive shell, so the line has to come first to cover `ssh <vm> '<cmd>'` and `wt -H <vm> …` as well.
 
-`bash test/install-smoke.sh` is the repo's smoke test: 634 assertions across seventeen scenario groups
+`bash test/install-smoke.sh` is the repo's smoke test: 640 assertions across seventeen scenario groups
 (fifty runs, since most groups have several cases and one loops over five flags), each run against its
 own throwaway `$HOME` with no network. They cover the default no-flags install — into an empty home and over a
 stranger's own dotfiles — `--opinionated-config`, each file flag on its own, the stickiness rules, idempotence,
 an unknown flag, every refusal path, which links count as this repo's own, the don't-clobber branches of
 `configure_git`, retirement of renamed links, and `ZSH_CUSTOM`. Set `INSTALL_BASH=/bin/bash` to run
 `install.sh` itself under bash 3.2, which is what a fresh Mac gives it; `FORCE_OS=Linux` drives the
-Linux-only steps from a Mac. Run on a VM it makes 488, because scenario 17 is about a Mac file and does not
+Linux-only steps from a Mac. Run on a VM it makes 492, because scenario 17 is about a Mac file and does not
 run there — and running it there is worth doing, because `FORCE_OS` cannot fake everything a real Linux box
 differs in. It was a VM that caught the suite building its fixtures at whatever the machine's umask happened
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
@@ -208,6 +210,14 @@ It does not contact any configured host.
 `bash test/remote-new-smoke.sh` uses scratch SSH and cmux stubs to check remote task preflight, a row failure
 after worktree creation, and an SSH disconnect after creation but before the Mac receives the result. It also
 checks that a brief and agent choice survive an interrupted `.wt-setup`.
+
+`bash test/github-guard-smoke.sh` runs 227 assertions of hook payloads through `bin/github-guard`, with `uname`
+stubbed to play the Mac or a VM and `gh` stubbed to answer `gh pr list` from fixtures by running the guard's
+own `--jq` filter over them. It checks that a command which only mentions `gh api` or `git push` — a commit
+message, a heredoc, a `grep` — gets no answer; that reads are approved everywhere; that pipes, substitutions,
+control characters, another repository, force pushes, deletions, the default branch, a fork's pull request
+and a remote whose push URL leaves github.com are all denied; and that `settings.base.json` wires the hook and
+carries no rule that would override it. `GUARD_BASH=/bin/bash` runs the guard under bash 3.2.
 
 **There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
 
@@ -438,18 +448,19 @@ VM left behind answers in a vocabulary this Mac no longer expects.
 ## Security
 
 All of this runs as you, with your keys and your logins, and a good deal of it exists to remove prompts. That
-is the point of it, but five of the choices behind it are worth knowing before you run `install.sh` on your
+is the point of it, but six of the choices behind it are worth knowing before you run `install.sh` on your
 own machine.
 
 - **The Claude permission list auto-approves, and denies.** The sixteen `permissions.allow` entries in
   [`home/.claude/settings.base.json`](home/.claude/settings.base.json) — `ls`, `cd`, the read-only git
   subcommands (`status`, `diff`, `log`, `show`, and the six read-only spellings of `branch`), `git add`,
   `git commit`, `wt list` and `wt show` — run with no prompt at all, so an agent commits to its branch
-  without asking you. Thirteen
-  `deny` entries cover `git -c`, `git config`, `git push` in its plain and its `git -C` spelling,
-  `git remote add`, `git filter-branch`, `gh api`,
+  without asking you. Eleven
+  `deny` entries cover `git -c`, `git config`, the `git -C` spelling of `git push`,
+  `git remote add`, `git filter-branch`,
   `gh pr create`, `gh repo create`, `gh repo fork`, `gh release create` and `wt pr`; most of them are things
-  the Agents section says agents never do on their own. Each list is spelled out form by form for the same
+  the Agents section says agents never do on their own. Plain `git push` and `gh api` are not on the list:
+  `github-guard`, below, decides those. Each list is spelled out form by form for the same
   reason: the broader `Bash(git *)` the allowlist replaced also matched `git -c alias.x='!<shell>' x`, which
   runs arbitrary shell with no prompt, and `Bash(git branch *)` covered `git branch -D` as readily as
   `git branch -v`. There is no allow entry for `git -C <path>` at all, and that is deliberate. Nine were
@@ -469,7 +480,8 @@ own machine.
   command substitution. What the lists are not is enforcement. They match the text of the command Claude
   writes, and the permissions documentation says in as many words that this "isn't a security boundary around
   the program", warning that "Bash permission patterns that try to constrain command arguments are fragile".
-  `Bash(git push *)` does not stop `/usr/bin/git push`, `bash -c 'git push'`, `git 'push' origin main` or
+  `Bash(gh pr create *)` does not stop `/opt/homebrew/bin/gh pr create`, `bash -c 'gh pr create'` or
+  `gh 'pr' create`, and the `git push` rule this list used to carry did not stop
   `git -c core.fsmonitor=<script> -C <path> push`. So read these lists as intent made legible where the tool
   can act on it: they catch the ordinary spellings an agent actually writes, and they save you a prompt on
   the ones you would always approve. Anything that has to actually hold wants what those docs
@@ -478,10 +490,35 @@ own machine.
   not: `Bash(git diff *)`, `Bash(git log *)` and `Bash(git show *)` all accept `--output=<file>`, so any of
   them will write to any path you can write, with no prompt.
 
+- **`github-guard` lets agents on a VM push to pull requests and comment on them.** `Bash(gh api *)` and
+  `Bash(git push *)` used to be denied outright, which also blocked reading a pull request's review comments:
+  inline comments are only reachable through `gh api`. A hook's allow cannot override a deny rule, so both
+  rules are gone and [`bin/github-guard`](bin/github-guard), a `PreToolUse` hook that sees every Bash command
+  before the permission lists do, decides instead. On every machine it approves a `gh api` read: GET or
+  HEAD, or a GraphQL query with no `mutation` in it, to a path on api.github.com. On a VM it also approves
+  three writes: `git push` of one branch, without force, through a remote whose push URL is on github.com, to
+  a branch that is not the default branch and is the head of an open pull request in that remote's own
+  repository — not a fork's (it asks `gh pr list`); `gh pr comment <n> --body …`; and a new review comment or
+  a reply on a pull request of this repository through `gh api`. Every other thing those three commands can
+  do, it denies, with a reason that names the approved form, so an agent rewrites the command rather than
+  waits for you. On the Mac, `git push` and `gh api` writes stay denied and `gh pr comment` still prompts. It
+  approves only a command it can read in full: one simple command with nothing a shell would expand — no
+  pipe, redirect, `;`, `&&`, `$`, backtick, glob, brace range, control character or unquoted newline — so
+  nothing it has not read can run beside it.
+
+  Two limits. It answers only a command that *starts* with `gh api`, `gh pr comment` or `git push`, because
+  the start is the only place it can find one without a shell parser (a later `git push` could be a line of a
+  commit message). So `npm test && git push --force origin main` and `env git push …` go to the permission
+  lists, which no longer deny them: they prompt, or in auto mode go to its classifier. And what an agent can
+  write is still whatever the VM's `gh` login and git credentials allow. The guard catches the ordinary
+  spellings of a force push or a push to main; branch protection on GitHub, and a token scoped to the
+  repositories the VM works on, are what actually hold.
+
 - **The hooks run scripts from this repo on every turn.** `settings.base.json` wires five Claude events
-  (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `SessionEnd`) to `agent-notify`, and
-  `cmux.json` hands cmux `~/.local/bin/cmux-hook` as a notification hook. Both are symlinks into this repo's
-  `bin/`, and both run as you. So `wt update` is a code-execution event rather than a data update: pulling
+  (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `SessionEnd`) to `agent-notify` and a
+  sixth, `PreToolUse` on every Bash command, to `github-guard`, and `cmux.json` hands cmux
+  `~/.local/bin/cmux-hook` as a notification hook. All three are symlinks into this repo's `bin/`, and all
+  three run as you. So `wt update` is a code-execution event rather than a data update: pulling
   changes the scripts that then run by themselves, with nothing to restart. That is why `wt update` prints
   the incoming commits and a diffstat and asks before it fast-forwards and re-runs `install.sh`, and why it
   refuses to apply them at all when stdin is not a terminal. Read that diff the way you would read any other

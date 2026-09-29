@@ -15,7 +15,9 @@ Each unit of work that changes code is a **task** and lives in its own git workt
 
 These are conventions, not a sandbox: a session launched with its cwd inside `.worktrees/<name>` is not isolated by Claude's own worktree isolation. Staying inside the worktree is your responsibility.
 
-Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish unless the user explicitly asked for that action in this conversation; report the branch instead.
+Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish unless the user explicitly asked for that action in this conversation; report the branch instead. A brief to work on an open pull request (address its review, fix its CI) counts as asking to push to that pull request's branch and to reply to its comments, and nothing more.
+
+Claude's `github-guard` hook approves these without a prompt and denies other GitHub writes, with a reason that names the approved form. Anywhere: a read as one `gh api <endpoint>` command, filtered with `--jq '<expr>'` (never a pipe) and with a quoted endpoint if it has `?` or `&`. On a VM only: `git push [-u] origin HEAD[:<pr-branch>]` to an open pull request's branch, `gh pr comment <n> --body '…'`, and a review-comment reply, `gh api -X POST repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies -f body='…'`. Run each as its own command, with no `cd … &&` in front.
 
 ## Layout and naming
 

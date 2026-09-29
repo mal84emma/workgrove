@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+# github-guard: Claude Code's PreToolUse hook for Bash — the one place that decides what an agent may say to
+# GitHub. It reads the hook payload on stdin and answers for three commands; every other command gets no
+# answer at all and goes through the permission lists in ~/.claude/settings.json as before.
+#
+#   gh api          a read (GET or HEAD, or a GraphQL query) is approved on every machine. On a VM, so is
+#                   one kind of write: a new review comment, or a reply to one, on a pull request of this
+#                   repo — POST repos/<this repo>/pulls/<n>/comments[/<id>/replies]. Every other write is
+#                   denied, as the old Bash(gh api *) deny rule did for them all.
+#   gh pr comment   on a VM, `gh pr comment [<n>] --body <text>` is approved; anything else is denied. On the
+#                   Mac it is left to the ordinary prompt, as it always was.
+#   git push        on a VM, `git push [-u] <remote> <src>[:<branch>]` is approved when <branch> is the head
+#                   branch of an open pull request in the remote's own repository — not a fork's — and not
+#                   the default branch; nothing that forces, deletes, mirrors or pushes tags gets through.
+#                   On the Mac it is denied, as Bash(git push *) did.
+#
+# Why a hook and not permission rules: a hook's "allow" does not override a deny rule (the permissions docs:
+# "Hook decisions don't bypass permission rules"), so Bash(gh api *) and Bash(git push *) had to leave the
+# deny list for any of this to be approvable, and a permission rule cannot tell `gh api .../comments` from
+# `gh api -X DELETE ...`, nor a pull request's branch from main. This script can, because it reads the words
+# the shell will actually see: a command is approved only when it is ONE simple command that tokenises
+# cleanly here — no pipe, redirect, `;`, `&&`, `$`, backtick, glob, brace, backslash or unquoted newline — so
+# nothing it did not read can run beside it. A command that starts with one of the three but is not that is
+# denied, with a reason that names the form that would be approved; the agent reads the reason and retries.
+#
+# What it does not see: one of these three later in a compound (`cd x && git push`), or behind a wrapper
+# (`env git push`, `command gh api`). Those get no answer, so they fall through to the permission lists —
+# where nothing now denies them, so they prompt (or go to auto mode's classifier). That is a prompt, not a
+# silent run; see the README's Security section.
+#
+# Exit status is always 0: exit 2 would block the tool call, and a hook that runs before every Bash command
+# must never block them all because it tripped. Any failure here — no jq, no payload — means no answer.
+set -u -f                 # -f: no word this script splits is ever a glob
+
+command -v jq >/dev/null 2>&1 || exit 0
+payload=$(cat)
+# A control character is refused outright rather than tokenised: bash drops a NUL from a variable while the
+# shell that runs the command stops at it, so the two would read different commands — `-f x=1\0 -X GET` is a
+# GET here and a POST there. jq sees the JSON string before bash does, so jq flags them and swaps each for
+# U+FFFD, which no tokenize() segment accepts.
+cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command // empty | explode
+  | map(if (. < 32 and . != 9 and . != 10) or . == 127 then 65533 else . end) | implode' 2>/dev/null) || exit 0
+[[ $cmd == *gh* || $cmd == *git* ]] || exit 0            # the fast path, taken by nearly every command
+ctrl=false
+[[ $cmd == *$'\xef\xbf\xbd'* ]] && ctrl=true
+cwd=$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null) || cwd=''
+[[ -n $cwd && -d $cwd ]] || cwd=$PWD
+
+on_mac=0
+[[ $(uname -s 2>/dev/null) == Darwin ]] && on_mac=1
+
+# decide <allow|deny> <reason>: the hook's answer, and the end of the run.
+decide() {
+  jq -cn --arg d "$1" --arg r "github-guard: $2" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}'
+  exit 0
+}
+allow() { decide allow "$1"; }
+deny() { decide deny "$1"; }
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }   # bash 3.2 has no ${v,,}
+
+# tokenize <command>: split it into WORDS exactly as sh, bash or zsh would, or fail. Only three kinds of
+# segment are understood — a bare run of [A-Za-z0-9_./:=@%+{}-], a '…' string, and a "…" string with no $,
+# backtick, backslash or ! in it — and a word is any run of them with no blank between. Anything else fails,
+# which is the point: every character that makes a shell do more than split words is outside those three.
+# The bare set leaves out the glob characters (* ? [ ]), the comma and ~, so no word can expand; `..` is
+# refused as well, because {a..b} is a brace expansion without a comma, and a leading = because zsh expands
+# =cmd to a path. The { and } that stay are there for gh's own {owner} and {repo}, which no shell touches.
+tokenize() {
+  local rest=$1 word seg got
+  local re_bare='^[A-Za-z0-9_./:=@%+{}-]+' re_sq="^'([^']*)'" re_dq='^"([^"$`\\!]*)"' re_blank='^[[:blank:]]+'
+  WORDS=()
+  while :; do
+    [[ $rest =~ $re_blank ]] && rest=${rest:${#BASH_REMATCH[0]}}
+    [[ -z $rest ]] && return 0
+    word='' got=0
+    while :; do
+      if [[ $rest =~ $re_bare ]]; then
+        seg=${BASH_REMATCH[0]}
+        [[ $seg == *..* ]] && return 1
+        [[ $got -eq 0 && $seg == =* ]] && return 1
+        word+=$seg
+      elif [[ $rest =~ $re_sq || $rest =~ $re_dq ]]; then
+        word+=${BASH_REMATCH[1]}
+      else
+        break
+      fi
+      rest=${rest:${#BASH_REMATCH[0]}}
+      got=1
+    done
+    [[ $got -eq 1 ]] || return 1
+    WORDS+=("$word")
+    [[ -z $rest || $rest =~ $re_blank ]] || return 1
+  done
+}
+
+# this_repos: owner/repo, one per line, of every github.com remote of the repository at $cwd.
+github_repo() {   # github_repo <url>: owner/repo when <url> is a github.com remote, else fail
+  local u=${1%/} re='^(https://([^@/]+@)?github\.com/|ssh://([^@/]+@)?(ssh\.)?github\.com(:[0-9]+)?/|([^@/:]+@)?github\.com:)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$'
+  u=${u%.git}
+  [[ $u =~ $re ]] || return 1
+  printf '%s/%s\n' "${BASH_REMATCH[7]}" "${BASH_REMATCH[8]}"
+}
+this_repos() {
+  local r u
+  for r in $(git -C "$cwd" remote 2>/dev/null); do
+    for u in $(git -C "$cwd" remote get-url --all "$r" 2>/dev/null); do github_repo "$u"; done
+  done
+}
+same_repo() {     # same_repo <owner> <repo>: gh's {owner}/{repo}, or one of this_repos, compared as GitHub does
+  [[ $1 == '{owner}' && $2 == '{repo}' ]] && return 0
+  local want mine
+  want=$(printf '%s/%s' "$1" "$2" | tr '[:upper:]' '[:lower:]')
+  while IFS= read -r mine; do
+    [[ $(printf '%s' "$mine" | tr '[:upper:]' '[:lower:]') == "$want" ]] && return 0
+  done < <(this_repos)
+  return 1
+}
+
+# ------------------------------------------------------------------------------------------------ gh api
+
+GH_API_FORM="approved forms: gh api <endpoint> for a read (add --jq '<expr>' to filter it, --paginate for every page, \
+-X GET -f key=value for query parameters, gh api graphql -f query='…' for a GraphQL query)"
+GH_API_WRITE="on a VM, the one gh api write approved is a pull request review comment in this repo: \
+gh api -X POST repos/{owner}/{repo}/pulls/<n>/comments/<comment id>/replies -f body='…' to reply, or \
+.../pulls/<n>/comments with -f body= -f commit_id= -f path= -F line= [-f side=] for a new one; \
+use gh pr comment <n> --body '…' for a comment on the conversation"
+
+check_gh_api() {
+  local a v key endpoint='' method='' nfields=0 fields=() values=() path ep_re
+  while [[ $# -gt 0 ]]; do
+    a=$1; shift
+    case $a in
+      -h|--help) allow "gh api help" ;;
+      --paginate|--slurp|-i|--include|--silent) continue ;;
+      --input|--input=*) deny "gh api --input sends a request body, which is a write; $GH_API_FORM" ;;
+      --*=*) v=${a#*=}; a=${a%%=*} ;;
+      -X|--method|-f|--raw-field|-F|--field|-H|--header|-q|--jq|-t|--template|--cache|-p|--preview)
+        [[ $# -gt 0 ]] || deny "gh api $a needs a value"
+        v=$1; shift ;;
+      -*) deny "gh api $a is not an approved option; $GH_API_FORM" ;;
+      *) [[ -z $endpoint ]] || deny "gh api takes one endpoint, and this has two ('$endpoint', '$a')"
+         endpoint=$a; continue ;;
+    esac
+    case $a in
+      -X|--method) method=$v ;;
+      -f|--raw-field|-F|--field)
+        [[ $a == -F || $a == --field ]] && [[ $v == *=@* ]] \
+          && deny "gh api -F key=@<file> sends a local file to GitHub; pass the value inline"
+        [[ $v == *=* ]] || deny "gh api $a takes key=value"
+        nfields=$((nfields + 1)); fields+=("${v%%=*}"); values+=("${v#*=}") ;;
+      -H|--header)
+        case $(lower "$v") in accept:*|x-github-api-version:*) ;;
+          *) deny "gh api may set only the Accept and X-GitHub-Api-Version headers" ;;
+        esac ;;
+      -q|--jq|-t|--template|--cache|-p|--preview) ;;
+      *) deny "gh api $a= is not an approved option; $GH_API_FORM" ;;
+    esac
+  done
+  [[ -n $endpoint ]] || deny "gh api needs an endpoint; $GH_API_FORM"
+  [[ $endpoint == -* ]] && deny "gh api endpoint '$endpoint' looks like an option"
+  [[ $endpoint == *://* ]] && deny "gh api endpoint must be a path on api.github.com, not a URL"
+  [[ $endpoint =~ [[:space:]] ]] && deny "gh api endpoint has a blank in it"
+
+  path=${endpoint#/}; path=${path%%\?*}
+  if [[ $(lower "$path") == graphql ]]; then
+    [[ -z $method || $method == POST ]] || deny "gh api graphql is always a POST; drop -X $method"
+    local i has_query=0
+    for ((i = 0; i < nfields; i++)); do
+      [[ ${fields[i]} == query ]] && has_query=1
+      # GraphQL has no escapes outside strings, so a mutation cannot be spelled without the word; matched in
+      # any case and anywhere, a field or a string that happens to contain it only costs a denial.
+      [[ $(lower "${values[i]}") == *mutation* ]] \
+        && deny "GraphQL mutations are not approved (this one writes to GitHub); $GH_API_WRITE"
+    done
+    [[ $has_query -eq 1 ]] || deny "gh api graphql needs -f query='…'"
+    allow "read-only GraphQL query"
+  fi
+
+  [[ -n $method ]] || { [[ $nfields -gt 0 ]] && method=POST || method=GET; }
+  case $method in
+    GET|HEAD) allow "read-only gh api $method" ;;
+  esac
+  [[ $on_mac -eq 1 ]] && deny "gh api -X $method writes to GitHub, which agents do not do from the Mac; \
+ask the user to run it. $GH_API_FORM"
+  [[ $method == POST ]] || deny "gh api -X $method is not an approved write; $GH_API_WRITE"
+  ep_re='^repos/([^/]+)/([^/]+)/pulls/[0-9]+/comments(/[0-9]+/replies)?$'
+  [[ $path =~ $ep_re && $endpoint != *\?* ]] || deny "gh api POST $endpoint is not an approved write; $GH_API_WRITE"
+  local owner=${BASH_REMATCH[1]} name=${BASH_REMATCH[2]}   # saved: same_repo's own =~ overwrites BASH_REMATCH
+  same_repo "$owner" "$name" \
+    || deny "$owner/$name is not this repository; agents comment only on its own pull requests"
+  local has_body=0
+  for key in ${fields[@]+"${fields[@]}"}; do
+    case $key in
+      body) has_body=1 ;;
+      commit_id|path|line|side|start_line|start_side|in_reply_to|subject_type|position) ;;
+      *) deny "gh api review comment field '$key' is not approved; $GH_API_WRITE" ;;
+    esac
+  done
+  [[ $has_body -eq 1 ]] || deny "a review comment needs -f body='…'"
+  allow "a review comment on a pull request in this repository"
+}
+
+# ----------------------------------------------------------------------------------------- gh pr comment
+
+check_gh_pr_comment() {
+  [[ $on_mac -eq 1 ]] && exit 0                    # the Mac keeps its prompt: no answer from here
+  local a pr='' body=0 form="approved form: gh pr comment [<number>] --body '…'"
+  while [[ $# -gt 0 ]]; do
+    a=$1; shift
+    case $a in
+      -b|--body) [[ $# -gt 0 ]] || deny "gh pr comment $a needs the text"; shift; body=1 ;;
+      --body=*) body=1 ;;
+      -*) deny "gh pr comment $a is not approved; $form" ;;
+      *) [[ -z $pr && $a =~ ^[0-9]+$ ]] || deny "gh pr comment takes a pull request number, not '$a'; $form"
+         pr=$a ;;
+    esac
+  done
+  [[ $body -eq 1 ]] || deny "gh pr comment needs --body; $form"
+  allow "a comment on a pull request in this repository"
+}
+
+# ---------------------------------------------------------------------------------------------- git push
+
+check_git_push() {
+  [[ $on_mac -eq 1 ]] && deny "agents do not push from the Mac; commit, report the branch and let the user push"
+  local a pos=() form="approved form: git push [-u] <remote> HEAD:<branch of an open pull request>"
+  while [[ $# -gt 0 ]]; do
+    a=$1; shift
+    case $a in
+      -u|--set-upstream|-q|--quiet|-v|--verbose|-n|--dry-run|--porcelain) ;;
+      -f|--force|--force-with-lease|--force-with-lease=*|--force-if-includes)
+        deny "force pushes are never approved; $form" ;;
+      -d|--delete|--prune|--mirror|--all|--branches|--tags|--follow-tags)
+        deny "git push $a touches more than one pull request branch; $form" ;;
+      -*) deny "git push $a is not approved; $form" ;;
+      *) pos+=("$a") ;;
+    esac
+  done
+  [[ ${#pos[@]} -eq 2 ]] || deny "name the remote and the branch; $form"
+  local remote=${pos[0]} spec=${pos[1]} src dst url repo='' r def n
+  [[ $remote =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || deny "push to a named remote, not '$remote'"
+  git -C "$cwd" remote 2>/dev/null | grep -qxF -- "$remote" || deny "'$remote' is not a remote of this repository"
+  # Where the push really goes: --push applies pushurl and pushInsteadOf, which a plain get-url would not.
+  for url in $(git -C "$cwd" remote get-url --push --all "$remote" 2>/dev/null); do
+    r=$(github_repo "$url") || deny "remote '$remote' pushes to $url, which is not a github.com repository"
+    [[ -z $repo || $repo == "$r" ]] || deny "remote '$remote' pushes to more than one repository"
+    repo=$r
+  done
+  [[ -n $repo ]] || deny "remote '$remote' has no push URL"
+
+  [[ $spec == +* ]] && deny "a + refspec is a force push; $form"
+  [[ $spec == *'*'* || $spec == *:*:* ]] && deny "push one branch; $form"
+  src=${spec%%:*}
+  [[ -n $src ]] || deny "an empty source deletes the remote branch; $form"
+  if [[ $spec == *:* ]]; then
+    dst=${spec#*:}
+  else
+    # With no :<dst>, remote.<name>.push may map the source somewhere else entirely; refuse to guess.
+    [[ -z $(git -C "$cwd" config --get-all "remote.$remote.push" 2>/dev/null) ]] \
+      || deny "remote.$remote.push is set, so name the destination: $form"
+    dst=$src
+    [[ $src == HEAD ]] && { dst=$(git -C "$cwd" symbolic-ref -q --short HEAD 2>/dev/null) \
+      || deny "HEAD is detached; $form"; }
+  fi
+  dst=${dst#refs/heads/}
+  [[ $src == HEAD || $src =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ ]] && [[ $src != *..* ]] \
+    || deny "push HEAD or a local branch, not '$src'; $form"
+  [[ $src == refs/* && $src != refs/heads/* ]] && deny "push a branch, not $src"
+  [[ $dst == refs/* ]] && deny "push to a branch, not $dst"
+  [[ $dst =~ ^[A-Za-z0-9_][A-Za-z0-9._/-]*$ && $dst != *..* ]] || deny "'$dst' is not a branch name git push approves"
+
+  def=$(git -C "$cwd" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null) && def=${def#"$remote"/}
+  [[ $dst == main || $dst == master || $dst == "${def:-main}" ]] \
+    && deny "$dst is the default branch; agents push only to a pull request's branch"
+  command -v gh >/dev/null 2>&1 || deny "gh is not installed, so the pull request for $dst cannot be checked"
+  n=$(gh pr list -R "$repo" --head "$dst" --state open --json isCrossRepository \
+        --jq 'map(select(.isCrossRepository | not)) | length' 2>/dev/null) \
+    || deny "could not ask GitHub whether $dst has an open pull request in $repo (is gh logged in?)"
+  [[ $n =~ ^[0-9]+$ && $n -gt 0 ]] \
+    || deny "$dst is not the branch of an open pull request in $repo; agents push only to those. \
+Report the branch and let the user open the pull request"
+  allow "a push to $dst, the branch of an open pull request in $repo"
+}
+
+# ------------------------------------------------------------------------------------------------- main
+
+GUARDED='(git[[:space:]]+push|gh[[:space:]]+api|gh[[:space:]]+pr[[:space:]]+comment)([[:space:]]|$)'
+if [[ $ctrl == false ]] && tokenize "$cmd"; then
+  set -- ${WORDS[@]+"${WORDS[@]}"}
+  lead=0
+  while [[ $# -gt 0 && $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do shift; lead=1; done
+  case "${1:-} ${2:-} ${3:-}" in
+    'gh api '*|'gh pr comment'|'git push '*)
+      [[ $lead -eq 0 ]] || deny "run $1 $2 with no VAR=value in front of it" ;;
+    *) exit 0 ;;
+  esac
+  case "$1 $2" in
+    'gh api') shift 2; check_gh_api "$@" ;;
+    'gh pr') shift 3; check_gh_pr_comment "$@" ;;
+    'git push') shift 2; check_git_push "$@" ;;
+  esac
+  exit 0
+fi
+# Not one clean simple command. Only a command that STARTS with one of the three is answered, because the
+# start is the one place a guarded command can be found without a shell parser: a later `git push` could as
+# well be a line of a commit message in a heredoc.
+lead='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(cd[[:space:]]+[^[:space:]&;|]+[[:space:]]*&&[[:space:]]*)?'
+if [[ $cmd =~ $lead$GUARDED ]]; then
+  [[ $on_mac -eq 1 && ${BASH_REMATCH[3]} == gh*pr* ]] && exit 0     # the Mac's gh pr comment still prompts
+  deny "${BASH_REMATCH[3]} is approved only as one simple command: no pipe, redirect, && or ;, no \$(...), \
+backticks or \$VARIABLES, no globs, and no cd in front (run the cd as its own command first: the directory \
+carries over, and this hook reads it). Filter gh api output with its own --jq '<expr>' rather than | jq, and \
+quote any argument with ? or & in it."
+fi
+exit 0
