@@ -167,8 +167,19 @@ if [[ $socket == *:[0-9]* ]]; then
     send_status=1
     if [[ -n ${WT_STATUS_FILE:-} && ${WT_STATUS_HEARTBEAT:-} != 1 ]]; then
       exec 9>"$WT_STATUS_FILE.lock"
-      if ! command -v flock >/dev/null || flock -w 1 9; then
-        if [[ $status == clear ]]; then rm -f "$WT_STATUS_FILE"; else
+      if command -v flock >/dev/null && flock -w 1 9; then
+        old_seq=''; old_session=''
+        if [[ -r $WT_STATUS_FILE ]]; then
+          old_seq=$(jq -r '.seq // empty' "$WT_STATUS_FILE" 2>/dev/null)
+          old_session=$(jq -r '.session_id // empty' "$WT_STATUS_FILE" 2>/dev/null)
+        fi
+        # A late hook must not replace a newer transition or a different session's status.
+        # shellcheck disable=SC2071  # both sequences are fixed-width decimal strings
+        if { [[ $event != UserPromptSubmit ]] &&
+             { [[ ! -r $WT_STATUS_FILE ]] || [[ $old_session != "$session" ]]; }; } ||
+           { [[ $old_seq =~ ^[0-9]{19}$ ]] && [[ $event_seq == "$old_seq" || $event_seq < $old_seq ]]; }; then
+          send_status=0
+        elif [[ $status == clear ]]; then rm -f "$WT_STATUS_FILE"; else
           transcript=''; offset=0; start=0
           if [[ $event == UserPromptSubmit && $title == 'Claude Code' ]]; then
             transcript=$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)
@@ -180,7 +191,9 @@ if [[ $socket == *:[0-9]* ]]; then
           jq -nc --arg s "$session" --arg st "$status" --arg q "$event_seq" --arg p "$transcript" --argjson o "$offset" --argjson t "$start" \
             '{hook_event_name:"Heartbeat",session_id:$s,state:$st,seq:$q} + (if $p == "" then {} else {transcript_path:$p,offset:$o,start:$t} end)' > "$WT_STATUS_FILE"
         fi
-        if command -v flock >/dev/null; then flock -u 9; fi
+        flock -u 9
+      else
+        send_status=0
       fi
       exec 9>&-
     fi

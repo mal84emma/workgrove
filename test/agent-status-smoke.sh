@@ -44,7 +44,7 @@ status_hook() {
   printf '{}\n' | bash "$REPO/bin/cmux-hook"
 }
 event() { printf '{"hook_event_name":"%s","session_id":"test-session"}\n' "$1" > "$WT_STATUS_FILE"; bash "$REPO/bin/agent-notify" </dev/null; }
-control() { printf 'wt-agent-status|%s|codex|%s|%s|test-session' "$1" "$2" "$3"; }
+control() { printf 'wt-agent-status|%s|codex|%s|%s|%s' "$1" "$2" "$3" "${4-test-session}"; }
 
 begin_scenario 'VM event mapping and relay order'
 event UserPromptSubmit
@@ -90,11 +90,18 @@ check_contains "$CMUX_LOG" 'set-status vm-codex Idle --workspace BBBBBBBB-BBBB-4
 : > "$CMUX_LOG"
 status_hook "$(control test-vm running 1000000000000000001)" >/dev/null
 check_missing "$CMUX_LOG" 'set-status'
+status_hook "$(control test-vm clear 1000000000000000004 old-session)" >/dev/null
+check_missing "$CMUX_LOG" 'clear-status'
+assert_eq 'old session cannot clear active row' idle "$(awk '{print $4}' "$XDG_STATE_HOME/cmux-agent-status/$CMUX_WORKSPACE_ID-codex")"
 status_hook "$(control test-vm clear 1000000000000000003)" >/dev/null
 check_contains "$CMUX_LOG" 'clear-status vm-codex --workspace BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
 : > "$CMUX_LOG"
 status_hook "$(control test-vm running 1000000000000000002)" >/dev/null
 check_missing "$CMUX_LOG" 'set-status'
+status_hook "$(control test-vm running 1000000000000000004 new-session)" >/dev/null
+: > "$CMUX_LOG"
+status_hook "$(control test-vm clear 1000000000000000005 '')" >/dev/null
+check_contains "$CMUX_LOG" 'clear-status vm-codex'
 end_scenario
 
 begin_scenario 'heartbeats recover lost updates without reviving stale state'
@@ -181,4 +188,4 @@ rm -rf "$XDG_STATE_HOME/cmux-agent-status"
 WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
 if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
 end_scenario
-lib_summary 48
+lib_summary 51
