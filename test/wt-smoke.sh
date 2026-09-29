@@ -1307,17 +1307,17 @@ ROWS
   assert_lacks "foreign-owned sshd was not killed" "$(cat "$TEST_ROOT/remote-log")" 'kill '
   assert_lacks "foreign-owned sshd did not reconnect" "$(cat "$CMUX_LOG")" 'workspace.remote.reconnect'
 
-  # After reconnect, a shell prompt goes through the same guarded --reattach path.
+  # After reconnect, a shell-looking screen only prompts for an explicit --reattach.
   printf 'sshd:%s\n' "$uid" >"$TEST_ROOT/remote-ps"
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:*' >"$TEST_ROOT/remote-ss-user"
   printf 'vm$\n' >"$TEST_ROOT/remote-screen"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
-  assert_wt_ok "recovery re-attaches a bare shell" -H fakevm attach task -r /vm/repos/project
+  assert_wt_ok "recovery selects a bare shell" -H fakevm attach task -r /vm/repos/project
   assert_has "hidden PID was inspected with sudo" "$(cat "$TEST_ROOT/remote-log")" 'sudo -n ss -H -ltnp sport = :65353'
-  assert_has "the shell received tmux" "$(cat "$CMUX_LOG")" 'send --workspace remote-row tmux new-session'
-  assert_has "the shell received return" "$(cat "$CMUX_LOG")" 'send-key --workspace remote-row enter'
-  assert_has "re-attach was reported" "$WT_OUT" '(re-attached)'
+  assert_lacks "a prompt-looking row was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "the recovered row was selected" "$WT_OUT" '(selected)'
+  assert_has "a bare shell gets an explicit re-attach hint" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
 
   # The row may become connected before the login shell has rendered its prompt.
   jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
@@ -1325,10 +1325,20 @@ ROWS
   printf 'connecting\n' >"$TEST_ROOT/remote-screen-delay"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "recovery waits for a late shell prompt" -H fakevm attach task -r /vm/repos/project
-  assert_eq "the late prompt was read and guarded" 3 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
-  assert_has "the late shell received tmux" "$(cat "$CMUX_LOG")" 'send --workspace remote-row tmux new-session'
-  assert_has "late re-attach was reported" "$WT_OUT" '(re-attached)'
+  assert_eq "the late prompt was read" 2 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
+  assert_lacks "the late shell was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "the late shell gets an explicit re-attach hint" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
 
+  # A TUI footer ending in % looks like a prompt to the suffix check; it must never cause a send.
+  jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  printf 'Context 100%%\n' >"$TEST_ROOT/remote-screen"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "recovery selects a row with a percent footer" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "the percent footer did not trigger a send" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "the percent footer row was selected" "$WT_OUT" '(selected)'
+
+  printf 'vm$\n' >"$TEST_ROOT/remote-screen"
   : >"$CMUX_LOG"
   assert_wt_ok "explicit --reattach still sends tmux" -H fakevm attach task -r /vm/repos/project --reattach
   assert_has "explicit re-attach selected the row" "$(cat "$CMUX_LOG")" 'workspace select remote-row'
@@ -1409,7 +1419,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=364
+FIXED_ASSERTIONS=367
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
