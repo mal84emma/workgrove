@@ -3,8 +3,17 @@
 set -euo pipefail
 [[ $(uname -s) == Linux ]] || { echo 'Linux only'; exit 0; }
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
-ROOT=$(mktemp -d "${TMPDIR:-/tmp}/wt-status-linux.XXXXXX")
-trap 'rm -rf "$ROOT"' EXIT
+ORIGINAL_HOME=$HOME
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/wt-status-linux.XXXXXX")
+TEST_ROOT=$(cd "$TEST_ROOT" && pwd -P)
+[[ $TEST_ROOT == "$(cd "${TMPDIR:-/tmp}" && pwd -P)"/* && $TEST_ROOT != "$HOME"/* ]] || exit 1
+ROOT=$TEST_ROOT
+# shellcheck source=test/lib.sh
+# shellcheck disable=SC1091  # sourced helper
+source "$REPO/test/lib.sh"
+# shellcheck disable=SC2034  # read by the sourced cleanup helper
+KEEP_LABEL='Linux status fixtures'
+trap 'HOME=$ORIGINAL_HOME lib_cleanup' EXIT
 mkdir -p "$ROOT/home/.local/state/wt-agent-status" "$ROOT/home/.claude/projects"
 cp /bin/bash "$ROOT/codex"
 cp /bin/bash "$ROOT/claude"
@@ -23,9 +32,8 @@ export WT_STATUS_FILE="$XDG_STATE_HOME/wt-agent-status/task" REPO
 unset TMUX WT_STATUS_HEARTBEAT
 FAKE_CODEX="$ROOT/codex" FAKE_CLAUDE="$ROOT/claude"
 export FAKE_CODEX FAKE_CLAUDE
-fail() { echo "FAIL: $*" >&2; exit 1; }
-has() { grep -qF -- "$1" "$CMUX_LOG" || fail "missing $1"; }
-no_status() { ! grep -qF -- '--title Codex status' "$CMUX_LOG" || fail 'unexpected status relay'; }
+has() { if grep -qF -- "$1" "$CMUX_LOG"; then pass; else fail "missing $1"; fi; }
+no_status() { if ! grep -qF -- '--title Codex status' "$CMUX_LOG"; then pass; else fail 'unexpected status relay'; fi; }
 agent_event() { # agent_event codex|claude JSON
   local agent=$1; export PAYLOAD=$2
   if [[ $agent == claude ]]; then export AGENT_NOTIFY_SOURCE='Claude Code'; else export AGENT_NOTIFY_SOURCE=Codex; fi
@@ -33,51 +41,90 @@ agent_event() { # agent_event codex|claude JSON
   "$ROOT/$agent" -c 'printf "%s\n" "$PAYLOAD" | bash "$REPO/bin/agent-notify"; sleep 0.05'
 }
 
+begin_scenario 'owner lifecycle and nested isolation'
 agent_event codex '{"hook_event_name":"UserPromptSubmit","session_id":"test-session"}'
 has '|codex|running|'
-[[ -r $WT_STATUS_FILE ]] || fail 'prompt did not create heartbeat state'
+if [[ -r $WT_STATUS_FILE ]]; then pass; else fail 'prompt did not create heartbeat state'; fi
 : > "$CMUX_LOG"
 agent_event codex '{"hook_event_name":"Stop","session_id":"test-session"}'
 has '|codex|idle|'
 : > "$CMUX_LOG"
 agent_event codex '{"hook_event_name":"SessionEnd","session_id":"test-session"}'
 has '|codex|clear|'
-[[ ! -e $WT_STATUS_FILE ]] || fail 'session end retained heartbeat state'
+if [[ ! -e $WT_STATUS_FILE ]]; then pass; else fail 'session end retained heartbeat state'; fi
 
 : > "$CMUX_LOG"
 # shellcheck disable=SC2016  # both nested bash processes read the exported fixture variables
 PAYLOAD='{"hook_event_name":"UserPromptSubmit","session_id":"nested"}' AGENT_NOTIFY_SOURCE=Codex \
   "$FAKE_CODEX" -c '"$FAKE_CODEX" -c '\''printf "%s\n" "$PAYLOAD" | bash "$REPO/bin/agent-notify"; sleep 0.05'\''; sleep 0.05'
 no_status
-[[ ! -e $WT_STATUS_FILE ]] || fail 'nested agent changed heartbeat state'
+if [[ ! -e $WT_STATUS_FILE ]]; then pass; else fail 'nested agent changed heartbeat state'; fi
 : > "$CMUX_LOG"
 TMUX_PANE=other agent_event codex '{"hook_event_name":"UserPromptSubmit","session_id":"wrong-pane"}'
 no_status
 : > "$CMUX_LOG"
 WT_STATUS_HEARTBEAT=1 bash "$REPO/bin/agent-notify" </dev/null
-[[ ! -e $CMUX_LOG || ! -s $CMUX_LOG ]] || fail 'missing state emitted a notification'
+if [[ ! -e $CMUX_LOG || ! -s $CMUX_LOG ]]; then pass; else fail 'missing state emitted a notification'; fi
+end_scenario
 
+begin_scenario 'Claude transcript interruptions and state replay'
 TRANSCRIPT="$HOME/.claude/projects/test.jsonl"
 : > "$TRANSCRIPT"
 payload=$(jq -nc --arg p "$TRANSCRIPT" '{hook_event_name:"UserPromptSubmit",session_id:"claude-session",transcript_path:$p}')
 agent_event claude "$payload"
-grep -q '"transcript_path"' "$WT_STATUS_FILE" || fail 'Claude transcript offset was not recorded'
+if grep -q '"transcript_path"' "$WT_STATUS_FILE"; then pass; else fail 'Claude transcript offset was not recorded'; fi
 printf '%s\n' '{"type":"user","message":{"content":"[Request interrupted by user]"}}' >> "$TRANSCRIPT"
 : > "$CMUX_LOG"
 WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
 has '|claude|idle|'
-[[ $(jq -r .state "$WT_STATUS_FILE") == idle ]] || fail 'Esc marker did not persist Idle'
+assert_eq 'Esc marker persists Idle' idle "$(jq -r .state "$WT_STATUS_FILE")"
 : > "$CMUX_LOG"
 WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
-has '|claude|renew|'
+saved_seq=$(jq -r .seq "$WT_STATUS_FILE")
+has "|claude|idle|$saved_seq|"
 agent_event claude '{"hook_event_name":"SessionEnd","session_id":"claude-session","reason":"clear"}'
 has '|claude|idle|'
+end_scenario
+
+begin_scenario 'first-turn and tool-use Esc markers are exact'
+rm -f "$TRANSCRIPT"
+payload=$(jq -nc --arg p "$TRANSCRIPT" '{hook_event_name:"UserPromptSubmit",session_id:"first-turn",transcript_path:$p}')
+agent_event claude "$payload"
+assert_eq 'missing first transcript uses offset zero' 0 "$(jq -r .offset "$WT_STATUS_FILE")"
+if grep -q '"transcript_path"' "$WT_STATUS_FILE"; then pass; else fail 'missing first transcript path was discarded'; fi
+printf '%s\n' '{"type":"user","message":{"content":"[Request interrupted by user for tool use]"}}' > "$TRANSCRIPT"
+: > "$CMUX_LOG"
+WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
+has '|claude|idle|'
+
+: > "$TRANSCRIPT"
+agent_event claude "$payload"
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"[Request interrupted by user for tool use]"}]}}' >> "$TRANSCRIPT"
+: > "$CMUX_LOG"
+WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
+assert_eq 'tool output is not an Esc marker' running "$(jq -r .state "$WT_STATUS_FILE")"
+has '|claude|running|'
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"prefix [Request interrupted by user]"}]}}' >> "$TRANSCRIPT"
+WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
+assert_eq 'embedded marker text is ignored' running "$(jq -r .state "$WT_STATUS_FILE")"
+printf '%s\n' '{"type":"user","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}' >> "$TRANSCRIPT"
+: > "$CMUX_LOG"
+WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
+has '|claude|idle|'
+
+: > "$TRANSCRIPT"
+agent_event claude "$payload"
+printf '%s\n' '{"type":"user","message":{"content":"Prompt already recorded"}}' >> "$TRANSCRIPT"
+WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
+assert_eq 'thinking without a marker stays Running' running "$(jq -r .state "$WT_STATUS_FILE")"
+end_scenario
 
 # A stalled relay must not hold the agent hook for cmux's ten-second CLI wait.
+begin_scenario 'relay timeout and wt run cleanup'
 : > "$CMUX_LOG"
 start=$SECONDS
 CMUX_SLEEP_NOTIFY=1 agent_event codex '{"hook_event_name":"UserPromptSubmit","session_id":"timeout"}'
-(( SECONDS - start < 4 )) || fail 'relay exceeded its one-second cap'
+if (( SECONDS - start < 4 )); then pass; else fail 'relay exceeded its one-second cap'; fi
 
 # Run the actual wt lifecycle: its cleanup sends Clear after deleting the heartbeat file.
 mkdir -p "$HOME/.local/bin" "$ROOT/repo"
@@ -100,8 +147,12 @@ bash "$REPO/bin/wt" new task -a codex --no-workspace -r "$ROOT/repo" >/dev/null
 export TEST_REPO="$ROOT/repo" CHILD_STATE_CHECK="$ROOT/child-kept-state" WT_SCRIPT="$REPO/bin/wt"
 WT_STATUS_BRIDGE=1 TMUX=/tmp/fake,1,0 PATH="$HOME/.local/bin:$PATH" \
   bash "$REPO/bin/wt" run task -r "$ROOT/repo" >/dev/null
-[[ -e $CHILD_STATE_CHECK ]] || fail 'nested wt removed its parent status file'
+if [[ -e $CHILD_STATE_CHECK ]]; then pass; else fail 'nested wt removed its parent status file'; fi
 has '|codex|clear|'
-[[ -z $(find "$XDG_STATE_HOME/wt-agent-status" -maxdepth 1 -type f -name 'wt-*' ! -name '*.lock' -print -quit) ]] ||
+if [[ -z $(find "$XDG_STATE_HOME/wt-agent-status" -maxdepth 1 -type f -name 'wt-*' ! -name '*.lock' -print -quit) ]]; then
+  pass
+else
   fail 'wt run left its heartbeat file after exit'
-echo 'ok Linux owner, heartbeat, Esc, clear and relay timeout'
+fi
+end_scenario
+lib_summary 26

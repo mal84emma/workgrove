@@ -415,9 +415,10 @@ interactive `wt attach`, `wt task` and `wt driver`, which belong to your own ses
   SSH pane has no local agent process; the VM-specific keys avoid that cleanup. The control notification is
   hidden from history and banners when the Mac hook is active. If the hook is missing, the fallback is a
   readable status notification. Claude's `StopFailure` and `idle_prompt` events return its row to Idle.
-  After Esc, the heartbeat also detects Claude's interruption marker in the transcript; if Claude writes no
-  further transcript data, it falls back to Idle after roughly three minutes, on the next heartbeat.
-  `/clear` leaves the agent at Idle.
+  After Esc, the heartbeat also detects Claude's interruption markers in the transcript, including an
+  interrupted tool. If Esc occurs while Claude is thinking and writes no marker, the row can stay Running
+  until the next lifecycle event. A transcript with no growth since the prompt hook falls back to Idle
+  after roughly three minutes, on the next heartbeat. `/clear` leaves the agent at Idle.
   The same Mac hook handles `wt-open` and `wt-attach`, opening the remote
   folder in VS Code or creating the row for the new VM task.
   To enable this on an existing VM, update the Mac first and ensure its `notifications.hooks` entry for
