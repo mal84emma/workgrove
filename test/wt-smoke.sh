@@ -28,8 +28,8 @@
 # asserted, first, to refuse — scenario 0 is that proof. Every git command that builds a fixture goes
 # through fixture_git, which guards the same way, so no fixture step can reach a repository of the user's.
 #
-# What a green run does NOT exercise: ssh (scenario 9 asserts only the paths that return before remote_sh is
-# reached — every one of them refuses in cmd_host or need_r), cmux itself (a stub answers for it), tmux, the
+# What a green run does NOT exercise: real ssh (scenario 10 uses a fake SSH server, and scenario 9 only
+# asserts the paths that return before remote_sh), cmux itself (a stub answers for it), tmux, the
 # `wt task`/`wt driver` pickers, `wt pr`, `wt sync`, `wt update` and VS Code (`wt open` runs a stub `code`).
 #
 # is_remote() is true on anything that is not a Mac, and bin/wt has no FORCE_OS to lie to it with the way
@@ -350,6 +350,17 @@ if [ "$1" = rpc ] && [ "$2" = workspace.remote.reconnect ]; then
   exit 0
 fi
 if [ "$1" = read-screen ]; then
+  if [ -f "$CMUX_STUB_SCREEN_COUNT" ]; then n=$(cat "$CMUX_STUB_SCREEN_COUNT"); else n=0; fi
+  n=$((n + 1))
+  printf '%s\n' "$n" >"$CMUX_STUB_SCREEN_COUNT"
+  if [ -f "$CMUX_STUB_SUSPEND_AT_READ" ] && [ "$n" = "$(cat "$CMUX_STUB_SUSPEND_AT_READ")" ]; then
+    jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$CMUX_STUB_ROWS" >"$CMUX_STUB_ROWS.tmp"
+    mv "$CMUX_STUB_ROWS.tmp" "$CMUX_STUB_ROWS"
+  fi
+  if [ -f "$CMUX_STUB_SCREEN_QUEUE/$n" ]; then
+    cat "$CMUX_STUB_SCREEN_QUEUE/$n"
+    exit 0
+  fi
   if [ -f "$CMUX_STUB_SCREEN_DELAY" ]; then
     cat "$CMUX_STUB_SCREEN_DELAY"
     rm -f "$CMUX_STUB_SCREEN_DELAY"
@@ -434,8 +445,11 @@ wt_run() {
            CMUX_STUB_LOG="$CMUX_LOG" CMUX_STUB_ROWS="$WT_ROWS" AGENT_ARGV_LOG="$AGENT_LOG" \
            CMUX_STUB_WINDOWS="$WT_WINDOWS" CMUX_STUB_ROWS_DIR="$WT_ROWS_DIR" \
            CMUX_STUB_SCREEN="$TEST_ROOT/remote-screen" CMUX_STUB_SCREEN_DELAY="$TEST_ROOT/remote-screen-delay" \
+           CMUX_STUB_SCREEN_COUNT="$TEST_ROOT/remote-screen-count" CMUX_STUB_SCREEN_QUEUE="$TEST_ROOT/remote-screen-queue" \
+           CMUX_STUB_SUSPEND_AT_READ="$TEST_ROOT/remote-suspend-at-read" \
            REMOTE_LOG="$TEST_ROOT/remote-log" \
            REMOTE_SS="$TEST_ROOT/remote-ss" REMOTE_SS_USER="$TEST_ROOT/remote-ss-user" REMOTE_PS="$TEST_ROOT/remote-ps" \
+           REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" REMOTE_WT_STATES="$TEST_ROOT/remote-wt-states" \
            CODEX_SANDBOX="$WT_SANDBOX" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
   return 0
@@ -1241,7 +1255,15 @@ bash -c "$1"
 STUB
   cat >"$SCRATCH_HOME/.local/bin/wt" <<'STUB'
 #!/bin/sh
-printf '  repo: /vm/repos/project\n  session: wt-project-task (agent running)\n'
+printf 'show %s\n' "$*" >>"$REMOTE_LOG"
+if [ -s "$REMOTE_WT_STATES" ]; then
+  state=$(head -1 "$REMOTE_WT_STATES")
+  tail -n +2 "$REMOTE_WT_STATES" >"$REMOTE_WT_STATES.tmp"
+  mv "$REMOTE_WT_STATES.tmp" "$REMOTE_WT_STATES"
+else
+  state=$(cat "$REMOTE_WT_STATE")
+fi
+printf '  repo: /vm/repos/project\n  session: wt-project-task (%s)\n' "$state"
 STUB
   cat >"$fake/ss" <<'STUB'
 #!/bin/sh
@@ -1271,6 +1293,9 @@ STUB
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
   printf 'sshd:%s\n' "$uid" >"$TEST_ROOT/remote-ps"
   printf 'agent still running\n' >"$TEST_ROOT/remote-screen"
+  printf 'agent running\n' >"$TEST_ROOT/remote-wt-state"
+  : >"$TEST_ROOT/remote-wt-states"
+  mkdir -p "$TEST_ROOT/remote-screen-queue"
   : >"$TEST_ROOT/remote-log"
   stub_cmux alive
   cat >"$WT_ROWS" <<ROWS
@@ -1283,8 +1308,9 @@ ROWS
   assert_has "only that sshd was stopped" "$(cat "$TEST_ROOT/remote-log")" 'kill -TERM 4242'
   assert_has "the row-specific reconnect was called" "$(cat "$CMUX_LOG")" 'rpc workspace.remote.reconnect {"workspace_id":"remote-row"}'
   assert_has "reconnect reached connected" "$WT_OUT" 'connected after reconnect'
-  assert_eq "no prompt is checked for a bounded five reads" 5 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
+  assert_eq "a recovered agent screen is checked for a bounded five reads" 5 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
   assert_lacks "an attached agent was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "uncertain recovery always names the manual step" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
 
   # A connected row leaves the relay untouched, even when ss would name an sshd.
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
@@ -1307,45 +1333,108 @@ ROWS
   assert_lacks "foreign-owned sshd was not killed" "$(cat "$TEST_ROOT/remote-log")" 'kill '
   assert_lacks "foreign-owned sshd did not reconnect" "$(cat "$CMUX_LOG")" 'workspace.remote.reconnect'
 
-  # After reconnect, a shell-looking screen only prompts for an explicit --reattach.
+  # A fresh VM report and a full shell prompt must agree. The first show says attached; the second,
+  # after reconnect, says detached. This proves recovery does not rely on its pre-reconnect snapshot.
   printf 'sshd:%s\n' "$uid" >"$TEST_ROOT/remote-ps"
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:*' >"$TEST_ROOT/remote-ss-user"
-  printf 'vm$\n' >"$TEST_ROOT/remote-screen"
+  printf 'agent running\nagent running, detached\n' >"$TEST_ROOT/remote-wt-states"
+  printf 'agent running, detached\n' >"$TEST_ROOT/remote-wt-state"
+  printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
+  rm -f "$TEST_ROOT/remote-screen-count"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
-  assert_wt_ok "recovery selects a bare shell" -H fakevm attach task -r /vm/repos/project
+  assert_wt_ok "recovery reattaches a proven bare shell" -H fakevm attach task -r /vm/repos/project
   assert_has "hidden PID was inspected with sudo" "$(cat "$TEST_ROOT/remote-log")" 'sudo -n ss -H -ltnp sport = :65353'
-  assert_lacks "a prompt-looking row was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
-  assert_has "the recovered row was selected" "$WT_OUT" '(selected)'
-  assert_has "a bare shell gets an explicit re-attach hint" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
+  assert_eq "VM show was refreshed after reconnect" 2 "$(grep -c '^show show task -r /vm/repos/project$' "$TEST_ROOT/remote-log" || true)"
+  assert_eq "the proven row got one tmux command" 1 "$(grep -c '^send --workspace remote-row ' "$CMUX_LOG" || true)"
+  assert_eq "the proven row got one return" 1 "$(grep -c '^send-key --workspace remote-row enter$' "$CMUX_LOG" || true)"
+  assert_has "the recovered row was re-attached" "$WT_OUT" '(re-attached)'
 
-  # The row may become connected before the login shell has rendered its prompt.
+  # The row may become connected before the login shell paints its prompt. The fourth poll sees it.
   jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
-  printf 'connecting\n' >"$TEST_ROOT/remote-screen-delay"
+  for n in 1 2 3; do printf 'connecting\n' >"$TEST_ROOT/remote-screen-queue/$n"; done
+  rm -f "$TEST_ROOT/remote-screen-count"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "recovery waits for a late shell prompt" -H fakevm attach task -r /vm/repos/project
-  assert_eq "the late prompt was read" 2 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
-  assert_lacks "the late shell was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
-  assert_has "the late shell gets an explicit re-attach hint" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
+  assert_eq "the late prompt got three waits and a final guard" 5 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
+  assert_eq "the late shell got one tmux command" 1 "$(grep -c '^send --workspace remote-row ' "$CMUX_LOG" || true)"
+  assert_eq "the late shell got one return" 1 "$(grep -c '^send-key --workspace remote-row enter$' "$CMUX_LOG" || true)"
+  assert_has "the late shell was re-attached" "$WT_OUT" '(re-attached)'
+
+  # A prompt that appears after the polling deadline still gets a useful manual command.
+  jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  for n in 1 2 3 4 5; do printf 'connecting\n' >"$TEST_ROOT/remote-screen-queue/$n"; done
+  rm -f "$TEST_ROOT/remote-screen-count"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "recovery reaches its prompt deadline" -H fakevm attach task -r /vm/repos/project
+  assert_eq "prompt polling was bounded" 5 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
+  assert_lacks "late-after-deadline prompt got no send" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "deadline prints explicit re-attach command" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
 
   # A TUI footer ending in % looks like a prompt to the suffix check; it must never cause a send.
   jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
   printf 'Context 100%%\n' >"$TEST_ROOT/remote-screen"
+  for n in 1 2 3 4 5; do rm -f "$TEST_ROOT/remote-screen-queue/$n"; done
+  rm -f "$TEST_ROOT/remote-screen-count"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "recovery selects a row with a percent footer" -H fakevm attach task -r /vm/repos/project
   assert_lacks "the percent footer did not trigger a send" "$(cat "$CMUX_LOG")" 'send --workspace'
   assert_has "the percent footer row was selected" "$WT_OUT" '(selected)'
+  assert_has "the percent footer gets a manual command" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
 
-  printf 'vm$\n' >"$TEST_ROOT/remote-screen"
+  # Even a shell-looking screen is insufficient if the VM still reports a tmux client.
+  jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  printf 'agent running\n' >"$TEST_ROOT/remote-wt-state"
+  printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
+  rm -f "$TEST_ROOT/remote-screen-count"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "recovery respects an attached tmux client" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "an attached tmux client got no send" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "attached-state uncertainty gets a manual command" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
+
+  # The final read can differ from the polling read. A prompt that turns into a TUI must stop the send.
+  jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  printf 'agent running, detached\n' >"$TEST_ROOT/remote-wt-state"
+  printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen-queue/1"
+  printf 'Context 100%%\n' >"$TEST_ROOT/remote-screen"
+  rm -f "$TEST_ROOT/remote-screen-count"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "recovery rechecks the prompt before sending" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "a changed screen got no send" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "changed-screen uncertainty gets a manual command" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
+  rm -f "$TEST_ROOT/remote-screen-queue/1"
+
+  # A second dropout during the final screen check invalidates an otherwise proven prompt.
+  jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
+  printf '2\n' >"$TEST_ROOT/remote-suspend-at-read"
+  rm -f "$TEST_ROOT/remote-screen-count"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "recovery rechecks connected state before sending" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "a second dropout got no send" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "second-dropout uncertainty gets a manual command" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
+  rm -f "$TEST_ROOT/remote-suspend-at-read"
+  jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "connected"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
+
+  printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
   : >"$CMUX_LOG"
   assert_wt_ok "explicit --reattach still sends tmux" -H fakevm attach task -r /vm/repos/project --reattach
   assert_has "explicit re-attach selected the row" "$(cat "$CMUX_LOG")" 'workspace select remote-row'
+  assert_eq "explicit re-attach sent one tmux command" 1 "$(grep -c '^send --workspace remote-row ' "$CMUX_LOG" || true)"
   printf 'agent still running\n' >"$TEST_ROOT/remote-screen"
   : >"$CMUX_LOG"
   assert_wt_fails 1 'does not end at a shell prompt' -H fakevm attach task -r /vm/repos/project --reattach
   assert_lacks "the screen guard prevented typing" "$(cat "$CMUX_LOG")" 'send --workspace'
+  printf 'Context 100%%\n' >"$TEST_ROOT/remote-screen"
+  : >"$CMUX_LOG"
+  assert_wt_fails 1 'does not end at a shell prompt' -H fakevm attach task -r /vm/repos/project --reattach
+  assert_lacks "the explicit percent-footer guard prevented typing" "$(cat "$CMUX_LOG")" 'send --workspace'
   WT_PATH_PREFIX=""
   end_scenario
 }
@@ -1419,7 +1508,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=367
+FIXED_ASSERTIONS=388
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under

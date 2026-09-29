@@ -176,15 +176,18 @@ run `exec bash` in that pane or open a new tmux window.
   `~/.bashrc` returns on its fourth line when the shell is not interactive, and anything below that return is
   never read by a command sent over ssh. Type `zsh` inside the row's tmux for the usual prompt.
 - No extra network rule is needed: the rows are plain ssh, and tmux is started by the row's own shell. After a
-  VM reboot or a cmux relaunch onto a lost pty a row shows a bare shell; `wt -H <vm> attach -r <repo> <name>`
-  re-attaches it (add `--restart-agent` when the reboot took the tmux session with it, or `--reattach` when a
-  dropped connection left the VM holding the old pty, which is the case cmux announces in the row as
-  `remote session was lost; starting a new shell`). After a Wi-Fi network switch, a row may instead be
+  VM reboot or a cmux relaunch onto a lost pty a row can show a bare shell. Run
+  `wt -H <vm> attach -r <repo> <name>`; use its `--restart-agent` line when the reboot took the tmux session
+  with it. If a dropped connection left the VM holding the old pty, cmux announces
+  `remote session was lost; starting a new shell`; inspect the row and use `--reattach` if it shows a bare
+  shell. After a Wi-Fi network switch, a row may instead be
   suspended with `Error: ssh-pty-attach: The cmux relay on <vm> did not become ready (the host may not allow SSH remote port forwarding). Automatic reconnect paused; use Reconnect to try again.`
   The port-forwarding warning is misleading: the old SSH connection can still hold that row's fixed relay
   port on the VM after the Mac's IP changes. `wt -H <vm> attach -r <repo> <name>` checks only that suspended
-  row, stops its user-owned stale `sshd` listener, asks cmux to reconnect it, and re-attaches tmux if it sees
-  a bare shell. A normal SSH reload does not end existing sessions, so block 1's keepalive setting only
+  row, stops its user-owned stale `sshd` listener, and asks cmux to reconnect it. It reattaches tmux only
+  when a fresh VM check shows the session detached and the row shows a recognizable task-shell prompt.
+  Otherwise it selects the row and prints the exact `--reattach` command; inspect the row before running it.
+  A normal SSH reload does not end existing sessions, so block 1's keepalive setting only
   shortens future stale connections to about a minute. Whether Azure ML preserves
   `/etc/ssh/sshd_config.d/10-workgrove-keepalive.conf` across a stop/start is **UNVERIFIED** (it does reset
   the login shell). After a stop/start, run `ssh <vm> 'ls -l /etc/ssh/sshd_config.d/10-workgrove-keepalive.conf; sudo sshd -T | grep -i clientalive'` and reapply block 1 if needed.

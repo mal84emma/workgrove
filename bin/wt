@@ -40,8 +40,9 @@
 #   wt -H <host> <new|attach|list|show|rm|path|open|repos|update|help> …
 #                                                             run wt on that VM over ssh and keep the cmux row local;
 #                                                             show/rm/path/open/attach need -r;
-#                                                             attach recovers a suspended row, then re-attaches;
-#                                                             [--restart-agent|--reattach] handle other cases;
+#                                                             attach recovers a suspended row and re-attaches when
+#                                                             its detached session and shell prompt are confirmed;
+#                                                             otherwise use --reattach; --restart-agent starts over;
 #                                                             update asks here, so run it from a terminal
 #
 # Where it runs: on a Mac wt drives cmux directly; on a VM (see is_remote) it only prepares worktrees and
@@ -1354,15 +1355,22 @@ recover_suspended_row() { # reconnect one suspended row, after freeing only its 
   die "row $id did not connect within 30 seconds (last state: ${state:-missing}); manual fallback: $fallback"
 }
 
-reattach_shell_row() { # the read-screen guard is shared by explicit --reattach and suspended-row recovery
-  local host="$1" title="$2" id="$3" session="$4" c screen last
+ROW_SHELL_LAST=""
+row_shell_prompt() { # read-screen is only a prompt signal when its last line looks like a whole VM shell prompt
+  local id="$1" c screen pattern='^[[:alnum:]_.-]+@[[:alnum:]_.-]+:[^[:cntrl:]]+[$#]$'
+  ROW_SHELL_LAST=""
+  c=$(cmux_bin) || return 1
+  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 1
+  ROW_SHELL_LAST=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -1)
+  [[ "$ROW_SHELL_LAST" =~ $pattern ]]
+}
+
+reattach_shell_row() { # explicit --reattach and suspended recovery both recheck the prompt before sending
+  local id="$3" session="$4" c
+  row_shell_prompt "$id" || return 1
+  # Recovery can lose its connection again while the prompt and detached session are being polled.
+  [[ "${5:-}" != require-connected || "$(row_remote_field "$id" state)" == connected ]] || return 1
   c=$(cmux_bin)
-  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null || true)
-  last=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -1)
-  case "$last" in
-    *'$'|*'#'|*'%') ;;
-    *) die "$title $(row_tag "$host") does not end at a shell prompt (last line: ${last:-empty}); it is probably still attached to tmux. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'" ;;
-  esac
   CMUX_QUIET=1 "$c" send --workspace "$id" "$(tmux_cmd "$session")" >/dev/null 2>&1 \
     || die "cmux send failed for $id; type this in the row instead: tmux attach -d -t '=$session'"
   CMUX_QUIET=1 "$c" send-key --workspace "$id" enter >/dev/null 2>&1 \
@@ -1383,7 +1391,7 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   done
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
-  local out session state title id path c screen last remote_state slot fallback tick recovered=0 maybe_shell=0 what=selected
+  local out session state title id path c remote_state slot fallback tick recovered=0 what=selected fresh fresh_session prompt_ready
   out=$(remote_wt "$host" show "$name" -r "$repo")
   session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
   path=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
@@ -1407,7 +1415,8 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
                                   # that the row shows a shell; the screen check is the backstop that stops the
                                   # tmux line from being typed into a running agent's prompt.
     [[ -n "$id" ]] || die "no row $title $(row_tag "$host") is open; wt -H $host attach -r $(shell_join "$repo") $name opens one"
-    reattach_shell_row "$host" "$title" "$id" "$session"
+    reattach_shell_row "$host" "$title" "$id" "$session" \
+      || die "$title $(row_tag "$host") does not end at a shell prompt (last line: ${ROW_SHELL_LAST:-empty}); it is probably still attached to tmux. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'"
     c=$(cmux_bin)
     CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
     printf 'row: %s %s (re-attached)\n' "$title" "$(row_tag "$host")"
@@ -1435,14 +1444,16 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   [[ -n "$id" ]] || { remote_row "$host" "$session" "$title" ""; return 0; }
   c=$(cmux_bin)
   if [[ $recovered -eq 1 ]]; then
-    # The row can report connected before its new login shell has painted a prompt. Screen text is only a
-    # hint: an agent footer can also end in $, # or %, so never type into a recovered row automatically.
+    # The row can report connected before its new login shell paints a prompt. Both this screen and the
+    # VM's tmux client count must be fresh: a prompt-shaped footer alone says nothing about what holds the pty.
     for ((tick=0; tick<5; tick++)); do
-      screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null || true)
-      last=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -1)
-      case "$last" in
-        *'$'|*'#'|*'%') maybe_shell=1; break ;;
-      esac
+      fresh=$(remote_wt_raw "$host" show "$name" -r "$repo" 2>/dev/null) || fresh=""
+      fresh_session=$(printf '%s\n' "$fresh" | sed -n 's/^ *session: *//p' | head -1)
+      prompt_ready=0; row_shell_prompt "$id" && prompt_ready=1
+      if [[ "$fresh_session" == "$session (agent running, detached)" && $prompt_ready -eq 1 ]]; then
+        if reattach_shell_row "$host" "$title" "$id" "$session" require-connected; then what=re-attached; fi
+        break
+      fi
       [[ $tick -eq 4 ]] || sleep 1
     done
   fi
@@ -1456,8 +1467,8 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   fi
   CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
   printf 'row: %s %s (%s)\n' "$title" "$(row_tag "$host")" "$what"
-  if [[ $maybe_shell -eq 1 ]]; then
-    warn "if this row shows a bare shell, re-attach with: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
+  if [[ $recovered -eq 1 && "$what" != re-attached ]]; then
+    warn "re-attach this row if it shows a bare shell: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
   fi
 }
 
