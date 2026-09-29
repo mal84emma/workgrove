@@ -1,1 +1,2 @@
 Throwaway file for the github-guard end-to-end test; this PR will be closed.
+A second line, pushed onto the existing branch.
