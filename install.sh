@@ -380,7 +380,7 @@ make_dirs() {
 # install_bins: link the scripts into ~/.local/bin, retiring any copy in ~/bin (which is first on PATH).
 install_bins() {
   local b
-  for b in wt agent-notify cmux-hook azml-ssh-host; do
+  for b in wt agent-notify cmux-hook azml-ssh-host github-guard; do
     if [[ -e "$HOME/bin/$b" || -L "$HOME/bin/$b" ]]; then
       stash "$HOME/bin/$b"
       echo "retired ~/bin/$b (it shadowed ~/.local/bin/$b); the old copy is in the backup dir"

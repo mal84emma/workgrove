@@ -28,7 +28,7 @@ Resolve conflicts inside the worktree, then `git rebase --continue`.
 
 ## Handing back
 
-Report the branch `wt/<name>` and what is on it. Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish unless the user explicitly asked for that action in this conversation; `wt pr <name>` only then.
+Report the branch `wt/<name>` and what is on it. Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish unless the user explicitly asked for that action in this conversation; `wt pr <name>` only then. A brief to work on an open pull request counts as asking to push to its branch and to reply to, edit your own of, and resolve its review comments; a brief to work on an issue counts as asking to comment on it and to edit what this login wrote there; AGENTS.md gives the forms that are approved without a prompt.
 
 ## Finishing a task
 

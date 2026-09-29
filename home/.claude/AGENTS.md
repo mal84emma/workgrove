@@ -15,7 +15,16 @@ Each unit of work that changes code is a **task** and lives in its own git workt
 
 These are conventions, not a sandbox: a session launched with its cwd inside `.worktrees/<name>` is not isolated by Claude's own worktree isolation. Staying inside the worktree is your responsibility.
 
-Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish unless the user explicitly asked for that action in this conversation; report the branch instead.
+Never `git push`, `wt pr`, `gh pr create`, `gh issue create`, create a remote repository or publish unless the user explicitly asked for that action in this conversation; report the branch instead. A brief to work on an open pull request (address its review, fix its CI) counts as asking to push to that pull request's branch and to reply to, edit your own of, and resolve its review comments; a brief to review one counts as asking to post the review; a brief to work on an issue counts as asking to comment on it, and to edit it and your comments on it where this login wrote them; and nothing more. Never approve a pull request: that stays the user's.
+
+Claude's `github-guard` hook approves these without a prompt, in this repository only, and denies other GitHub writes with a reason that names the approved form — read it and retry. Run each as its own command: no pipe, `&&`, `$(…)` or `cd … &&` in front; filter with `--jq '<expr>'`, pass long text with `--body-file <file in the repo or a temp dir>`, quote an endpoint with `?` or `&`.
+
+- Read: `gh api <endpoint>`, `gh api graphql -f query='…'`, `gh pr view|diff|checks|list|status`, `gh issue view|list|status`.
+- Push: `git push [-u] origin HEAD[:<branch>]` (or a local branch by name, never a tag), to any branch but the default one; never forced, never more than one branch.
+- Open a pull request or an issue: `gh pr create --title '…' --body '…'` (or `--fill`), `wt pr <name>`, `gh issue create --title '…' --body '…' [--label …]`. No `--template`: read the repository's template and pass the filled-in text.
+- Comment and review: `gh pr comment <n> --body '…'` or `gh issue comment <n> --body '…'` (`--edit-last` to fix your latest), `gh pr review <n> --comment|--request-changes --body '…'`; through `gh api -X POST repos/{owner}/{repo}/pulls/<n>/…`: `comments/<id>/replies -f body=…` to reply, `comments -f body= -f commit_id= -f path= -F line=` for one inline comment, `reviews -f event=COMMENT -f body=… -f 'comments[][path]=…' -F 'comments[][line]=…' -f 'comments[][body]=…'` for a review with inline comments.
+- Edit your own: `gh issue edit <n> --title|--body|--add-label …` on an issue this login opened; `gh api -X PATCH repos/{owner}/{repo}/pulls/comments/<id>` or `…/issues/comments/<id>` with `-f body=…`. Closing and reopening issues still ask.
+- Resolve: `gh api graphql -F threadId=<id> -f query='mutation($threadId: ID!) { resolveReviewThread(input: {threadId: $threadId}) { thread { isResolved } } }'` (thread ids come from a `reviewThreads` query).
 
 ## Layout and naming
 
