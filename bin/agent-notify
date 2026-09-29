@@ -12,10 +12,12 @@ status=''; status_only=''; body=''; sound=''
 interrupted=0
 if [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -z $payload ]]; then
   [[ -n ${WT_STATUS_FILE:-} && -r $WT_STATUS_FILE ]] || exit 0
-  # The file is also written by lifecycle hooks. Read and, if needed, update it under one lock.
+  # The file is also written by lifecycle hooks, which drop their update if they wait long for the lock.
+  # Hold it to read and to write, not while scanning the transcript: a long turn can take seconds to parse.
   exec 9>"$WT_STATUS_FILE.lock"
   if command -v flock >/dev/null; then flock -w 1 9 || exit 0; fi
   payload=$(cat "$WT_STATUS_FILE" 2>/dev/null) || exit 0
+  if command -v flock >/dev/null; then flock -u 9; fi
   path=$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)
   offset=$(printf '%s' "$payload" | jq -r '.offset // empty' 2>/dev/null)
   start=$(printf '%s' "$payload" | jq -r '.start // empty' 2>/dev/null)
@@ -27,14 +29,20 @@ if [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -z $payload ]]; then
          elif type == "array" then any(.[]; .type == "text" and (.text | startswith("[Request interrupted by user")))
          else false end))' >/dev/null 2>&1; } ||
        { (( size == offset && $(date +%s) - start >= 180 )); }; then
-      prompt_seq=$(printf '%s' "$payload" | jq -r '.seq // empty' 2>/dev/null)
-      [[ $prompt_seq =~ ^[0-9]{19}$ ]] && event_seq=$((10#$prompt_seq + 1))
-      payload=$(printf '%s' "$payload" | jq -c --arg q "$event_seq" '.state = "idle" | .seq = $q | del(.transcript_path, .offset, .start)')
-      printf '%s\n' "$payload" > "$WT_STATUS_FILE"
-      interrupted=1
+      if command -v flock >/dev/null; then flock -w 1 9 || exit 0; fi
+      current=$(cat "$WT_STATUS_FILE" 2>/dev/null) || exit 0
+      if [[ $current == "$payload" ]]; then
+        prompt_seq=$(printf '%s' "$payload" | jq -r '.seq // empty' 2>/dev/null)
+        [[ $prompt_seq =~ ^[0-9]{19}$ ]] && event_seq=$((10#$prompt_seq + 1))
+        payload=$(printf '%s' "$payload" | jq -c --arg q "$event_seq" '.state = "idle" | .seq = $q | del(.transcript_path, .offset, .start)')
+        printf '%s\n' "$payload" > "$WT_STATUS_FILE"
+        interrupted=1
+      else
+        payload=$current  # a hook wrote during the scan; its state is newer than the marker
+      fi
+      if command -v flock >/dev/null; then flock -u 9; fi
     fi
   fi
-  if command -v flock >/dev/null; then flock -u 9; fi
   exec 9>&-
 fi
 event=$(printf '%s' "$payload" | jq -r '.hook_event_name // empty' 2>/dev/null || true)

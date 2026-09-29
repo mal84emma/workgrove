@@ -164,6 +164,43 @@ if [[ ! -e $WT_STATUS_FILE ]]; then pass; else fail 'old Stop recreated ended st
 if grep -qF '|codex|idle|' "$CMUX_LOG"; then fail 'old Stop was relayed after clear'; else pass; fi
 end_scenario
 
+# A long turn can take seconds to parse; hooks that arrive meanwhile must neither wait for nor lose to the scan.
+begin_scenario 'a slow transcript scan does not hold the status lock'
+cat > "$ROOT/shim/tail" <<'TAIL'
+#!/usr/bin/env bash
+[[ -n ${SLOW_SCAN:-} ]] && { : > "$SLOW_SCAN"; sleep 2; }
+exec /usr/bin/tail "$@"
+TAIL
+chmod +x "$ROOT/shim/tail"
+scan() { # scan — start a heartbeat whose transcript read takes two seconds, and wait until it is reading
+  rm -f "$ROOT/scanning"
+  SLOW_SCAN="$ROOT/scanning" WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null &
+  heartbeat=$!
+  for _ in $(seq 1 50); do [[ -e $ROOT/scanning ]] && break; sleep 0.1; done
+}
+rm -f "$WT_STATUS_FILE"; : > "$TRANSCRIPT"
+payload=$(jq -nc --arg p "$TRANSCRIPT" '{hook_event_name:"UserPromptSubmit",session_id:"slow-scan",transcript_path:$p}')
+agent_event claude "$payload"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}' >> "$TRANSCRIPT"
+: > "$CMUX_LOG"
+scan
+agent_event claude '{"hook_event_name":"Stop","session_id":"slow-scan"}'
+has '|claude|idle|'
+wait "$heartbeat"
+assert_eq 'Stop during a scan persists Idle' idle "$(jq -r .state "$WT_STATUS_FILE")"
+
+agent_event claude "$payload"
+printf '%s\n' '{"type":"user","message":{"content":"[Request interrupted by user]"}}' >> "$TRANSCRIPT"
+: > "$CMUX_LOG"
+scan
+agent_event claude "$payload"   # the next prompt lands while the heartbeat is still reading the Esc marker
+new_seq=$(jq -r .seq "$WT_STATUS_FILE")
+wait "$heartbeat"
+assert_eq 'scan does not overwrite a newer prompt' running "$(jq -r .state "$WT_STATUS_FILE")"
+assert_eq 'newer prompt keeps its sequence' "$new_seq" "$(jq -r .seq "$WT_STATUS_FILE")"
+if grep -qF '|claude|idle|' "$CMUX_LOG"; then fail 'stale Esc was relayed'; else pass; fi
+end_scenario
+
 # A stalled relay must not hold the agent hook for cmux's ten-second CLI wait.
 begin_scenario 'relay timeout and wt run cleanup'
 : > "$CMUX_LOG"
@@ -200,4 +237,4 @@ else
   fail 'wt run left its heartbeat file after exit'
 fi
 end_scenario
-lib_summary 37
+lib_summary 42
