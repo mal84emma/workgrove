@@ -211,15 +211,15 @@ It does not contact any configured host.
 after worktree creation, and an SSH disconnect after creation but before the Mac receives the result. It also
 checks that a brief and agent choice survive an interrupted `.wt-setup`.
 
-`bash test/github-guard-smoke.sh` runs 276 assertions of hook payloads through `bin/github-guard`, with `gh`
-stubbed to answer `gh pr list` and `gh api` from fixtures by running the guard's own `--jq` filter over them.
+`bash test/github-guard-smoke.sh` runs 282 assertions of hook payloads through `bin/github-guard`, with `gh`
+stubbed to answer `gh api` from fixtures by running the guard's own `--jq` filter over them.
 It checks that a command which only mentions `gh api` or `git push` — a commit message, a heredoc, a `grep` —
-gets no answer; that reads, pushes to a pull request's branch or a new one, pull requests, comments, reviews,
+gets no answer; that reads, pushes to any branch but the default one, pull requests, comments, reviews,
 edits of your own comments and thread resolution are approved; and that pipes, substitutions, brace
 expansions, control characters, another repository, someone else's comment, an approval, any other GraphQL
 mutation (behind an alias, a fragment, a directive, a comment or a block string too), force pushes,
-deletions, the default branch, an existing branch with no pull request, a fork's pull request, a body file
-outside the repository and a remote whose push URL leaves github.com are all denied; and that
+deletions, the default branch — as GitHub names it, over a stale local HEAD, and when nothing can name it —
+a body file outside the repository and a remote whose push URL leaves github.com are all denied; and that
 `settings.base.json` wires the hook and carries no rule that would override it. `GUARD_BASH=/bin/bash` runs
 the guard under bash 3.2.
 
@@ -501,8 +501,8 @@ own machine.
   that sees every Bash command before the permission lists do, decides instead, the same way on every machine.
   It approves, in the repository the session is in: reads (`gh api` GET or HEAD, a GraphQL query, `gh pr
   view|diff|checks|list|status`); `git push` of one branch, without force, through a remote whose push URL is on
-  github.com, to a branch that is not the default branch and is either the head of an open pull request in
-  that remote's own repository — not a fork's — or does not exist there yet; `gh pr create` and `wt pr`;
+  github.com, to any branch but that repository's default one — which it asks GitHub for, falling back to the
+  remote's HEAD, and denies the push when neither answers; `gh pr create` and `wt pr`;
   `gh pr comment` and `gh pr review --comment|--request-changes`; through `gh api`, a comment, an inline review
   comment or a reply, a review with inline comments, and an edit of a comment or review that GitHub says the
   `gh` login wrote; and a GraphQL mutation whose only fields are `resolveReviewThread` or
@@ -520,8 +520,9 @@ own machine.
   deny them: they prompt, or in auto mode go to its classifier — and on a machine whose `settings.json` still
   allows `Bash(git *)`, they run. Resolving a thread is not checked against the repository, since a thread id
   does not say which one it belongs to. And what an agent can write is still whatever the machine's `gh` login
-  and git credentials allow: the guard catches the ordinary spellings of a force push or a push to main, while
-  branch protection on GitHub and a token scoped to the repositories you work on are what actually hold.
+  and git credentials allow: the guard catches the ordinary spellings of a force push or a push to the default
+  branch, while branch protection on GitHub and a token scoped to the repositories you work on are what
+  actually hold.
 
 - **The hooks run scripts from this repo on every turn.** `settings.base.json` wires five Claude events
   (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `SessionEnd`) to `agent-notify` and a

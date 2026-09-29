@@ -7,9 +7,8 @@
 # the session is in — a github.com remote of its working directory, or gh's own {owner}/{repo}:
 #
 #   read          gh api GET or HEAD; gh api graphql with a query; gh pr view|diff|checks|list|status
-#   push          git push [-u] <remote> <src>[:<branch>] — no force, no delete, no tags, never the default
-#                 branch, and <branch> is either the head of an open pull request in that remote's own
-#                 repository (not a fork's) or does not exist there yet (a new branch, to open one from)
+#   push          git push [-u] <remote> <src>[:<branch>] to any branch but the default one (GitHub is asked
+#                 which that is) — no force, no delete, no tags, one branch, a github.com push URL
 #   open a PR     gh pr create (not from a file outside this repository or a temp dir, not into another
 #                 repository); wt pr <name> [--draft]
 #   comment       gh pr comment [<n>] --body|--body-file …, and --edit-last to edit your latest one;
@@ -28,7 +27,7 @@
 # Why a hook and not permission rules: a hook's "allow" does not override a deny rule (the permissions docs:
 # "Hook decisions don't bypass permission rules"), so Bash(gh api *), Bash(git push *), Bash(gh pr create *)
 # and Bash(wt pr *) had to leave the deny list for any of this to be approvable, and a permission rule cannot
-# tell `gh api .../comments` from `gh api -X DELETE ...`, nor a pull request's branch from main. This script
+# tell `gh api .../comments` from `gh api -X DELETE ...`, nor a feature branch from the default one. This script
 # can, because it reads the words the shell will actually see: a command is approved only when it is ONE simple
 # command that tokenises cleanly here — no pipe, redirect, `;`, `&&`, `$`, backtick, glob, brace range,
 # backslash or unquoted newline — so nothing it did not read can run beside it.
@@ -418,7 +417,7 @@ check_gh_pr() {
 # ---------------------------------------------------------------------------------------------- git push
 
 check_git_push() {
-  local a pos=() form="approved form: git push [-u] <remote> HEAD[:<branch>], to a pull request's branch or a new one"
+  local a pos=() form="approved form: git push [-u] <remote> HEAD[:<branch>], to any branch but the default one"
   while [[ $# -gt 0 ]]; do
     a=$1; shift
     case $a in
@@ -432,7 +431,7 @@ check_git_push() {
     esac
   done
   [[ ${#pos[@]} -eq 2 ]] || deny "name the remote and the branch; $form"
-  local remote=${pos[0]} spec=${pos[1]} src dst url repo='' r def n
+  local remote=${pos[0]} spec=${pos[1]} src dst url repo='' r def
   [[ $remote =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || deny "push to a named remote, not '$remote'"
   git -C "$cwd" remote 2>/dev/null | grep -qxF -- "$remote" || deny "'$remote' is not a remote of this repository"
   # Where the push really goes: --push applies pushurl and pushInsteadOf, which a plain get-url would not.
@@ -463,21 +462,19 @@ check_git_push() {
   [[ $dst == refs/* ]] && deny "push to a branch, not $dst"
   branch_name "$dst" || deny "'$dst' is not a branch name git push approves"
 
-  def=$(git -C "$cwd" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null) && def=${def#"$remote"/}
-  [[ $dst == main || $dst == master || $dst == "${def:-main}" ]] \
-    && deny "$dst is the default branch; agents push only to a pull request's branch or a new one"
-  command -v gh >/dev/null 2>&1 || deny "gh is not installed, so $dst cannot be checked"
-  n=$(gh_here pr list -R "$repo" --head "$dst" --state open --json isCrossRepository \
-        --jq 'map(select(.isCrossRepository | not)) | length') \
-    || deny "could not ask GitHub whether $dst has an open pull request in $repo (is gh logged in?)"
-  [[ $n =~ ^[0-9]+$ && $n -gt 0 ]] && allow "a push to $dst, the branch of an open pull request in $repo"
-  # No open pull request: a branch that does not exist yet is safe to create — it is what a pull request is
-  # opened from — but an existing one belongs to someone, or to a closed pull request, and is left alone.
-  n=$(gh_here api "repos/$repo/git/matching-refs/heads/$dst" --jq "map(select(.ref == \"refs/heads/$dst\")) | length") \
-    || deny "could not ask GitHub whether $dst exists in $repo (is gh logged in?)"
-  [[ $n == 0 ]] && allow "a push that creates $dst in $repo"
-  deny "$dst already exists in $repo and is not the branch of an open pull request there; agents push only to \
-those, or to a new branch"
+  # The default branch is the one thing a push may not reach, so it is asked of GitHub, which knows; the
+  # remote-tracking HEAD is only the fallback, because a clone that never ran `git remote set-head` has none,
+  # and one taken before the default was renamed has the old name. Neither answering is a denial, not a guess.
+  def=''
+  command -v gh >/dev/null 2>&1 && def=$(gh_here api "repos/$repo" --jq '.default_branch // empty')
+  branch_name "$def" || def=''                               # an error page is not a branch
+  [[ -n $def ]] || { def=$(git -C "$cwd" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null) \
+    && def=${def#"$remote"/}; }
+  [[ -n $def ]] || deny "could not find the default branch of $repo (is gh logged in?), so $dst cannot be checked"
+  [[ $dst == main || $dst == master || $dst == "$def" ]] \
+    && deny "$dst is the default branch of $repo; agents push only to other branches — push to one and open a \
+pull request"
+  allow "a push to $dst in $repo"
 }
 
 # ------------------------------------------------------------------------------------------------ wt pr

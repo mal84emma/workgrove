@@ -7,8 +7,8 @@
 # Bash(gh pr create *) and Bash(wt pr *) left the deny list it is the only thing that denies any of them, so
 # both directions are asserted: that what it approves really is a read, or a write to this repository's pull
 # requests of a kind it lists, and that a command which merely mentions one of them gets no answer at all.
-# `gh` is stubbed: `gh pr list` and `gh api <endpoint>` answer from fixtures by running the guard's own --jq
-# filter over them, so the filters are tested too, and an endpoint with no fixture fails the way a 404 does.
+# `gh` is stubbed: `gh api <endpoint>` answers from fixtures by running the guard's own --jq filter over them,
+# so the filters are tested too, and an endpoint with no fixture fails the way a 404 does.
 # Nothing here contacts GitHub: the remotes name github.com, but nothing fetches from or pushes to them.
 set -euo pipefail
 umask 022
@@ -29,45 +29,37 @@ GUARD=${GUARD:-$REPO/bin/github-guard}   # overridable, so a mutated copy can be
 # The user's own git config could rewrite a github.com URL (url.<base>.insteadOf) under the guard's feet.
 export GIT_CONFIG_GLOBAL="$TEST_ROOT/gitconfig" GIT_CONFIG_NOSYSTEM=1
 : >"$GIT_CONFIG_GLOBAL"
-mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/home" "$TEST_ROOT/prs" "$TEST_ROOT/api" "$TEST_ROOT/elsewhere"
+mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/home" "$TEST_ROOT/api" "$TEST_ROOT/elsewhere"
 cat >"$TEST_ROOT/bin/gh" <<'GH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_LOG"
 [[ ${FAKE_GH_FAIL:-} == 1 ]] && { echo 'HTTP 401: Bad credentials' >&2; exit 1; }
-kind="$1 ${2:-}"; target=${2:-}; head='' filter='.'
+[[ ${1:-} == api ]] || exit 3
+target=${2:-} filter='.'
 shift 2 || true
 while [[ $# -gt 0 ]]; do
-  case $1 in --head) head=$2; shift ;; --jq) filter=$2; shift ;; esac
+  case $1 in --jq) filter=$2; shift ;; esac
   shift
 done
-case $kind in
-  'pr list') f="$TEST_ROOT/prs/${head//\//__}.json"; [[ -f $f ]] || f="$TEST_ROOT/prs/none.json" ;;
-  api\ *) f="$TEST_ROOT/api/${target//\//__}.json"
-          [[ -f $f ]] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; } ;;
-  *) exit 3 ;;
-esac
+f="$TEST_ROOT/api/${target//\//__}.json"
+[[ -f $f ]] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
 jq -r "$filter" "$f"
 GH
 chmod +x "$TEST_ROOT/bin/"*
-fixture() { printf '%s\n' "$2" >"$TEST_ROOT/$1.json"; }   # fixture <prs|api>/<key with / as __> <json>
-fixture prs/none '[]'
-fixture prs/wt__label-prop '[{"isCrossRepository": false}]'
-fixture prs/feature__other '[{"isCrossRepository": false}]'
-fixture prs/fork-only '[{"isCrossRepository": true}]'
-fixture prs/trunk '[{"isCrossRepository": false}]'    # an open PR whose head is the default branch
+fixture() { printf '%s\n' "$2" >"$TEST_ROOT/$1.json"; }   # fixture api/<endpoint with / as __> <json>
+fixture api/repos__acme__widgets '{"default_branch": "trunk"}'
+fixture api/repos__someone__widgets '{"default_branch": "develop"}'     # the fork: no local fork/HEAD
+fixture api/repos__acme__gadgets '{"default_branch": "new-default"}'    # renamed since the clone
+fixture api/repos__acme__nulls '{}'                                      # .default_branch comes back null
 fixture api/user '{"login": "me"}'
 fixture 'api/repos__{owner}__{repo}__pulls__comments__7' '{"user": {"login": "me"}}'
 fixture api/repos__acme__widgets__pulls__comments__8 '{"user": {"login": "a-reviewer"}}'
 fixture api/repos__acme__widgets__issues__comments__9 '{"user": {"login": "Me"}}'
 fixture api/repos__acme__widgets__pulls__5__reviews__11 '{"user": {"login": "me"}}'
-# matching-refs matches by prefix, so the guard has to pick the exact ref out of what comes back
-fixture api/repos__acme__widgets__git__matching-refs__heads__wt__new-branch '[{"ref": "refs/heads/wt/new-branch-2"}]'
-fixture api/repos__acme__widgets__git__matching-refs__heads__release__1 '[{"ref": "refs/heads/release/1"}]'
-fixture api/repos__acme__widgets__git__matching-refs__heads__fork-only '[{"ref": "refs/heads/fork-only"}]'
 
-# The repository an agent would be in: a task branch with an open pull request, a default branch called
-# trunk (so "is it the default branch" is not only "is it called main"), and one remote for each way a push
-# could leave GitHub.
+# The repository an agent would be in: a task branch, a default branch called trunk (so "is it the default
+# branch" is not only "is it called main"), and one remote for each way a push could leave GitHub or find the
+# default branch wrongly.
 W="$TEST_ROOT/widgets"
 git init -q -b trunk "$W"
 git -C "$W" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
@@ -81,6 +73,10 @@ git -C "$W" remote add mapped https://github.com/acme/widgets
 git -C "$W" config remote.mapped.push refs/heads/wt/label-prop:refs/heads/trunk
 git -C "$W" update-ref refs/remotes/origin/trunk HEAD
 git -C "$W" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+git -C "$W" remote add renamed https://github.com/acme/gadgets.git          # local HEAD says old-default
+git -C "$W" update-ref refs/remotes/renamed/old-default HEAD
+git -C "$W" symbolic-ref refs/remotes/renamed/HEAD refs/remotes/renamed/old-default
+git -C "$W" remote add nulls https://github.com/acme/nulls.git
 printf 'Two nits inline.\n' >"$W/notes.md"
 printf 'Adds the label prop.\n' >"$TEST_ROOT/pr-body.md"                 # a temp dir, where agents write
 ln -s "$REPO/README.md" "$W/linked.md"                                      # in the repo, pointing out of it
@@ -313,24 +309,28 @@ expect deny 'wt pr label-prop -r' 'not approved'
 expect deny 'wt pr label-prop other'
 end_scenario
 
-begin_scenario 'git push: a pull request branch or a new one, never the default branch, never forced'
+begin_scenario 'git push: any branch but the default one, never forced'
 : >"$TEST_ROOT/gh.log"
-expect allow 'git push origin HEAD' 'open pull request'
-assert_grep 'the PR is looked up in the push remote repo' "$TEST_ROOT/gh.log" \
-  'pr list -R acme/widgets --head wt/label-prop --state open'
+expect allow 'git push origin HEAD' 'a push to wt/label-prop in acme/widgets'
+assert_grep 'the default branch is asked of GitHub' "$TEST_ROOT/gh.log" 'api repos/acme/widgets --jq .default_branch // empty'
 expect allow 'git push -u origin HEAD'
 expect allow 'git push origin wt/label-prop'
 expect allow 'git push origin HEAD:feature/other'
+expect allow 'git push origin HEAD:release/1'              # an existing branch, with or without a PR
 expect allow 'git push origin refs/heads/wt/label-prop:refs/heads/wt/label-prop'
 expect allow 'git push --dry-run fork HEAD:wt/label-prop'
 expect allow 'git push mapped HEAD:wt/label-prop'
-expect allow 'git push -u origin HEAD:wt/new-branch' 'creates wt/new-branch'
-assert_grep 'a new branch is looked up exactly' "$TEST_ROOT/gh.log" 'api repos/acme/widgets/git/matching-refs/heads/wt/new-branch'
-expect deny 'git push origin HEAD:release/1' 'already exists'
-expect deny 'git push origin HEAD:fork-only' 'already exists'      # only a fork's PR has that head
-expect deny 'git push origin HEAD:wt/unknown' 'whether wt/unknown exists'
 expect deny 'git push origin HEAD:trunk' 'default branch'
+expect deny 'git push origin HEAD:refs/heads/trunk' 'default branch'
 expect deny 'git push origin HEAD:main' 'default branch'
+expect deny 'git push origin HEAD:master' 'default branch'
+expect deny 'git push fork HEAD:develop' 'default branch of someone/widgets'   # known only to GitHub
+expect deny 'git push renamed HEAD:new-default' 'default branch'               # GitHub over a stale HEAD
+expect allow 'git push renamed HEAD:old-default'
+FAKE_GH_FAIL=1 expect allow 'git push origin HEAD:wt/label-prop'               # the local HEAD answers
+FAKE_GH_FAIL=1 expect deny 'git push origin HEAD:trunk' 'default branch'
+FAKE_GH_FAIL=1 expect deny 'git push fork HEAD:wt/label-prop' 'could not find the default branch'
+expect deny 'git push nulls HEAD:wt/label-prop' 'could not find the default branch'
 expect deny 'git push --force origin HEAD' 'force'
 expect deny 'git push -f origin HEAD' 'force'
 expect deny 'git push --force-with-lease origin HEAD' 'force'
@@ -354,7 +354,6 @@ expect deny 'git push --receive-pack=/tmp/x origin HEAD' 'not approved'
 expect deny 'git push --no-verify origin HEAD'
 expect deny 'git push origin HEAD 2>&1 | tail -3' 'one simple command'
 expect deny 'cd /tmp && git push origin HEAD' 'cd'
-FAKE_GH_FAIL=1 expect deny 'git push origin HEAD' 'could not ask GitHub'
 CWD="$TEST_ROOT/elsewhere" expect deny 'git push origin HEAD' 'not a remote'
 git -C "$W" checkout -q --detach
 expect deny 'git push origin HEAD' 'detached'
@@ -381,4 +380,4 @@ assert_eq 'install.sh links the guard' 'yes' \
   "$(grep -Eq '^  for b in .*github-guard' "$REPO/install.sh" && echo yes || echo no)"
 end_scenario
 
-lib_summary 276
+lib_summary 282

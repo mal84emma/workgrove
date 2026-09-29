@@ -20,7 +20,7 @@ Never `git push`, `wt pr`, `gh pr create`, create a remote repository or publish
 Claude's `github-guard` hook approves these without a prompt, in this repository only, and denies other GitHub writes with a reason that names the approved form — read it and retry. Run each as its own command: no pipe, `&&`, `$(…)` or `cd … &&` in front; filter with `--jq '<expr>'`, pass long text with `--body-file <file in the repo or a temp dir>`, quote an endpoint with `?` or `&`.
 
 - Read: `gh api <endpoint>`, `gh api graphql -f query='…'`, `gh pr view|diff|checks|list|status`.
-- Push: `git push [-u] origin HEAD[:<branch>]`, to an open pull request's branch or a new branch; never forced, never the default branch.
+- Push: `git push [-u] origin HEAD[:<branch>]`, to any branch but the default one; never forced, never more than one branch.
 - Open a pull request: `gh pr create --title '…' --body '…'` (or `--fill`), or `wt pr <name>`.
 - Comment and review: `gh pr comment <n> --body '…'` (`--edit-last` to fix your latest), `gh pr review <n> --comment|--request-changes --body '…'`; through `gh api -X POST repos/{owner}/{repo}/pulls/<n>/…`: `comments/<id>/replies -f body=…` to reply, `comments -f body= -f commit_id= -f path= -F line=` for one inline comment, `reviews -f event=COMMENT -f body=… -f 'comments[][path]=…' -F 'comments[][line]=…' -f 'comments[][body]=…'` for a review with inline comments.
 - Edit your own: `gh api -X PATCH repos/{owner}/{repo}/pulls/comments/<id>` or `…/issues/comments/<id>` with `-f body=…`.
