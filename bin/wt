@@ -1383,7 +1383,7 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   done
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
-  local out session state title id path c screen last remote_state slot fallback recovered=0 what=selected
+  local out session state title id path c screen last remote_state slot fallback tick recovered=0 what=selected
   out=$(remote_wt "$host" show "$name" -r "$repo")
   session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
   path=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
@@ -1435,9 +1435,15 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   [[ -n "$id" ]] || { remote_row "$host" "$session" "$title" ""; return 0; }
   c=$(cmux_bin)
   if [[ $recovered -eq 1 ]]; then
-    screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null || true)
-    last=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -1)
-    case "$last" in *'$'|*'#'|*'%') reattach_shell_row "$host" "$title" "$id" "$session"; what=re-attached ;; esac
+    # The row can report connected before its new login shell has painted a prompt.
+    for ((tick=0; tick<5; tick++)); do
+      screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null || true)
+      last=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -1)
+      case "$last" in
+        *'$'|*'#'|*'%') reattach_shell_row "$host" "$title" "$id" "$session"; what=re-attached; break ;;
+      esac
+      [[ $tick -eq 4 ]] || sleep 1
+    done
   fi
   if [[ $recovered -eq 0 && "$state" == *detached ]]; then   # the one place an existing row is typed into: the VM reported no tmux
                                          # client, so the row kept its ssh but lost the pty that held tmux

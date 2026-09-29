@@ -349,7 +349,15 @@ if [ "$1" = rpc ] && [ "$2" = workspace.remote.reconnect ]; then
   mv "$CMUX_STUB_ROWS.tmp" "$CMUX_STUB_ROWS"
   exit 0
 fi
-if [ "$1" = read-screen ]; then cat "$CMUX_STUB_SCREEN"; exit 0; fi
+if [ "$1" = read-screen ]; then
+  if [ -f "$CMUX_STUB_SCREEN_DELAY" ]; then
+    cat "$CMUX_STUB_SCREEN_DELAY"
+    rm -f "$CMUX_STUB_SCREEN_DELAY"
+  else
+    cat "$CMUX_STUB_SCREEN"
+  fi
+  exit 0
+fi
 echo "workspace:99"
 exit 0
 STUB
@@ -425,7 +433,8 @@ wt_run() {
            WT_REPOS_DIR="$REPOS_DIR" CMUX_BUNDLED_CLI_PATH="$WT_STUB" \
            CMUX_STUB_LOG="$CMUX_LOG" CMUX_STUB_ROWS="$WT_ROWS" AGENT_ARGV_LOG="$AGENT_LOG" \
            CMUX_STUB_WINDOWS="$WT_WINDOWS" CMUX_STUB_ROWS_DIR="$WT_ROWS_DIR" \
-           CMUX_STUB_SCREEN="$TEST_ROOT/remote-screen" REMOTE_LOG="$TEST_ROOT/remote-log" \
+           CMUX_STUB_SCREEN="$TEST_ROOT/remote-screen" CMUX_STUB_SCREEN_DELAY="$TEST_ROOT/remote-screen-delay" \
+           REMOTE_LOG="$TEST_ROOT/remote-log" \
            REMOTE_SS="$TEST_ROOT/remote-ss" REMOTE_SS_USER="$TEST_ROOT/remote-ss-user" REMOTE_PS="$TEST_ROOT/remote-ps" \
            CODEX_SANDBOX="$WT_SANDBOX" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
@@ -1274,6 +1283,7 @@ ROWS
   assert_has "only that sshd was stopped" "$(cat "$TEST_ROOT/remote-log")" 'kill -TERM 4242'
   assert_has "the row-specific reconnect was called" "$(cat "$CMUX_LOG")" 'rpc workspace.remote.reconnect {"workspace_id":"remote-row"}'
   assert_has "reconnect reached connected" "$WT_OUT" 'connected after reconnect'
+  assert_eq "no prompt is checked for a bounded five reads" 5 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
   assert_lacks "an attached agent was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
 
   # A connected row leaves the relay untouched, even when ss would name an sshd.
@@ -1308,6 +1318,17 @@ ROWS
   assert_has "the shell received tmux" "$(cat "$CMUX_LOG")" 'send --workspace remote-row tmux new-session'
   assert_has "the shell received return" "$(cat "$CMUX_LOG")" 'send-key --workspace remote-row enter'
   assert_has "re-attach was reported" "$WT_OUT" '(re-attached)'
+
+  # The row may become connected before the login shell has rendered its prompt.
+  jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  printf 'connecting\n' >"$TEST_ROOT/remote-screen-delay"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "recovery waits for a late shell prompt" -H fakevm attach task -r /vm/repos/project
+  assert_eq "the late prompt was read and guarded" 3 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
+  assert_has "the late shell received tmux" "$(cat "$CMUX_LOG")" 'send --workspace remote-row tmux new-session'
+  assert_has "late re-attach was reported" "$WT_OUT" '(re-attached)'
+
   : >"$CMUX_LOG"
   assert_wt_ok "explicit --reattach still sends tmux" -H fakevm attach task -r /vm/repos/project --reattach
   assert_has "explicit re-attach selected the row" "$(cat "$CMUX_LOG")" 'workspace select remote-row'
@@ -1388,7 +1409,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=359
+FIXED_ASSERTIONS=364
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
