@@ -1501,7 +1501,7 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
       fi
     else
       reattach_shell_row "$id" "$session" \
-        || die "$title $(row_tag "$host") does not end at a shell prompt (last line: ${ROW_SHELL_LAST:-empty}); it is probably still attached to tmux. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'"
+        || die "$title $(row_tag "$host") does not end at a shell prompt naming user@host, on its own line or the one above (last line: ${ROW_SHELL_LAST:-empty}); it is probably still attached to tmux, or its prompt names no user@host. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'"
     fi
     CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
     printf 'row: %s %s (re-attached)\n' "$title" "$(row_tag "$host")"

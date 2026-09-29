@@ -8,7 +8,8 @@
 # bin/wt is run by $WT_BASH, printed in the header line. They default to the same `bash` from PATH, which on
 # the author's Mac is Homebrew's 5.x — but bin/wt starts `#!/usr/bin/env bash` and a fresh Mac has no bash
 # but /bin/bash 3.2.57, so 3.2 is the interpreter bin/wt gets there until Homebrew arrives. Run this file
-# both ways, or the one that matters goes untested under the one that matters.
+# both ways, or the one that matters goes untested under the one that matters. Scenario 11 does at least
+# parse bin/wt with /bin/bash -n on every run, so a 3.2 syntax error cannot hide behind a green 5.x run.
 #
 # Why this file exists: bin/wt is 1500 lines that create and DESTROY work — `wt rm` deletes a worktree, its
 # branch and its uncommitted files, and `wt prune` does it in a loop without being asked twice. Everything
@@ -1683,16 +1684,23 @@ ROWS
   : >"$CMUX_LOG"
   assert_wt_fails 1 'does not end at a shell prompt' -H fakevm attach task -r /vm/repos/project --reattach
   assert_lacks "a lone % under plain output prevented typing" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "the refusal says what a prompt must name" "$WT_OUT" 'naming user@host'
   WT_PATH_PREFIX=""
   end_scenario
 }
 
 # 11. The invariants two files promise each other in comments and nothing enforced: bin/cmux-hook's copy
 # of tmux_cmd must match bin/wt's line for line (the command is the one bin/cmux-hook's own comment gives), and
-# the two must merge the per-window row lists identically.
+# the two must merge the per-window row lists identically. First, though, the promise bin/wt's own shebang
+# makes: it must PARSE under /bin/bash, which on a Mac is 3.2.57 and once choked on a case pattern inside a
+# heredoc inside $(…) that every newer bash accepted — a whole-suite run under WT_BASH=/bin/bash catches
+# that too, but only when someone remembers to make one. This check is made on every run, whatever runs it.
 scenario_shared_tmux_cmd() {
-  begin_scenario "11. bin/wt and bin/cmux-hook agree on tmux_cmd and on the row list"
-  local a b
+  begin_scenario "11. bin/wt parses under /bin/bash, and agrees with bin/cmux-hook on tmux_cmd and the row list"
+  local a b sys=/bin/bash out=""
+  out=$("$sys" -n "$REPO/bin/wt" 2>&1) || out="${out:-syntax error} (exit $?)"
+  # shellcheck disable=SC2016   # $BASH_VERSION is for THAT bash to expand, not this one
+  assert_eq "bin/wt parses under $sys $("$sys" -c 'echo "$BASH_VERSION"')" "" "$out"
   a="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt" | grep -v '^ *#')"
   b="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/cmux-hook" | grep -v '^ *#')"
   assert_has "bin/wt has a tmux_cmd" "$a" "tmux new-session"
@@ -1756,7 +1764,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=481
+FIXED_ASSERTIONS=483
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
