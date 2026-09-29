@@ -426,7 +426,7 @@ wt_run() {
            CMUX_STUB_LOG="$CMUX_LOG" CMUX_STUB_ROWS="$WT_ROWS" AGENT_ARGV_LOG="$AGENT_LOG" \
            CMUX_STUB_WINDOWS="$WT_WINDOWS" CMUX_STUB_ROWS_DIR="$WT_ROWS_DIR" \
            CMUX_STUB_SCREEN="$TEST_ROOT/remote-screen" REMOTE_LOG="$TEST_ROOT/remote-log" \
-           REMOTE_SS="$TEST_ROOT/remote-ss" REMOTE_PS="$TEST_ROOT/remote-ps" \
+           REMOTE_SS="$TEST_ROOT/remote-ss" REMOTE_SS_USER="$TEST_ROOT/remote-ss-user" REMOTE_PS="$TEST_ROOT/remote-ps" \
            CODEX_SANDBOX="$WT_SANDBOX" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
   return 0
@@ -1237,6 +1237,11 @@ STUB
   cat >"$fake/ss" <<'STUB'
 #!/bin/sh
 printf 'ss %s\n' "$*" >>"$REMOTE_LOG"
+if [ -f "$REMOTE_SS_USER" ]; then cat "$REMOTE_SS_USER"; else cat "$REMOTE_SS"; fi
+STUB
+  cat >"$fake/sudo" <<'STUB'
+#!/bin/sh
+printf 'sudo %s\n' "$*" >>"$REMOTE_LOG"
 cat "$REMOTE_SS"
 STUB
   cat >"$fake/ps" <<'STUB'
@@ -1248,6 +1253,7 @@ STUB
 #!/bin/sh
 printf 'kill %s\n' "$*" >>"$REMOTE_LOG"
 : >"$REMOTE_SS"
+rm -f "$REMOTE_SS_USER"
 STUB
   chmod +x "$fake"/* "$SCRATCH_HOME/.local/bin/wt"
   WT_PATH_PREFIX="$fake"
@@ -1294,9 +1300,11 @@ ROWS
   # After reconnect, a shell prompt goes through the same guarded --reattach path.
   printf 'sshd:%s\n' "$uid" >"$TEST_ROOT/remote-ps"
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:*' >"$TEST_ROOT/remote-ss-user"
   printf 'vm$\n' >"$TEST_ROOT/remote-screen"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "recovery re-attaches a bare shell" -H fakevm attach task -r /vm/repos/project
+  assert_has "hidden PID was inspected with sudo" "$(cat "$TEST_ROOT/remote-log")" 'sudo -n ss -H -ltnp sport = :65353'
   assert_has "the shell received tmux" "$(cat "$CMUX_LOG")" 'send --workspace remote-row tmux new-session'
   assert_has "the shell received return" "$(cat "$CMUX_LOG")" 'send-key --workspace remote-row enter'
   assert_has "re-attach was reported" "$WT_OUT" '(re-attached)'
@@ -1380,7 +1388,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=358
+FIXED_ASSERTIONS=359
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
