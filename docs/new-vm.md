@@ -28,11 +28,12 @@ sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gi
   && sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gh
 sudo update-locale LANG=C.UTF-8
 # sshd uses the first value it reads in sshd_config.d. This file sorts before Ubuntu's 50-cloudimg-settings.conf.
-keepalive=$(mktemp)
+conf=/etc/ssh/sshd_config.d/10-workgrove-keepalive.conf keepalive=$(mktemp)
 printf 'ClientAliveInterval 15\nClientAliveCountMax 4\n' >"$keepalive"
-if ! sudo cmp -s "$keepalive" /etc/ssh/sshd_config.d/10-workgrove-keepalive.conf; then
-  sudo install -m 644 "$keepalive" /etc/ssh/sshd_config.d/10-workgrove-keepalive.conf
-  sudo sshd -t && sudo systemctl reload ssh
+if ! sudo cmp -s "$keepalive" "$conf"; then
+  sudo install -m 644 "$keepalive" "$conf"
+  # if sshd -t fails, the new file goes at once, so it cannot break the next sshd restart and lock you out
+  if sudo sshd -t; then sudo systemctl reload ssh; else sudo rm -f "$conf"; echo "sshd -t failed; removed $conf" >&2; fi
 fi
 rm -f "$keepalive"
 sudo sshd -T | grep -i clientalive   # clientaliveinterval 15; clientalivecountmax 4
@@ -184,13 +185,19 @@ run `exec bash` in that pane or open a new tmux window.
   suspended with `Error: ssh-pty-attach: The cmux relay on <vm> did not become ready (the host may not allow SSH remote port forwarding). Automatic reconnect paused; use Reconnect to try again.`
   The port-forwarding warning is misleading: the old SSH connection can still hold that row's fixed relay
   port on the VM after the Mac's IP changes. `wt -H <vm> attach -r <repo> <name>` checks only that suspended
-  row, stops its user-owned stale `sshd` listener, and asks cmux to reconnect it. It reattaches tmux only
-  when a fresh VM check shows the session detached and the row shows a recognizable task-shell prompt.
-  Otherwise it selects the row and prints the exact `--reattach` command; inspect the row before running it.
+  row, stops the stale listener on its relay port (a user-owned `sshd`, or `sshd-session` from OpenSSH 9.8,
+  on any local address), and asks cmux to reconnect it. It refuses, and signals nothing, when that `sshd`'s
+  connection comes from the Mac's current address, because that session may still be live. It reattaches
+  tmux only when a fresh VM check shows the session detached and the row shows a recognizable task-shell
+  prompt. Otherwise it selects the row and prints the exact `--reattach` command; inspect the row before
+  running it. If recovery fails, wait for the VM to drop the old SSH session (about a minute with block 1's
+  keepalive), then press **Reconnect** on the row or re-run `wt -H <vm> attach -r <repo> <name>`.
   A normal SSH reload does not end existing sessions, so block 1's keepalive setting only
-  shortens future stale connections to about a minute. Whether Azure ML preserves
-  `/etc/ssh/sshd_config.d/10-workgrove-keepalive.conf` across a stop/start is **UNVERIFIED** (it does reset
-  the login shell). After a stop/start, run `ssh <vm> 'ls -l /etc/ssh/sshd_config.d/10-workgrove-keepalive.conf; sudo sshd -T | grep -i clientalive'` and reapply block 1 if needed.
+  shortens future stale connections to about a minute. A VM set up before that setting existed gets it by
+  pasting just block 1's keepalive lines, from its `sshd_config.d` comment to the end; they are idempotent.
+  During recovery `wt -H <vm> attach` warns when the VM's sshd has no `ClientAliveInterval`. Whether Azure ML
+  preserves `/etc/ssh/sshd_config.d/10-workgrove-keepalive.conf` across a stop/start is **UNVERIFIED** (it
+  does reset the login shell). After a stop/start, run `ssh <vm> 'ls -l /etc/ssh/sshd_config.d/10-workgrove-keepalive.conf; sudo sshd -T | grep -i clientalive'` and reapply those lines if needed.
 - **`server exited unexpectedly` from every tmux command, `wt new` included,** after a `tmux kill-server`.
   First, the warning: `tmux kill-server` ends **every session on that socket** — every `wt-<repo>-<name>` task
   on that VM and every agent running in one. It is almost never what you want; to restart a single task use
