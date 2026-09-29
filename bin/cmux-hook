@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# cmux notification hook. Acts only on wt-open / wt-attach sent from a VM row; otherwise prints nothing (= unchanged).
+# cmux notification hook. Handles wt row requests and VM agent status; otherwise leaves notifications unchanged.
 set -u
-cat >/dev/null          # drain the envelope: everything acted on comes from the CMUX_NOTIFICATION_* env
+mode=${1:-hook}
+if [[ $mode == hook ]]; then cat >/dev/null; fi   # drain the envelope
 t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; ws=${CMUX_NOTIFICATION_WORKSPACE_ID:-}
-case $t in wt-open|wt-attach) ;; *) exit 0 ;; esac
+if [[ $mode == hook && ${CMUX_NOTIFICATION_SUBTITLE:-} == wt-agent-status\|* ]]; then
+  t=wt-agent-status; b=${CMUX_NOTIFICATION_SUBTITLE}
+fi
+case $mode:$t in hook:*|--apply:*|--expire:*) ;; *) exit 0 ;; esac
 : "${HOME:?cmux-hook: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-hook.log"
 log() { # stdout is the patch and every call site discards stderr, so the reason a jump did not happen
@@ -12,7 +16,7 @@ log() { # stdout is the patch and every call site discards stderr, so the reason
     printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOG") 2>/dev/null
   return 0; }
 PERL=$(command -v perl || true)
-DEADLINE=$(( $(date +%s) + 15 ))   # cmux.json allows this hook 20 s; leave room to print the patch
+DEADLINE=${WT_STATUS_DEADLINE:-$(( $(date +%s) + 15 ))}   # child --apply shares this hook's 20 s budget
 capped() { # capped <cmd…>: one cmux call, inside what is left of that budget. `workspace list --json`
            # answers in ~0.02 s and `cmux ssh` in ~4 s; the 1.2-2.9 s quoted in the notes is how long a row
            # takes to *paint*, UI work that happens after the CLI has already returned. So the cap is here
@@ -33,11 +37,85 @@ known_host() { awk -v w="$1" '$1=="Host"{for(i=2;i<=NF;i++){if($i~/^#/)break; if
 # cmux.json answers `{"effects":{"desktop":false}}` or `{}`). So this prints a fixed literal rather than
 # echoing the envelope back, which carries whatever the agent session was working on.
 quiet() { printf '%s\n' '{"effects":{"desktop":false,"sound":false,"markUnread":false,"paneFlash":false}}'; }
+quiet_control() { printf '%s\n' '{"effects":{"record":false,"markUnread":false,"reorderWorkspace":false,"desktop":false,"sound":false,"command":false,"paneFlash":false}}'; }
 CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
 CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
 valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 safe_path() { [[ $1 == /* && $1 != *$'\n'* && $1 != *//* && $1 != */ && $1 != *'/../'* && $1 != */.. && $1 != *[\'\"\`\$\\\;]* ]]; }
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
+status_dir="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-agent-status"
+status_file() { printf '%s/%s-%s' "$status_dir" "$1" "$2"; }
+status_locked() { # called under lockf: workspace agent state sequence session
+  local f old_seq=0 lease=0 old_session='' old_state='' expires=0 key label icon color state seq session
+  f=$(status_file "$1" "$2"); key="vm-$2"
+  [[ -r $f ]] && read -r old_seq lease old_session old_state expires < "$f"
+  # Upgrade the three-field state written by older installs in place.
+  if [[ ! $lease =~ ^[0-9]+$ ]]; then old_state=$old_session; old_session=$lease; lease=0; expires=0; fi
+  state=$3; seq=$4; session=$5
+  if [[ $state == expire ]]; then
+    [[ $lease == "$seq" && ( $old_state == running || $old_state == idle ) && $expires =~ ^[0-9]+$ && $(date +%s) -ge $expires ]] || return 0
+    state=expired-$old_state; seq=$old_seq; session=$old_session
+  elif [[ $state == renew ]]; then
+    [[ $old_state != clear && $old_session == "$session" && $old_seq != 0 ]] || return 0
+    # Older VM state files have no transition sequence; keep their lease alive until the next event.
+    state=${old_state#expired-}; seq=$old_seq
+  else
+    # An agent's SessionEnd must not clear a newer session; `wt run` sends '-' when it exits.
+    [[ $state != clear || $session == - || -z $old_session || $old_session == - || $session == "$old_session" ]] || return 0
+    # shellcheck disable=SC2071  # fixed-width decimal strings; avoid signed 64-bit overflow in arithmetic
+    [[ $seq < $old_seq ]] && return 0
+    if [[ $seq == "$old_seq" ]]; then
+      [[ ( $state == "$old_state" || $old_state == "expired-$state" ) && $session == "$old_session" && $state != clear ]] || return 0
+    fi
+  fi
+  case $state in
+    running) label=Running; icon=bolt.fill; color='#4C8DFF' ;;
+    idle) label=Idle; icon=pause.fill; color='#8E8E93' ;;
+  esac
+  if [[ $state == clear || $state == expired-* ]]; then
+    capped "$CMUX" clear-status "$key" --workspace "$1" >/dev/null 2>&1 || { log "clear-status $key failed on $1"; return 1; }
+  else
+    capped "$CMUX" set-status "$key" "$label" --workspace "$1" --icon "$icon" --color "$color" >/dev/null 2>&1 ||
+      { log "set-status $key failed on $1"; return 1; }
+  fi
+  printf '%s %s %s %s %s\n' "$seq" "$((lease + 1))" "${session:--}" "$state" "$(( $(date +%s) + ${WT_STATUS_LEASE_SECONDS:-120} ))" > "$f"
+}
+status_apply() {
+  if [[ $3 == expire ]]; then
+    [[ -d $status_dir ]] || return 0  # an orphan timer must not recreate removed state
+  else
+    (umask 077; mkdir -p "$status_dir") || { log "cannot create $status_dir"; return 1; }
+  fi
+  local f rc=0 lease state
+  f=$(status_file "$1" "$2")
+  if command -v lockf >/dev/null; then
+    WT_STATUS_DEADLINE=$DEADLINE lockf -k -t 1 "$f.lock" "$0" --apply "$@" || rc=$?
+  elif command -v flock >/dev/null; then
+    WT_STATUS_DEADLINE=$DEADLINE flock -o -w 1 "$f.lock" "$0" --apply "$@" || rc=$?
+  else
+    log 'no file lock command for VM status'; return 1
+  fi
+  [[ $rc -eq 0 ]] || return "$rc"
+  # Launch after lockf/flock exits: a sleeping child must not inherit its lock descriptor.
+  if [[ $3 != clear && $3 != expire && -r $f ]]; then
+    read -r _ lease _ state _ < "$f"
+    if [[ $state == running || $state == idle ]]; then
+      nohup bash "$0" --expire "$1" "$2" "$lease" >/dev/null 2>&1 </dev/null &
+    fi
+  fi
+}
+status_sweep() { # detached expiry may lose cmux ancestry; retry expired clears on later hook calls
+  local f base row agent seq lease session state expires
+  for f in "$status_dir"/*; do
+    [[ -f $f && $f != *.lock ]] || continue
+    base=${f##*/}; row=${base%-*}; agent=${base##*-}
+    [[ $row =~ ^[A-Fa-f0-9-]{36}$ && ( $agent == claude || $agent == codex ) ]] || continue
+    read -r seq lease session state expires < "$f"
+    [[ $lease =~ ^[0-9]+$ && $expires =~ ^[0-9]+$ && ( $state == running || $state == idle ) && $(date +%s) -ge $expires ]] || continue
+    status_apply "$row" "$agent" expire "$lease" - || true
+    (( DEADLINE - $(date +%s) > 2 )) || break
+  done
+}
 WS_JSON=""; WS_RC=""
 ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in every window, kept in $WS_JSON
             # with its status in $WS_RC.
@@ -133,7 +211,31 @@ attach_row() { # attach_row <host> <session> <title> <command> — bring this ta
   capped "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1" ||
     log "set-description @$1 failed for $ref"   # cosmetic only: the row is there, so the jump did happen
   return 0; }
+case $mode in
+  --apply)
+    [[ $# -eq 6 && $2 =~ ^[A-Fa-f0-9-]{36}$ && ( $3 == claude || $3 == codex ) &&
+       ( $4 == running || $4 == idle || $4 == clear || $4 == renew || $4 == expire ) && $5 =~ ^[0-9]{1,19}$ ]] || exit 1
+    status_locked "$2" "$3" "$4" "$5" "$6"; exit $? ;;
+  --expire)
+    [[ $# -eq 4 && $2 =~ ^[A-Fa-f0-9-]{36}$ && ( $3 == claude || $3 == codex ) && $4 =~ ^[0-9]+$ ]] || exit 1
+    sleep "${WT_STATUS_LEASE_SECONDS:-120}"
+    DEADLINE=$(( $(date +%s) + 15 ))
+    [[ -r $(status_file "$2" "$3") ]] || exit 0
+    status_apply "$2" "$3" expire "$4" -
+    exit $? ;;
+esac
 case $t in
+  wt-agent-status) # subtitle: wt-agent-status|host|agent|state|sequence|session
+    quiet_control  # control traffic is never a user notification, even if validation or cmux fails
+    IFS='|' read -r marker h agent state seq session extra <<< "$b"
+    if valid_host "$h" && known_host "$h" && [[ $agent == claude || $agent == codex ]] &&
+       [[ $state == running || $state == idle || $state == clear || $state == renew ]] &&
+       [[ $marker == wt-agent-status && -z ${extra:-} && $seq =~ ^[0-9]{19}$ && $session =~ ^[A-Za-z0-9-]*$ ]] &&
+       [[ $ws =~ ^[A-Fa-f0-9-]{36}$ ]] && from_row_on_host "$ws" "$h"; then
+      status_apply "$ws" "$agent" "$state" "$seq" "${session:--}" || log "status $state for $agent on $ws failed"
+    else
+      log "ignored invalid VM agent status for workspace $ws"
+    fi ;;
   wt-open)   # body: {"host":…,"path":…}
     h=$(field host || true); p=$(field path || true)
     # -x $CODE first: the fallback above is a hard-coded path, and on a machine with no VS Code, or with it
@@ -159,9 +261,10 @@ case $t in
       # against the hook's 20 s budget in cmux.json.
       # Only on success: a notification whose jump failed keeps its banner, sound and unread mark, and
       # printing nothing at all is what cmux reads as "leave the effects alone". $LOG says what went wrong.
-      if attach_row "$h" "wt-$id-$n" "$id:$n" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
+      if attach_row "$h" "wt-$id-$n" "$id:$n" "WT_STATUS_BRIDGE=1 \"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
         quiet
       fi
     fi ;;
 esac
+[[ $mode == hook ]] && status_sweep
 exit 0

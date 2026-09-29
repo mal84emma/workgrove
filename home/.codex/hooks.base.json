@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AGENT_NOTIFY_SOURCE=Codex agent-notify",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PermissionRequest": [
       {
         "hooks": [
@@ -18,6 +29,28 @@
             "type": "command",
             "command": "AGENT_NOTIFY_SOURCE=Codex agent-notify",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AGENT_NOTIFY_SOURCE=Codex agent-notify",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "AGENT_NOTIFY_SOURCE=Codex agent-notify",
+            "timeout": 3
           }
         ]
       }
