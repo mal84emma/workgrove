@@ -600,8 +600,8 @@ pull request"
 
 # ------------------------------------------------------------------------------------------------ wt pr
 
-check_wt_pr() {   # wt pr <name> [--draft]: it pushes the worktree's own wt/<name> and opens its pull request
-  local a name=''
+check_wt_pr() {   # wt pr <name> [--draft]: check the push and gh target inside the selected worktree
+  local a name='' target
   for a in "$@"; do
     case $a in
       --draft) ;;
@@ -610,7 +610,12 @@ check_wt_pr() {   # wt pr <name> [--draft]: it pushes the worktree's own wt/<nam
     esac
   done
   [[ -n $name ]] || deny "wt pr needs the task name"
-  allow "pushing wt/$name and opening its pull request"
+  target=$(cd "$cwd" && wt path "$name" 2>/dev/null) \
+    || deny "could not find task '$name' in this repository; wt pr needs an existing task worktree"
+  [[ -d $target ]] || deny "task '$name' has no worktree directory; wt pr cannot push it"
+  cwd=$target
+  gh_aims_here                  # wt pr runs gh pr create from this worktree after its push
+  check_git_push origin "wt/$name"   # wt pr runs git push -u origin wt/<name> without another hook
 }
 
 # ------------------------------------------------------------------------------------------------- main

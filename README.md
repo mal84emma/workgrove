@@ -211,7 +211,7 @@ It does not contact any configured host.
 after worktree creation, and an SSH disconnect after creation but before the Mac receives the result. It also
 checks that a brief and agent choice survive an interrupted `.wt-setup`.
 
-`bash test/github-guard-smoke.sh` runs 417 assertions of hook payloads through `bin/github-guard`, with `gh`
+`bash test/github-guard-smoke.sh` runs 425 assertions of hook payloads through `bin/github-guard`, with `gh`
 stubbed to answer `gh api` from fixtures by running the guard's own `--jq` filter over them.
 It checks that a command which only mentions `gh api` or `git push` — a commit message, a heredoc, a `grep` —
 gets no answer; that reads, pushes to any branch but the default one, pull requests, issues, comments,
@@ -221,7 +221,7 @@ substitutions, brace expansions, control characters, another repository (named, 
 mutation (behind an alias, a fragment, a directive, a comment or a block string too), force pushes,
 deletions, a tag or a bare commit as the source, the default branch — as GitHub names it, over a stale local
 HEAD, and when nothing can name it — a body file outside the repository, `--template`, and a remote whose
-push URL leaves github.com are all denied; and that
+push URL leaves github.com are all denied, including when `wt pr` would push through that remote; and that
 `settings.base.json` wires the hook and carries no rule that would override it. `GUARD_BASH=/bin/bash` runs
 the guard under bash 3.2.
 
@@ -505,7 +505,8 @@ own machine.
   view|diff|checks|list|status`, `gh issue view|list|status`); `git push` of `HEAD` or one local branch — never
   a tag or a bare commit — without force, through a remote whose push URL is on github.com, to any branch but
   that repository's default one — which it asks GitHub for, falling back to the remote's HEAD, and denies the
-  push when neither answers; `gh pr create`, `wt pr` and `gh issue create`; `gh pr comment`, `gh issue comment`
+  push when neither answers; `gh pr create`, `wt pr` (after checking the push and PR destination it runs) and
+  `gh issue create`; `gh pr comment`, `gh issue comment`
   and `gh pr review --comment|--request-changes`; `gh issue edit` of an issue the `gh` login opened; through
   `gh api`, a new issue, a comment on an issue or pull request, an inline review comment or a reply, a review
   with inline comments, and an edit of an issue, comment or review that GitHub says the `gh` login wrote; and a

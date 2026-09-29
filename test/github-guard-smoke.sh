@@ -46,6 +46,11 @@ f="$TEST_ROOT/api/${target//\//__}.json"
 [[ -f $f ]] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
 jq -r "$filter" "$f"
 GH
+cat >"$TEST_ROOT/bin/wt" <<'WT'
+#!/usr/bin/env bash
+[[ ${1:-} == path && ${2:-} == label-prop && $# -eq 2 ]] || exit 1
+printf '%s\n' "$TEST_ROOT/widgets"
+WT
 chmod +x "$TEST_ROOT/bin/"*
 fixture() { printf '%s\n' "$2" >"$TEST_ROOT/$1.json"; }   # fixture api/<endpoint with / as __> <json>
 fixture api/repos__acme__widgets '{"default_branch": "trunk"}'
@@ -327,6 +332,14 @@ expect deny 'gh pr create --fill --recover /etc/hosts' 'not approved'
 
 expect allow 'wt pr label-prop'
 expect allow 'wt pr label-prop --draft'
+expect deny 'wt pr missing' 'could not find task'
+GH_REPO=evil/other expect deny 'wt pr label-prop' 'GH_REPO'
+git -C "$W" remote set-url --push origin git@gitlab.com:acme/widgets.git
+expect deny 'wt pr label-prop' 'not a github.com repository'
+git -C "$W" remote set-url --push origin git@github.com:acme/widgets.git
+fixture api/repos__acme__widgets '{"default_branch": "wt/label-prop"}'
+expect deny 'wt pr label-prop' 'default branch'
+fixture api/repos__acme__widgets '{"default_branch": "trunk"}'
 expect deny 'wt pr' 'needs the task name'
 expect deny 'wt pr -r /elsewhere label-prop'
 expect deny 'wt pr label-prop -r' 'not approved'
@@ -492,4 +505,4 @@ assert_eq 'install.sh links the guard' 'yes' \
   "$(grep -Eq '^  for b in .*github-guard' "$REPO/install.sh" && echo yes || echo no)"
 end_scenario
 
-lib_summary 417
+lib_summary 425
