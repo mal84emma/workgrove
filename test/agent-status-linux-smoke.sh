@@ -73,11 +73,14 @@ TRANSCRIPT="$HOME/.claude/projects/test.jsonl"
 payload=$(jq -nc --arg p "$TRANSCRIPT" '{hook_event_name:"UserPromptSubmit",session_id:"claude-session",transcript_path:$p}')
 agent_event claude "$payload"
 if grep -q '"transcript_path"' "$WT_STATUS_FILE"; then pass; else fail 'Claude transcript offset was not recorded'; fi
+prompt_seq=$(jq -r .seq "$WT_STATUS_FILE")
 printf '%s\n' '{"type":"user","message":{"content":"[Request interrupted by user]"}}' >> "$TRANSCRIPT"
+printf '%s\n' '{"type":"system","message":"metadata after interruption"}' >> "$TRANSCRIPT"
 : > "$CMUX_LOG"
 WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
 has '|claude|idle|'
 assert_eq 'Esc marker persists Idle' idle "$(jq -r .state "$WT_STATUS_FILE")"
+assert_eq 'Esc follows the interrupted prompt sequence' "$((10#$prompt_seq + 1))" "$(jq -r .seq "$WT_STATUS_FILE")"
 : > "$CMUX_LOG"
 WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
 saved_seq=$(jq -r .seq "$WT_STATUS_FILE")
@@ -93,6 +96,7 @@ agent_event claude "$payload"
 assert_eq 'missing first transcript uses offset zero' 0 "$(jq -r .offset "$WT_STATUS_FILE")"
 if grep -q '"transcript_path"' "$WT_STATUS_FILE"; then pass; else fail 'missing first transcript path was discarded'; fi
 printf '%s\n' '{"type":"user","message":{"content":"[Request interrupted by user for tool use]"}}' > "$TRANSCRIPT"
+printf '%s\n' '{"type":"system","message":"metadata after tool interruption"}' >> "$TRANSCRIPT"
 : > "$CMUX_LOG"
 WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null
 has '|claude|idle|'
@@ -155,4 +159,4 @@ else
   fail 'wt run left its heartbeat file after exit'
 fi
 end_scenario
-lib_summary 26
+lib_summary 27

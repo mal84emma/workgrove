@@ -46,37 +46,37 @@ field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; 
 status_dir="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-agent-status"
 status_file() { printf '%s/%s-%s' "$status_dir" "$1" "$2"; }
 status_locked() { # called under lockf: workspace agent state sequence session
-  local f old_seq=0 lease=0 old_session='' old_state='' expires=0 key label icon color state seq
+  local f old_seq=0 lease=0 old_session='' old_state='' expires=0 key label icon color state seq session
   f=$(status_file "$1" "$2"); key="vm-$2"
   [[ -r $f ]] && read -r old_seq lease old_session old_state expires < "$f"
   # Upgrade the three-field state written by older installs in place.
   if [[ ! $lease =~ ^[0-9]+$ ]]; then old_state=$old_session; old_session=$lease; lease=0; expires=0; fi
-  state=$3; seq=$4
+  state=$3; seq=$4; session=$5
   if [[ $state == expire ]]; then
-    [[ $lease == "$seq" && $old_state != clear && $expires =~ ^[0-9]+$ && $(date +%s) -ge $expires ]] || return 0
-    state=clear; seq="$(date +%s)000000000"
+    [[ $lease == "$seq" && ( $old_state == running || $old_state == idle ) && $expires =~ ^[0-9]+$ && $(date +%s) -ge $expires ]] || return 0
+    state=expired-$old_state; seq=$old_seq; session=$old_session
   elif [[ $state == renew ]]; then
-    [[ $old_state != clear && $old_session == "$5" && $old_seq != 0 ]] || return 0
+    [[ $old_state != clear && $old_session == "$session" && $old_seq != 0 ]] || return 0
     # Older VM state files have no transition sequence; keep their lease alive until the next event.
-    state=$old_state; seq=$old_seq
+    state=${old_state#expired-}; seq=$old_seq
   else
     # shellcheck disable=SC2071  # fixed-width decimal strings; avoid signed 64-bit overflow in arithmetic
     [[ $seq < $old_seq ]] && return 0
     if [[ $seq == "$old_seq" ]]; then
-      [[ $state == "$old_state" && $5 == "$old_session" && $state != clear ]] || return 0
+      [[ ( $state == "$old_state" || $old_state == "expired-$state" ) && $session == "$old_session" && $state != clear ]] || return 0
     fi
   fi
   case $state in
     running) label=Running; icon=bolt.fill; color='#4C8DFF' ;;
     idle) label=Idle; icon=pause.fill; color='#8E8E93' ;;
   esac
-  if [[ $state == clear ]]; then
+  if [[ $state == clear || $state == expired-* ]]; then
     capped "$CMUX" clear-status "$key" --workspace "$1" >/dev/null 2>&1 || { log "clear-status $key failed on $1"; return 1; }
   else
     capped "$CMUX" set-status "$key" "$label" --workspace "$1" --icon "$icon" --color "$color" >/dev/null 2>&1 ||
       { log "set-status $key failed on $1"; return 1; }
   fi
-  printf '%s %s %s %s %s\n' "$seq" "$((lease + 1))" "${5:--}" "$state" "$(( $(date +%s) + ${WT_STATUS_LEASE_SECONDS:-120} ))" > "$f"
+  printf '%s %s %s %s %s\n' "$seq" "$((lease + 1))" "${session:--}" "$state" "$(( $(date +%s) + ${WT_STATUS_LEASE_SECONDS:-120} ))" > "$f"
 }
 status_apply() {
   if [[ $3 == expire ]]; then
@@ -109,7 +109,7 @@ status_sweep() { # detached expiry may lose cmux ancestry; retry expired clears 
     base=${f##*/}; row=${base%-*}; agent=${base##*-}
     [[ $row =~ ^[A-Fa-f0-9-]{36}$ && ( $agent == claude || $agent == codex ) ]] || continue
     read -r seq lease session state expires < "$f"
-    [[ $lease =~ ^[0-9]+$ && $expires =~ ^[0-9]+$ && $state != clear && $(date +%s) -ge $expires ]] || continue
+    [[ $lease =~ ^[0-9]+$ && $expires =~ ^[0-9]+$ && ( $state == running || $state == idle ) && $(date +%s) -ge $expires ]] || continue
     status_apply "$row" "$agent" expire "$lease" - || true
     (( DEADLINE - $(date +%s) > 2 )) || break
   done
