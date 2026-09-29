@@ -53,7 +53,7 @@ workgrove/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
 │   ├── agent-notify           agent lifecycle hook, relays to cmux or posts a banner
 │   ├── cmux-hook              Mac-side cmux notification hook: remote wt open / wt attach
-│   ├── github-guard           Claude PreToolUse hook: GitHub reads anywhere, PR pushes and comments on a VM
+│   ├── github-guard           Claude PreToolUse hook: GitHub reads, PR pushes, PRs, comments and reviews
 │   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 ├── home/
 │   ├── .zshenv .gitignore_global   always installed; .zshrc .gitconfig .tmux.conf are opt-in
@@ -74,7 +74,7 @@ workgrove/
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
-│   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with fake uname/gh
+│   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with a fake gh
 │   └── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
 └── docs/
     ├── new-mac.md             set up a Mac
@@ -211,13 +211,17 @@ It does not contact any configured host.
 after worktree creation, and an SSH disconnect after creation but before the Mac receives the result. It also
 checks that a brief and agent choice survive an interrupted `.wt-setup`.
 
-`bash test/github-guard-smoke.sh` runs 227 assertions of hook payloads through `bin/github-guard`, with `uname`
-stubbed to play the Mac or a VM and `gh` stubbed to answer `gh pr list` from fixtures by running the guard's
-own `--jq` filter over them. It checks that a command which only mentions `gh api` or `git push` — a commit
-message, a heredoc, a `grep` — gets no answer; that reads are approved everywhere; that pipes, substitutions,
-control characters, another repository, force pushes, deletions, the default branch, a fork's pull request
-and a remote whose push URL leaves github.com are all denied; and that `settings.base.json` wires the hook and
-carries no rule that would override it. `GUARD_BASH=/bin/bash` runs the guard under bash 3.2.
+`bash test/github-guard-smoke.sh` runs 276 assertions of hook payloads through `bin/github-guard`, with `gh`
+stubbed to answer `gh pr list` and `gh api` from fixtures by running the guard's own `--jq` filter over them.
+It checks that a command which only mentions `gh api` or `git push` — a commit message, a heredoc, a `grep` —
+gets no answer; that reads, pushes to a pull request's branch or a new one, pull requests, comments, reviews,
+edits of your own comments and thread resolution are approved; and that pipes, substitutions, brace
+expansions, control characters, another repository, someone else's comment, an approval, any other GraphQL
+mutation (behind an alias, a fragment, a directive, a comment or a block string too), force pushes,
+deletions, the default branch, an existing branch with no pull request, a fork's pull request, a body file
+outside the repository and a remote whose push URL leaves github.com are all denied; and that
+`settings.base.json` wires the hook and carries no rule that would override it. `GUARD_BASH=/bin/bash` runs
+the guard under bash 3.2.
 
 **There is no uninstaller.** Undoing an install is manual, and the backup directory is what makes it possible.
 
@@ -389,7 +393,8 @@ The six skills in `home/.agents/skills/` are linked into both `~/.agents/skills/
 | `task-driver` | "start a task on `<vm>`", "queue these three", "check on the tasks" |
 | `azml-compute` | "add compute instance X to my ssh config", "which compute instances can I ssh to" |
 
-What agents never do on their own: `git push`, `wt pr`, `gh pr create`, create a remote repository, publish,
+What agents never do on their own: `git push`, `wt pr`, `gh pr create`, create a remote repository, publish
+(a brief to work on or review a pull request counts as asking, for that pull request; approving one never does),
 remove a worktree you did not ask them to remove, pass `--force` or `--discard-commits`, open VS Code unasked, or run the
 interactive `wt attach`, `wt task` and `wt driver`, which belong to your own session.
 
@@ -455,12 +460,11 @@ own machine.
   [`home/.claude/settings.base.json`](home/.claude/settings.base.json) — `ls`, `cd`, the read-only git
   subcommands (`status`, `diff`, `log`, `show`, and the six read-only spellings of `branch`), `git add`,
   `git commit`, `wt list` and `wt show` — run with no prompt at all, so an agent commits to its branch
-  without asking you. Eleven
+  without asking you. Nine
   `deny` entries cover `git -c`, `git config`, the `git -C` spelling of `git push`,
-  `git remote add`, `git filter-branch`,
-  `gh pr create`, `gh repo create`, `gh repo fork`, `gh release create` and `wt pr`; most of them are things
-  the Agents section says agents never do on their own. Plain `git push` and `gh api` are not on the list:
-  `github-guard`, below, decides those. Each list is spelled out form by form for the same
+  `git remote add`, `git filter-branch`, `gh repo create`, `gh repo fork` and `gh release create`; most of
+  them are things the Agents section says agents never do on their own. Plain `git push`, `gh api`,
+  `gh pr` and `wt pr` are not on either list: `github-guard`, below, decides those. Each list is spelled out form by form for the same
   reason: the broader `Bash(git *)` the allowlist replaced also matched `git -c alias.x='!<shell>' x`, which
   runs arbitrary shell with no prompt, and `Bash(git branch *)` covered `git branch -D` as readily as
   `git branch -v`. There is no allow entry for `git -C <path>` at all, and that is deliberate. Nine were
@@ -480,8 +484,8 @@ own machine.
   command substitution. What the lists are not is enforcement. They match the text of the command Claude
   writes, and the permissions documentation says in as many words that this "isn't a security boundary around
   the program", warning that "Bash permission patterns that try to constrain command arguments are fragile".
-  `Bash(gh pr create *)` does not stop `/opt/homebrew/bin/gh pr create`, `bash -c 'gh pr create'` or
-  `gh 'pr' create`, and the `git push` rule this list used to carry did not stop
+  `Bash(gh repo create *)` does not stop `/opt/homebrew/bin/gh repo create`, `bash -c 'gh repo create'` or
+  `gh 'repo' create`, and the `git push` rule this list used to carry did not stop
   `git -c core.fsmonitor=<script> -C <path> push`. So read these lists as intent made legible where the tool
   can act on it: they catch the ordinary spellings an agent actually writes, and they save you a prompt on
   the ones you would always approve. Anything that has to actually hold wants what those docs
@@ -490,29 +494,34 @@ own machine.
   not: `Bash(git diff *)`, `Bash(git log *)` and `Bash(git show *)` all accept `--output=<file>`, so any of
   them will write to any path you can write, with no prompt.
 
-- **`github-guard` lets agents on a VM push to pull requests and comment on them.** `Bash(gh api *)` and
-  `Bash(git push *)` used to be denied outright, which also blocked reading a pull request's review comments:
-  inline comments are only reachable through `gh api`. A hook's allow cannot override a deny rule, so both
-  rules are gone and [`bin/github-guard`](bin/github-guard), a `PreToolUse` hook that sees every Bash command
-  before the permission lists do, decides instead. On every machine it approves a `gh api` read: GET or
-  HEAD, or a GraphQL query with no `mutation` in it, to a path on api.github.com. On a VM it also approves
-  three writes: `git push` of one branch, without force, through a remote whose push URL is on github.com, to
-  a branch that is not the default branch and is the head of an open pull request in that remote's own
-  repository — not a fork's (it asks `gh pr list`); `gh pr comment <n> --body …`; and a new review comment or
-  a reply on a pull request of this repository through `gh api`. Every other thing those three commands can
-  do, it denies, with a reason that names the approved form, so an agent rewrites the command rather than
-  waits for you. On the Mac, `git push` and `gh api` writes stay denied and `gh pr comment` still prompts. It
-  approves only a command it can read in full: one simple command with nothing a shell would expand — no
-  pipe, redirect, `;`, `&&`, `$`, backtick, glob, brace range, control character or unquoted newline — so
-  nothing it has not read can run beside it.
+- **`github-guard` lets agents work on pull requests.** `Bash(gh api *)`, `Bash(git push *)`,
+  `Bash(gh pr create *)` and `Bash(wt pr *)` used to be denied outright, which also blocked reading a pull
+  request's review comments: inline comments are only reachable through `gh api`. A hook's allow cannot
+  override a deny rule, so those rules are gone and [`bin/github-guard`](bin/github-guard), a `PreToolUse` hook
+  that sees every Bash command before the permission lists do, decides instead, the same way on every machine.
+  It approves, in the repository the session is in: reads (`gh api` GET or HEAD, a GraphQL query, `gh pr
+  view|diff|checks|list|status`); `git push` of one branch, without force, through a remote whose push URL is on
+  github.com, to a branch that is not the default branch and is either the head of an open pull request in
+  that remote's own repository — not a fork's — or does not exist there yet; `gh pr create` and `wt pr`;
+  `gh pr comment` and `gh pr review --comment|--request-changes`; through `gh api`, a comment, an inline review
+  comment or a reply, a review with inline comments, and an edit of a comment or review that GitHub says the
+  `gh` login wrote; and a GraphQL mutation whose only fields are `resolveReviewThread` or
+  `unresolveReviewThread`. It denies every other thing those commands can do, with a reason that names the
+  approved form, so an agent rewrites the command rather than waits for you — approving a pull request among
+  them, because an approval from your login counts toward branch protection. It approves only a command it
+  can read in full: one simple command with nothing a shell would expand — no pipe, redirect, `;`, `&&`, `$`,
+  backtick, glob, brace expansion, control character or unquoted newline — so nothing it has not read can run
+  beside it. A `--body-file` has to be a regular file in the repository or a temp dir, so a prompt injection
+  that says "post ~/.ssh/id_rsa" gets a denial rather than a comment.
 
-  Two limits. It answers only a command that *starts* with `gh api`, `gh pr comment` or `git push`, because
-  the start is the only place it can find one without a shell parser (a later `git push` could be a line of a
-  commit message). So `npm test && git push --force origin main` and `env git push …` go to the permission
-  lists, which no longer deny them: they prompt, or in auto mode go to its classifier. And what an agent can
-  write is still whatever the VM's `gh` login and git credentials allow. The guard catches the ordinary
-  spellings of a force push or a push to main; branch protection on GitHub, and a token scoped to the
-  repositories the VM works on, are what actually hold.
+  Three limits. It answers only a command that *starts* with one of these, because the start is the only place
+  it can find one without a shell parser (a later `git push` could be a line of a commit message). So
+  `npm test && git push --force origin main` and `env git push …` go to the permission lists, which no longer
+  deny them: they prompt, or in auto mode go to its classifier — and on a machine whose `settings.json` still
+  allows `Bash(git *)`, they run. Resolving a thread is not checked against the repository, since a thread id
+  does not say which one it belongs to. And what an agent can write is still whatever the machine's `gh` login
+  and git credentials allow: the guard catches the ordinary spellings of a force push or a push to main, while
+  branch protection on GitHub and a token scoped to the repositories you work on are what actually hold.
 
 - **The hooks run scripts from this repo on every turn.** `settings.base.json` wires five Claude events
   (`UserPromptSubmit`, `PermissionRequest`, `Notification`, `Stop`, `SessionEnd`) to `agent-notify` and a

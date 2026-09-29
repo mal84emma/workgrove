@@ -28,11 +28,9 @@
       "Bash(git -C * push *)",
       "Bash(git remote add *)",
       "Bash(git filter-branch *)",
-      "Bash(gh pr create *)",
       "Bash(gh repo create *)",
       "Bash(gh repo fork *)",
-      "Bash(gh release create *)",
-      "Bash(wt pr *)"
+      "Bash(gh release create *)"
     ]
   },
   "hooks": {
