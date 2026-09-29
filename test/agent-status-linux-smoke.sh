@@ -123,6 +123,47 @@ WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-no
 assert_eq 'thinking without a marker stays Running' running "$(jq -r .state "$WT_STATUS_FILE")"
 end_scenario
 
+begin_scenario 'VM state rejects stale and foreign session hooks'
+mkdir -p "$ROOT/shim"
+cat > "$ROOT/shim/date" <<'DATE'
+#!/usr/bin/env bash
+if [[ ${1:-} == +%s%N && -n ${FIXED_EVENT_SEQ:-} ]]; then
+  printf '%s\n' "$FIXED_EVENT_SEQ"
+else
+  exec /bin/date "$@"
+fi
+DATE
+chmod +x "$ROOT/shim/date"
+export PATH="$ROOT/shim:$PATH"
+rm -f "$WT_STATUS_FILE"
+FIXED_EVENT_SEQ=1000000000000000010 agent_event claude '{"hook_event_name":"UserPromptSubmit","session_id":"alpha"}'
+FIXED_EVENT_SEQ=1000000000000000012 agent_event claude '{"hook_event_name":"UserPromptSubmit","session_id":"alpha"}'
+: > "$CMUX_LOG"
+FIXED_EVENT_SEQ=1000000000000000011 agent_event claude '{"hook_event_name":"Notification","notification_type":"idle_prompt","session_id":"alpha"}'
+assert_eq 'older idle leaves Running in VM state' running "$(jq -r .state "$WT_STATUS_FILE")"
+assert_eq 'older idle preserves newest sequence' 1000000000000000012 "$(jq -r .seq "$WT_STATUS_FILE")"
+if grep -qF '|claude|idle|' "$CMUX_LOG"; then fail 'older idle was relayed'; else pass; fi
+end_scenario
+
+begin_scenario 'old Codex thread cannot clear a new session'
+rm -f "$WT_STATUS_FILE"
+FIXED_EVENT_SEQ=1000000000000000013 agent_event codex '{"hook_event_name":"UserPromptSubmit","session_id":"alpha"}'
+FIXED_EVENT_SEQ=1000000000000000014 agent_event codex '{"hook_event_name":"UserPromptSubmit","session_id":"beta"}'
+: > "$CMUX_LOG"
+FIXED_EVENT_SEQ=1000000000000000015 agent_event codex '{"hook_event_name":"SessionEnd","session_id":"alpha"}'
+assert_eq 'old SessionEnd keeps new owner' beta "$(jq -r .session_id "$WT_STATUS_FILE")"
+assert_eq 'old SessionEnd keeps Running' running "$(jq -r .state "$WT_STATUS_FILE")"
+if grep -qF '|codex|clear|' "$CMUX_LOG"; then fail 'old SessionEnd was relayed'; else pass; fi
+FIXED_EVENT_SEQ=1000000000000000016 agent_event codex '{"hook_event_name":"Stop","session_id":"alpha"}'
+assert_eq 'old Stop cannot replace new owner' beta "$(jq -r .session_id "$WT_STATUS_FILE")"
+FIXED_EVENT_SEQ=1000000000000000017 agent_event codex '{"hook_event_name":"SessionEnd","session_id":"beta"}'
+if [[ ! -e $WT_STATUS_FILE ]]; then pass; else fail 'current SessionEnd did not remove its state'; fi
+: > "$CMUX_LOG"
+FIXED_EVENT_SEQ=1000000000000000018 agent_event codex '{"hook_event_name":"Stop","session_id":"alpha"}'
+if [[ ! -e $WT_STATUS_FILE ]]; then pass; else fail 'old Stop recreated ended state'; fi
+if grep -qF '|codex|idle|' "$CMUX_LOG"; then fail 'old Stop was relayed after clear'; else pass; fi
+end_scenario
+
 # A stalled relay must not hold the agent hook for cmux's ten-second CLI wait.
 begin_scenario 'relay timeout and wt run cleanup'
 : > "$CMUX_LOG"
@@ -159,4 +200,4 @@ else
   fail 'wt run left its heartbeat file after exit'
 fi
 end_scenario
-lib_summary 27
+lib_summary 37

@@ -60,6 +60,8 @@ status_locked() { # called under lockf: workspace agent state sequence session
     # Older VM state files have no transition sequence; keep their lease alive until the next event.
     state=${old_state#expired-}; seq=$old_seq
   else
+    # An agent's SessionEnd must not clear a newer session; `wt run` sends '-' when it exits.
+    [[ $state != clear || $session == - || -z $old_session || $old_session == - || $session == "$old_session" ]] || return 0
     # shellcheck disable=SC2071  # fixed-width decimal strings; avoid signed 64-bit overflow in arithmetic
     [[ $seq < $old_seq ]] && return 0
     if [[ $seq == "$old_seq" ]]; then
