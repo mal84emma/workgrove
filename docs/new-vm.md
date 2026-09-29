@@ -27,6 +27,16 @@ sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gi
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null \
   && sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gh
 sudo update-locale LANG=C.UTF-8
+# sshd uses the first value it reads in sshd_config.d. This file sorts before Ubuntu's 50-cloudimg-settings.conf.
+conf=/etc/ssh/sshd_config.d/10-workgrove-keepalive.conf keepalive=$(mktemp)
+printf 'ClientAliveInterval 15\nClientAliveCountMax 4\n' >"$keepalive"
+if ! sudo cmp -s "$keepalive" "$conf"; then
+  sudo install -m 644 "$keepalive" "$conf"
+  # if sshd -t fails, the new file goes at once, so it cannot break the next sshd restart and lock you out
+  if sudo sshd -t; then sudo systemctl reload ssh; else sudo rm -f "$conf"; echo "sshd -t failed; removed $conf" >&2; fi
+fi
+rm -f "$keepalive"
+sudo sshd -T | grep -i clientalive   # clientaliveinterval 15; clientalivecountmax 4
 ```
 
 ```bash
@@ -167,10 +177,27 @@ run `exec bash` in that pane or open a new tmux window.
   `~/.bashrc` returns on its fourth line when the shell is not interactive, and anything below that return is
   never read by a command sent over ssh. Type `zsh` inside the row's tmux for the usual prompt.
 - No extra network rule is needed: the rows are plain ssh, and tmux is started by the row's own shell. After a
-  VM reboot or a cmux relaunch onto a lost pty a row shows a bare shell; `wt -H <vm> attach -r <repo> <name>`
-  re-attaches it (add `--restart-agent` when the reboot took the tmux session with it, or `--reattach` when a
-  dropped connection left the VM holding the old pty, which is the case cmux announces in the row as
-  `remote session was lost; starting a new shell`).
+  VM reboot or a cmux relaunch onto a lost pty a row can show a bare shell. Run
+  `wt -H <vm> attach -r <repo> <name>`; use its `--restart-agent` line when the reboot took the tmux session
+  with it. If a dropped connection left the VM holding the old pty, cmux announces
+  `remote session was lost; starting a new shell`; inspect the row and use `--reattach` if it shows a bare
+  shell. After a Wi-Fi network switch, a row may instead be
+  suspended with `Error: ssh-pty-attach: The cmux relay on <vm> did not become ready (the host may not allow SSH remote port forwarding). Automatic reconnect paused; use Reconnect to try again.`
+  The port-forwarding warning is misleading: the old SSH connection can still hold that row's fixed relay
+  port on the VM after the Mac's IP changes. `wt -H <vm> attach -r <repo> <name>` checks only that suspended
+  row, stops the stale listener on its relay port (a user-owned `sshd`, or `sshd-session` from OpenSSH 9.8,
+  on any local address), and asks cmux to reconnect it. It refuses, and signals nothing, when that `sshd`'s
+  connection comes from the Mac's current address, because that session may still be live. It reattaches
+  tmux only when a fresh VM check shows the session detached and the row shows a recognizable task-shell
+  prompt. Otherwise it selects the row and prints the exact `--reattach` command; inspect the row before
+  running it. If recovery fails, wait for the VM to drop the old SSH session (about a minute with block 1's
+  keepalive), then press **Reconnect** on the row or re-run `wt -H <vm> attach -r <repo> <name>`.
+  A normal SSH reload does not end existing sessions, so block 1's keepalive setting only
+  shortens future stale connections to about a minute. A VM set up before that setting existed gets it by
+  pasting just block 1's keepalive lines, from its `sshd_config.d` comment to the end; they are idempotent.
+  During recovery `wt -H <vm> attach` warns when the VM's sshd has no `ClientAliveInterval`. Whether Azure ML
+  preserves `/etc/ssh/sshd_config.d/10-workgrove-keepalive.conf` across a stop/start is **UNVERIFIED** (it
+  does reset the login shell). After a stop/start, run `ssh <vm> 'ls -l /etc/ssh/sshd_config.d/10-workgrove-keepalive.conf; sudo sshd -T | grep -i clientalive'` and reapply those lines if needed.
 - **`server exited unexpectedly` from every tmux command, `wt new` included,** after a `tmux kill-server`.
   First, the warning: `tmux kill-server` ends **every session on that socket** — every `wt-<repo>-<name>` task
   on that VM and every agent running in one. It is almost never what you want; to restart a single task use

@@ -40,7 +40,9 @@
 #   wt -H <host> <new|attach|list|show|rm|path|open|repos|update|help> …
 #                                                             run wt on that VM over ssh and keep the cmux row local;
 #                                                             show/rm/path/open/attach need -r;
-#                                                             attach [--restart-agent|--reattach];
+#                                                             attach recovers a suspended row and re-attaches when
+#                                                             its detached session and shell prompt are confirmed;
+#                                                             otherwise use --reattach; --restart-agent starts over;
 #                                                             update asks here, so run it from a terminal
 #
 # Where it runs: on a Mac wt drives cmux directly; on a VM (see is_remote) it only prepares worktrees and
@@ -1309,6 +1311,178 @@ agent_on_vm() { # agent_on_vm <host> <session> — 0 when claude or codex holds 
   remote_sh "$1" "for t in \$(tmux list-panes -s -t $q -F '#{pane_tty}' 2>/dev/null); do pgrep -t \"\${t#/dev/}\" -x 'claude|codex' >/dev/null 2>&1 && exit 0; done; exit 1" >/dev/null 2>&1
 }
 
+row_remote_field() { # row_remote_field <id> <field>… — this row's current remote fields (state, daemon slot) from one
+                     # rows_json read, joined by $WT_FS: never a tab, which read would collapse when a field is empty.
+                     # Capture it before splitting it: bash 3.2 applies `IFS=… read` to a here-string's $(…) too
+  local id="$1"; shift
+  rows_json | jq -r --arg id "$id" --arg fs "$WT_FS" \
+    'first((.workspaces? // .)[] | select(.id == $id) | .remote as $r
+       | [$ARGS.positional[] as $k | ($r[$k] // "") | tostring] | join($fs)) // empty' --args "$@" 2>/dev/null || true
+}
+
+clear_stale_relay() { # clear_stale_relay <host> <slot> — signal only this user's sshd, and only when its session is
+                      # not from the Mac's current address; the last line on stdout is `stopped <port> <pid>` or `free <port>`
+  local script
+  # Bash 3.2 misparses case patterns in a heredoc nested inside command substitution.
+  IFS= read -r -d '' script <<'WT_RELAY' || :
+slot=$1
+case "$slot" in ssh-[A-Za-z0-9-]*) ;; *) echo 'invalid relay slot' >&2; exit 1 ;; esac
+# Without a keepalive a stale session holds its port for hours; the Mac warns. These files are world-readable.
+if [ -r /etc/ssh/sshd_config ] && ! grep -qisE '^[[:space:]]*ClientAliveInterval[[:space:]=]+0*[1-9]' \
+    /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then echo 'keepalive missing'; fi
+port=''
+for file in "$HOME"/.cmux/relay/*.slot; do
+  [ -f "$file" ] || continue
+  [ "$(cat "$file")" = "$slot" ] || continue
+  candidate=${file##*/}; candidate=${candidate%.slot}
+  case "$candidate" in *[!0-9]*|'') echo 'invalid relay port' >&2; exit 1 ;; esac
+  [ -z "$port" ] || { echo 'multiple ports for relay slot' >&2; exit 1; }
+  port=$candidate
+done
+[ -n "$port" ] || { echo 'relay slot file not found' >&2; exit 1; }
+on_port() { # every listener on $port at any local address: field 4 after a State column, else field 3
+  awk -v port="$port" '{ o = ($1 ~ /^[0-9]+$/) ? 0 : 1; n = split($(3 + o), a, ":"); if (n > 1 && a[n] == port) print }'
+}
+lines=$(ss -H -ltnp "sport = :$port") || { echo 'ss failed' >&2; exit 1; }
+held=$(printf '%s\n' "$lines" | on_port)
+if [ -z "$held" ]; then printf 'free %s\n' "$port"; exit 0; fi
+if printf '%s\n' "$held" | grep -qv 'pid='; then
+  # Some VMs hide even this user's sshd PID from unprivileged ss. Sudo is only for inspection.
+  lines=$(sudo -n ss -H -ltnp "sport = :$port") || { echo "cannot inspect listener PID on $port" >&2; exit 1; }
+  held=$(printf '%s\n' "$lines" | on_port)
+fi
+if [ -z "$held" ] || printf '%s\n' "$held" | grep -qv 'pid='; then echo "cannot identify one listener on $port" >&2; exit 1; fi
+# One sshd may hold the port on IPv4 and IPv6 at once: one PID across every line, never one line.
+pids=$(printf '%s\n' "$held" | grep -oE 'pid=[0-9]+' | sort -u)
+[ "$(printf '%s\n' "$pids" | grep -c .)" -eq 1 ] || { echo "multiple listeners on $port" >&2; exit 1; }
+pid=${pids#pid=}
+# OpenSSH 9.8 and later run each session as sshd-session.
+if printf '%s\n' "$held" | grep -qvF -e "\"sshd\",pid=$pid," -e "\"sshd-session\",pid=$pid,"; then
+  echo "listener on $port is not sshd" >&2; exit 1
+fi
+case "$(ps -o comm= -p "$pid" | tr -d ' ')" in sshd|sshd-session) ;; *) echo "listener on $port is not a user-owned sshd" >&2; exit 1 ;; esac
+[ "$(ps -o uid= -p "$pid" | tr -d ' ')" = "$(id -u)" ] || { echo "listener on $port is not a user-owned sshd" >&2; exit 1; }
+# Stale means connected from an address the Mac no longer has. This call's own SSH_CONNECTION is the
+# Mac's current address; a session from it may be live (a ControlMaster VS Code shares) and is refused.
+[ -n "${SSH_CONNECTION:-}" ] || { echo "SSH_CONNECTION is empty, so sshd $pid holding relay port $port cannot be shown to be stale" >&2; exit 1; }
+client_ip=${SSH_CONNECTION%% *}; server_port=${SSH_CONNECTION##* }
+case "$server_port" in *[!0-9]*|'') echo "unexpected SSH_CONNECTION: $SSH_CONNECTION" >&2; exit 1 ;; esac
+bare_ip() { a=${1#\[}; a=${a%\]}; printf '%s\n' "${a#::ffff:}"; }   # [addr], ::ffff:v4 and v4 compare equal
+conns=$(ss -H -tnp state established "( sport = :$server_port )") || { echo 'ss failed' >&2; exit 1; }
+conn=$(printf '%s\n' "$conns" | grep -F ",pid=$pid,")
+if [ -z "$conn" ]; then   # hidden PIDs again; sudo only reads
+  conns=$(sudo -n ss -H -tnp state established "( sport = :$server_port )") || conns=''
+  conn=$(printf '%s\n' "$conns" | grep -F ",pid=$pid,")
+fi
+# `state established` drops ss's State column, so the peer is field 4, or 5 when a State column is there.
+peer=$(printf '%s\n' "$conn" | awk '{ o = ($1 ~ /^[0-9]+$/) ? 0 : 1; print $(4 + o) }')
+[ "$(printf '%s\n' "$conn" | grep -c .)" -eq 1 ] && [ -n "$peer" ] \
+  || { echo "cannot find sshd $pid's SSH connection on port $server_port, so it cannot be shown to be stale" >&2; exit 1; }
+peer=$(bare_ip "${peer%:*}"); here=$(bare_ip "$client_ip")
+[ "$peer" != "$here" ] || { echo "sshd $pid holding relay port $port is connected from this Mac's current address ($here); it may still be live" >&2; exit 1; }
+env kill -TERM "$pid" || { echo "could not stop sshd $pid on $port" >&2; exit 1; }
+for attempt in 1 2 3 4 5; do
+  lines=$(ss -H -ltnp "sport = :$port") || { echo 'ss failed after signal' >&2; exit 1; }
+  held=$(printf '%s\n' "$lines" | on_port)
+  [ -z "$held" ] && break
+  sleep 1
+done
+[ -z "$held" ] || { echo "relay port $port is still held after signal" >&2; exit 1; }
+printf 'stopped %s %s\n' "$port" "$pid"
+WT_RELAY
+  remote_sh_raw "$1" "bash -s -- $(shell_join "$2") <<'WT_RELAY'
+$script
+WT_RELAY"
+}
+
+recover_suspended_row() { # reconnect one suspended row, after freeing only its own stale SSH forward
+  local host="$1" id="$2" slot="$3" fallback="$4" c out rc=0 reason result reply body state tick port left=0
+  local why="did not connect within 30 seconds"
+  [[ -n "$slot" ]] || { warn "suspended row $id has no persistent daemon slot"; die "manual fallback: $fallback"; }
+  # Every refusal the relay script makes is on its stderr, and a VM's login files may print ahead of its result.
+  out=$(clear_stale_relay "$host" "$slot" 2>&1) || rc=$?
+  [[ $rc -ne 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
+  if printf '%s\n' "$out" | grep -x 'keepalive missing' >/dev/null; then   # no -q: pipefail and SIGPIPE
+    warn "$host's sshd has no ClientAliveInterval, so a stale SSH session holds its relay port until TCP keepalive gives up; apply docs/new-vm.md block 1's keepalive lines"
+  fi
+  if [[ $rc -ne 0 ]]; then   # the script's reason is its last line
+    reason=$(printf '%s\n' "$out" | grep -vx 'keepalive missing' | sed '/^[[:space:]]*$/d' | tail -1 || true)
+    warn "could not clear $id's stale relay on $host: ${reason:-no reason given}"; die "manual fallback: $fallback"
+  fi
+  result=$(printf '%s\n' "$out" | grep -E '^(stopped|free) ' | tail -1 || true)
+  case "$result" in
+    stopped\ *) port=${result#stopped }; port=${port%% *}
+                printf 'relay: stopped stale user sshd %s on %s port %s\n' "${result##* }" "$host" "$port" ;;
+    free\ *) printf 'relay: port %s on %s was free\n' "${result#free }" "$host" ;;
+    *) warn "unexpected relay check: $out"; die "manual fallback: $fallback" ;;
+  esac
+  c=$(cmux_bin); body=$(jq -cn --arg id "$id" '{workspace_id: $id}')
+  rc=0; reply=$(CMUX_QUIET=1 "$c" rpc workspace.remote.reconnect "$body" 2>&1) || rc=$?
+  reply=${reply//$'\n'/ }   # kept for every failure message below
+  [[ $rc -eq 0 ]] || die "cmux reconnect failed for $id (${reply:-no reply}); manual fallback: $fallback"
+  for ((tick=0; tick<30; tick++)); do
+    state=$(row_remote_field "$id" state)
+    if [[ "$state" == connected ]]; then printf 'row: %s connected after reconnect\n' "$id"; return 0; fi
+    # The first reads may still say suspended; suspended again after any other state is cmux giving up.
+    if [[ "$state" == suspended && $left -eq 1 ]]; then why="went back to suspended after cmux tried to reconnect it"; break; fi
+    [[ -z "$state" || "$state" == suspended ]] || left=1
+    sleep 1
+  done
+  die "row $id $why (last state: ${state:-missing}; cmux reconnect reply: ${reply:-empty}); manual fallback: $fallback"
+}
+
+ROW_SHELL_LAST=""
+row_shell_prompt() { # row_shell_prompt <id> — 0 when the row's last non-blank line ends in $, # or % and names a
+                     # user@host, or is that character alone under a line that does (a two-line theme such as
+                     # workgrove's). A TUI footer such as `Context 100%` names none. ROW_SHELL_LAST is that last line
+  local id="$1" c screen lines above="" nl=$'\n' who='[[:alnum:]_.-]+@[[:alnum:]_.-]+' end='[$#%]$' bare='^[$#%]$'
+  ROW_SHELL_LAST=""
+  c=$(cmux_bin) || return 1
+  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 1
+  lines=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -2)
+  ROW_SHELL_LAST=${lines##*"$nl"}
+  [[ "$lines" != *"$nl"* ]] || above=${lines%%"$nl"*}
+  [[ "$ROW_SHELL_LAST" =~ $end ]] || return 1
+  [[ "$ROW_SHELL_LAST" =~ $who ]] || { [[ "$ROW_SHELL_LAST" =~ $bare && "$above" =~ $who ]]; }
+}
+
+send_tmux_line() { # send_tmux_line <id> <session> — type the row's tmux attach line into it and press return
+  local c; c=$(cmux_bin)
+  CMUX_QUIET=1 "$c" send --workspace "$1" "$(tmux_cmd "$2")" >/dev/null 2>&1 \
+    || die "cmux send failed for $1; type this in the row instead: tmux attach -d -t '=$2'"
+  CMUX_QUIET=1 "$c" send-key --workspace "$1" enter >/dev/null 2>&1 \
+    || die "cmux send-key failed for $1; press return in the row to finish the attach"
+}
+
+vm_session_detached() { # vm_session_detached <host> <session> — 0 only when the VM has that tmux session and lists no
+                        # client on it; one ssh call, and any failure, ssh's own included, is "not proven"
+  local q; q=$(shell_join "=$2")
+  remote_sh_raw "$1" "tmux has-session -t $q 2>/dev/null && c=\$(tmux list-clients -t $q 2>/dev/null) && [ -z \"\$c\" ]" >/dev/null 2>&1
+}
+
+reattach_shell_row() { # reattach_shell_row <id> <session> [host] — send the tmux line only to a row at a shell prompt;
+                       # with a host (after a reconnect) the row must also still be connected and that VM must list
+                       # no client on the session, checked in that order just before the send
+  local id="$1" session="$2" host="${3:-}"
+  row_shell_prompt "$id" || return 1
+  if [[ -n "$host" ]]; then   # the connection can drop again, and a restored pty can still hold tmux
+    [[ "$(row_remote_field "$id" state)" == connected ]] || return 1
+    vm_session_detached "$host" "$session" || return 1
+  fi
+  send_tmux_line "$id" "$session"
+}
+
+reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> — a reconnected row can say connected before its
+                           # new login shell paints a prompt, so try for 5 ticks ~1 s apart; each tick reads the screen
+                           # first (local) and asks the VM only when that shows a prompt. 1: never proven, nothing sent
+  local tick
+  for ((tick=0; tick<5; tick++)); do
+    reattach_shell_row "$2" "$3" "$1" && return 0
+    [[ $tick -eq 4 ]] || sleep 1
+  done
+  return 1
+}
+
 host_attach() { # re-attach to the VM's session; starting an agent again is never implicit
   local host="$1" restart=0 reattach=0 name="" repo=""; shift
   while [[ $# -gt 0 ]]; do
@@ -1323,7 +1497,7 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   done
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
-  local out session state title id path c screen last what=selected
+  local out session state title id path c remote remote_state slot fallback recovered=0 what=selected
   out=$(remote_wt "$host" show "$name" -r "$repo")
   session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
   path=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
@@ -1331,24 +1505,34 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
   state="${session#*(}"; state="${state%)}"; session="${session%% *}"
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$path")" ]] || die "unexpected output from $host"
   title=$(row_title "$name" "$path")
+  id=$(cmux_row_field "$title" id "$host")
+  if [[ -n "$id" && $restart -eq 0 ]]; then
+    remote=$(row_remote_field "$id" state persistent_daemon_slot)
+    IFS="$WT_FS" read -r remote_state slot <<<"$remote"
+    if [[ "$remote_state" == suspended ]]; then
+      fallback="once $host has dropped the old SSH session (about a minute with docs/new-vm.md block 1's keepalive), press Reconnect on the row or re-run: wt -H $host attach -r $(shell_join "$repo") $name"
+      recover_suspended_row "$host" "$id" "$slot" "$fallback"
+      recovered=1
+    fi
+  fi
   if [[ $reattach -eq 1 ]]; then  # A dropped connection can leave the row with a fresh login shell while the VM
                                   # keeps the pty that holds tmux, so the abandoned client is still listed and
                                   # session_state cannot call the session detached. The flag is the user's word
                                   # that the row shows a shell; the screen check is the backstop that stops the
-                                  # tmux line from being typed into a running agent's prompt.
-    id=$(cmux_row_field "$title" id "$host")
+                                  # tmux line from being typed into a running agent's prompt. A row reconnected
+                                  # just now may still show its pre-suspension screen and its restored pty may
+                                  # still hold tmux, which the user cannot have seen, so it gets recovery's proof.
     [[ -n "$id" ]] || die "no row $title $(row_tag "$host") is open; wt -H $host attach -r $(shell_join "$repo") $name opens one"
     c=$(cmux_bin)
-    screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null || true)
-    last=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -1)
-    case "$last" in
-      *'$'|*'#'|*'%') ;;
-      *) die "$title $(row_tag "$host") does not end at a shell prompt (last line: ${last:-empty}); it is probably still attached to tmux. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'" ;;
-    esac
-    CMUX_QUIET=1 "$c" send --workspace "$id" "$(tmux_cmd "$session")" >/dev/null 2>&1 \
-      || die "cmux send failed for $id; type this in the row instead: tmux attach -d -t '=$session'"
-    CMUX_QUIET=1 "$c" send-key --workspace "$id" enter >/dev/null 2>&1 \
-      || die "cmux send-key failed for $id; press return in the row to finish the attach"
+    if [[ $recovered -eq 1 ]]; then
+      if ! reattach_recovered_row "$host" "$id" "$session"; then
+        CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
+        die "$title $(row_tag "$host") reconnected, but its shell prompt and a detached VM session were not both confirmed (last line: ${ROW_SHELL_LAST:-empty}); look at the row and, if it shows a bare shell, re-run: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
+      fi
+    else
+      reattach_shell_row "$id" "$session" \
+        || die "$title $(row_tag "$host") does not end at a shell prompt naming user@host, on its own line or the one above (last line: ${ROW_SHELL_LAST:-empty}); it is probably still attached to tmux, or its prompt names no user@host. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'"
+    fi
     CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
     printf 'row: %s %s (re-attached)\n' "$title" "$(row_tag "$host")"
     return 0
@@ -1372,19 +1556,22 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
     "agent running"|"agent running, detached") ;;
     *) die "$name on $host has no agent pane ($state); restart it: wt -H $host attach --restart-agent -r $(shell_join "$repo") $name; if an agent is visibly running there, the VM's wt is older than the Mac's: wt -H $host update" ;;
   esac
-  id=$(cmux_row_field "$title" id "$host")
   [[ -n "$id" ]] || { remote_row "$host" "$session" "$title" ""; return 0; }
   c=$(cmux_bin)
-  if [[ "$state" == *detached ]]; then   # the one place an existing row is typed into: the VM reported no tmux
-                                         # client, so the row kept its ssh but lost the pty that held tmux
+  if [[ $recovered -eq 1 ]]; then
+    # The show above predates the reconnect, and a prompt-shaped footer alone says nothing about what holds
+    # the pty, so this waits for a prompt and asks the VM again, just before any send.
+    if reattach_recovered_row "$host" "$id" "$session"; then what=re-attached; fi
+  elif [[ "$state" == *detached ]]; then   # a row that never dropped: the VM reported no tmux client, so the row
+                                           # kept its ssh but lost the pty that held tmux
     what=re-attached
-    CMUX_QUIET=1 "$c" send --workspace "$id" "$(tmux_cmd "$session")" >/dev/null 2>&1 \
-      || die "cmux send failed for $id; re-create the row: wt -H $host attach --restart-agent -r $(shell_join "$repo") $name"
-    CMUX_QUIET=1 "$c" send-key --workspace "$id" enter >/dev/null 2>&1 \
-      || die "cmux send-key failed for $id; press return in the row to finish the attach"
+    send_tmux_line "$id" "$session"
   fi
   CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
   printf 'row: %s %s (%s)\n' "$title" "$(row_tag "$host")" "$what"
+  if [[ $recovered -eq 1 && "$what" != re-attached ]]; then
+    warn "re-attach this row if it shows a bare shell: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
+  fi
 }
 
 host_open() { # VS Code Remote-SSH on a VM worktree
