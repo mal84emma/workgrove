@@ -213,7 +213,7 @@ It does not contact any configured host.
 after worktree creation, and an SSH disconnect after creation but before the Mac receives the result. It also
 checks that a brief and agent choice survive an interrupted `.wt-setup`.
 
-`bash test/github-guard-smoke.sh` runs 425 assertions of hook payloads through `bin/github-guard`, with `gh`
+`bash test/github-guard-smoke.sh` runs 430 assertions of hook payloads through `bin/github-guard`, with `gh`
 stubbed to answer `gh api` from fixtures by running the guard's own `--jq` filter over them.
 It checks that a command which only mentions `gh api` or `git push` — a commit message, a heredoc, a `grep` —
 gets no answer; that reads, pushes to any branch but the default one, pull requests, issues, comments,
@@ -531,9 +531,9 @@ own machine.
   It approves, in the repository the session is in: reads (`gh api` GET or HEAD, a GraphQL query, `gh pr
   view|diff|checks|list|status`, `gh issue view|list|status`); `git push` of `HEAD` or one local branch — never
   a tag or a bare commit — without force, through a remote whose push URL is on github.com, to any branch but
-  that repository's default one — which it asks GitHub for, falling back to the remote's HEAD, and denies the
-  push when neither answers; `gh pr create`, `wt pr` (after checking the push and PR destination it runs) and
-  `gh issue create`; `gh pr comment`, `gh issue comment`
+  that repository's default one — which it must ask GitHub for, denying the push if `gh` is unavailable or
+  GitHub does not return a valid branch; `gh pr create`, `wt pr` (after checking the push and PR destination it
+  runs) and `gh issue create`; `gh pr comment`, `gh issue comment`
   and `gh pr review --comment|--request-changes`; `gh issue edit` of an issue the `gh` login opened; through
   `gh api`, a new issue, a comment on an issue or pull request, an inline review comment or a reply, a review
   with inline comments, and an edit of an issue, comment or review that GitHub says the `gh` login wrote; and a
@@ -550,15 +550,19 @@ own machine.
   is approved only while `GH_REPO`, `GH_HOST` and `gh repo set-default` all leave `gh` pointed at one of the
   repository's github.com remotes: each of them can send `gh` elsewhere.
 
-  Four limits. It answers only a command that *starts* with one of these, because the start is the only place
+  Limits. It answers only a command that *starts* with one of these, because the start is the only place
   it can find one without a shell parser (a later `git push` could be a line of a commit message). So
   `npm test && git push --force origin main` and `env git push …` go to the permission lists, which no longer
   deny them: they prompt, or in auto mode go to its classifier — and on a machine whose `settings.json` still
   allows `Bash(git *)`, they run. Resolving a thread is not checked against the repository, since a thread id
   does not say which one it belongs to. It reads `GH_REPO` and `GH_HOST` from the environment Claude Code runs
-  hooks with, so a value set only inside the Bash tool's own shell would go unseen. And what an agent can
-  write is still whatever the machine's `gh` login and git credentials allow: the guard catches the ordinary
-  spellings of a force push or a push to the default branch, while branch protection on GitHub and a token
+  hooks with, so a value set only inside the Bash tool's own shell would go unseen. A machine with Git's
+  `push.followTags=true` can still send annotated tags alongside an approved branch push; the guard does not
+  inspect that setting. The default-branch check fails closed when `gh` cannot reach GitHub, even if Git
+  credentials would permit a push; the denial suggests checking `gh` authentication and network access,
+  without making a second connection request. What an agent can write is still whatever the machine's `gh`
+  login and Git credentials allow: the guard catches the ordinary spellings of a force push or a push to the
+  default branch, while branch protection on GitHub and a token
   scoped to the repositories you work on are what actually hold.
 
 - **The hooks run scripts from this repo on every turn.** `settings.base.json` wires six Claude events

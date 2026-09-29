@@ -337,6 +337,7 @@ GH_REPO=evil/other expect deny 'wt pr label-prop' 'GH_REPO'
 git -C "$W" remote set-url --push origin git@gitlab.com:acme/widgets.git
 expect deny 'wt pr label-prop' 'not a github.com repository'
 git -C "$W" remote set-url --push origin git@github.com:acme/widgets.git
+FAKE_GH_FAIL=1 expect deny 'wt pr label-prop' 'could not query github.com'
 fixture api/repos__acme__widgets '{"default_branch": "wt/label-prop"}'
 expect deny 'wt pr label-prop' 'default branch'
 fixture api/repos__acme__widgets '{"default_branch": "trunk"}'
@@ -446,10 +447,11 @@ expect deny 'git push origin HEAD:master' 'default branch'
 expect deny 'git push fork HEAD:develop' 'default branch of someone/widgets'   # known only to GitHub
 expect deny 'git push renamed HEAD:new-default' 'default branch'               # GitHub over a stale HEAD
 expect allow 'git push renamed HEAD:old-default'
-FAKE_GH_FAIL=1 expect allow 'git push origin HEAD:wt/label-prop'               # the local HEAD answers
-FAKE_GH_FAIL=1 expect deny 'git push origin HEAD:trunk' 'default branch'
-FAKE_GH_FAIL=1 expect deny 'git push fork HEAD:wt/label-prop' 'could not find the default branch'
-expect deny 'git push nulls HEAD:wt/label-prop' 'could not find the default branch'
+FAKE_GH_FAIL=1 expect deny 'git push origin HEAD:wt/label-prop' 'gh auth status and network access'
+FAKE_GH_FAIL=1 expect deny 'git push origin HEAD:trunk' 'could not query github.com'
+FAKE_GH_FAIL=1 expect deny 'git push fork HEAD:wt/label-prop' 'could not query github.com'
+FAKE_GH_FAIL=1 expect deny 'git push renamed HEAD:new-default' 'could not query github.com' # stale local HEAD cannot answer
+expect deny 'git push nulls HEAD:wt/label-prop' 'valid default branch'
 expect deny 'git push --force origin HEAD' 'force'
 expect deny 'git push -f origin HEAD' 'force'
 expect deny 'git push --force-with-lease origin HEAD' 'force'
@@ -505,4 +507,4 @@ assert_eq 'install.sh links the guard' 'yes' \
   "$(grep -Eq '^  for b in .*github-guard' "$REPO/install.sh" && echo yes || echo no)"
 end_scenario
 
-lib_summary 425
+lib_summary 430

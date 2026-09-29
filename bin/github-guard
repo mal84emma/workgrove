@@ -11,8 +11,8 @@
 #   read          gh api GET or HEAD; gh api graphql with a query; gh pr view|diff|checks|list|status;
 #                 gh issue view|list|status
 #   push          git push [-u] <remote> <src>[:<branch>] of HEAD or a local branch, to any branch but the
-#                 default one (GitHub is asked which that is) — no force, no delete, no tags, one branch, a
-#                 github.com push URL
+#                 default one (GitHub must answer which that is) — no force, no delete, no explicit tags, one
+#                 branch, a github.com push URL; push.followTags may still add annotated tags
 #   open          gh pr create, gh issue create (not from a file outside this repository or a temp dir, not
 #                 into another repository, no --template); wt pr <name> [--draft]; gh api POST .../issues
 #   comment       gh pr comment, gh issue comment [<n>] --body|--body-file …, and --edit-last to edit your
@@ -582,16 +582,14 @@ check_git_push() {
   [[ $dst == refs/* ]] && deny "push to a branch, not $dst"
   branch_name "$dst" || deny "'$dst' is not a branch name git push approves"
 
-  # The default branch is the one thing a push may not reach, so it is asked of GitHub, which knows; the
-  # remote-tracking HEAD is only the fallback, because a clone that never ran `git remote set-head` has none,
-  # and one taken before the default was renamed has the old name. Neither answering is a denial, not a guess.
-  def=''
+  # A local remote-tracking HEAD can be stale after a default-branch change. Only GitHub's answer is
+  # authoritative; when it cannot answer, deny rather than risk pushing to the current default branch.
   command -v gh >/dev/null 2>&1 \
-    && def=$(gh_here api "repos/$repo" --hostname github.com --jq '.default_branch // empty')   # not GH_HOST's
-  branch_name "$def" || def=''                               # an error page is not a branch
-  [[ -n $def ]] || { def=$(git -C "$cwd" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null) \
-    && def=${def#"$remote"/}; }
-  [[ -n $def ]] || deny "could not find the default branch of $repo (is gh logged in?), so $dst cannot be checked"
+    || deny "gh is needed to check the default branch of $repo before pushing $dst; install gh and log in"
+  def=$(gh_here api "repos/$repo" --hostname github.com --jq '.default_branch // empty') \
+    || deny "could not query github.com for the default branch of $repo; check gh auth status and network access, then retry the push"
+  branch_name "$def" \
+    || deny "github.com did not return a valid default branch for $repo, so pushing $dst is denied"
   [[ $dst == main || $dst == master || $dst == "$def" ]] \
     && deny "$dst is the default branch of $repo; agents push only to other branches — push to one and open a \
 pull request"
