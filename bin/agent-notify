@@ -21,9 +21,13 @@ if [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -z $payload ]]; then
   start=$(printf '%s' "$payload" | jq -r '.start // empty' 2>/dev/null)
   if [[ $path == "$HOME/.claude/projects/"*.jsonl && $offset =~ ^[0-9]+$ && $start =~ ^[0-9]+$ && -r $path ]]; then
     size=$(wc -c < "$path")
-    if { (( size > offset )) && tail -c "+$((offset + 1))" "$path" | jq -e 'select(.type == "user" and ((.message.content | tostring) | contains("[Request interrupted by user]")))' >/dev/null 2>&1; } ||
+    if { (( size > offset )) && tail -c "+$((offset + 1))" "$path" | jq -e '
+      select(.type == "user" and
+        (.message.content | if type == "string" then startswith("[Request interrupted by user")
+         elif type == "array" then any(.[]; .type == "text" and (.text | startswith("[Request interrupted by user")))
+         else false end))' >/dev/null 2>&1; } ||
        { (( size == offset && $(date +%s) - start >= 180 )); }; then
-      payload=$(printf '%s' "$payload" | jq -c '.state = "idle" | del(.transcript_path, .offset, .start)')
+      payload=$(printf '%s' "$payload" | jq -c --arg q "$event_seq" '.state = "idle" | .seq = $q | del(.transcript_path, .offset, .start)')
       printf '%s\n' "$payload" > "$WT_STATUS_FILE"
       interrupted=1
     fi
@@ -58,7 +62,11 @@ case $event in
     status_only=1 ;;
   Stop) body="finished"; sound=Funk; status=idle ;;
   StopFailure|Interrupt) status=idle; status_only=1 ;;
-  Heartbeat) status=renew; status_only=1 ;;
+  Heartbeat)
+    status=$(printf '%s' "$payload" | jq -r '.state // empty' 2>/dev/null)
+    saved_seq=$(printf '%s' "$payload" | jq -r '.seq // empty' 2>/dev/null)
+    if [[ $saved_seq =~ ^[0-9]{19}$ ]]; then event_seq=$saved_seq; else status=renew; fi
+    status_only=1 ;;
   PermissionRequest) body="needs approval"; sound=Glass ;;
   Notification)
     body=$(printf '%s' "$payload" | jq -r '.message // "needs input"' 2>/dev/null || echo "needs input"); sound=Glass
@@ -162,12 +170,13 @@ if [[ $socket == *:[0-9]* ]]; then
           transcript=''; offset=0; start=0
           if [[ $event == UserPromptSubmit && $title == 'Claude Code' ]]; then
             transcript=$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null)
-            if [[ $transcript == "$HOME/.claude/projects/"*.jsonl && -r $transcript ]]; then
-              offset=$(wc -c < "$transcript"); start=$(date +%s)
+            if [[ $transcript == "$HOME/.claude/projects/"*.jsonl ]]; then
+              [[ -r $transcript ]] && offset=$(wc -c < "$transcript")
+              start=$(date +%s)
             else transcript=''; fi
           fi
-          jq -nc --arg s "$session" --arg st "$status" --arg p "$transcript" --argjson o "$offset" --argjson t "$start" \
-            '{hook_event_name:"Heartbeat",session_id:$s,state:$st} + (if $p == "" then {} else {transcript_path:$p,offset:$o,start:$t} end)' > "$WT_STATUS_FILE"
+          jq -nc --arg s "$session" --arg st "$status" --arg q "$event_seq" --arg p "$transcript" --argjson o "$offset" --argjson t "$start" \
+            '{hook_event_name:"Heartbeat",session_id:$s,state:$st,seq:$q} + (if $p == "" then {} else {transcript_path:$p,offset:$o,start:$t} end)' > "$WT_STATUS_FILE"
         fi
         if command -v flock >/dev/null; then flock -u 9; fi
       fi

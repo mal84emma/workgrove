@@ -97,14 +97,21 @@ status_hook "$(control test-vm running 1000000000000000002)" >/dev/null
 check_missing "$CMUX_LOG" 'set-status'
 end_scenario
 
-begin_scenario 'renewal preserves the latest lifecycle state'
+begin_scenario 'heartbeats recover lost updates without reviving stale state'
 : > "$CMUX_LOG"
 status_hook "$(control test-vm running 1000000000000000010)" >/dev/null
 status_hook "$(control test-vm idle 1000000000000000011)" >/dev/null
 status_hook "$(control test-vm renew 1000000000000000012)" >/dev/null
+assert_eq 'legacy renewal keeps Idle' idle "$(awk '{print $4}' "$XDG_STATE_HOME/cmux-agent-status/$CMUX_WORKSPACE_ID-codex")"
+status_hook "$(control test-vm running 1000000000000000010)" >/dev/null
+status_hook "$(control test-vm idle 1000000000000000011)" >/dev/null
 check_contains "$CMUX_LOG" 'set-status vm-codex Idle'
-check_missing "$CMUX_LOG" 'set-status vm-codex Running --workspace CCCCCCCC'
-assert_eq 'renewed state stays idle' idle "$(awk '{print $4}' "$XDG_STATE_HOME/cmux-agent-status/$CMUX_WORKSPACE_ID-codex")"
+assert_eq 'stale Running stays Idle' idle "$(awk '{print $4}' "$XDG_STATE_HOME/cmux-agent-status/$CMUX_WORKSPACE_ID-codex")"
+: > "$CMUX_LOG"
+status_hook "$(control test-vm running 1000000000000000012)" >/dev/null
+# The Idle event is lost; its heartbeat has the same transition sequence as that event.
+status_hook "$(control test-vm idle 1000000000000000013)" >/dev/null
+assert_eq 'missed Idle is recovered' idle "$(awk '{print $4}' "$XDG_STATE_HOME/cmux-agent-status/$CMUX_WORKSPACE_ID-codex")"
 end_scenario
 
 begin_scenario 'control failures stay quiet'
@@ -146,4 +153,10 @@ CMUX_NOTIFICATION_TITLE='unrelated' CMUX_NOTIFICATION_SUBTITLE='' bash "$REPO/bi
 check_contains "$CMUX_LOG" 'clear-status vm-codex --workspace BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
 assert_eq 'retry clears the expired state' clear "$(awk '{print $4}' "$f")"
 end_scenario
-lib_summary 36
+
+begin_scenario 'an orphan timer does not recreate removed test state'
+rm -rf "$XDG_STATE_HOME/cmux-agent-status"
+WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
+if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
+end_scenario
+lib_summary 38

@@ -57,11 +57,14 @@ status_locked() { # called under lockf: workspace agent state sequence session
     state=clear; seq="$(date +%s)000000000"
   elif [[ $state == renew ]]; then
     [[ $old_state != clear && $old_session == "$5" && $old_seq != 0 ]] || return 0
-    # A renewal never changes lifecycle state, even if it read Running just before Stop wrote Idle.
+    # Older VM state files have no transition sequence; keep their lease alive until the next event.
     state=$old_state; seq=$old_seq
   else
     # shellcheck disable=SC2071  # fixed-width decimal strings; avoid signed 64-bit overflow in arithmetic
-    [[ $seq == "$old_seq" || $seq < $old_seq ]] && return 0
+    [[ $seq < $old_seq ]] && return 0
+    if [[ $seq == "$old_seq" ]]; then
+      [[ $state == "$old_state" && $5 == "$old_session" && $state != clear ]] || return 0
+    fi
   fi
   case $state in
     running) label=Running; icon=bolt.fill; color='#4C8DFF' ;;
@@ -76,7 +79,11 @@ status_locked() { # called under lockf: workspace agent state sequence session
   printf '%s %s %s %s %s\n' "$seq" "$((lease + 1))" "${5:--}" "$state" "$(( $(date +%s) + ${WT_STATUS_LEASE_SECONDS:-120} ))" > "$f"
 }
 status_apply() {
-  (umask 077; mkdir -p "$status_dir") || { log "cannot create $status_dir"; return 1; }
+  if [[ $3 == expire ]]; then
+    [[ -d $status_dir ]] || return 0  # an orphan timer must not recreate removed state
+  else
+    (umask 077; mkdir -p "$status_dir") || { log "cannot create $status_dir"; return 1; }
+  fi
   local f rc=0 lease state
   f=$(status_file "$1" "$2")
   if command -v lockf >/dev/null; then
@@ -211,6 +218,7 @@ case $mode in
     [[ $# -eq 4 && $2 =~ ^[A-Fa-f0-9-]{36}$ && ( $3 == claude || $3 == codex ) && $4 =~ ^[0-9]+$ ]] || exit 1
     sleep "${WT_STATUS_LEASE_SECONDS:-120}"
     DEADLINE=$(( $(date +%s) + 15 ))
+    [[ -r $(status_file "$2" "$3") ]] || exit 0
     status_apply "$2" "$3" expire "$4" -
     exit $? ;;
 esac
