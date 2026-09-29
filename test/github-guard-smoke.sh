@@ -6,7 +6,7 @@
 # The guard runs before every Bash command an agent sends, and since Bash(gh api *), Bash(git push *),
 # Bash(gh pr create *) and Bash(wt pr *) left the deny list it is the only thing that denies any of them, so
 # both directions are asserted: that what it approves really is a read, or a write to this repository's pull
-# requests of a kind it lists, and that a command which merely mentions one of them gets no answer at all.
+# requests or issues of a kind it lists, and that a command which merely mentions one of them gets no answer.
 # `gh` is stubbed: `gh api <endpoint>` answers from fixtures by running the guard's own --jq filter over them,
 # so the filters are tested too, and an endpoint with no fixture fails the way a 404 does.
 # Nothing here contacts GitHub: the remotes name github.com, but nothing fetches from or pushes to them.
@@ -29,6 +29,7 @@ GUARD=${GUARD:-$REPO/bin/github-guard}   # overridable, so a mutated copy can be
 # The user's own git config could rewrite a github.com URL (url.<base>.insteadOf) under the guard's feet.
 export GIT_CONFIG_GLOBAL="$TEST_ROOT/gitconfig" GIT_CONFIG_NOSYSTEM=1
 : >"$GIT_CONFIG_GLOBAL"
+unset GH_REPO GH_HOST   # the guard reads both, so the runner's own would decide every write below
 mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/home" "$TEST_ROOT/api" "$TEST_ROOT/elsewhere"
 cat >"$TEST_ROOT/bin/gh" <<'GH'
 #!/usr/bin/env bash
@@ -56,6 +57,9 @@ fixture 'api/repos__{owner}__{repo}__pulls__comments__7' '{"user": {"login": "me
 fixture api/repos__acme__widgets__pulls__comments__8 '{"user": {"login": "a-reviewer"}}'
 fixture api/repos__acme__widgets__issues__comments__9 '{"user": {"login": "Me"}}'
 fixture api/repos__acme__widgets__pulls__5__reviews__11 '{"user": {"login": "me"}}'
+fixture api/repos__acme__widgets__issues__12 '{"user": {"login": "me"}}'
+fixture 'api/repos__{owner}__{repo}__issues__12' '{"user": {"login": "me"}}'
+fixture 'api/repos__{owner}__{repo}__issues__13' '{"user": {"login": "someone-else"}}'
 
 # The repository an agent would be in: a task branch, a default branch called trunk (so "is it the default
 # branch" is not only "is it called main"), and one remote for each way a push could leave GitHub or find the
@@ -77,6 +81,7 @@ git -C "$W" remote add renamed https://github.com/acme/gadgets.git          # lo
 git -C "$W" update-ref refs/remotes/renamed/old-default HEAD
 git -C "$W" symbolic-ref refs/remotes/renamed/HEAD refs/remotes/renamed/old-default
 git -C "$W" remote add nulls https://github.com/acme/nulls.git
+git -C "$W" tag v1                                                          # a tag, and no branch, named v1
 printf 'Two nits inline.\n' >"$W/notes.md"
 printf 'Adds the label prop.\n' >"$TEST_ROOT/pr-body.md"                 # a temp dir, where agents write
 ln -s "$REPO/README.md" "$W/linked.md"                                      # in the repo, pointing out of it
@@ -91,6 +96,7 @@ guard_payload() {
   local out rc=0
   out=$(env HOME="$TEST_ROOT/home" PATH="$TEST_ROOT/bin:$PATH" TEST_ROOT="$TEST_ROOT" \
           GH_LOG="$TEST_ROOT/gh.log" FAKE_GH_FAIL="${FAKE_GH_FAIL:-}" \
+          GH_REPO="${GH_REPO:-}" GH_HOST="${GH_HOST:-}" \
           "${GUARD_BASH:-bash}" "$GUARD" <<<"$1") || rc=$?
   printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' >"$TEST_ROOT/reason" \
     2>/dev/null || : >"$TEST_ROOT/reason"
@@ -225,13 +231,27 @@ expect deny 'gh api -X POST repos/acme/widgets/pulls/5/comments -f body=x -f eve
 expect deny 'gh api -X POST repos/acme/widgets/pulls/5/comments -f commit_id=abc' 'body'
 expect deny 'gh api -X POST repos/acme/widgets/pulls/5/comments/1/replies -F body=@notes.md' 'local file'
 expect deny "gh api -X POST 'repos/acme/widgets/pulls/5/comments?x=1' -f body=x" '?query'
-expect deny 'gh api repos/acme/widgets/issues -f title=x -f body=y' 'not an approved write'
 expect deny 'gh api -X PATCH repos/acme/widgets/pulls/5 -f title=x' 'not an approved write'
 expect deny 'gh api -X DELETE repos/acme/widgets/issues/comments/9'
 expect deny 'gh api -X PUT repos/acme/widgets/pulls/5/merge'
 expect deny 'gh api -X DELETE repos/acme/widgets/git/refs/heads/trunk'
 expect deny 'gh api -X post repos/acme/widgets/pulls/5/comments/1/replies -f body=x'
 expect deny 'gh api -X POST user/repos -f name=x'
+end_scenario
+
+begin_scenario 'gh api: issues are opened, commented on and, when this login opened them, edited'
+expect allow "gh api repos/acme/widgets/issues -f title='Flaky test' -f body='Seen twice on trunk.' -f 'labels[]=bug' -f 'assignees[]=me' -F milestone=2" \
+  'a new issue in this repository'
+expect allow "gh api -X POST repos/{owner}/{repo}/issues -f title='Flaky test'"
+expect allow "gh api -X POST repos/acme/widgets/issues/12/comments -f body='Reproduced on trunk.'"
+expect allow "gh api -X PATCH repos/acme/widgets/issues/12 -f title='Flaky test in CI' -f body=edited -f 'labels[]=ci'"
+expect deny 'gh api -X POST repos/acme/widgets/issues -f body=x' "title='…'"
+expect deny 'gh api -X POST repos/acme/widgets/issues -f title=x -f state=closed' "'state'"
+expect deny 'gh api -X PATCH repos/acme/widgets/issues/12 -f state=closed' "'state'"      # closing stays out
+expect deny 'gh api -X PATCH repos/acme/widgets/issues/5 -f title=x' 'who wrote'           # no answer
+expect deny 'gh api -X POST repos/evil/other/issues -f title=x' 'its own issues and pull requests'
+expect deny 'gh api -X POST repos/acme/widgets/issues/12/labels -f "labels[]=x"' 'not an approved write'
+expect deny 'gh api -X PUT repos/acme/widgets/issues/12/lock' 'not an approved write'
 end_scenario
 
 begin_scenario 'gh api graphql: resolving review threads, and no other mutation'
@@ -300,6 +320,10 @@ expect deny 'gh pr create --editor'
 expect deny "gh pr create --title x --body-file $OUTSIDE" 'not a regular file'
 expect deny 'gh pr create feature' 'only options'
 expect deny 'gh pr create --title x --body y --head someone:feature' 'takes a branch'
+expect deny 'gh pr create --title Example --template /etc/hosts' "read the repository's template"
+expect deny 'gh pr create --fill -T .github/pull_request_template.md' "read the repository's template"
+expect deny 'gh pr create --fill --template=/etc/hosts' "read the repository's template"
+expect deny 'gh pr create --fill --recover /etc/hosts' 'not approved'
 
 expect allow 'wt pr label-prop'
 expect allow 'wt pr label-prop --draft'
@@ -309,10 +333,92 @@ expect deny 'wt pr label-prop -r' 'not approved'
 expect deny 'wt pr label-prop other'
 end_scenario
 
+begin_scenario 'gh issue view, create, comment and edit'
+expect allow 'gh issue view 12 --comments'
+expect allow "gh issue list --label bug --json number,title --jq '.[].title'"
+expect allow 'gh issue status'
+expect allow "gh issue create --title 'Flaky test' --body 'Seen twice on trunk.' --label bug --assignee @me" \
+  'opening an issue'
+expect allow "gh issue create -t 'Flaky test' -F notes.md -m v2 -p Roadmap"
+expect allow "gh issue create --title=x --body-file=$TEST_ROOT/pr-body.md"
+expect deny "gh issue create --title x --body-file $OUTSIDE" 'not a regular file'
+expect deny 'gh issue create --title x --body-file -' 'not a regular file'
+expect deny 'gh issue create --title x --body y -R evil/repo' 'this repository only'
+expect deny "gh issue create --title x --template 'Bug report'" "read the repository's template"
+expect deny 'gh issue create --title x --body y -T=bug_report.md' 'not approved'
+expect deny 'gh issue create --web'
+expect deny 'gh issue create --editor'
+expect deny 'gh issue create --recover state.json' 'not approved'
+expect deny 'gh issue create feature' 'only options'
+
+expect allow "gh issue comment 12 --body 'Reproduced on trunk.'" 'a comment on an issue'
+expect allow 'gh issue comment 12 -F notes.md'
+expect allow "gh issue comment 12 --edit-last -b 'Edited.'" 'latest comment on an issue'
+expect deny 'gh issue comment 12 --delete-last'
+expect deny 'gh issue comment 12 --web'
+expect deny 'gh issue comment 12' 'needs --body'
+expect deny 'gh issue comment https://github.com/evil/repo/issues/1 --body x' 'an issue number'
+expect deny "gh issue comment 12 --body-file $OUTSIDE" 'not a regular file'
+
+: >"$TEST_ROOT/gh.log"
+expect allow "gh issue edit 12 --title 'Flaky test in CI' --add-label ci --remove-label bug --body-file notes.md" \
+  'which this login opened'
+assert_grep 'the issue author is asked of GitHub' "$TEST_ROOT/gh.log" 'api repos/{owner}/{repo}/issues/12 --jq .user.login'
+expect allow 'gh issue edit 12 --add-assignee @me --milestone v2 --remove-milestone --add-project Roadmap'
+expect deny 'gh issue edit 13 --title x' 'written by someone-else'
+expect deny 'gh issue edit 14 --title x' 'who wrote'
+expect deny 'gh issue edit 12 13 --add-label ci' 'one issue number'
+expect deny 'gh issue edit --title x' 'needs the issue number'
+expect deny 'gh issue edit 12 -R evil/repo --title x' 'not approved'
+expect deny "gh issue edit 12 --body-file $OUTSIDE" 'not a regular file'
+
+expect none 'gh issue close 12'                 # not a guarded subcommand: left to the permission lists
+expect none 'gh issue reopen 12'
+expect none 'gh issue delete 12 --yes'
+expect none 'gh issue transfer 12 evil/repo'
+expect deny "gh issue comment 12 --body x | cat" 'one simple command'
+expect deny "cd /tmp && gh issue create --title x --body y" 'cd'
+end_scenario
+
+begin_scenario 'gh writes only while gh itself points at this repository'
+GH_REPO=evil/other expect deny "gh api -X POST repos/{owner}/{repo}/issues/5/comments -f body=x" 'GH_REPO=evil/other'
+GH_REPO=evil/other expect deny 'gh api -X POST repos/acme/widgets/issues/5/comments -f body=x' 'GH_REPO'
+GH_REPO=evil/other expect deny 'gh pr comment 5 --body x' 'GH_REPO'
+GH_REPO=evil/other expect deny 'gh pr review 5 --comment --body x' 'GH_REPO'
+GH_REPO=evil/other expect deny 'gh pr create --title x --body y' 'GH_REPO'
+GH_REPO=evil/other expect deny 'gh issue create --title x --body y' 'GH_REPO'
+GH_REPO=evil/other expect deny 'gh issue edit 12 --title x' 'GH_REPO'
+GH_REPO=evil/other expect deny "gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: \"x\"}) { thread { id } } }'" \
+  'GH_REPO'
+GH_REPO=evil/other expect allow 'gh api repos/{owner}/{repo}/pulls/5/comments'    # a read may go anywhere
+GH_REPO=evil/other expect allow 'git push origin HEAD'                            # git does not read it
+GH_REPO=acme/widgets expect allow 'gh pr comment 5 --body x'
+GH_REPO=GitHub.com/Someone/Widgets expect allow 'gh pr comment 5 --body x'     # the fork, as [HOST/]OWNER/REPO
+GH_REPO=https://github.com/acme/widgets expect deny 'gh pr comment 5 --body x' 'GH_REPO'   # not read: refused
+GH_REPO=acme/widgets/extra expect deny 'gh pr comment 5 --body x' 'GH_REPO'
+GH_HOST=ghe.example expect deny 'gh api -X POST repos/acme/widgets/issues/5/comments -f body=x' 'GH_HOST=ghe.example'
+GH_HOST=ghe.example expect deny 'gh issue comment 12 --body x' 'GH_HOST'
+GH_HOST=GitHub.com expect allow 'gh pr comment 5 --body x'
+: >"$TEST_ROOT/gh.log"
+GH_HOST=ghe.example expect allow 'git push origin HEAD'
+assert_grep "the default branch is asked of github.com, not GH_HOST's server" "$TEST_ROOT/gh.log" \
+  'api repos/acme/widgets --hostname github.com --jq'
+git -C "$W" config remote.origin.gh-resolved evil/other      # what gh repo set-default leaves, hand-edited
+expect deny 'gh pr comment 5 --body x' 'set-default points gh at evil/other'
+expect deny 'gh api -X POST repos/{owner}/{repo}/issues/5/comments -f body=x' 'set-default'
+expect allow 'gh pr view 5'
+git -C "$W" config remote.origin.gh-resolved someone/widgets   # a fork remote's repository: still this one
+expect allow 'gh pr comment 5 --body x'
+git -C "$W" config remote.origin.gh-resolved base
+expect allow 'gh pr comment 5 --body x'
+git -C "$W" config --unset remote.origin.gh-resolved
+end_scenario
+
 begin_scenario 'git push: any branch but the default one, never forced'
 : >"$TEST_ROOT/gh.log"
 expect allow 'git push origin HEAD' 'a push to wt/label-prop in acme/widgets'
-assert_grep 'the default branch is asked of GitHub' "$TEST_ROOT/gh.log" 'api repos/acme/widgets --jq .default_branch // empty'
+assert_grep 'the default branch is asked of GitHub' "$TEST_ROOT/gh.log" \
+  'api repos/acme/widgets --hostname github.com --jq .default_branch // empty'
 expect allow 'git push -u origin HEAD'
 expect allow 'git push origin wt/label-prop'
 expect allow 'git push origin HEAD:feature/other'
@@ -349,6 +455,12 @@ expect deny 'git push split HEAD:wt/label-prop' 'evil.example'
 expect deny 'git push mapped HEAD' 'remote.mapped.push'
 expect deny "git push origin 'HEAD~1:wt/label-prop'" 'HEAD or a local branch'
 expect deny 'git push origin HEAD:refs/tags/v1' 'not refs/tags/v1'
+expect deny 'git push origin v1' "'v1' is not a local branch"                # a tag, named like a branch
+expect deny 'git push origin v1:wt/label-prop' 'not a local branch'
+expect deny 'git push origin refs/tags/v1' 'not refs/tags/v1'
+expect deny "git push origin $(git -C "$W" rev-parse HEAD):wt/label-prop" 'not a local branch'
+expect deny 'git push origin origin/trunk:wt/label-prop' 'not a local branch'   # a remote-tracking ref
+expect deny 'git push origin no-such-branch' 'not a local branch'
 expect deny "git push origin 'wt/*'" 'one branch'
 expect deny 'git push --receive-pack=/tmp/x origin HEAD' 'not approved'
 expect deny 'git push --no-verify origin HEAD'
@@ -373,11 +485,11 @@ assert_eq 'PreToolUse runs the guard before every Bash command' '~/.local/bin/gi
   "$(jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[].command' "$S")"
 # A deny or ask rule beats a hook's allow, so any of these would make everything above unreachable.
 assert_eq 'no permission rule for what the guard decides' '' \
-  "$(jq -r '(.permissions.deny + .permissions.ask // [])[] | select(test("^Bash\\((gh api|git push|gh pr|wt pr)"))' "$S")"
+  "$(jq -r '(.permissions.deny + .permissions.ask // [])[] | select(test("^Bash\\((gh api|git push|gh pr|gh issue|wt pr)"))' "$S")"
 assert_eq 'gh repo create stays denied' 'true' \
   "$(jq -r '.permissions.deny | index("Bash(gh repo create *)") != null' "$S")"
 assert_eq 'install.sh links the guard' 'yes' \
   "$(grep -Eq '^  for b in .*github-guard' "$REPO/install.sh" && echo yes || echo no)"
 end_scenario
 
-lib_summary 282
+lib_summary 417

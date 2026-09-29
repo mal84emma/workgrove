@@ -1,23 +1,28 @@
 #!/usr/bin/env bash
 # github-guard: Claude Code's PreToolUse hook for Bash — the one place that decides what an agent may do on
-# GitHub. It reads the hook payload on stdin and answers for `gh api`, `gh pr`, `git push` and `wt pr`; every
-# other command gets no answer at all and goes through the permission lists in ~/.claude/settings.json.
+# GitHub. It reads the hook payload on stdin and answers for `gh api`, `gh pr`, `gh issue`, `git push` and
+# `wt pr`; every other command gets no answer at all and goes through the permission lists in
+# ~/.claude/settings.json.
 #
 # Approved, on every machine, when written as one simple command (below), everything scoped to the repository
-# the session is in — a github.com remote of its working directory, or gh's own {owner}/{repo}:
+# the session is in — a github.com remote of its working directory, or gh's own {owner}/{repo} while GH_REPO,
+# GH_HOST and `gh repo set-default` leave gh pointed at one of those:
 #
-#   read          gh api GET or HEAD; gh api graphql with a query; gh pr view|diff|checks|list|status
-#   push          git push [-u] <remote> <src>[:<branch>] to any branch but the default one (GitHub is asked
-#                 which that is) — no force, no delete, no tags, one branch, a github.com push URL
-#   open a PR     gh pr create (not from a file outside this repository or a temp dir, not into another
-#                 repository); wt pr <name> [--draft]
-#   comment       gh pr comment [<n>] --body|--body-file …, and --edit-last to edit your latest one;
-#                 gh api POST .../issues/<n>/comments, .../pulls/<n>/comments (an inline review comment),
-#                 .../pulls/<n>/comments/<id>/replies
+#   read          gh api GET or HEAD; gh api graphql with a query; gh pr view|diff|checks|list|status;
+#                 gh issue view|list|status
+#   push          git push [-u] <remote> <src>[:<branch>] of HEAD or a local branch, to any branch but the
+#                 default one (GitHub is asked which that is) — no force, no delete, no tags, one branch, a
+#                 github.com push URL
+#   open          gh pr create, gh issue create (not from a file outside this repository or a temp dir, not
+#                 into another repository, no --template); wt pr <name> [--draft]; gh api POST .../issues
+#   comment       gh pr comment, gh issue comment [<n>] --body|--body-file …, and --edit-last to edit your
+#                 latest one; gh api POST .../issues/<n>/comments (on an issue or a pull request),
+#                 .../pulls/<n>/comments (an inline review comment), .../pulls/<n>/comments/<id>/replies
 #   review        gh pr review [<n>] --comment|--request-changes --body …; gh api POST .../pulls/<n>/reviews
 #                 (with comments[][…] for inline comments) and .../reviews/<id>/events
-#   edit          gh api PATCH .../pulls/comments/<id>, .../issues/comments/<id>, PUT .../pulls/<n>/reviews/<id>
-#                 — only when the gh login wrote it, which is asked of GitHub first
+#   edit          gh issue edit <n>; gh api PATCH .../issues/<n>, .../pulls/comments/<id>,
+#                 .../issues/comments/<id>, PUT .../pulls/<n>/reviews/<id> — only when the gh login wrote it,
+#                 which is asked of GitHub first
 #   resolve       gh api graphql with a mutation whose only fields are resolveReviewThread/unresolveReviewThread
 #
 # Everything else those commands can do is denied, with a reason that names the approved form; the agent reads
@@ -120,14 +125,40 @@ this_repos() {    # owner/repo, one per line, of every github.com remote of the 
     for u in $(git -C "$cwd" remote get-url --all "$r" 2>/dev/null); do github_repo "$u"; done
   done
 }
-same_repo() {     # same_repo <owner> <repo>: gh's {owner}/{repo}, or one of this_repos, compared as GitHub does
-  [[ $1 == '{owner}' && $2 == '{repo}' ]] && return 0
+is_this_repo() {  # is_this_repo <owner/repo>: one of this_repos, compared as GitHub does, case-insensitively
   local want mine
-  want=$(lower "$1/$2")
+  want=$(lower "$1")
   while IFS= read -r mine; do
     [[ $(lower "$mine") == "$want" ]] && return 0
   done < <(this_repos)
   return 1
+}
+same_repo() {     # same_repo <owner> <repo>: gh's {owner}/{repo}, which gh_aims_here vouches for, or one of this_repos
+  [[ $1 == '{owner}' && $2 == '{repo}' ]] && return 0
+  is_this_repo "$1/$2"
+}
+# gh_aims_here: gh's own choice of repository — what it puts in {owner}/{repo}, and what every gh pr and gh
+# issue command acts on — is one of this_repos, or it denies. GH_REPO overrides the remotes; `gh repo
+# set-default` leaves a remote.<name>.gh-resolved that gh follows even to a repository that is no remote at all;
+# and GH_HOST sends even an explicit repos/<owner>/<repo> to another server. Each is read here before any write
+# is approved. Only the environment Claude Code runs this hook with can be read: a variable set only inside the
+# Bash tool's own shell is not seen.
+gh_aims_here() {
+  local v r
+  v=${GH_HOST:-github.com}
+  [[ $(lower "$v") == github.com ]] || deny "GH_HOST=$v points gh at another server; agents write only to github.com"
+  if [[ -n ${GH_REPO:-} ]]; then
+    r=$GH_REPO
+    [[ $(lower "${r%%/*}") == github.com ]] && r=${r#*/}          # [HOST/]OWNER/REPO, as gh takes it
+    is_this_repo "$r" || deny "GH_REPO=$GH_REPO points gh at a repository that is not a github.com remote of \
+this one; agents write only to this repository"
+  fi
+  while read -r _ v; do
+    r=$v
+    [[ $(lower "${r%%/*}") == github.com ]] && r=${r#*/}
+    [[ $v == base ]] || is_this_repo "$r" \
+      || deny "gh repo set-default points gh at $v, which is not a github.com remote of this repository"
+  done < <(git -C "$cwd" config --get-regexp '^remote\..*\.gh-resolved$' 2>/dev/null)
 }
 BRANCH_RE='^[A-Za-z0-9_][A-Za-z0-9._/-]*$'
 branch_name() { [[ $1 =~ $BRANCH_RE && $1 != *..* ]]; }
@@ -154,12 +185,14 @@ body_file() {
 
 GH_API_FORMS="approved gh api forms: a read, gh api <endpoint> (--jq '<expr>' to filter, --paginate for every \
 page, -X GET -f key=value for query parameters, gh api graphql -f query='…' for a GraphQL query); and, in this \
-repository, -X POST repos/{owner}/{repo}/issues/<n>/comments, .../pulls/<n>/comments (an inline comment: -f \
-body= -f commit_id= -f path= -F line=), .../pulls/<n>/comments/<id>/replies, .../pulls/<n>/reviews (-f \
-event=COMMENT|REQUEST_CHANGES, inline comments as -f 'comments[][path]=…' -F 'comments[][line]=…' -f \
-'comments[][body]=…'), .../pulls/<n>/reviews/<id>/events; -X PATCH .../pulls/comments/<id> or \
-.../issues/comments/<id> and -X PUT .../pulls/<n>/reviews/<id> with -f body= on your own; and gh api graphql \
-with a resolveReviewThread or unresolveReviewThread mutation"
+repository, -X POST repos/{owner}/{repo}/issues (-f title= -f body=, -f 'labels[]=…' -f 'assignees[]=…' -F \
+milestone=), .../issues/<n>/comments, .../pulls/<n>/comments (an inline comment: -f body= -f commit_id= -f \
+path= -F line=), .../pulls/<n>/comments/<id>/replies, .../pulls/<n>/reviews (-f event=COMMENT|REQUEST_CHANGES, \
+inline comments as -f 'comments[][path]=…' -F 'comments[][line]=…' -f 'comments[][body]=…'), \
+.../pulls/<n>/reviews/<id>/events; on your own, -X PATCH .../issues/<n> with the fields an issue is opened \
+with, and -X PATCH .../pulls/comments/<id> or .../issues/comments/<id> and -X PUT .../pulls/<n>/reviews/<id> \
+with -f body=; and gh api graphql with a resolveReviewThread or unresolveReviewThread mutation"
+ISSUE_FIELDS='title body labels[] assignees[] milestone'   # not state: closing and reopening stay out
 
 # gql_class <document>: "query", or "mutation <root field>…", or fail when the document cannot be read. The
 # lexer is GraphQL's own token set; anything outside it — a comment, a block string, a stray character — is
@@ -278,6 +311,7 @@ check_gh_api() {
     class=$(gql_class "$query") || deny "could not read that GraphQL document (no # comments, \"\"\" strings, \
 fragments or directives in a mutation); $GH_API_FORMS"
     [[ $class == query ]] && allow "read-only GraphQL query"
+    gh_aims_here
     for a in ${class#mutation }; do
       case $a in resolveReviewThread|unresolveReviewThread) ;;
         *) deny "GraphQL mutation $a is not approved; the only approved mutations are resolveReviewThread and \
@@ -295,10 +329,11 @@ unresolveReviewThread. $GH_API_FORMS" ;;
   [[ $path =~ $re_repo ]] || deny "gh api -X $method $endpoint is not an approved write; $GH_API_FORMS"
   local owner=${BASH_REMATCH[1]} name=${BASH_REMATCH[2]}   # saved: same_repo's own =~ overwrites BASH_REMATCH
   rest=${path#"${BASH_REMATCH[0]}"}
-  local mr="$method $rest" edit='' what
+  local mr="$method $rest" edit='' what need=body
   local re_comment='^POST (issues/[0-9]+/comments|pulls/[0-9]+/comments/[0-9]+/replies)$'
   local re_inline='^POST pulls/[0-9]+/comments$' re_review='^POST pulls/[0-9]+/reviews$'
   local re_submit='^POST pulls/[0-9]+/reviews/[0-9]+/events$'
+  local re_issue='^POST issues$' re_issue_edit='^PATCH issues/[0-9]+$'
   local re_edit='^(PUT pulls/[0-9]+/reviews/[0-9]+|PATCH (pulls|issues)/comments/[0-9]+)$'
   if [[ $mr =~ $re_comment ]]; then
     fields_only 'body'; what='a comment'
@@ -308,24 +343,29 @@ unresolveReviewThread. $GH_API_FORMS" ;;
   elif [[ $mr =~ $re_review ]]; then
     fields_only 'body event commit_id comments[][path] comments[][line] comments[][side] comments[][start_line]
                  comments[][start_side] comments[][body] comments[][position]'
-    event_ok optional; what='a review'
+    event_ok optional; need=''; what='a review'
   elif [[ $mr =~ $re_submit ]]; then
     fields_only 'body event'; event_ok required; what='submitting a pending review'
+  elif [[ $mr =~ $re_issue ]]; then
+    fields_only "$ISSUE_FIELDS"; need=title; what='a new issue'
+  elif [[ $mr =~ $re_issue_edit ]]; then      # PRs are issues here: this edits your own PR's too
+    fields_only "$ISSUE_FIELDS"; need=''; edit=$path; what='an edit of its own issue'
   elif [[ $mr =~ $re_edit ]]; then
     fields_only 'body'; edit=$path; what='an edit of its own'
   else
     deny "gh api -X $method $endpoint is not an approved write; $GH_API_FORMS"
   fi
-  field body >/dev/null || [[ $rest == */reviews ]] || deny "gh api needs -f body='…' here"
+  [[ -z $need ]] || field "$need" >/dev/null || deny "gh api needs -f $need='…' here"
+  gh_aims_here
   same_repo "$owner" "$name" \
-    || deny "$owner/$name is not this repository; agents write only to its own pull requests"
+    || deny "$owner/$name is not this repository; agents write only to its own issues and pull requests"
   [[ -n $edit ]] && own "$edit"
-  allow "$what on a pull request in this repository"
+  allow "$what in this repository"
 }
 
 # ----------------------------------------------------------------------------------------------- gh pr
 
-# body_opt <flag> <value>: shared by comment, review and create. Sets body=1 when it is a body option.
+# body_opt <flag> <value>: shared by comment, review, create and edit. Sets body=1 when it is a body option.
 body_opt() {
   case $1 in
     -b|--body) body=1 ;;
@@ -336,25 +376,34 @@ the text to a file there, or pass it with --body"
     *) return 1 ;;
   esac
 }
+# --template is refused rather than checked: gh pr create would read the file from any path, and without a
+# terminal gh either refuses it beside --body or ignores it, so it never does what the agent meant.
+NO_TEMPLATE="--template is not approved: read the repository's template yourself and pass the filled-in text \
+with --body or --body-file"
 
-check_gh_pr_comment() {
-  local a v pr='' body=0 edit=0 form="approved form: gh pr comment [<number>] --body '…' | --body-file <file> [--edit-last]"
+# check_gh_comment <pr|issue> <args>: gh pr comment and gh issue comment take the same options.
+check_gh_comment() {
+  local kind=$1 a v n='' body=0 edit=0 noun='a pull request' form
+  shift
+  [[ $kind == issue ]] && noun='an issue'
+  form="approved form: gh $kind comment [<number>] --body '…' | --body-file <file> [--edit-last]"
   while [[ $# -gt 0 ]]; do
     a=$1; shift
     case $a in
       --edit-last) edit=1; continue ;;
       --create-if-none) continue ;;
       --*=*) v=${a#*=}; a=${a%%=*} ;;
-      -b|--body|-F|--body-file) [[ $# -gt 0 ]] || deny "gh pr comment $a needs a value"; v=$1; shift ;;
-      -*) deny "gh pr comment $a is not approved; $form" ;;
-      *) [[ -z $pr && $a =~ ^[0-9]+$ ]] || deny "gh pr comment takes a pull request number, not '$a'; $form"
-         pr=$a; continue ;;
+      -b|--body|-F|--body-file) [[ $# -gt 0 ]] || deny "gh $kind comment $a needs a value"; v=$1; shift ;;
+      -*) deny "gh $kind comment $a is not approved; $form" ;;
+      *) [[ -z $n && $a =~ ^[0-9]+$ ]] || deny "gh $kind comment takes $noun number, not '$a'; $form"
+         n=$a; continue ;;
     esac
-    body_opt "$a" "$v" || deny "gh pr comment $a is not approved; $form"
+    body_opt "$a" "$v" || deny "gh $kind comment $a is not approved; $form"
   done
-  [[ $body -eq 1 ]] || deny "gh pr comment needs --body or --body-file; $form"
-  [[ $edit -eq 1 ]] && allow "an edit of this login's latest comment on a pull request in this repository"
-  allow "a comment on a pull request in this repository"
+  [[ $body -eq 1 ]] || deny "gh $kind comment needs --body or --body-file; $form"
+  gh_aims_here
+  [[ $edit -eq 1 ]] && allow "an edit of this login's latest comment on $noun in this repository"
+  allow "a comment on $noun in this repository"
 }
 
 check_gh_pr_review() {
@@ -376,6 +425,7 @@ branch protection, so it stays the user's to give; $form" ;;
   done
   [[ -n $kind ]] || deny "gh pr review needs --comment or --request-changes; $form"
   [[ $body -eq 1 ]] || deny "gh pr review needs --body or --body-file; $form"
+  gh_aims_here
   allow "a review of a pull request in this repository"
 }
 
@@ -387,18 +437,20 @@ check_gh_pr_create() {
     case $a in
       -d|--draft|-f|--fill|--fill-first|--fill-verbose|--no-maintainer-edit|--dry-run) continue ;;
       -R|--repo|--repo=*) deny "gh pr create opens a pull request in this repository only; drop $a" ;;
+      -T|--template|--template=*) deny "gh pr create $NO_TEMPLATE" ;;
       --*=*) v=${a#*=}; a=${a%%=*} ;;
-      -t|--title|-b|--body|-F|--body-file|-B|--base|-H|--head|-l|--label|-r|--reviewer|-a|--assignee|-m|--milestone|-p|--project|-T|--template)
+      -t|--title|-b|--body|-F|--body-file|-B|--base|-H|--head|-l|--label|-r|--reviewer|-a|--assignee|-m|--milestone|-p|--project)
         [[ $# -gt 0 ]] || deny "gh pr create $a needs a value"; v=$1; shift ;;
       -*) deny "gh pr create $a is not approved; $form" ;;
       *) deny "gh pr create takes no arguments, only options; $form" ;;
     esac
     case $a in
       -B|--base|-H|--head) branch_name "$v" || deny "gh pr create $a takes a branch of this repository, not '$v'" ;;
-      -t|--title|-l|--label|-r|--reviewer|-a|--assignee|-m|--milestone|-p|--project|-T|--template) ;;
+      -t|--title|-l|--label|-r|--reviewer|-a|--assignee|-m|--milestone|-p|--project) ;;
       *) body_opt "$a" "$v" || deny "gh pr create $a is not approved; $form" ;;
     esac
   done
+  gh_aims_here
   allow "opening a pull request in this repository"
 }
 
@@ -407,11 +459,74 @@ check_gh_pr() {
   shift || true
   case $sub in
     view|diff|checks|list|status) allow "read-only gh pr $sub" ;;
-    comment) check_gh_pr_comment "$@" ;;
+    comment) check_gh_comment pr "$@" ;;
     review) check_gh_pr_review "$@" ;;
     create) check_gh_pr_create "$@" ;;
   esac
   exit 0             # any other gh pr subcommand: no answer, so the permission lists decide
+}
+
+# -------------------------------------------------------------------------------------------- gh issue
+
+check_gh_issue_create() {
+  local a v body=0 form="approved form: gh issue create --title '…' --body '…' | --body-file <file> \
+[--label|--assignee|--milestone|--project …]"
+  while [[ $# -gt 0 ]]; do
+    a=$1; shift
+    case $a in
+      -R|--repo|--repo=*) deny "gh issue create opens an issue in this repository only; drop $a" ;;
+      -T|--template|--template=*) deny "gh issue create $NO_TEMPLATE" ;;
+      --*=*) v=${a#*=}; a=${a%%=*} ;;
+      -t|--title|-b|--body|-F|--body-file|-l|--label|-a|--assignee|-m|--milestone|-p|--project)
+        [[ $# -gt 0 ]] || deny "gh issue create $a needs a value"; v=$1; shift ;;
+      -*) deny "gh issue create $a is not approved; $form" ;;
+      *) deny "gh issue create takes no arguments, only options; $form" ;;
+    esac
+    case $a in
+      -t|--title|-l|--label|-a|--assignee|-m|--milestone|-p|--project) ;;
+      *) body_opt "$a" "$v" || deny "gh issue create $a is not approved; $form" ;;
+    esac
+  done
+  gh_aims_here
+  allow "opening an issue in this repository"
+}
+
+check_gh_issue_edit() {   # gh issue edit <n> …: one issue, and one the gh login opened, as GitHub says
+  local a v n='' body=0 form="approved form: gh issue edit <number> [--title '…'] [--body '…' | --body-file \
+<file>] [--add-label|--remove-label|--add-assignee|--remove-assignee|--add-project|--remove-project|--milestone \
+…] [--remove-milestone], on an issue this login opened"
+  while [[ $# -gt 0 ]]; do
+    a=$1; shift
+    case $a in
+      --remove-milestone) continue ;;
+      --*=*) v=${a#*=}; a=${a%%=*} ;;
+      -t|--title|-b|--body|-F|--body-file|-m|--milestone|--add-label|--remove-label|--add-assignee|--remove-assignee|--add-project|--remove-project)
+        [[ $# -gt 0 ]] || deny "gh issue edit $a needs a value"; v=$1; shift ;;
+      -*) deny "gh issue edit $a is not approved; $form" ;;
+      *) [[ -z $n && $a =~ ^[0-9]+$ ]] || deny "gh issue edit takes one issue number, not '$a'; $form"
+         n=$a; continue ;;
+    esac
+    case $a in
+      -t|--title|-m|--milestone|--add-label|--remove-label|--add-assignee|--remove-assignee|--add-project|--remove-project) ;;
+      *) body_opt "$a" "$v" || deny "gh issue edit $a is not approved; $form" ;;
+    esac
+  done
+  [[ -n $n ]] || deny "gh issue edit needs the issue number; $form"
+  gh_aims_here
+  own "repos/{owner}/{repo}/issues/$n"
+  allow "an edit of issue #$n, which this login opened"
+}
+
+check_gh_issue() {
+  local sub=${1:-}
+  shift || true
+  case $sub in
+    view|list|status) allow "read-only gh issue $sub" ;;
+    comment) check_gh_comment issue "$@" ;;
+    create) check_gh_issue_create "$@" ;;
+    edit) check_gh_issue_edit "$@" ;;
+  esac
+  exit 0             # close, reopen, delete, transfer, lock, pin, develop…: the permission lists decide
 }
 
 # ---------------------------------------------------------------------------------------------- git push
@@ -459,6 +574,11 @@ check_git_push() {
   dst=${dst#refs/heads/}
   [[ $src == HEAD ]] || branch_name "$src" || deny "push HEAD or a local branch, not '$src'; $form"
   [[ $src == refs/* && $src != refs/heads/* ]] && deny "push a branch, not $src"
+  # A name is not a type: `git push origin v1` pushes the tag v1 when no branch has that name, and a hash or a
+  # remote-tracking name pushes whatever it points at. So the source must be a local branch. From one, git
+  # makes a new unqualified destination a branch too, and it will not move a tag already there without force.
+  [[ $src == HEAD ]] || git -C "$cwd" show-ref --verify --quiet "refs/heads/${src#refs/heads/}" \
+    || deny "'$src' is not a local branch (a tag, a commit or another kind of ref); $form"
   [[ $dst == refs/* ]] && deny "push to a branch, not $dst"
   branch_name "$dst" || deny "'$dst' is not a branch name git push approves"
 
@@ -466,7 +586,8 @@ check_git_push() {
   # remote-tracking HEAD is only the fallback, because a clone that never ran `git remote set-head` has none,
   # and one taken before the default was renamed has the old name. Neither answering is a denial, not a guess.
   def=''
-  command -v gh >/dev/null 2>&1 && def=$(gh_here api "repos/$repo" --jq '.default_branch // empty')
+  command -v gh >/dev/null 2>&1 \
+    && def=$(gh_here api "repos/$repo" --hostname github.com --jq '.default_branch // empty')   # not GH_HOST's
   branch_name "$def" || def=''                               # an error page is not a branch
   [[ -n $def ]] || { def=$(git -C "$cwd" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null) \
     && def=${def#"$remote"/}; }
@@ -494,18 +615,20 @@ check_wt_pr() {   # wt pr <name> [--draft]: it pushes the worktree's own wt/<nam
 
 # ------------------------------------------------------------------------------------------------- main
 
-GUARDED='(git[[:space:]]+push|gh[[:space:]]+api|gh[[:space:]]+pr[[:space:]]+(view|diff|checks|list|status|comment|review|create)|wt[[:space:]]+pr)([[:space:]]|$)'
+GUARDED='(git[[:space:]]+push|gh[[:space:]]+api|gh[[:space:]]+pr[[:space:]]+(view|diff|checks|list|status|comment|review|create)|gh[[:space:]]+issue[[:space:]]+(view|list|status|comment|create|edit)|wt[[:space:]]+pr)([[:space:]]|$)'
 if [[ $ctrl == false ]] && tokenize "$cmd"; then
   set -- ${WORDS[@]+"${WORDS[@]}"}
   lead=0
   while [[ $# -gt 0 && $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do shift; lead=1; done
   case "${1:-} ${2:-}" in
-    'gh api'|'gh pr'|'git push'|'wt pr') [[ $lead -eq 0 ]] || deny "run $1 $2 with no VAR=value in front of it" ;;
+    'gh api'|'gh pr'|'gh issue'|'git push'|'wt pr')
+      [[ $lead -eq 0 ]] || deny "run $1 $2 with no VAR=value in front of it" ;;
     *) exit 0 ;;
   esac
   case "$1 $2" in
     'gh api') shift 2; check_gh_api "$@" ;;
     'gh pr') shift 2; check_gh_pr "$@" ;;
+    'gh issue') shift 2; check_gh_issue "$@" ;;
     'git push') shift 2; check_git_push "$@" ;;
     'wt pr') shift 2; check_wt_pr "$@" ;;
   esac
