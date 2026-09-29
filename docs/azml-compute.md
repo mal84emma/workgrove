@@ -97,7 +97,10 @@ also the name the ⌃⌥⌘T picker, `wt -H <instance> …` and VS Code Remote-S
 What you gain is the two keepalive lines, `ServerAliveInterval 30` and `ServerAliveCountMax 6`, which a
 hand-written block usually lacks. Without them an idle session carrying tmux or VS Code Remote-SSH hangs
 silently the moment a NAT or a router drops the connection: the client sits there with a dead socket. With
-them the client gives up after about three minutes, and cmux or VS Code reconnects on its own.
+them the client gives up after about three minutes. VS Code reconnects on its own, and cmux usually
+reconnects after sleep or a brief dropout. After a Wi-Fi network switch, a cmux row can stay suspended
+because its old server-side SSH session still holds the row's relay port; recover a task row with
+`wt -H <instance> attach -r <repo> <name>` (see the README's recovery table).
 
 ## Gotchas
 

@@ -183,22 +183,23 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 359 assertions over thirteen groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 386 assertions over fourteen groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
 base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
 worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that a squash-merged
 branch is not one of them while a commit made after the squash, a partial revert and a later edit to the same
 lines still are (against a bare "origin" and a second clone that plays GitHub, and once more under a `git`
 that claims to be 2.34), that `wt prune` keeps exactly what `wt rm` refuses, that a row sitting in a second cmux window is still found and still closed, and
-that `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists and on which
+that a suspended VM row's relay is cleared only when a user-owned `sshd` holds its mapped port, and that
+`bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists and on which
 field of `cmux list-windows` is a window. The last group is the odd one out: it tests `test/lib.sh`'s own
 `rm -rf`, which no real run reaches, because both suites build their scratch root with `mktemp -d` and refuse
 one inside the real home before arming the trap that calls it — and a branch nothing exercises is a branch
-nobody knows is broken. Run on a VM it makes 331: scenario 8 is about the Mac's row list, and `bin/wt` has no
+nobody knows is broken. Run on a VM it makes 358: scenario 8 is about the Mac's row list, and `bin/wt` has no
 `FORCE_OS` to lie to `is_remote()` with, so there `wt new` asks the Mac for a row over the relay and never
 consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
-assertions is the failure mode a green run hides. What neither covers is anything needing ssh, tmux or a live
-cmux.
+assertions is the failure mode a green run hides. The SSH and cmux recovery checks use fakes; neither suite
+covers a live VM reconnect.
 
 `bash test/hosts-smoke.sh` checks the SSH inventory's JSON, table, alias filtering, concurrent probes and
 failure states with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake hardware
@@ -250,8 +251,8 @@ and, on a default run, the `set -ag update-environment` line appended to your ow
 | Look at the code | Say "show me the worktree code" (the agent runs `wt open`), or run `wt open <name>` / `wt -H <vm> open -r <repo> <name>`. This works from VM sessions too |
 | Shell on a VM | ⌃⌥⌘T → `<vm>` → `vm-shell` (row `shell`, second line `@<vm>`). A host you type that is not a configured alias is tried as-is; requests from inside that VM need a real `Host` entry |
 | Shell in a repo | ⌃⌥⌘T → where → `repo-shell` → repo (row `<repo> shell`) |
-| Re-open a VM task's row | `wt -H <vm> attach -r <repo> <name>`. It re-attaches a live agent, including one whose row lost its pty in a cmux relaunch and now shows a bare shell; when no agent is running in the session (it exited, or a VM restart took the session) it refuses and prints the `--restart-agent` line, which resumes Claude with `-c`. If the row shows a bare shell but plain attach only selects it, add `--reattach` (see the row below) |
-| Reconnect after sleep or Wi-Fi loss | Often nothing: the row reconnects by itself and the agent kept running in tmux. When the outage outlasts cmux's retries the row goes quiet and its sidebar says the automatic reconnect is paused; press **Reconnect** there, once per row, which reliably comes back attached to tmux with the relay intact. Sometimes cmux reports `remote session was lost; starting a new shell` and the row comes back as a bare shell while the VM still holds the pty, and therefore still lists the old tmux client, so plain attach cannot tell the session is orphaned: `wt -H <vm> attach -r <repo> <name> --reattach` sends the tmux line to that row and rebinds the session to the row's current relay socket. A lost remote pty (a cmux relaunch) needs plain `wt -H <vm> attach -r <repo> <name>`; a VM reboot takes the tmux session with it, so that one needs `--restart-agent` |
+| Re-open a VM task's row | `wt -H <vm> attach -r <repo> <name>`. It recovers a suspended row, then re-attaches a live agent if needed. When no agent is running (it exited, or a VM restart took the session), it refuses and prints the `--restart-agent` line, which resumes Claude with `-c`. If a connected row shows a bare shell but plain attach only selects it, add `--reattach` |
+| Reconnect after sleep or Wi-Fi loss | After sleep or a brief dropout cmux usually reconnects the row itself. A Wi-Fi network switch can leave it `[ssh:suspended]` with `Error: ssh-pty-attach: The cmux relay on <vm> did not become ready (the host may not allow SSH remote port forwarding). Automatic reconnect paused; use Reconnect to try again.` The port-forwarding warning is misleading: the old SSH session may still hold the row's fixed relay port on the VM after the Mac's IP changes, so pressing **Reconnect** cannot work until that session closes. Run `wt -H <vm> attach -r <repo> <name>`: it maps the row's daemon slot to its relay port, stops only a user-owned `sshd` listening on that port while the row is suspended, calls cmux's reconnect RPC for that row and waits up to 30 seconds. It prints a manual fallback on failure. If cmux instead says `remote session was lost; starting a new shell` and the connected row shows a bare shell while the VM still lists its old tmux client, run `wt -H <vm> attach -r <repo> <name> --reattach`. A VM reboot takes the tmux session too, so use `--restart-agent` then |
 | Hand back | Report the branch. `wt pr <name>` only when you ask for it |
 | Clean up | `wt rm <name>`, `wt -H <vm> rm -r <repo> <name>`, `wt prune` |
 | Update a machine | `wt update`, `wt -H <vm> update`; add `--refresh-config` only after reviewing a `.base` change |

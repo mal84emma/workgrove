@@ -27,6 +27,15 @@ sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gi
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null \
   && sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gh
 sudo update-locale LANG=C.UTF-8
+# sshd uses the first value it reads in sshd_config.d. This file sorts before Ubuntu's 50-cloudimg-settings.conf.
+keepalive=$(mktemp)
+printf 'ClientAliveInterval 15\nClientAliveCountMax 4\n' >"$keepalive"
+if ! sudo cmp -s "$keepalive" /etc/ssh/sshd_config.d/10-workgrove-keepalive.conf; then
+  sudo install -m 644 "$keepalive" /etc/ssh/sshd_config.d/10-workgrove-keepalive.conf
+  sudo sshd -t && sudo systemctl reload ssh
+fi
+rm -f "$keepalive"
+sudo sshd -T | grep -i clientalive   # clientaliveinterval 15; clientalivecountmax 4
 ```
 
 ```bash
@@ -170,7 +179,15 @@ run `exec bash` in that pane or open a new tmux window.
   VM reboot or a cmux relaunch onto a lost pty a row shows a bare shell; `wt -H <vm> attach -r <repo> <name>`
   re-attaches it (add `--restart-agent` when the reboot took the tmux session with it, or `--reattach` when a
   dropped connection left the VM holding the old pty, which is the case cmux announces in the row as
-  `remote session was lost; starting a new shell`).
+  `remote session was lost; starting a new shell`). After a Wi-Fi network switch, a row may instead be
+  suspended with `Error: ssh-pty-attach: The cmux relay on <vm> did not become ready (the host may not allow SSH remote port forwarding). Automatic reconnect paused; use Reconnect to try again.`
+  The port-forwarding warning is misleading: the old SSH connection can still hold that row's fixed relay
+  port on the VM after the Mac's IP changes. `wt -H <vm> attach -r <repo> <name>` checks only that suspended
+  row, stops its user-owned stale `sshd` listener, asks cmux to reconnect it, and re-attaches tmux if it sees
+  a bare shell. A normal SSH reload does not end existing sessions, so block 1's keepalive setting only
+  shortens future stale connections to about a minute. Whether Azure ML preserves
+  `/etc/ssh/sshd_config.d/10-workgrove-keepalive.conf` across a stop/start is **UNVERIFIED** (it does reset
+  the login shell). After a stop/start, run `ssh <vm> 'ls -l /etc/ssh/sshd_config.d/10-workgrove-keepalive.conf; sudo sshd -T | grep -i clientalive'` and reapply block 1 if needed.
 - **`server exited unexpectedly` from every tmux command, `wt new` included,** after a `tmux kill-server`.
   First, the warning: `tmux kill-server` ends **every session on that socket** — every `wt-<repo>-<name>` task
   on that VM and every agent running in one. It is almost never what you want; to restart a single task use

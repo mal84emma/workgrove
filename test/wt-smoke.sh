@@ -344,6 +344,12 @@ if [ "$1" = workspace ] && [ "$2" = list ]; then
   fi
   exit 0
 fi
+if [ "$1" = rpc ] && [ "$2" = workspace.remote.reconnect ]; then
+  jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "connected"' "$CMUX_STUB_ROWS" >"$CMUX_STUB_ROWS.tmp"
+  mv "$CMUX_STUB_ROWS.tmp" "$CMUX_STUB_ROWS"
+  exit 0
+fi
+if [ "$1" = read-screen ]; then cat "$CMUX_STUB_SCREEN"; exit 0; fi
 echo "workspace:99"
 exit 0
 STUB
@@ -419,6 +425,8 @@ wt_run() {
            WT_REPOS_DIR="$REPOS_DIR" CMUX_BUNDLED_CLI_PATH="$WT_STUB" \
            CMUX_STUB_LOG="$CMUX_LOG" CMUX_STUB_ROWS="$WT_ROWS" AGENT_ARGV_LOG="$AGENT_LOG" \
            CMUX_STUB_WINDOWS="$WT_WINDOWS" CMUX_STUB_ROWS_DIR="$WT_ROWS_DIR" \
+           CMUX_STUB_SCREEN="$TEST_ROOT/remote-screen" REMOTE_LOG="$TEST_ROOT/remote-log" \
+           REMOTE_SS="$TEST_ROOT/remote-ss" REMOTE_PS="$TEST_ROOT/remote-ps" \
            CODEX_SANDBOX="$WT_SANDBOX" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
   return 0
@@ -1209,11 +1217,105 @@ scenario_host_args() {
   end_scenario
 }
 
-# 10. The invariants two files promise each other in comments and nothing enforced: bin/cmux-hook's copy
+# 10. A fake SSH server runs the relay check in a scratch HOME. Its ss, ps and kill shims prove that
+# attach signals only the process owning the suspended row's port, then asks cmux to reconnect that row.
+scenario_suspended_attach() {
+  begin_scenario "10. wt -H attach recovers only a suspended row's user-owned sshd relay"
+  local fake="$TEST_ROOT/remote-bin" slot=ssh-014753cc-049e-487f-a41a-355d5bb50708 uid
+  mkdir -p "$fake" "$SCRATCH_HOME/.local/bin" "$SCRATCH_HOME/.cmux/relay"
+  uid=$(id -u)
+  cat >"$fake/ssh" <<'STUB'
+#!/bin/bash
+shift 5  # -o BatchMode=yes -o ConnectTimeout=5 <host>; the command is left
+printf 'ssh %s\n' "${1%%$'\n'*}" >>"$REMOTE_LOG"
+bash -c "$1"
+STUB
+  cat >"$SCRATCH_HOME/.local/bin/wt" <<'STUB'
+#!/bin/sh
+printf '  repo: /vm/repos/project\n  session: wt-project-task (agent running)\n'
+STUB
+  cat >"$fake/ss" <<'STUB'
+#!/bin/sh
+printf 'ss %s\n' "$*" >>"$REMOTE_LOG"
+cat "$REMOTE_SS"
+STUB
+  cat >"$fake/ps" <<'STUB'
+#!/bin/sh
+value=$(cat "$REMOTE_PS")
+case "$2" in comm=) echo "${value%%:*}" ;; uid=) echo "${value#*:}" ;; esac
+STUB
+  cat >"$fake/kill" <<'STUB'
+#!/bin/sh
+printf 'kill %s\n' "$*" >>"$REMOTE_LOG"
+: >"$REMOTE_SS"
+STUB
+  chmod +x "$fake"/* "$SCRATCH_HOME/.local/bin/wt"
+  WT_PATH_PREFIX="$fake"
+  printf '%s\n' "$slot" >"$SCRATCH_HOME/.cmux/relay/65353.slot"
+  printf '%s\n' 'other-row' >"$SCRATCH_HOME/.cmux/relay/65000.slot"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  printf 'sshd:%s\n' "$uid" >"$TEST_ROOT/remote-ps"
+  printf 'agent still running\n' >"$TEST_ROOT/remote-screen"
+  : >"$TEST_ROOT/remote-log"
+  stub_cmux alive
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"remote-row","title":"project:task","description":"@fakevm",
+  "remote":{"enabled":true,"destination":"fakevm","state":"suspended","persistent_daemon_slot":"$slot"}}]}
+ROWS
+  assert_wt_ok "a suspended row reconnects" -H fakevm attach task -r /vm/repos/project
+  assert_has "the matching slot yielded port 65353" "$(cat "$TEST_ROOT/remote-log")" 'sport = :65353'
+  assert_lacks "another row's port was not checked" "$(cat "$TEST_ROOT/remote-log")" 'sport = :65000'
+  assert_has "only that sshd was stopped" "$(cat "$TEST_ROOT/remote-log")" 'kill -TERM 4242'
+  assert_has "the row-specific reconnect was called" "$(cat "$CMUX_LOG")" 'rpc workspace.remote.reconnect {"workspace_id":"remote-row"}'
+  assert_has "reconnect reached connected" "$WT_OUT" 'connected after reconnect'
+  assert_lacks "an attached agent was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
+
+  # A connected row leaves the relay untouched, even when ss would name an sshd.
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "an already connected row is selected" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "connected row made no ss check" "$(cat "$TEST_ROOT/remote-log")" 'ss '
+  assert_lacks "connected row made no reconnect call" "$(cat "$CMUX_LOG")" 'workspace.remote.reconnect'
+
+  # A non-sshd listener and a foreign-owned sshd both fail closed before the RPC.
+  jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  sed 's/"sshd"/"other"/' "$TEST_ROOT/remote-ss" >"$TEST_ROOT/remote-ss.tmp" && mv "$TEST_ROOT/remote-ss.tmp" "$TEST_ROOT/remote-ss"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_fails 1 'manual fallback:' -H fakevm attach task -r /vm/repos/project
+  assert_lacks "other listener was not killed" "$(cat "$TEST_ROOT/remote-log")" 'kill '
+  assert_lacks "failed check did not reconnect" "$(cat "$CMUX_LOG")" 'workspace.remote.reconnect'
+  sed 's/"other"/"sshd"/' "$TEST_ROOT/remote-ss" >"$TEST_ROOT/remote-ss.tmp" && mv "$TEST_ROOT/remote-ss.tmp" "$TEST_ROOT/remote-ss"
+  printf 'sshd:%s\n' "$((uid + 1))" >"$TEST_ROOT/remote-ps"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_fails 1 'manual fallback:' -H fakevm attach task -r /vm/repos/project
+  assert_lacks "foreign-owned sshd was not killed" "$(cat "$TEST_ROOT/remote-log")" 'kill '
+  assert_lacks "foreign-owned sshd did not reconnect" "$(cat "$CMUX_LOG")" 'workspace.remote.reconnect'
+
+  # After reconnect, a shell prompt goes through the same guarded --reattach path.
+  printf 'sshd:%s\n' "$uid" >"$TEST_ROOT/remote-ps"
+  printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
+  printf 'vm$\n' >"$TEST_ROOT/remote-screen"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "recovery re-attaches a bare shell" -H fakevm attach task -r /vm/repos/project
+  assert_has "the shell received tmux" "$(cat "$CMUX_LOG")" 'send --workspace remote-row tmux new-session'
+  assert_has "the shell received return" "$(cat "$CMUX_LOG")" 'send-key --workspace remote-row enter'
+  assert_has "re-attach was reported" "$WT_OUT" '(re-attached)'
+  : >"$CMUX_LOG"
+  assert_wt_ok "explicit --reattach still sends tmux" -H fakevm attach task -r /vm/repos/project --reattach
+  assert_has "explicit re-attach selected the row" "$(cat "$CMUX_LOG")" 'workspace select remote-row'
+  printf 'agent still running\n' >"$TEST_ROOT/remote-screen"
+  : >"$CMUX_LOG"
+  assert_wt_fails 1 'does not end at a shell prompt' -H fakevm attach task -r /vm/repos/project --reattach
+  assert_lacks "the screen guard prevented typing" "$(cat "$CMUX_LOG")" 'send --workspace'
+  WT_PATH_PREFIX=""
+  end_scenario
+}
+
+# 11. The invariants two files promise each other in comments and nothing enforced: bin/cmux-hook's copy
 # of tmux_cmd must match bin/wt's line for line (the command is the one bin/cmux-hook's own comment gives), and
 # the two must merge the per-window row lists identically.
 scenario_shared_tmux_cmd() {
-  begin_scenario "10. bin/wt and bin/cmux-hook agree on tmux_cmd and on the row list"
+  begin_scenario "11. bin/wt and bin/cmux-hook agree on tmux_cmd and on the row list"
   local a b
   a="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt" | grep -v '^ *#')"
   b="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/cmux-hook" | grep -v '^ *#')"
@@ -1243,7 +1345,7 @@ scenario_shared_tmux_cmd() {
 # nothing outside it is so much as named even if the guard were wrong.
 # shellcheck disable=SC2016   # the $1 in the bash -c program is for THAT bash to expand, not this file
 scenario_cleanup_guard() {
-  begin_scenario "11. lib_cleanup refuses a scratch root it must not remove"
+  begin_scenario "12. lib_cleanup refuses a scratch root it must not remove"
   local bad="$TEST_ROOT/cleanup-bad" good="$TEST_ROOT/cleanup-good" out
   mkdir -p "$bad/home/inner" "$good/inner"
   guard_scratch_root "$bad"
@@ -1278,7 +1380,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=331
+FIXED_ASSERTIONS=358
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
@@ -1305,6 +1407,7 @@ main() {
   scenario_prune_agrees
   scenario_cmux
   scenario_host_args
+  scenario_suspended_attach
   scenario_shared_tmux_cmd
   scenario_cleanup_guard
   lib_summary "$(expected_assertions)"
