@@ -1287,7 +1287,8 @@ row_remote_field() { # row_remote_field <id> <field> — read this row's current
 
 clear_stale_relay() { # clear_stale_relay <host> <slot> — never signal a listener other than this user's sshd
   local script
-  script=$(cat <<'WT_RELAY'
+  # Bash 3.2 misparses case patterns in a heredoc nested inside command substitution.
+  IFS= read -r -d '' script <<'WT_RELAY' || :
 slot=$1
 case "$slot" in ssh-[A-Za-z0-9-]*) ;; *) echo 'invalid relay slot' >&2; exit 1 ;; esac
 port=''
@@ -1327,7 +1328,6 @@ done
 [ -z "$line" ] || { echo "relay port $port is still held after signal" >&2; exit 1; }
 printf 'stopped %s %s\n' "$port" "$pid"
 WT_RELAY
-)
   remote_sh_raw "$1" "bash -s -- $(shell_join "$2") <<'WT_RELAY'
 $script
 WT_RELAY"
