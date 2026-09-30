@@ -450,6 +450,7 @@ WT_RC=0
 WT_CWD=""          # where the next wt_run runs; empty means the scratch root, which is not a git repo
 WT_SANDBOX=""      # CODEX_SANDBOX for the next wt_run; empty means not inside Codex's sandbox
 WT_PATH_PREFIX=""  # a directory put before $FAKE_BIN on wt_run's PATH; scenario 6b's old-git shim lives in one
+WT_RELAY_ENV=()     # a scenario can simulate a VM row against the stub cmux, never the real relay
 WT_EXTRA=""        # machine-wide agent args for model precedence checks
 wt_run() {
   WT_RC=0
@@ -472,6 +473,7 @@ wt_run() {
            REMOTE_SSH_NOISE="$TEST_ROOT/remote-ssh-noise" \
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
            REMOTE_TMUX="$TEST_ROOT/remote-tmux" REMOTE_TMUX_QUEUE="$TEST_ROOT/remote-tmux-queue" \
+           "${WT_RELAY_ENV[@]}" \
            CODEX_SANDBOX="$WT_SANDBOX" WT_AGENT_ARGS="$WT_EXTRA" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
   return 0
@@ -840,6 +842,19 @@ scenario_list_show_path() {
     assert_wt_fails 1 "VS Code did not open $ra/.worktrees/a1: code exited 7: launch refused" open a1 -r "$ra"
     rm -f "$FAKE_BIN/code"
   fi
+  # A VM receives only cmux's delivery result, never the Mac hook's launch result.
+  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=test CMUX_SOCKET_PATH=127.0.0.1:12345 WT_HOST=fakevm TMUX=)
+  stub_cmux alive
+  assert_wt_ok "VM wt open sends a request" open a1 -r "$ra"
+  assert_has "…reports a request, not a launched window" "$WT_OUT" "requested VS Code on the Mac: fakevm:$ra/.worktrees/a1"
+  assert_has "…labels the manual command as conditional" "$WT_OUT" "if no window appears, run on the Mac: wt -H fakevm open -r $ra a1"
+  assert_lacks "…does not claim a window opened" "$WT_OUT" "opened in VS Code"
+  assert_grep "…sent the notification" "$CMUX_LOG" "notify --title wt-open"
+  stub_cmux dead
+  assert_wt_fails 1 "VS Code request to the Mac failed" open a1 -r "$ra"
+  assert_has "…gives the manual command on relay failure" "$WT_OUT" "Run on the Mac: wt -H fakevm open -r $ra a1"
+  assert_lacks "…does not report a successful request" "$WT_OUT" "requested VS Code on the Mac:"
+  WT_RELAY_ENV=()
   REPOS_DIR="$saved"
   end_scenario
 }
@@ -1843,7 +1858,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=535
+FIXED_ASSERTIONS=544
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under

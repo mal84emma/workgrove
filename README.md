@@ -189,7 +189,7 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 563 assertions over fifteen groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 572 assertions over fifteen groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar,
 including a task model passed to Claude and Codex on later launches, and how a base is pinned (`@`, `HEAD^0`,
 `--head` on a detached checkout — the spellings that would otherwise compare a
@@ -205,7 +205,7 @@ parses under `/bin/bash` (the 3.2 a fresh Mac ships), and that `bin/wt` and `bin
 field of `cmux list-windows` is a window. The last group is the odd one out: it tests `test/lib.sh`'s own
 `rm -rf`, which no real run reaches, because both suites build their scratch root with `mktemp -d` and refuse
 one inside the real home before arming the trap that calls it — and a branch nothing exercises is a branch
-nobody knows is broken. Run on a VM it makes 535: scenario 8 is about the Mac's row list, and `bin/wt` has no
+nobody knows is broken. Run on a VM it makes 544: scenario 8 is about the Mac's row list, and `bin/wt` has no
 `FORCE_OS` to lie to `is_remote()` with, so there `wt new` asks the Mac for a row over the relay and never
 consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
 assertions is the failure mode a green run hides. The SSH and cmux recovery checks use fakes; neither suite
@@ -659,15 +659,16 @@ own machine.
   `ssh -t <host> tmux …` with the cmux socket forwarded back for notifications, which paints as fast as any
   local row but gives up cmux's SSH badge, managed reconnect and relay.
 
-- **A Codex session on a VM cannot reach the Mac by itself.** Codex runs the commands it issues in a sandbox
-  that refuses to create sockets, and the cmux relay a VM row uses is a loopback TCP socket, so `wt open` and
-  `wt new` inside a Codex row on a VM cannot ask the Mac to open VS Code or a new row. `wt` detects the failed
-  relay and prints the command to run on the Mac instead, for example
-  `wt -H <host> open -r <repo> <task>`; run that in any Mac shell for `open`, and in a cmux terminal for
-  `new` or `attach`, which need the cmux socket. Claude sessions on a VM are unaffected, and so are Codex's own
-  notifications, because Codex spawns its lifecycle hooks outside that sandbox. Allowing network access in
-  `[sandbox_workspace_write]` is not the fix: it would open outbound network for every command Codex runs on
-  the VM, and it does not lift the loopback restriction.
+- **A Codex session on a VM may need escalation to reach the Mac.** Codex's sandbox refuses to create sockets,
+  and the cmux relay a VM row uses is a loopback TCP socket. A sandboxed `wt open` or `wt new` can therefore
+  fail to notify the Mac; rerunning the command with escalation lets the relay work. A successful VM-side
+  `wt open` says the Mac was asked to open VS Code and prints a conditional `wt -H <host> open -r <repo> <task>`
+  fallback. cmux confirms it accepted the request, not whether the Mac hook opened a window. If the
+  relay fails, `wt open` exits nonzero and prints that manual command as the recovery step. Run it in any Mac
+  shell for `open`, or in a cmux terminal for `new` and `attach`, which need the cmux socket. Claude sessions
+  on a VM are unaffected, as are Codex's lifecycle notifications, which run outside its command sandbox.
+  Allowing network access in `[sandbox_workspace_write]` would open outbound network for every command Codex
+  runs on the VM, and it does not lift the loopback restriction.
 
 - **The notification hooks find `agent-notify` on `PATH`.** The portable hooks in
   `home/.claude/settings.base.json` and `home/.codex/hooks.base.json` call it by bare name, and `~/.zshenv` puts

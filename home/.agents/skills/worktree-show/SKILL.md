@@ -9,7 +9,7 @@ Decide the intent first, then run one command:
 
 | The user says | Run | Then |
 |---|---|---|
-| "show me the code", "show me the worktree (code)", "open the worktree", "let me see it", "open VS Code" | `wt open` | exit 0: report the printed `opened in VS Code: <path>` line, nothing else; otherwise see below |
+| "show me the code", "show me the worktree (code)", "open the worktree", "let me see it", "open VS Code" | `wt open` | exit 0: report `opened in VS Code` locally, or `requested VS Code on the Mac` from a VM; otherwise see below |
 | "what changed", "how far is it", "status of <task>" | `wt show <name>` | summarise in a few sentences |
 | "what tasks are running", "list the worktrees" | `wt list` | summarise |
 
@@ -27,9 +27,9 @@ wt -H <vm> list            # the same, on a VM (implies --all)
 wt -H <vm> show -r <repo> <name>
 ```
 
-`wt open` prints `opened in VS Code` only when `code` succeeded; a non-zero exit means no window opened. Inside Codex's sandbox it refuses up front, because app launches are blocked there and `code` would exit 0 anyway: rerun the same `wt open` with escalation (see `AGENTS.md`, Opening apps). Any other failure: report the error it printed.
+On the Mac, `wt open` prints `opened in VS Code` only when `code` succeeded; a non-zero exit means no window opened. Inside Codex's sandbox it refuses up front, because app launches are blocked there and `code` would exit 0 anyway: rerun the same `wt open` with escalation (see `AGENTS.md`, Opening apps). Any other failure: report the error it printed.
 
-From inside a VM session, plain `wt open` asks the Mac to open the remote folder and prints the `wt -H <vm> open …` fallback line; report that line if the user sees nothing. On a VM, `wt show` also reports `session: wt-<repo>-<name> (agent running|shell only|none)`, with `, detached` appended when no tmux client is attached — so `agent running, detached` means the agent is alive but no row is holding its session.
+From inside a VM session, exit 0 means cmux on the Mac accepted the request, not that the hook confirmed a window. Report that VS Code was requested on the Mac; the printed `wt -H <vm> open …` command is only for use if no window appears. If `wt open` fails, report its error and the manual command. On a VM, `wt show` also reports `session: wt-<repo>-<name> (agent running|shell only|none)`, with `, detached` appended when no tmux client is attached — so `agent running, detached` means the agent is alive but no row is holding its session.
 
 For a single file's changes, stay in the terminal. Use `cd` then `git diff`, not `git -C`: the permission rules deny `Bash(git -c *)`, Bash patterns are matched case-insensitively, so `git -C` matches that deny too, and deny beats allow. A compound command is split on `&&`, and `cd` and `git diff` are both allowed.
 
