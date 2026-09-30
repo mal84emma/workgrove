@@ -545,6 +545,15 @@ scenario_default_empty() {
     assert_regular "$h" .gitconfig           # configure_git makes a real file here; never a link
     assert_status_line "$h" no
     assert_claude_ui "$h" no                 # …and no UI taste in the settings.json copy either
+    if [[ $OS == Darwin ]]; then
+      assert_settings_key "$h" prefersReducedMotion no
+      assert_eq "Mac Codex keeps its default animations" 0 \
+        "$(count_matches "$h/.codex/config.toml" 'animations = false')"
+    else
+      assert_eq "VM Claude reduces terminal motion" true \
+        "$(jq -r '.prefersReducedMotion' "$h/.claude/settings.json")"
+      assert_grep "VM Codex disables terminal animations" "$h/.codex/config.toml" 'animations = false'
+    fi
     # The two settings that are machinery rather than taste have to arrive anyway, via configure_git.
     assert_eq "core.excludesFile in the scratch ~/.gitconfig" \
       "$h/.gitignore_global" "$(scratch_git "$h" config --global --get core.excludesFile)"
@@ -1225,9 +1234,22 @@ scenario_linux_legs() {
     # copy_config's two platform filters, both of them Linux-only.
     assert_settings_key "$h" tui yes            # --with-claude-ui was given…
     assert_settings_key "$h" voice no           # …and the voice keys go anyway: a VM has no microphone
+    assert_eq "VM Claude reduces terminal motion with UI enabled" true \
+      "$(jq -r '.prefersReducedMotion' "$h/.claude/settings.json")"
+    assert_grep "VM Codex disables terminal animations with UI enabled" "$h/.codex/config.toml" 'animations = false'
     assert_eq "the Keychain line is filtered out of ~/.codex/config.toml" 0 \
       "$(count_matches "$h/.codex/config.toml" "cli_auth_credentials_store")"
     assert_absent "$h" .config/cmux/cmux.json   # cmux runs on the Mac only
+  fi
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  RUN_EXTRA_ENV=(FORCE_OS=Linux)
+  if assert_install_ok "$h" "$log"; then
+    assert_settings_key "$h" tui no
+    assert_eq "VM Claude reduces terminal motion without UI opt-in" true \
+      "$(jq -r '.prefersReducedMotion' "$h/.claude/settings.json")"
+    assert_grep "VM Codex disables terminal animations without UI opt-in" "$h/.codex/config.toml" 'animations = false'
   fi
   end_scenario
 
@@ -1575,7 +1597,7 @@ expected_assertions() {
 }
 
 # Everything that is not assert_machinery. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=376
+FIXED_ASSERTIONS=384
 # Scenario 17's own assertions, counted apart because that whole group is Darwin-only: ~/.config/cmux/cmux.json
 # is a Mac file, install.sh no-ops everywhere else, and a fixed total that was right on one platform and wrong
 # on the other would fail the suite on a VM for a reason that has nothing to do with the code.

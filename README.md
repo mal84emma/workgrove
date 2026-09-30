@@ -161,8 +161,10 @@ is the file that git-ignores `.worktrees/`.
 | Class | Files | Behaviour |
 |---|---|---|
 | Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, and every opt-in file you asked for — `cmux.json` among them, Mac only, under `--with-cmux-config` | Edits, including an agent's, land in the repo, so `git diff` is the review |
-| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use or did not ask for: the voice keys and the Keychain credential store off a Mac, `statusLine` without `--with-statusline`, and `tui`, `voice`, `theme` and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
+| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use or did not ask for: voice and Keychain credential keys on VMs, `statusLine` without `--with-statusline`, and `tui`, `voice`, `theme` and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files — `~/.zshrc.local` only when `~/.zshrc` is one of them |
+
+VM copies also set Claude's `prefersReducedMotion` and disable Codex TUI animations to keep tmux task rows steady. Mac copies leave both animations enabled.
 
 It is idempotent: rerun it after every repo change. Nothing is deleted. Anything in the way is moved into
 `~/.workgrove-backup/<timestamp>-<pid>`, which is created only when it is actually needed. It stops with a
@@ -174,14 +176,14 @@ message if no git identity is set — `~/.gitconfig.local` first, then your glob
 `~/.zshenv`, because cmux runs its VM rows in bash. At the top because Ubuntu's `~/.bashrc` returns early in a
 non-interactive shell, so the line has to come first to cover `ssh <vm> '<cmd>'` and `wt -H <vm> …` as well.
 
-`bash test/install-smoke.sh` is the repo's smoke test: 640 assertions across seventeen scenario groups
+`bash test/install-smoke.sh` is the repo's smoke test: 648 assertions across seventeen scenario groups
 (fifty runs, since most groups have several cases and one loops over five flags), each run against its
 own throwaway `$HOME` with no network. They cover the default no-flags install — into an empty home and over a
 stranger's own dotfiles — `--opinionated-config`, each file flag on its own, the stickiness rules, idempotence,
 an unknown flag, every refusal path, which links count as this repo's own, the don't-clobber branches of
 `configure_git`, retirement of renamed links, and `ZSH_CUSTOM`. Set `INSTALL_BASH=/bin/bash` to run
 `install.sh` itself under bash 3.2, which is what a fresh Mac gives it; `FORCE_OS=Linux` drives the
-Linux-only steps from a Mac. Run on a VM it makes 492, because scenario 17 is about a Mac file and does not
+Linux-only steps from a Mac. Run on a VM it makes 500, because scenario 17 is about a Mac file and does not
 run there — and running it there is worth doing, because `FORCE_OS` cannot fake everything a real Linux box
 differs in. It was a VM that caught the suite building its fixtures at whatever the machine's umask happened
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
