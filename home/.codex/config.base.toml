@@ -62,3 +62,7 @@ persistence = "none"
 [otel]
 exporter = "none"
 log_user_prompt = false
+
+# Keep Codex's spinner from redrawing awkwardly in tmux task rows.
+[tui]
+animations = false
