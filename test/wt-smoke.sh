@@ -426,6 +426,7 @@ printf '%s\n' "$@" >"$AGENT_ARGV_LOG"
 echo "FAKE-AGENT ran"
 AGENT
 chmod +x "$FAKE_BIN/claude"
+cp "$FAKE_BIN/claude" "$FAKE_BIN/codex"
 
 # ---------------------------------------------------------------------------- running bin/wt
 
@@ -439,8 +440,8 @@ chmod +x "$FAKE_BIN/claude"
 #   CMUX_SSH_ATTEMPT_ID and CMUX_SOCKET_PATH are unset because is_remote() reads both, and this suite runs
 #   inside a cmux pane that sets them — with either one inherited, every `wt new` would take the VM branch.
 #   CMUX_WORKSPACE_ID is unset because relay_env would otherwise address a real row on this machine.
-#   WT_AGENT, WT_AGENT_ARGS and WT_HOST are unset because the author's shell exports them and each one
-#   changes what `wt new` records or which branch `wt new` takes.
+#   WT_AGENT and WT_HOST are unset because the author's shell exports them and each one changes what `wt new`
+#   records or which branch it takes. WT_AGENT_ARGS is replaced with WT_EXTRA for precedence checks.
 #   CODEX_SANDBOX is pinned to $WT_SANDBOX, empty unless a scenario sets it: Codex sets it inside its
 #   sandbox, and `wt open` refuses there — so a run of this suite from a Codex session would fail otherwise.
 #   stdin is /dev/null so nothing can block on a read.
@@ -450,6 +451,7 @@ WT_CWD=""          # where the next wt_run runs; empty means the scratch root, w
 WT_SANDBOX=""      # CODEX_SANDBOX for the next wt_run; empty means not inside Codex's sandbox
 WT_PATH_PREFIX=""  # a directory put before $FAKE_BIN on wt_run's PATH; scenario 6b's old-git shim lives in one
 WT_RELAY_ENV=()     # a scenario can simulate a VM row against the stub cmux, never the real relay
+WT_EXTRA=""        # machine-wide agent args for model precedence checks
 wt_run() {
   WT_RC=0
   WT_OUT="$(cd "${WT_CWD:-$TEST_ROOT}" \
@@ -472,7 +474,7 @@ wt_run() {
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
            REMOTE_TMUX="$TEST_ROOT/remote-tmux" REMOTE_TMUX_QUEUE="$TEST_ROOT/remote-tmux-queue" \
            "${WT_RELAY_ENV[@]}" \
-           CODEX_SANDBOX="$WT_SANDBOX" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
+           CODEX_SANDBOX="$WT_SANDBOX" WT_AGENT_ARGS="$WT_EXTRA" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
   return 0
 }
@@ -569,6 +571,7 @@ scenario_new_and_sidecar() {
 
   assert_meta "$r" demo base main
   assert_meta "$r" demo agent claude
+  assert_meta "$r" demo model ""
   assert_meta "$r" demo title "$id:demo"
   assert_meta "$r" demo session "wt-$id-demo"
   assert_meta "$r" demo includes ""
@@ -591,6 +594,82 @@ scenario_new_and_sidecar() {
   rm -f "$AGENT_LOG"
   assert_wt_ok "wt run demo again" run demo -r "$r"
   assert_eq "the second run resumes with -c" "-c" "$(cat "$AGENT_LOG")"
+  end_scenario
+}
+
+scenario_task_model() {
+  begin_scenario "1b. a task model persists and wins on every agent launch"
+  local r sidecar
+  r="$(new_repo model)"
+  sidecar="$r/.git/wt/chosen.json"
+  assert_wt_ok "Claude model with a bracket suffix" new chosen --no-workspace -r "$r" -a claude -m 'opus[1m]' -p 'the brief'
+  assert_meta "$r" chosen model 'opus[1m]'
+  assert_wt_ok "show prints the model" show chosen -r "$r"
+  assert_has "show prints the chosen model" "$WT_OUT" 'model:   opus[1m]'
+  WT_EXTRA='--model other --fallback-model sonnet --verbose'
+  rm -f "$AGENT_LOG"
+  assert_wt_ok "Claude first launch" run chosen -r "$r"
+  assert_eq "Claude got only the task model and the brief" "$(printf '%s\n' --model 'opus[1m]' --verbose -- 'the brief')" "$(cat "$AGENT_LOG")"
+  WT_EXTRA='--model=other --fallback-model=sonnet --verbose'
+  rm -f "$AGENT_LOG"
+  assert_wt_ok "Claude resume" run chosen -r "$r"
+  assert_eq "Claude resume kept the task model" "$(printf '%s\n' --model 'opus[1m]' --verbose -c)" "$(cat "$AGENT_LOG")"
+  WT_EXTRA='-c model=unchanged'
+  rm -f "$AGENT_LOG"
+  assert_wt_ok "Claude keeps -c as an agent option" run chosen -r "$r"
+  assert_eq "Claude -c option was not mistaken for Codex config" "$(printf '%s\n' --model 'opus[1m]' -c model=unchanged -c)" "$(cat "$AGENT_LOG")"
+  WT_EXTRA=''
+  rm -f "$AGENT_LOG"
+  assert_wt_ok "Claude with no extra args" run chosen -r "$r"
+  assert_eq "task model works without WT_AGENT_ARGS" "$(printf '%s\n' --model 'opus[1m]' -c)" "$(cat "$AGENT_LOG")"
+
+  assert_wt_ok "Codex model" new codex-model --no-workspace -r "$r" -a codex --model gpt-5.3-codex -p 'codex brief'
+  assert_meta "$r" codex-model model gpt-5.3-codex
+  WT_EXTRA='-m other -c model=older --search'
+  rm -f "$AGENT_LOG"
+  assert_wt_ok "Codex first launch" run codex-model -r "$r"
+  assert_eq "Codex got only the task model and the brief" "$(printf '%s\n' -m gpt-5.3-codex --search -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  WT_EXTRA='--model=other -mother -m=other -cmodel=older --config=model=older --search'
+  rm -f "$AGENT_LOG"
+  assert_wt_ok "Codex later launch" run codex-model -r "$r"
+  assert_eq "Codex later launch kept the task model" "$(printf '%s\n' -m gpt-5.3-codex --search -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  WT_EXTRA=''
+
+  assert_wt_ok "Claude Vertex model ID" new vertex --no-workspace -r "$r" -a claude -m 'claude-sonnet-4-5@20250514'
+  assert_meta "$r" vertex model 'claude-sonnet-4-5@20250514'
+  assert_wt_ok "Claude Bedrock model ID" new bedrock --no-workspace -r "$r" -a claude -m 'us.anthropic.claude-sonnet-4-5-v1:0'
+  assert_meta "$r" bedrock model 'us.anthropic.claude-sonnet-4-5-v1:0'
+  assert_wt_ok "Codex colon model ID" new oss --no-workspace -r "$r" -a codex -m 'gpt-oss:20b'
+  assert_meta "$r" oss model 'gpt-oss:20b'
+
+  assert_wt_ok "same-agent attach" attach chosen -r "$r" -a claude
+  assert_meta "$r" chosen model 'opus[1m]'
+  assert_wt_ok "change agent" attach chosen -r "$r" -a codex
+  assert_meta "$r" chosen model ""
+  assert_absent "$r/.git/wt" chosen.started
+  rm -f "$AGENT_LOG"
+  assert_wt_ok "changed agent starts from brief" run chosen -r "$r"
+  assert_eq "Codex receives no stale Claude model" "$(printf '%s\n' -- 'the brief')" "$(cat "$AGENT_LOG")"
+
+  assert_wt_ok "shell-only task" new shell-only --no-workspace -r "$r" -a none
+  jq '.model="bad model"' "$r/.git/wt/shell-only.json" >"$TEST_ROOT/shell-only.json"
+  mv "$TEST_ROOT/shell-only.json" "$r/.git/wt/shell-only.json"
+  assert_wt_ok "shell-only ignores model metadata" run shell-only -r "$r"
+  assert_has "shell-only run opens the shell" "$WT_OUT" 'this is your shell'
+  jq '.model="bad model"' "$sidecar" >"$TEST_ROOT/chosen.json"
+  mv "$TEST_ROOT/chosen.json" "$sidecar"
+  assert_wt_fails 1 "$sidecar" run chosen -r "$r"
+
+  assert_wt_fails 1 "invalid model" new bad-space --no-workspace -r "$r" -m 'two words'
+  assert_absent "$r/.worktrees" bad-space
+  assert_wt_fails 1 "invalid model" new bad-shell --no-workspace -r "$r" -m 'opus;touch'
+  assert_absent "$r/.worktrees" bad-shell
+  assert_wt_fails 1 "invalid model" new bad-empty --no-workspace -r "$r" -m ''
+  assert_absent "$r/.worktrees" bad-empty
+  assert_wt_fails 1 "needs an agent" new bad-none --no-workspace -r "$r" -a none -m fable
+  assert_absent "$r/.worktrees" bad-none
+  assert_wt_fails 1 "for Claude" new bad-codex --no-workspace -r "$r" -a codex -m 'opus[1m]'
+  assert_absent "$r/.worktrees" bad-codex
   end_scenario
 }
 
@@ -1779,7 +1858,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=492
+FIXED_ASSERTIONS=544
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
@@ -1797,6 +1876,7 @@ main() {
        "($("$WT_BASH" -c 'echo "$BASH_VERSION"'))"
   scenario_guard
   scenario_new_and_sidecar
+  scenario_task_model
   scenario_base_resolution
   scenario_names_and_collisions
   scenario_list_show_path

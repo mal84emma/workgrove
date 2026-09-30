@@ -12,6 +12,7 @@ Tool: `wt new` (see `wt help`). One task = one worktree at `<repo>/.worktrees/<n
 ```bash
 wt new <name> -p "<complete task prompt>"            # worktree + cmux row running Claude on the prompt
 wt new <name> -p "<prompt>" -a codex                  # ...running Codex instead
+wt new <name> -p "<prompt>" -a claude -m <model>      # choose this task's model, also on later launches
 wt new <name> --no-workspace                          # worktree only; no agent, no cmux row
 wt new <name> -p "<prompt>" --head                    # branch from the current branch instead of the default one
 wt new <name> -p "<prompt>" -b <ref>                  # branch from <ref> instead of the default one
@@ -19,6 +20,8 @@ wt new <name> -r <repo-name-or-path> -p "<prompt>"    # target another repo in $
 ```
 
 `wt new` prints the path, branch, repo and session. It runs from anywhere inside the repo, including from another worktree (it always resolves the main checkout). In a driver session, whose cwd is the first existing folder in `$WT_REPOS_DIR` and not a repo, `-r <repo>` is required. A repo name is searched along `$WT_REPOS_DIR` (several folders, separated by `:`); if the same name sits in two of them, `wt` refuses it and you pass the path.
+
+When the user names a model, pass `-m <model>` with either Claude or Codex, locally or with `wt -H <vm> new`. The stored choice overrides a model in `WT_AGENT_ARGS` on every launch. This replaces staging `.claude/settings.local.json` through `.wt-include`.
 
 ## Rules
 
