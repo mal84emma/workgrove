@@ -679,9 +679,14 @@ open_code() { # open_code <folder uri> <label>   (no --new-window: a repeat call
 
 open_worktree() { # open_worktree <name> — VS Code here; from a VM ask the Mac to do it
   if ! is_remote; then open_code "file://$P" "$P"; return 0; fi
-  local h; h=$(wt_host)
-  if hook_ok_repo; then notify_mac wt-open host "$h" path "$P" || true; fi
-  printf 'on the Mac: wt -H %s open -r %s %s\n' "$h" "$(shell_join "$REPO")" "$1"
+  local h manual; h=$(wt_host)
+  manual="wt -H $h open -r $(shell_join "$REPO") $1"
+  if ! hook_ok_repo || ! notify_mac wt-open host "$h" path "$P"; then
+    printf 'VS Code request to the Mac failed. Run on the Mac: %s\n' "$manual"
+    return 1
+  fi
+  printf 'requested VS Code on the Mac: %s:%s\n' "$h" "$P"
+  printf 'if no window appears, run on the Mac: %s\n' "$manual"
 }
 
 request_row() { # request_row <name> — VM side: ask the Mac for a cmux row, and always print the recovery line
