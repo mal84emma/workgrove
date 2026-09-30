@@ -20,7 +20,7 @@ wt open                    # this session's worktree (no name needed); a repeat 
 wt open <name>             # another task in this repo
 wt -H <vm> open -r <repo> <name>   # from the Mac, opens the VM folder over Remote-SSH
 
-wt show <name>             # path, repo, branch, row:, task prompt, model when set, commits vs base, diff --stat, status
+wt show <name>             # path…last: (branch, merged:, dirty:, …), model: if set, session: on a VM; commits, diff --stat, working tree
 wt list                    # this repo: NAME BRANCH BASE AHEAD BEHIND DIRTY LAST
 wt list --all              # every repo in every folder of $WT_REPOS_DIR
 wt -H <vm> list            # the same, on a VM (implies --all)
