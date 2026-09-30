@@ -552,7 +552,9 @@ scenario_default_empty() {
     else
       assert_eq "VM Claude reduces terminal motion" true \
         "$(jq -r '.prefersReducedMotion' "$h/.claude/settings.json")"
-      assert_grep "VM Codex disables terminal animations" "$h/.codex/config.toml" 'animations = false'
+      # install.sh appends a bare [tui] table, which becomes a duplicate-table TOML error once the base has one.
+      assert_eq "VM Codex disables animations in its only [tui] table" "1 1" \
+        "$(count_matches "$h/.codex/config.toml" '[tui]') $(count_matches "$h/.codex/config.toml" 'animations = false')"
     fi
     # The two settings that are machinery rather than taste have to arrive anyway, via configure_git.
     assert_eq "core.excludesFile in the scratch ~/.gitconfig" \
@@ -1236,7 +1238,8 @@ scenario_linux_legs() {
     assert_settings_key "$h" voice no           # …and the voice keys go anyway: a VM has no microphone
     assert_eq "VM Claude reduces terminal motion with UI enabled" true \
       "$(jq -r '.prefersReducedMotion' "$h/.claude/settings.json")"
-    assert_grep "VM Codex disables terminal animations with UI enabled" "$h/.codex/config.toml" 'animations = false'
+    assert_eq "VM Codex disables animations in its only [tui] table with UI enabled" "1 1" \
+      "$(count_matches "$h/.codex/config.toml" '[tui]') $(count_matches "$h/.codex/config.toml" 'animations = false')"
     assert_eq "the Keychain line is filtered out of ~/.codex/config.toml" 0 \
       "$(count_matches "$h/.codex/config.toml" "cli_auth_credentials_store")"
     assert_absent "$h" .config/cmux/cmux.json   # cmux runs on the Mac only
@@ -1249,7 +1252,8 @@ scenario_linux_legs() {
     assert_settings_key "$h" tui no
     assert_eq "VM Claude reduces terminal motion without UI opt-in" true \
       "$(jq -r '.prefersReducedMotion' "$h/.claude/settings.json")"
-    assert_grep "VM Codex disables terminal animations without UI opt-in" "$h/.codex/config.toml" 'animations = false'
+    assert_eq "VM Codex disables animations in its only [tui] table without UI opt-in" "1 1" \
+      "$(count_matches "$h/.codex/config.toml" '[tui]') $(count_matches "$h/.codex/config.toml" 'animations = false')"
   fi
   end_scenario
 
