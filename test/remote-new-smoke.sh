@@ -56,6 +56,12 @@ case "$1" in
   repos) [ "$2" = wt-demo ] || { echo 'repo not found' >&2; exit 1; }
          printf '%s\n' "$REMOTE_REPO" ;;
   new) cat >/dev/null
+       if [ "$REMOTE_OUTPUT_MODE" = old ]; then
+         for arg in "$@"; do
+           case "$arg" in -m|--model) echo "wt: new: unknown option $arg" >&2; exit 1 ;; esac
+         done
+       fi
+       printf '%s\n' "$@" >"$REMOTE_NEW_MARKER.args"
        : >"$REMOTE_NEW_MARKER"
        [ "$REMOTE_OUTPUT_MODE" != bad ] || { echo 'created ???'; exit 0; }
        printf 'created task\n  path:   %s/.worktrees/task\n  branch: wt/task (from main)\n  repo:   %s\n  session: wt-repo-task\n' "$REMOTE_REPO" "$REMOTE_REPO" ;;
@@ -85,6 +91,7 @@ invoke_wt() {
 run_wt() {
   local args=(-H fakevm new task -r "$1")
   [[ -z "$2" ]] || args+=(-a "$2")
+  [[ -z "${3:-}" ]] || args+=(-m "$3")
   args+=(-p 'test brief')
   invoke_wt "${args[@]}"
 }
@@ -131,9 +138,29 @@ rm "$TEST_ROOT/remote-new"
 
 # A healthy path still creates and reports the row.
 SSH_MODE=ok
-run_wt wt-demo claude
+run_wt wt-demo claude 'opus[1m]'
 check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'row: repo:task @fakevm'* ]] && echo yes)" 'healthy remote creation failed'
+check "$([[ $(grep -xcF -- '-m' "$TEST_ROOT/remote-new.args") -eq 1 && $(grep -xcF -- 'opus[1m]' "$TEST_ROOT/remote-new.args") -eq 1 ]] && echo yes)" 'remote model flag or value was not forwarded intact'
 rm "$TEST_ROOT/remote-new"
+
+# An old VM parser rejects the option before making a task, and the Mac names the update command.
+REMOTE_OUTPUT_MODE=old
+run_wt wt-demo claude fable
+check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'wt -H fakevm update'* ]] && echo yes)" 'old remote wt did not give a safe update path'
+run_wt wt-demo claude
+check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'old remote fake rejected a task without -m'
+rm "$TEST_ROOT/remote-new"
+REMOTE_OUTPUT_MODE=normal
+
+run_wt wt-demo claude 'two words'
+check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'invalid model'* ]] && echo yes)" 'invalid remote model reached task creation'
+
+# Combined spellings are not accepted by the VM parser, so reject them before any SSH call.
+rm -f "$TEST_ROOT/ssh.log"
+invoke_wt -H fakevm new task -r wt-demo --model=fable
+check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'use -m <model>'* && ! -e "$TEST_ROOT/ssh.log" && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'combined long model option reached SSH'
+invoke_wt -H fakevm new task -r wt-demo -mfable
+check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'use -m <model>'* && ! -e "$TEST_ROOT/ssh.log" && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'combined short model option reached SSH'
 
 # An installed Mac hook enables the bridge without reloading all cmux settings during task creation.
 mkdir -p "$TEST_ROOT/local/.local/bin" "$TEST_ROOT/local/.config/cmux"
@@ -163,7 +190,7 @@ run_wt wt-demo claude
 check "$([[ $WT_RC -ne 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'row with this title is already open'* && "$WT_OUT" == *'attach --restart-agent'* ]] && echo yes)" 'leftover row falsely reported success'
 end_scenario
 
-begin_scenario 'interrupted setup retains the brief and agent'
+begin_scenario 'interrupted setup retains the brief, agent and model'
 SCRATCH_REPO="$TEST_ROOT/local-repo"
 git init -q "$SCRATCH_REPO"
 git -C "$SCRATCH_REPO" config user.name Test
@@ -178,10 +205,10 @@ SETUP
 chmod +x "$SCRATCH_REPO/.wt-setup"
 set +o pipefail
 printf 'the brief' | env HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
-  "${WT_BASH:-bash}" "$REPO/bin/wt" new task -r "$SCRATCH_REPO" -a codex --no-workspace --prompt-stdin 2>&1 | head -n 1 >/dev/null || true
+  "${WT_BASH:-bash}" "$REPO/bin/wt" new task -r "$SCRATCH_REPO" -a codex -m gpt-5.3-codex --no-workspace --prompt-stdin 2>&1 | head -n 1 >/dev/null || true
 set -o pipefail
 check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task.json" && -f "$SCRATCH_REPO/.git/wt/task.prompt" ]] && echo yes)" 'interrupted setup lost task metadata'
-check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex ]] && echo yes)" 'interrupted setup lost brief or agent choice'
+check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex && $(jq -r .model "$SCRATCH_REPO/.git/wt/task.json") == gpt-5.3-codex ]] && echo yes)" 'interrupted setup lost brief, agent or model choice'
 end_scenario
 
-lib_summary 16
+lib_summary 22

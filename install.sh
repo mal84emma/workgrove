@@ -263,9 +263,10 @@ link() {
 
 # copy_config <repo-relative .base> <home-relative dst> <claude|codex|plain>: install one machine-local
 # copy, keeping an existing real file unless --refresh-config was given. Kind "claude" drops the
-# voice keys off a Mac, because a VM has no local microphone, and the UI keys unless --with-claude-ui (or the
-# record of an earlier one) asked for them, because those are taste rather than machinery; kind "codex" drops
-# the Keychain credential store off a Mac, because only macOS has one.
+# voice keys on a VM, because it has no local microphone, and the UI keys unless --with-claude-ui (or the
+# record of an earlier one) asked for them, because those are taste rather than machinery. VM copies also
+# reduce terminal motion for tmux rows. Kind "codex" drops the Keychain credential store on a VM, because
+# only macOS has one, and disables its terminal animations there.
 # A SYMLINK at $dst is displaced, and deliberately so — this is the one place that does not leave a dotfile
 # manager's link alone the way hook_bashrc, hook_tmux_conf and configure_git do. These three files are exactly
 # the ones the apps write their own state into, so they must be real files at the path the app opens; a link
@@ -304,7 +305,7 @@ copy_config() {
   if [[ $kind == claude ]]; then
     local filter='.'
     if [[ $OS != Darwin ]]; then
-      filter="$filter | del(.voice, .voiceEnabled)"       # no local microphone on a VM, flag or no flag
+      filter="$filter | del(.voice, .voiceEnabled) | .prefersReducedMotion = true"
     fi
     # UI taste, not machinery — the hooks and permissions around them stay on every machine. The env var is
     # in this list for the same reason the three keys are: it turns mouse clicks off in the Claude Code TUI, so
@@ -324,6 +325,8 @@ copy_config() {
     jq "$filter" "$src" >"$tmp" || { rm -f "$tmp"; die "jq failed on $1"; }
   elif [[ $kind == codex && $OS != Darwin ]]; then
     grep -v '^cli_auth_credentials_store' "$src" >"$tmp" || { rm -f "$tmp"; die "failed to filter $1"; }
+    # The base keeps animations on for the Mac; only a VM's tmux rows need a still spinner.
+    printf '\n[tui]\nanimations = false\n' >>"$tmp"
   else
     cp "$src" "$tmp"
   fi

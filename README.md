@@ -27,7 +27,7 @@ VS Code opens on demand, through `wt open`.
   merge their lists, and nothing else had to change. They enumerate by window uuid, never by the index
   `cmux list-windows` prints first, because opening a window renumbers the rest.
 - **Git owns the worktree; sidecar files own the launch metadata.** `wt` reads `git worktree list`. Per task
-  it keeps `<repo>/.git/wt/<name>.json` (base ref, agent, row title, tmux session, copied files, and what
+  it keeps `<repo>/.git/wt/<name>.json` (base ref, agent, model, row title, tmux session, copied files, and what
   `.wt-setup` left behind),
   `<name>.prompt` (the brief, handed to the agent by `wt run`) and `<name>.started` (after which Claude
   resumes with `-c`). None of this is ever committed.
@@ -161,8 +161,10 @@ is the file that git-ignores `.worktrees/`.
 | Class | Files | Behaviour |
 |---|---|---|
 | Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, and every opt-in file you asked for — `cmux.json` among them, Mac only, under `--with-cmux-config` | Edits, including an agent's, land in the repo, so `git diff` is the review |
-| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use or did not ask for: the voice keys and the Keychain credential store off a Mac, `statusLine` without `--with-statusline`, and `tui`, `voice`, `theme` and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
+| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Created from the versioned `.base` files, minus the keys this machine cannot use or did not ask for: voice and Keychain credential keys on VMs, `statusLine` without `--with-statusline`, and `tui`, `voice`, `theme` and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`. The apps write local state into them, so a normal run keeps what is there and only `install.sh --refresh-config` replaces them |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides, sourced or included by the linked files — `~/.zshrc.local` only when `~/.zshrc` is one of them |
+
+VM copies also set Claude's `prefersReducedMotion` and disable Codex TUI animations to keep tmux task rows steady. Mac copies leave both animations enabled.
 
 It is idempotent: rerun it after every repo change. Nothing is deleted. Anything in the way is moved into
 `~/.workgrove-backup/<timestamp>-<pid>`, which is created only when it is actually needed. It stops with a
@@ -174,22 +176,23 @@ message if no git identity is set — `~/.gitconfig.local` first, then your glob
 `~/.zshenv`, because cmux runs its VM rows in bash. At the top because Ubuntu's `~/.bashrc` returns early in a
 non-interactive shell, so the line has to come first to cover `ssh <vm> '<cmd>'` and `wt -H <vm> …` as well.
 
-`bash test/install-smoke.sh` is the repo's smoke test: 640 assertions across seventeen scenario groups
+`bash test/install-smoke.sh` is the repo's smoke test: 648 assertions across seventeen scenario groups
 (fifty runs, since most groups have several cases and one loops over five flags), each run against its
 own throwaway `$HOME` with no network. They cover the default no-flags install — into an empty home and over a
 stranger's own dotfiles — `--opinionated-config`, each file flag on its own, the stickiness rules, idempotence,
 an unknown flag, every refusal path, which links count as this repo's own, the don't-clobber branches of
 `configure_git`, retirement of renamed links, and `ZSH_CUSTOM`. Set `INSTALL_BASH=/bin/bash` to run
 `install.sh` itself under bash 3.2, which is what a fresh Mac gives it; `FORCE_OS=Linux` drives the
-Linux-only steps from a Mac. Run on a VM it makes 492, because scenario 17 is about a Mac file and does not
+Linux-only steps from a Mac. Run on a VM it makes 500, because scenario 17 is about a Mac file and does not
 run there — and running it there is worth doing, because `FORCE_OS` cannot fake everything a real Linux box
 differs in. It was a VM that caught the suite building its fixtures at whatever the machine's umask happened
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 511 assertions over fourteen groups against throwaway git repos, with
-cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
-base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
+`bash test/wt-smoke.sh` is the other one: 563 assertions over fifteen groups against throwaway git repos, with
+cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar,
+including a task model passed to Claude and Codex on later launches, and how a base is pinned (`@`, `HEAD^0`,
+`--head` on a detached checkout — the spellings that would otherwise compare a
 worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that a squash-merged
 branch is not one of them while a commit made after the squash, a partial revert and a later edit to the same
 lines still are (against a bare "origin" and a second clone that plays GitHub, and once more under a `git`
@@ -202,7 +205,7 @@ parses under `/bin/bash` (the 3.2 a fresh Mac ships), and that `bin/wt` and `bin
 field of `cmux list-windows` is a window. The last group is the odd one out: it tests `test/lib.sh`'s own
 `rm -rf`, which no real run reaches, because both suites build their scratch root with `mktemp -d` and refuse
 one inside the real home before arming the trap that calls it — and a branch nothing exercises is a branch
-nobody knows is broken. Run on a VM it makes 483: scenario 8 is about the Mac's row list, and `bin/wt` has no
+nobody knows is broken. Run on a VM it makes 535: scenario 8 is about the Mac's row list, and `bin/wt` has no
 `FORCE_OS` to lie to `is_remote()` with, so there `wt new` asks the Mac for a row over the relay and never
 consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
 assertions is the failure mode a green run hides. The SSH and cmux recovery checks use fakes; neither suite
@@ -213,9 +216,9 @@ failure states with a fake `ssh` on a scratch `PATH`. It also executes the probe
 commands, including malformed GPU output, and verifies the client deadline against a hanging SSH process.
 It does not contact any configured host.
 
-`bash test/remote-new-smoke.sh` uses scratch SSH and cmux stubs to check remote task preflight, a row failure
-after worktree creation, and an SSH disconnect after creation but before the Mac receives the result. It also
-checks that a brief and agent choice survive an interrupted `.wt-setup`.
+`bash test/remote-new-smoke.sh` uses scratch SSH and cmux stubs to check remote task preflight, model forwarding,
+an older VM's option refusal, a row failure after worktree creation, and an SSH disconnect after creation but
+before the Mac receives the result. It also checks that a brief, agent and model survive an interrupted `.wt-setup`.
 
 `bash test/github-guard-smoke.sh` runs 430 assertions of hook payloads through `bin/github-guard`, with `gh`
 stubbed to answer `gh api` from fixtures by running the guard's own `--jq` filter over them.
@@ -294,10 +297,10 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 
 | Command | Does |
 |---|---|
-| `wt new [name] [-p TEXT] [-a claude\|codex\|none] [-r PATH] [-b REF]` | Create the worktree and a cmux row running the agent with the brief |
+| `wt new [name] [-p TEXT] [-a claude\|codex\|none] [-m MODEL] [-r PATH] [-b REF]` | Create the worktree and a cmux row running the agent with the brief and optional task model |
 | `wt run <name>` | Run that worktree's agent with its brief. cmux runs this for you |
 | `wt list [--all]` | Worktrees, with branch, base, ahead/behind, merged (`yes`, `squash`, `no`), dirty count, last commit |
-| `wt show <name> [--diff]` | Path, branch, whether and how it is merged, row, brief, dirty files, commits and diffstat vs base; on a VM also the tmux session and whether its agent is running |
+| `wt show <name> [--diff]` | Path, branch, whether and how it is merged, row, brief, task model when set, dirty files, commits and diffstat vs base; on a VM also the tmux session and whether its agent is running |
 | `wt open [name]` | Open the worktree in VS Code. No name means the one you are in |
 | `wt attach <name>` | Open a cmux row for a worktree that already exists |
 | `wt sync <name> [--merge]` | Rebase (or merge) the branch onto its base |
@@ -355,8 +358,10 @@ into the sidecar, and `wt rm` excuses those paths only while they still hold exa
 yourself and it counts again. `wt list` keeps showing git's own dirty count, unexcused.
 
 Useful environment variables: `WT_REPOS_DIR` (the folders repos are looked for in), `WT_AGENT` (default
-agent), `WT_AGENT_ARGS` (extra agent arguments), and `WT_HOST` on a VM. `git config wt.dir` renames the
-worktree folder for one repo.
+agent), `WT_AGENT_ARGS` (extra agent arguments), and `WT_HOST` on a VM. A model chosen with `wt new -m`
+persists for every `wt run` launch, including Claude resumes. It overrides model options in `WT_AGENT_ARGS`;
+Claude's `--fallback-model` is also removed when the task has a model. Without `-m`, those arguments still
+apply. `git config wt.dir` renames the worktree folder for one repo.
 
 `WT_REPOS_DIR` may hold several folders separated by `:`, like `$PATH`, searched in the order given; empty
 entries and folders that are missing or unreadable are skipped, and a folder named twice is searched once.
