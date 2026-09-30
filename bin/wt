@@ -6,7 +6,7 @@
 #
 # Usage:
 #   wt new  [name] [-p|--prompt TEXT] [--prompt-stdin] [-b|--base REF] [--head]
-#           [-a|--agent claude|codex|none] [--no-workspace] [-r|--repo PATH]
+#           [-a|--agent claude|codex|none] [-m|--model MODEL] [--no-workspace] [-r|--repo PATH]
 #                                                             create a worktree (+ a cmux row running `wt run`)
 #   wt run  <name> [-r PATH]                                  run the worktree's agent with its brief (cmux runs this)
 #   wt list [--all] [-r PATH]                                 list worktrees (--all: every repo in $WT_REPOS_DIR)
@@ -53,7 +53,7 @@
 # line), tmux session "wt-<repo>-<name>", <repo> = repo basename
 # with anything outside [A-Za-z0-9-] replaced by '-'. Task names: ^[a-z0-9][a-z0-9_-]{0,62}$ (no '.').
 #
-# Task files (never committed): <repo>/.git/wt/<name>.json    base, created, agent, title, session, includes
+# Task files (never committed): <repo>/.git/wt/<name>.json    base, created, agent, model, title, session, includes
 #                               <repo>/.git/wt/<name>.prompt  the brief, passed to the agent by `wt run`
 #                               <repo>/.git/wt/<name>.started marker: Claude resumes with -c after this exists
 #
@@ -62,7 +62,7 @@
 #                       for repos; a name found in two of them must be given as a path (default ~/Documents/Repositories)
 #   WT_HOST             on a VM: this machine's alias in the Mac's ~/.ssh/config (set by install.sh in ~/.zshenv.local)
 #   WT_AGENT            default agent for `wt new`                                              (default claude)
-#   WT_AGENT_ARGS       extra args for the agent command (e.g. "--model opus")
+#   WT_AGENT_ARGS       extra agent args; a task's -m model overrides any model option here
 #   git config wt.dir   per-repo override of the worktree folder name                           (default .worktrees)
 #
 # Per-repo hooks:
@@ -219,6 +219,8 @@ valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 need_name()  { valid_name "$1" || die "invalid name '$1' (lowercase letters, digits, _ and -, max 63, no '.')"; }
 tidy_name()  { printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/-/g'; }  # "Fix Auth" -> fix-auth; anything else must already be valid
 valid_agent() { case "$1" in claude|codex|none) ;; *) die "unknown agent '$1' (use claude, codex or none)" ;; esac; }
+valid_model() { local LC_ALL=C; [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*(\[[A-Za-z0-9._-]+\])?$ ]]; }
+need_model()  { valid_model "$1" || die "invalid model '$1' (use letters, digits, ., _, -, / and an optional [suffix])"; }
 
 slugify() {
   printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C tr -cs 'a-z0-9' '-' \
@@ -747,7 +749,7 @@ list_names() { # registered worktrees under the wt root
 
 # ---------------------------------------------------------------- commands
 cmd_new() {
-  local name="" prompt="" stdin_prompt=0 base="" from_head=0 agent="$DEFAULT_AGENT" workspace=1 repo=""
+  local name="" prompt="" stdin_prompt=0 base="" from_head=0 agent="$DEFAULT_AGENT" model="" model_set=0 workspace=1 repo=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -p|--prompt) [[ $# -ge 2 ]] || die "new: $1 needs a brief"; prompt="$2"; shift 2 ;;
@@ -755,6 +757,7 @@ cmd_new() {
       -b|--base) [[ $# -ge 2 ]] || die "new: $1 needs a ref"; base="$2"; shift 2 ;;
       --head) from_head=1; shift ;;
       -a|--agent) [[ $# -ge 2 ]] || die "new: $1 needs an agent"; agent="$2"; shift 2 ;;
+      -m|--model) [[ $# -ge 2 ]] || die "new: $1 needs a model"; model="$2"; model_set=1; shift 2 ;;
       --no-workspace) workspace=0; shift ;;
       -r|--repo) [[ $# -ge 2 ]] || die "new: $1 needs a repo"; repo="$2"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
@@ -769,6 +772,7 @@ cmd_new() {
   [[ -n "$name" ]] || name="task-$(date +%Y%m%d-%H%M%S)"
   need_name "$name"
   valid_agent "$agent"
+  [[ $model_set -eq 0 ]] || need_model "$model"
   local p b; p=$(wt_path "$name"); b=$(wt_branch "$name")
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (kept by wt rm --keep-branch, or by a removal git would not call merged, or left behind by a worktree deleted outside wt); inspect it (git -C $REPO log $b), then delete it (git -C $REPO branch -D $b) or pick another name"
@@ -805,11 +809,11 @@ cmd_new() {
 
   mkdir -p "$(wt_root)"
   git -C "$REPO" worktree add -q -b "$b" "$p" "$base" || die "git worktree add failed"
-  # The worktree is now registered. Persist its brief and agent before slow copy/setup work: if the
+# The worktree is now registered. Persist its brief, agent and model before slow copy/setup work: if the
   # SSH channel closes during a hook, attach --restart-agent must still know what to run.
   mkdir -p "$REPO/.git/wt"
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; fi
-  meta_set "$name" "base=$base" "created=$(date -u +%FT%TZ)" "agent=$agent" \
+  meta_set "$name" "base=$base" "created=$(date -u +%FT%TZ)" "agent=$agent" "model=$model" \
     "title=$(row_title "$name" "$REPO")" "session=$(wt_session "$name" "$REPO")" \
     "includes=" "setup="
   local includes; includes=$(copy_includes "$p")
@@ -835,8 +839,10 @@ cmd_run() { # run the worktree's agent here; cmux types this into the row's shel
   resolve_repo "$repo"; require_wt "$name"
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac
   cd "$P"
-  local agent brief="" f rc=0
+  local agent model brief="" f rc=0
   agent=$(meta_get "$name" agent 2>/dev/null || true); [[ -n "$agent" ]] || agent="$DEFAULT_AGENT"
+  model=$(meta_get "$name" model 2>/dev/null || true)
+  [[ -z "$model" ]] || need_model "$model"
   case "$agent" in
     none|shell|"") printf '%s: %s\n  agent:  none — this is your shell\n' "$name" "$P"; return 0 ;;
     claude|codex) ;;
@@ -844,10 +850,27 @@ cmd_run() { # run the worktree's agent here; cmux types this into the row's shel
   esac
   f=$(wt_prompt "$name")                         # a command substitution would eat the trailing newline
   if [[ -f "$f" ]]; then IFS= read -r -d '' brief <"$f" || true; fi
-  local extra=() args=()
+  local extra=() filtered=() model_arg=() args=() i=0
   if [[ -n "${WT_AGENT_ARGS:-}" ]]; then
     # shellcheck disable=SC2206   # word splitting is the point
     extra=($WT_AGENT_ARGS)
+  fi
+  if [[ -n "$model" ]]; then
+    # Remove machine-wide model choices before adding this task's choice. Neither CLI needs to decide
+    # which repeated model flag wins, including on a Claude -c resume.
+    while [[ $i -lt ${#extra[@]} ]]; do
+      case "${extra[$i]}" in
+        -m|--model) i=$((i + 2)); continue ;;
+        -m?*|--model=*) i=$((i + 1)); continue ;;
+        -c|--config)
+          if [[ "$agent" == codex && "${extra[$((i + 1))]:-}" == model=* ]]; then i=$((i + 2)); continue; fi ;;
+        -cmodel=*|--config=model=*)
+          if [[ "$agent" == codex ]]; then i=$((i + 1)); continue; fi ;;
+      esac
+      filtered+=("${extra[$i]}"); i=$((i + 1))
+    done
+    extra=("${filtered[@]+"${filtered[@]}"}")
+    if [[ "$agent" == claude ]]; then model_arg=(--model "$model"); else model_arg=(-m "$model"); fi
   fi
   if [[ "$agent" == claude && -e "$(wt_started "$name")" ]]; then
     args=(-c)                                    # resume this worktree's last conversation
@@ -869,7 +892,7 @@ cmd_run() { # run the worktree's agent here; cmux types this into the row's shel
       done ) >/dev/null 2>&1 &
     WT_STATUS_HEARTBEAT_PID=$!
   fi
-  "$agent" "${extra[@]+"${extra[@]}"}" "${args[@]+"${args[@]}"}" || rc=$?
+  "$agent" "${model_arg[@]+"${model_arg[@]}"}" "${extra[@]+"${extra[@]}"}" "${args[@]+"${args[@]}"}" || rc=$?
   [[ -n ${WT_STATUS_FILE:-} ]] && wt_cleanup
   [[ $rc -eq 0 ]] || warn "$agent exited with status $rc"
   return 0
@@ -918,6 +941,8 @@ cmd_show() {
   esac
   printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  merged:  %s\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
     "$nn" "$P" "$REPO" "$br" "$ah" "$be" "$base" "$mg" "$title $(row_tag)" "$(prompt_line "$name")" "$di" "$last"
+  local model; model=$(meta_get "$name" model 2>/dev/null || true)
+  [[ -z "$model" ]] || printf '  model:   %s\n' "$model"
   if is_remote; then printf '  session: %s\n' "$(session_state "$name")"; fi   # `wt -H … attach` reads this line
   printf '\n--- commits vs %s\n' "$base"; git -C "$P" log --oneline "$base..HEAD" 2>/dev/null | head -20
   printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$P" diff --stat "$base...HEAD" 2>/dev/null | tail -15
@@ -1266,6 +1291,7 @@ host_new() { # create the worktree on the VM, then the cmux row here
     --prompt-stdin) IFS= read -r -d '' prompt || true; shift ;;
     -r|--repo) [[ $# -ge 2 ]] || die "new: $1 needs a repo"; repo_request="$2"; args+=("$1" "$2"); shift 2 ;;
     -a|--agent) [[ $# -ge 2 ]] || die "new: $1 needs an agent"; requested_agent="$2"; valid_agent "$requested_agent"; args+=("$1" "$2"); shift 2 ;;
+    -m|--model) [[ $# -ge 2 ]] || die "new: $1 needs a model"; need_model "$2"; args+=("$1" "$2"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) args+=("$1"); shift ;;
   esac; done
@@ -1279,6 +1305,9 @@ host_new() { # create the worktree on the VM, then the cmux row here
   else
     rc=$?
     [[ -z "$out" ]] || printf '%s\n' "$out" >&2
+    if [[ "$out" == *'new: unknown option -m'* || "$out" == *'new: unknown option --model'* ]]; then
+      warn "$host has an older wt without -m; update it with: wt -H $host update"
+    fi
     if [[ $rc -eq 255 ]]; then
       warn "SSH disconnected during creation on $host; could not confirm whether a worktree was created; inspect with: $inspect"
       warn "a disconnected create may still be finishing; recheck before starting the same task elsewhere"

@@ -27,7 +27,7 @@ VS Code opens on demand, through `wt open`.
   merge their lists, and nothing else had to change. They enumerate by window uuid, never by the index
   `cmux list-windows` prints first, because opening a window renumbers the rest.
 - **Git owns the worktree; sidecar files own the launch metadata.** `wt` reads `git worktree list`. Per task
-  it keeps `<repo>/.git/wt/<name>.json` (base ref, agent, row title, tmux session, copied files, and what
+  it keeps `<repo>/.git/wt/<name>.json` (base ref, agent, model, row title, tmux session, copied files, and what
   `.wt-setup` left behind),
   `<name>.prompt` (the brief, handed to the agent by `wt run`) and `<name>.started` (after which Claude
   resumes with `-c`). None of this is ever committed.
@@ -187,9 +187,10 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 511 assertions over fourteen groups against throwaway git repos, with
-cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar, how a
-base is pinned (`@`, `HEAD^0`, `--head` on a detached checkout — the spellings that would otherwise compare a
+`bash test/wt-smoke.sh` is the other one: 535 assertions over fifteen groups against throwaway git repos, with
+cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar,
+including a task model passed to Claude and Codex on later launches, and how a base is pinned (`@`, `HEAD^0`,
+`--head` on a detached checkout — the spellings that would otherwise compare a
 worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that a squash-merged
 branch is not one of them while a commit made after the squash, a partial revert and a later edit to the same
 lines still are (against a bare "origin" and a second clone that plays GitHub, and once more under a `git`
@@ -202,7 +203,7 @@ parses under `/bin/bash` (the 3.2 a fresh Mac ships), and that `bin/wt` and `bin
 field of `cmux list-windows` is a window. The last group is the odd one out: it tests `test/lib.sh`'s own
 `rm -rf`, which no real run reaches, because both suites build their scratch root with `mktemp -d` and refuse
 one inside the real home before arming the trap that calls it — and a branch nothing exercises is a branch
-nobody knows is broken. Run on a VM it makes 483: scenario 8 is about the Mac's row list, and `bin/wt` has no
+nobody knows is broken. Run on a VM it makes 507: scenario 8 is about the Mac's row list, and `bin/wt` has no
 `FORCE_OS` to lie to `is_remote()` with, so there `wt new` asks the Mac for a row over the relay and never
 consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
 assertions is the failure mode a green run hides. The SSH and cmux recovery checks use fakes; neither suite
@@ -213,9 +214,9 @@ failure states with a fake `ssh` on a scratch `PATH`. It also executes the probe
 commands, including malformed GPU output, and verifies the client deadline against a hanging SSH process.
 It does not contact any configured host.
 
-`bash test/remote-new-smoke.sh` uses scratch SSH and cmux stubs to check remote task preflight, a row failure
-after worktree creation, and an SSH disconnect after creation but before the Mac receives the result. It also
-checks that a brief and agent choice survive an interrupted `.wt-setup`.
+`bash test/remote-new-smoke.sh` uses scratch SSH and cmux stubs to check remote task preflight, model forwarding,
+an older VM's option refusal, a row failure after worktree creation, and an SSH disconnect after creation but
+before the Mac receives the result. It also checks that a brief, agent and model survive an interrupted `.wt-setup`.
 
 `bash test/github-guard-smoke.sh` runs 430 assertions of hook payloads through `bin/github-guard`, with `gh`
 stubbed to answer `gh api` from fixtures by running the guard's own `--jq` filter over them.
@@ -294,10 +295,10 @@ anything that is not `^[a-z0-9][a-z0-9_-]{0,62}$` after that is refused, and `.`
 
 | Command | Does |
 |---|---|
-| `wt new [name] [-p TEXT] [-a claude\|codex\|none] [-r PATH] [-b REF]` | Create the worktree and a cmux row running the agent with the brief |
+| `wt new [name] [-p TEXT] [-a claude\|codex\|none] [-m MODEL] [-r PATH] [-b REF]` | Create the worktree and a cmux row running the agent with the brief and optional task model |
 | `wt run <name>` | Run that worktree's agent with its brief. cmux runs this for you |
 | `wt list [--all]` | Worktrees, with branch, base, ahead/behind, merged (`yes`, `squash`, `no`), dirty count, last commit |
-| `wt show <name> [--diff]` | Path, branch, whether and how it is merged, row, brief, dirty files, commits and diffstat vs base; on a VM also the tmux session and whether its agent is running |
+| `wt show <name> [--diff]` | Path, branch, whether and how it is merged, row, brief, task model when set, dirty files, commits and diffstat vs base; on a VM also the tmux session and whether its agent is running |
 | `wt open [name]` | Open the worktree in VS Code. No name means the one you are in |
 | `wt attach <name>` | Open a cmux row for a worktree that already exists |
 | `wt sync <name> [--merge]` | Rebase (or merge) the branch onto its base |
@@ -355,8 +356,9 @@ into the sidecar, and `wt rm` excuses those paths only while they still hold exa
 yourself and it counts again. `wt list` keeps showing git's own dirty count, unexcused.
 
 Useful environment variables: `WT_REPOS_DIR` (the folders repos are looked for in), `WT_AGENT` (default
-agent), `WT_AGENT_ARGS` (extra agent arguments), and `WT_HOST` on a VM. `git config wt.dir` renames the
-worktree folder for one repo.
+agent), `WT_AGENT_ARGS` (extra agent arguments), and `WT_HOST` on a VM. A model chosen with `wt new -m`
+persists for every `wt run` launch, including Claude resumes. It overrides model options in `WT_AGENT_ARGS`;
+without `-m`, those arguments still apply. `git config wt.dir` renames the worktree folder for one repo.
 
 `WT_REPOS_DIR` may hold several folders separated by `:`, like `$PATH`, searched in the order given; empty
 entries and folders that are missing or unreadable are skipped, and a folder named twice is searched once.

@@ -426,6 +426,7 @@ printf '%s\n' "$@" >"$AGENT_ARGV_LOG"
 echo "FAKE-AGENT ran"
 AGENT
 chmod +x "$FAKE_BIN/claude"
+cp "$FAKE_BIN/claude" "$FAKE_BIN/codex"
 
 # ---------------------------------------------------------------------------- running bin/wt
 
@@ -449,6 +450,7 @@ WT_RC=0
 WT_CWD=""          # where the next wt_run runs; empty means the scratch root, which is not a git repo
 WT_SANDBOX=""      # CODEX_SANDBOX for the next wt_run; empty means not inside Codex's sandbox
 WT_PATH_PREFIX=""  # a directory put before $FAKE_BIN on wt_run's PATH; scenario 6b's old-git shim lives in one
+WT_EXTRA=""        # machine-wide agent args for model precedence checks
 wt_run() {
   WT_RC=0
   WT_OUT="$(cd "${WT_CWD:-$TEST_ROOT}" \
@@ -470,7 +472,7 @@ wt_run() {
            REMOTE_SSH_NOISE="$TEST_ROOT/remote-ssh-noise" \
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
            REMOTE_TMUX="$TEST_ROOT/remote-tmux" REMOTE_TMUX_QUEUE="$TEST_ROOT/remote-tmux-queue" \
-           CODEX_SANDBOX="$WT_SANDBOX" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
+           CODEX_SANDBOX="$WT_SANDBOX" WT_AGENT_ARGS="$WT_EXTRA" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
   return 0
 }
@@ -567,6 +569,7 @@ scenario_new_and_sidecar() {
 
   assert_meta "$r" demo base main
   assert_meta "$r" demo agent claude
+  assert_meta "$r" demo model ""
   assert_meta "$r" demo title "$id:demo"
   assert_meta "$r" demo session "wt-$id-demo"
   assert_meta "$r" demo includes ""
@@ -589,6 +592,40 @@ scenario_new_and_sidecar() {
   rm -f "$AGENT_LOG"
   assert_wt_ok "wt run demo again" run demo -r "$r"
   assert_eq "the second run resumes with -c" "-c" "$(cat "$AGENT_LOG")"
+  end_scenario
+}
+
+scenario_task_model() {
+  begin_scenario "1b. a task model persists and wins on every agent launch"
+  local r
+  r="$(new_repo model)"
+  assert_wt_ok "Claude model with a bracket suffix" new chosen --no-workspace -r "$r" -a claude -m 'opus[1m]' -p 'the brief'
+  assert_meta "$r" chosen model 'opus[1m]'
+  assert_wt_ok "show prints the model" show chosen -r "$r"
+  assert_has "show prints the chosen model" "$WT_OUT" 'model:   opus[1m]'
+  WT_EXTRA='--model other --verbose'
+  assert_wt_ok "Claude first launch" run chosen -r "$r"
+  assert_eq "Claude got only the task model and the brief" "$(printf '%s\n' --model 'opus[1m]' --verbose -- 'the brief')" "$(cat "$AGENT_LOG")"
+  assert_wt_ok "Claude resume" run chosen -r "$r"
+  assert_eq "Claude resume kept the task model" "$(printf '%s\n' --model 'opus[1m]' --verbose -c)" "$(cat "$AGENT_LOG")"
+  WT_EXTRA=''
+
+  assert_wt_ok "Codex model" new codex-model --no-workspace -r "$r" -a codex --model gpt-5.3-codex -p 'codex brief'
+  assert_meta "$r" codex-model model gpt-5.3-codex
+  WT_EXTRA='-m other -c model=older --search'
+  assert_wt_ok "Codex first launch" run codex-model -r "$r"
+  assert_eq "Codex got only the task model and the brief" "$(printf '%s\n' -m gpt-5.3-codex --search -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  WT_EXTRA='--model=other --search'
+  assert_wt_ok "Codex later launch" run codex-model -r "$r"
+  assert_eq "Codex later launch kept the task model" "$(printf '%s\n' -m gpt-5.3-codex --search -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  WT_EXTRA=''
+
+  assert_wt_fails 1 "invalid model" new bad-space --no-workspace -r "$r" -m 'two words'
+  assert_absent "$r/.worktrees" bad-space
+  assert_wt_fails 1 "invalid model" new bad-shell --no-workspace -r "$r" -m 'opus;touch'
+  assert_absent "$r/.worktrees" bad-shell
+  assert_wt_fails 1 "invalid model" new bad-empty --no-workspace -r "$r" -m ''
+  assert_absent "$r/.worktrees" bad-empty
   end_scenario
 }
 
@@ -1764,7 +1801,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=483
+FIXED_ASSERTIONS=507
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
@@ -1782,6 +1819,7 @@ main() {
        "($("$WT_BASH" -c 'echo "$BASH_VERSION"'))"
   scenario_guard
   scenario_new_and_sidecar
+  scenario_task_model
   scenario_base_resolution
   scenario_names_and_collisions
   scenario_list_show_path
