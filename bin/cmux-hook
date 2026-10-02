@@ -265,6 +265,33 @@ case $t in
         quiet
       fi
     fi ;;
+  wt-close) # a VM task removed itself; only its own row may ask to close
+    DEADLINE=$(( $(date +%s) + 12 ))   # leave time under cmux's 20 s hook limit to stop tmux after closing
+    h=$(field host || true); r=$(field repo || true); n=$(field task || true)
+    if valid_host "$h" && known_host "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] &&
+       from_row_on_host "$ws" "$h"; then
+      id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-')
+      if [[ $(row_by_title "$id:$n" "$h") == "$ws" ]]; then
+        printf -v q '%q' "$r"; rc=0
+        gone=$(capped ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "exec \"\$HOME/.local/bin/wt\" path $n -r $q" 2>&1) || rc=$?
+        if [[ $rc -ne 1 || $gone != *"no worktree named '$n' in $r"* ]]; then
+          log "ignored wt-close for $id:$n on $h: could not confirm its worktree is gone"
+        elif capped "$CMUX" workspace close "$ws" >/dev/null 2>&1; then
+          # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
+          DEADLINE=$(( $(date +%s) + 5 ))
+          if capped ssh -o BatchMode=yes -o ConnectTimeout=4 "$h" "exec tmux kill-session -t '=wt-$id-$n'" >/dev/null 2>&1; then
+            quiet_control
+          else
+            log "could not stop tmux session wt-$id-$n on $h after closing $ws"
+            if command -v osascript >/dev/null 2>&1; then
+              osascript -e 'on run argv' \
+                -e 'display notification (item 1 of argv) with title "workgrove teardown incomplete"' \
+                -e 'end run' "Run: ssh $h tmux kill-session -t '=wt-$id-$n'" >/dev/null 2>&1 || true
+            fi
+          fi
+        else log "could not close row $ws for $id:$n on $h"; fi
+      else log "ignored wt-close for a row other than $id:$n on $h"; fi
+    else log "ignored invalid wt-close for workspace $ws"; fi ;;
 esac
 [[ $mode == hook ]] && status_sweep
 exit 0

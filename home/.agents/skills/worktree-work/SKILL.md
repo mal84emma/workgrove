@@ -9,11 +9,11 @@ You are inside one when the cwd is `<repo>/.worktrees/<name>` and `git rev-parse
 
 ## Rules while in a worktree
 
-1. **Stay inside.** Edit only files under this worktree. Never `cd` into, edit, or run commands against the main checkout or other worktrees. Their paths are visible in `wt list`; treat them as read-only reference at most.
+1. **Stay inside for task work.** Edit only files under this worktree. Do not work in the main checkout or sibling worktrees. If the user asks you to remove this worktree, follow `worktree-teardown`: change to the main checkout for `wt rm` only.
 2. **Commit as you go**, on the worktree's own branch (`wt/<name>`). Small, described commits; the user reviews branches, not working trees.
 3. **Do not switch branches** or run `git checkout <other-branch>` inside a worktree; the branch is the task's identity. Do not create nested worktrees.
 4. **Dependencies and env** live per worktree. If something is missing, install it here (or suggest a `.wt-setup` script for the repo) rather than pointing at the main checkout.
-5. **Do not remove the worktree yourself** when done. Report completion; the user (or `worktree-teardown`) decides.
+5. **Remove the worktree only when the user asks.** You may remove your own worktree by following `worktree-teardown`.
 6. **No interactive `wt attach`, `wt task` or `wt driver` from here.** Those belong to the user's own session on the Mac.
 
 ## Syncing with the base
