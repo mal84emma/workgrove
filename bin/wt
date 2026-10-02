@@ -1612,7 +1612,21 @@ tmux detach-client -t "${clients#* }" -E "$line"
 WT_CLIENT
   remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$proof" "$line") <<'WT_CLIENT'
 $script
-WT_CLIENT" >/dev/null 2>&1
+WT_CLIENT" >/dev/null 2>&1 || return 1
+  # The row can reconnect again between the screen proof and the replacement. Confirm the new client
+  # is visible there before reporting that its terminal modes were restored.
+  nonce="WT_REINIT_${RANDOM}_${RANDOM}_$$_$(date +%s)"
+  IFS= read -r -d '' script <<'WT_CLIENT' || :
+session=$1 tty=$2 nonce=$3
+clients=$(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}' 2>/dev/null) || exit 1
+[[ "$clients" =~ ^[0-9]+[[:space:]]+/dev/pts/[0-9]+$ && "${clients#* }" == "$tty" ]] || exit 1
+tmux display-message -d 5000 -t "$session" "$nonce"
+WT_CLIENT
+  remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "${proof#* }" "$nonce") <<'WT_CLIENT'
+$script
+WT_CLIENT" >/dev/null 2>&1 || return 1
+  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 1
+  [[ "$screen" == *"$nonce"* && "$(row_remote_field "$id" state)" == connected ]] || return 1
 }
 
 host_attach() { # re-attach to the VM's session; start an agent only for a task never started before
@@ -1710,7 +1724,8 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     local reinit_rc=0
     reinit_task_client "$host" "$id" "$session" || reinit_rc=$?
     if [[ $reinit_rc -eq 0 ]]; then what=re-initialized
-    elif [[ $reinit_rc -ne 2 ]]; then warn "could not replace $session's tmux client on $host; inspect the row, then re-run attach if its terminal settings are missing"
+    elif [[ $reinit_rc -eq 2 ]]; then warn "could not confirm $session's client in this row; inspect it, then re-run attach if its terminal settings are missing; for a bare shell use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
+    else warn "could not confirm $session's replacement client on $host; inspect the row, then re-run attach; for a bare shell use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
     fi
   fi
   CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"

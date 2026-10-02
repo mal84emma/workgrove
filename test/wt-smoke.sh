@@ -480,6 +480,7 @@ wt_run() {
            REMOTE_WT_SESSION="${REMOTE_WT_SESSION:-wt-project-task}" \
            REMOTE_TMUX="$TEST_ROOT/remote-tmux" REMOTE_TMUX_QUEUE="$TEST_ROOT/remote-tmux-queue" \
            REMOTE_TMUX_CLIENT_QUEUE="$TEST_ROOT/remote-tmux-client-queue" \
+           REMOTE_TMUX_LATE_RECONNECT="$TEST_ROOT/remote-tmux-late-reconnect" \
            REMOTE_TMUX_DETACH_FAIL="$TEST_ROOT/remote-tmux-detach-fail" \
            "${WT_RELAY_ENV[@]}" \
            CODEX_SANDBOX="$WT_SANDBOX" WT_AGENT_ARGS="$WT_EXTRA" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
@@ -1478,9 +1479,12 @@ case "$1" in
       *) if [ "$(cat "$REMOTE_TMUX.drawn")" = attached ]; then echo '/dev/pts/3: wt-project-task [200x50 xterm-256color] (utf8)'; fi ;;
     esac ;;
   display-message)
+    [ "$2" = -d ] && [ "$3" = 5000 ] && [ "$4" = -t ] && [ "$5" = =wt-project-task ] || exit 1
     for arg do nonce=$arg; done
-    printf '%s\n' "$nonce" >"$CMUX_STUB_NONCE" ;;
-  detach-client) [ ! -f "$REMOTE_TMUX_DETACH_FAIL" ] ;;
+    [ -f "$REMOTE_TMUX_LATE_RECONNECT.triggered" ] || printf '%s\n' "$nonce" >"$CMUX_STUB_NONCE" ;;
+  detach-client)
+    if [ -f "$REMOTE_TMUX_LATE_RECONNECT" ]; then : >"$REMOTE_TMUX_LATE_RECONNECT.triggered"; fi
+    [ ! -f "$REMOTE_TMUX_DETACH_FAIL" ] ;;
   *) exit 1 ;;
 esac
 STUB
@@ -1534,7 +1538,7 @@ ROWS
   assert_has "only that sshd was stopped" "$(cat "$TEST_ROOT/remote-log")" 'kill -TERM 4242'
   assert_has "the row-specific reconnect was called" "$(cat "$CMUX_LOG")" 'rpc workspace.remote.reconnect {"workspace_id":"remote-row"}'
   assert_has "reconnect reached connected" "$WT_OUT" 'connected after reconnect'
-  assert_eq "a recovered agent screen is checked before client replacement" 7 "$(screen_reads)"
+  assert_eq "a recovered agent screen is checked around client replacement" 8 "$(screen_reads)"
   assert_eq "a screen with no prompt never asked the VM's tmux" 0 "$(vm_probes)"
   assert_lacks "an attached agent was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
   assert_has "a recovered attached client was replaced" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
@@ -1561,6 +1565,20 @@ ROWS
   expected_line=$(tmux_cmd wt-project-task)
   assert_has "replacement uses tmux_cmd's exact attach line" "$(cat "$TEST_ROOT/remote-log")" "tmux detach-client -t /dev/pts/3 -E $expected_line"
 
+  if REMOTE_LOG="$TEST_ROOT/remote-log" CMUX_STUB_NONCE="$TEST_ROOT/remote-tmux-nonce" \
+      "$fake/tmux" display-message -d 5000 -t =wrong WT_REINIT_BAD >/dev/null 2>&1; then
+    fail "a status message for another tmux session was accepted"
+  else
+    pass
+  fi
+
+  : >"$TEST_ROOT/remote-tmux-late-reconnect"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "a late reconnect is not reported as re-initialized" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "the abandoned client replacement was not claimed" "$WT_OUT" '(re-initialized)'
+  assert_has "late reconnect names the recovery command" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
+  rm "$TEST_ROOT/remote-tmux-late-reconnect" "$TEST_ROOT/remote-tmux-late-reconnect.triggered"
+
   # The old client can still exist while cmux has opened a fresh shell but shows a cached agent screen.
   : >"$TEST_ROOT/remote-tmux-nonce-stale"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
@@ -1577,7 +1595,7 @@ ROWS
   : >"$TEST_ROOT/remote-tmux-detach-fail"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "a failed client replacement leaves the task running" -H fakevm attach task -r /vm/repos/project
-  assert_has "replacement failure is reported" "$WT_OUT" 'could not replace wt-project-task'
+  assert_has "replacement failure is reported" "$WT_OUT" "could not confirm wt-project-task's replacement client"
   assert_lacks "replacement failure never sent keys" "$(cat "$CMUX_LOG")" 'send --workspace'
   rm "$TEST_ROOT/remote-tmux-detach-fail"
 
@@ -2007,7 +2025,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=591
+FIXED_ASSERTIONS=595
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
