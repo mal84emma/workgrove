@@ -34,7 +34,7 @@ Inspect it with `wt show <name>` first. Tell the user the branch, commits, test 
 cd <absolute-repo-path> && wt rm <name> -r <absolute-repo-path>
 ```
 
-On a VM, run that command on the VM, not through `wt -H`. After removal, `wt` asks the Mac to close this row; the Mac then stops its tmux session. The tool call or agent may be cut off as the row closes, so give the user the summary first. If `wt rm` refuses, the row stays open: report the reason and leave the worktree. If it reports that the Mac row was not closed, tell the user to close that row and its tmux session from the Mac.
+On a VM, run that command on the VM, not through `wt -H`. After removal, `wt` asks the Mac to close this task's row, then stop its tmux session. The tool call or agent may be cut off, so give the user the summary first. If `wt rm` refuses, the row stays open: report the reason and leave the worktree. If the session remains active after `wt rm` waits for the Mac hook, cleanup is incomplete even if it printed `removed`: report its warning and have the user close the named row and tmux session from the Mac. `wt -H <vm> rm` cannot retry once the worktree is gone.
 
 ## Safety contract (enforced by `wt rm`, exit code 3 on refusal)
 

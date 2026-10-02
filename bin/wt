@@ -383,10 +383,11 @@ open_workspace() { # open_workspace <name> — always unfocused: a new task row 
   printf 'workspace: %s\n' "${ref:-$out}"
 }
 
-close_workspace() { # close_workspace <name> — the row is found by its title
-  local title
+close_workspace() { # close_workspace <name> [title] — use the saved title after rm deletes the sidecar
+  local title="${2:-}"
   cmux_ok || return 0
-  title=$(meta_get "$1" title 2>/dev/null || true); [[ -n "$title" ]] || title=$(row_title "$1" "$REPO")
+  [[ -n "$title" ]] || title=$(meta_get "$1" title 2>/dev/null || true)
+  [[ -n "$title" ]] || title=$(row_title "$1" "$REPO")
   close_row "$(cmux_row_field "$title" id)"
 }
 close_row() { # close_row <row id> — silent when the row is already gone
@@ -1027,12 +1028,18 @@ cmd_pr() {
 }
 
 cmd_rm() {
-  local name="" force=0 keep=0 repo=""
+  local name="" force=0 keep=0 repo="" self_remote=0 host="" session="" title=""
   while [[ $# -gt 0 ]]; do case "$1" in --force|-f) force=1;; --keep-branch) keep=1;; --discard-commits) RM_DISCARD_COMMITS=1;; -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "rm: unknown option $1";; *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "rm: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
   local here there; here=$(pwd -P); there=$(cd "$P" 2>/dev/null && pwd -P) || there="$P"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
+  if is_remote && [[ -n ${TMUX:-} ]]; then
+    session=$(wt_session "$name" "$REPO")
+    if [[ "$(tmux display-message -p '#S' 2>/dev/null || true)" == "$session" ]]; then
+      self_remote=1
+    fi
+  fi
   local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
   reset_fetched
   if [[ $force -eq 0 ]]; then
@@ -1046,6 +1053,12 @@ cmd_rm() {
       case "${reasons[*]}" in *' not merged into '*) printf 'wt: --discard-commits waives only the commit reason (a squash merge the base later edited or reverted); the other checks stay.\n' >&2 ;; esac
       exit 3
     fi
+  fi
+  if [[ $self_remote -eq 1 ]]; then
+    # Check relay setup only after the reasons above, while the worktree is still intact.
+    host=$(wt_host)
+    hook_ok_repo || die "cannot request Mac row cleanup for $REPO"
+    relay_env || die "cannot find the Mac cmux relay in this session"
   fi
   # remaining ignored files are unchanged copies or build output, so --force is the normal path here
   if [[ -d "$P" ]]; then
@@ -1066,20 +1079,25 @@ cmd_rm() {
       else keep=1; warn "kept branch $B: git will not delete it as merged (git -C $REPO branch -D $B discards it)"; fi
     fi
   fi
+  title=$(meta_get "$name" title 2>/dev/null || true)
   rm -f "$(wt_meta "$name")" "$(wt_prompt "$name")" "$(wt_started "$name")"
   git -C "$REPO" worktree prune
   printf 'removed %s%s\n' "$name" "$([[ $keep -eq 1 ]] && echo " (branch $B kept)")"
   if is_remote; then
-    local session; session=$(wt_session "$name" "$REPO")
-    if [[ -n ${TMUX:-} && "$(tmux display-message -p '#S' 2>/dev/null || true)" == "$session" ]]; then
-      # Closing this session here would kill the agent before its Mac row can be closed.
-      if ! hook_ok_repo || ! notify_mac wt-close host "$(wt_host)" repo "$REPO" task "$name"; then
-        warn "worktree removed, but its Mac row was not closed; close the row and tmux session from the Mac"
+    [[ -n "$session" ]] || session=$(wt_session "$name" "$REPO")
+    if [[ $self_remote -eq 1 ]]; then
+      # The Mac hook closes the row and kills this session. If we survive its deadline, cleanup did not finish.
+      if notify_mac wt-close host "$host" repo "$REPO" task "$name"; then
+        local close_wait="${WT_CLOSE_WAIT_SECONDS:-22}" i
+        [[ "$close_wait" =~ ^[0-9]+$ ]] || close_wait=22
+        for ((i=0; i<close_wait; i++)); do sleep 1; done
       fi
+      warn "worktree removed, but its Mac row or tmux session is still open"
+      warn "on the Mac: close row $(row_title "$name" "$REPO") @$host, then run: ssh $host tmux kill-session -t '=$session'"
     else
       tmux kill-session -t "=$session" 2>/dev/null || true   # the Mac owns the row
     fi
-  else close_workspace "$name"; fi
+  else close_workspace "$name" "$title"; fi
 }
 
 cmd_prune() {

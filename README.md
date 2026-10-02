@@ -189,14 +189,14 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 572 assertions over fifteen groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 592 assertions over sixteen groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar,
 including a task model passed to Claude and Codex on later launches, and how a base is pinned (`@`, `HEAD^0`,
 `--head` on a detached checkout — the spellings that would otherwise compare a
 worktree with itself), every reason `wt rm` refuses and that `--force` gets past each, that a squash-merged
 branch is not one of them while a commit made after the squash, a partial revert and a later edit to the same
 lines still are (against a bare "origin" and a second clone that plays GitHub, and once more under a `git`
-that claims to be 2.34), that `wt prune` keeps exactly what `wt rm` refuses, that a row sitting in a second cmux window is still found and still closed, and
+that claims to be 2.34), that `wt prune` keeps exactly what `wt rm` refuses, that a VM task can remove itself only after leaving its worktree, that a row sitting in a second cmux window is still found and still closed, and
 that a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its mapped
 port, on any local address, over a connection that is not from the Mac's current address, that a recovered
 row, `--reattach` included, is typed into only at a shell prompt naming `user@host` (on its own line or the
@@ -205,7 +205,7 @@ parses under `/bin/bash` (the 3.2 a fresh Mac ships), and that `bin/wt` and `bin
 field of `cmux list-windows` is a window. The last group is the odd one out: it tests `test/lib.sh`'s own
 `rm -rf`, which no real run reaches, because both suites build their scratch root with `mktemp -d` and refuse
 one inside the real home before arming the trap that calls it — and a branch nothing exercises is a branch
-nobody knows is broken. Run on a VM it makes 544: scenario 8 is about the Mac's row list, and `bin/wt` has no
+nobody knows is broken. Run on a VM it makes 561: scenario 8 is about the Mac's row list, and `bin/wt` has no
 `FORCE_OS` to lie to `is_remote()` with, so there `wt new` asks the Mac for a row over the relay and never
 consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
 assertions is the failure mode a green run hides. The SSH and cmux recovery checks use fakes; neither suite
@@ -235,7 +235,8 @@ push URL leaves github.com are all denied, including when `wt pr` would push thr
 the guard under bash 3.2.
 
 `bash test/agent-status-smoke.sh` checks the VM lifecycle relay and Mac row status handler with a fake cmux:
-Running, Idle, clear, interruption, delayed events, stale-status expiry, and quiet failure paths. It needs no VM.
+Running, Idle, clear, interruption, delayed events, stale-status expiry, and failed self-teardown cleanup.
+It needs no VM.
 On a Linux VM, `bash test/agent-status-linux-smoke.sh` checks the real process owner gate, transcript interruption,
 heartbeat state and relay timeout against scratch files and a fake cmux.
 
@@ -332,7 +333,9 @@ it only removes worktrees whose branch is merged and whose tree is clean.
 An agent asked to remove its own task first reports its work, then changes to the main checkout and runs
 `wt rm <name> -r <absolute-repo-path>`. `wt rm` still refuses if its command runs inside the worktree being
 removed. Closing its own row ends the agent session. On a VM, a task running in its own tmux session asks
-the Mac to close that row after removal; the Mac then stops the tmux session. A refusal leaves both open.
+the Mac to close that row, then stop its tmux session after removal. A refusal leaves both open.
+If the agent is still running after the Mac hook's deadline, `wt rm` warns with the row and session to close
+from the Mac. It checks that the VM row has relay configuration before removing its own worktree.
 
 "Merged" is either of two things. The branch is an ancestor of the base: a merge commit or a fast-forward.
 Or its work is all in the base without its commits being there, which is what GitHub's "squash and merge"

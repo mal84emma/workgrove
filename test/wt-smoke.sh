@@ -1242,16 +1242,26 @@ STUB
   stub_cmux alive
   WT_PATH_PREFIX="$fake" WT_CWD="$r"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SOCKET_PATH=127.0.0.1:23456" "CMUX_WORKSPACE_ID=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"
-                "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=$session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
+                "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=$session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log"
+                "WT_CLOSE_WAIT_SECONDS=0")
   printf 'unsaved\n' >"$r/.worktrees/self/scratch.txt"
   assert_wt_fails 3 "1 uncommitted change(s)" rm self -r "$r"
   assert_dir "refusal kept the worktree" "$r/.worktrees/self"
-  assert_lacks "refusal sent no row-close request" "$(cat "$CMUX_LOG")" "notify --title wt-close"
+  assert_lacks "refusal sent no row-close request" "$(cat "$CMUX_LOG")" "--title wt-close"
   guard_scratch_root "$r/.worktrees/self"; rm -f "$r/.worktrees/self/scratch.txt"
+  WT_RELAY_ENV[0]="WT_HOST="
+  printf 'unsaved again\n' >"$r/.worktrees/self/scratch.txt"
+  assert_wt_fails 3 "1 uncommitted change(s)" rm self -r "$r"
+  assert_dir "dirty refusal takes precedence over missing host" "$r/.worktrees/self"
+  guard_scratch_root "$r/.worktrees/self"; rm -f "$r/.worktrees/self/scratch.txt"
+  assert_wt_fails 1 "WT_HOST is not set" rm self -r "$r"
+  assert_dir "missing host left the worktree intact" "$r/.worktrees/self"
+  WT_RELAY_ENV[0]="WT_HOST=test-vm"
   assert_wt_ok "VM self-removal" rm self -r "$r"
   assert_gone "self-removal removed the worktree" "$r/.worktrees/self"
   assert_branch "$r" wt/self no
   assert_has "self-removal asked the Mac to close the row" "$(cat "$CMUX_LOG")" "--title wt-close"
+  assert_has "an unanswered request warns about incomplete cleanup" "$WT_OUT" "Mac row or tmux session is still open"
   assert_lacks "VM did not kill its own tmux session first" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
   WT_RELAY_ENV=() WT_PATH_PREFIX="" WT_CWD=""
   end_scenario
@@ -1339,6 +1349,17 @@ ROWS
   assert_wt_ok "wt rm removes it" rm elsewhere -r "$r"
   assert_has "…and closed the row it could not have seen before" "$(cat "$CMUX_LOG")" \
              "workspace close row-in-window-two"
+
+  # The sidecar holds the row title. Save it before removing that sidecar, or a renamed row stays open.
+  stub_cmux alive
+  assert_wt_ok "wt new custom" new custom --no-workspace -r "$r"
+  jq --arg t "$id:renamed" '.title = $t' "$r/.git/wt/custom.json" >"$r/.git/wt/custom.json.tmp"
+  mv "$r/.git/wt/custom.json.tmp" "$r/.git/wt/custom.json"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"custom-row","title":"$id:renamed","description":"@local","current_directory":"$r"}]}
+ROWS
+  assert_wt_ok "wt rm uses the saved title" rm custom -r "$r"
+  assert_has "…and closes the renamed row" "$(cat "$CMUX_LOG")" "workspace close custom-row"
 
   # A cmux that cannot be enumerated — no list-windows, or output that is not a window list — must keep the
   # single-window behaviour rather than lose the lookup altogether. stub_cmux has just reset it to that.
@@ -1892,7 +1913,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=554
+FIXED_ASSERTIONS=561
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
@@ -1901,7 +1922,7 @@ FIXED_ASSERTIONS=554
 # neither the "row belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable),
 # and scenario 4 does not assert that `wt show` prints no session: line, because there it prints one, nor
 # run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=28
+DARWIN_ASSERTIONS=31
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {

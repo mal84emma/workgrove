@@ -18,7 +18,9 @@ printf 'Host test-vm\n' > "$TEST_ROOT/home/.ssh/config"
 cat > "$TEST_ROOT/cmux" <<'CMUX'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CMUX_LOG"
+[[ -n ${CLOSE_ORDER_LOG:-} && $1 == workspace && ${2:-} == close ]] && printf '%s\n' close >> "$CLOSE_ORDER_LOG"
 [[ ${CMUX_FAIL:-} == "$1" ]] && exit 142
+[[ ${CMUX_FAIL_CLOSE:-} == 1 && $1 == workspace && ${2:-} == close ]] && exit 142
 case $1 in
   list-windows) echo 'window:1 AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' ;;
   workspace) echo '{"workspaces":[{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"repo:task","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}]}' ;;
@@ -81,13 +83,22 @@ cat > "$TEST_ROOT/ssh" <<'SSH'
 #!/bin/sh
 printf '%s\n' "$*" >> "$SSH_LOG"
 case "$*" in *' path task -r /vm/repos/repo')
+  [ "${SSH_PROBE_FAIL:-}" = 1 ] && exit 255
   [ -e "$REMOTE_TASK_EXISTS" ] && { echo '/vm/repos/repo/.worktrees/task'; exit 0; }
   echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
   exit 1 ;;
 esac
+case "$*" in *' kill-session '*) [ "${SSH_KILL_FAIL:-}" = 1 ] && exit 1 ;; esac
+case "$*" in *' kill-session '*) printf '%s\n' kill >> "$CLOSE_ORDER_LOG" ;; esac
+exit 0
 SSH
 chmod +x "$TEST_ROOT/ssh"
-export PATH="$TEST_ROOT:$PATH" SSH_LOG="$TEST_ROOT/ssh.log" REMOTE_TASK_EXISTS="$TEST_ROOT/remote-task-exists"
+cat > "$TEST_ROOT/osascript" <<'OSA'
+#!/bin/sh
+printf '%s\n' "$*" >> "$OSASCRIPT_LOG"
+OSA
+chmod +x "$TEST_ROOT/osascript"
+export PATH="$TEST_ROOT:$PATH" SSH_LOG="$TEST_ROOT/ssh.log" REMOTE_TASK_EXISTS="$TEST_ROOT/remote-task-exists" CLOSE_ORDER_LOG="$TEST_ROOT/close-order.log" OSASCRIPT_LOG="$TEST_ROOT/osascript.log"
 close_hook() {
   CMUX_NOTIFICATION_TITLE=wt-close CMUX_NOTIFICATION_SUBTITLE='' \
     CMUX_NOTIFICATION_BODY="$1" CMUX_NOTIFICATION_WORKSPACE_ID="${2:-$CMUX_WORKSPACE_ID}" \
@@ -99,19 +110,42 @@ if [[ $out == *'"record":false'* ]]; then pass; else fail 'row-close control not
 check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
 check_contains "$SSH_LOG" 'path task -r /vm/repos/repo'
 check_contains "$SSH_LOG" "test-vm exec tmux kill-session -t '=wt-repo-task'"
+assert_eq 'Mac closes row before stopping tmux' $'close\nkill' "$(cat "$CLOSE_ORDER_LOG")"
 : > "$CMUX_LOG"; : > "$SSH_LOG"
 : > "$REMOTE_TASK_EXISTS"
-close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}' >/dev/null
+out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
+if [[ $out != *'"record":false'* ]]; then pass; else fail 'live worktree rejection was hidden'; fi
 check_missing "$CMUX_LOG" 'workspace close'
 check_missing "$SSH_LOG" 'kill-session'
 rm "$REMOTE_TASK_EXISTS"
 : > "$CMUX_LOG"; : > "$SSH_LOG"
-close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"other"}' >/dev/null
+out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"other"}')
+if [[ $out != *'"record":false'* ]]; then pass; else fail 'wrong-task rejection was hidden'; fi
 check_missing "$CMUX_LOG" 'workspace close'
 check_missing "$SSH_LOG" 'kill-session'
-close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}' CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC >/dev/null
+out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}' CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC)
+if [[ $out != *'"record":false'* ]]; then pass; else fail 'foreign-row rejection was hidden'; fi
 check_missing "$CMUX_LOG" 'workspace close'
 check_missing "$SSH_LOG" 'kill-session'
+: > "$CMUX_LOG"; : > "$SSH_LOG"
+export SSH_PROBE_FAIL=1
+out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
+if [[ $out != *'"record":false'* ]]; then pass; else fail 'failed VM probe was hidden'; fi
+check_missing "$CMUX_LOG" 'workspace close'
+unset SSH_PROBE_FAIL
+: > "$CMUX_LOG"; : > "$SSH_LOG"
+export CMUX_FAIL_CLOSE=1
+out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
+if [[ $out != *'"record":false'* ]]; then pass; else fail 'failed row close was hidden'; fi
+check_missing "$SSH_LOG" 'kill-session'
+unset CMUX_FAIL_CLOSE
+: > "$CMUX_LOG"; : > "$SSH_LOG"
+export SSH_KILL_FAIL=1
+out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
+if [[ $out != *'"record":false'* ]]; then pass; else fail 'failed tmux kill was hidden'; fi
+check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
+check_contains "$OSASCRIPT_LOG" "Run: ssh test-vm tmux kill-session -t '=wt-repo-task'"
+unset SSH_KILL_FAIL
 end_scenario
 
 begin_scenario 'Mac Running, Idle, clear and event ordering'
@@ -226,4 +260,4 @@ rm -rf "$XDG_STATE_HOME/cmux-agent-status"
 WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
 if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
 end_scenario
-lib_summary 61
+lib_summary 72
