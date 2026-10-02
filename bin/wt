@@ -7,7 +7,8 @@
 # Usage:
 #   wt new  [name] [-p|--prompt TEXT] [--prompt-stdin] [-b|--base REF] [--head]
 #           [-a|--agent claude|codex|none] [-m|--model MODEL] [--no-workspace] [-r|--repo PATH]
-#                                                             create a worktree (+ a cmux row running `wt run`)
+#                                                             create a worktree (+ a cmux row running `wt run`);
+#                                                             --no-workspace leaves it ready for `wt attach`
 #   wt run  <name> [-r PATH]                                  run the worktree's agent with its brief (cmux runs this)
 #   wt list [--all] [-r PATH]                                 list worktrees (--all: every repo in $WT_REPOS_DIR)
 #   wt show <name> [--diff] [-r PATH]                         status summary; --diff also opens a cmux diff pane
@@ -40,6 +41,8 @@
 #   wt -H <host> <new|attach|list|show|rm|path|open|repos|update|help> …
 #                                                             run wt on that VM over ssh and keep the cmux row local;
 #                                                             show/rm/path/open/attach need -r;
+#                                                             new --no-workspace leaves the VM task unstarted;
+#                                                             plain attach starts it later with its saved brief;
 #                                                             attach recovers a suspended row and re-attaches when
 #                                                             its detached session and shell prompt are confirmed;
 #                                                             otherwise use --reattach; --restart-agent starts over;
@@ -1304,8 +1307,8 @@ host_new_preflight() { # read-only checks in the same non-interactive SSH enviro
   remote_sh "$host" "$cmd"
 }
 
-host_new() { # create the worktree on the VM, then the cmux row here
-  local host="$1" prompt="" repo_request="" requested_agent="" inspect="" args=(); shift
+host_new() { # create the worktree on the VM, then the cmux row here unless --no-workspace
+  local host="$1" prompt="" repo_request="" requested_agent="" inspect="" no_workspace=0 args=(); shift
   # both ways of giving a brief are consumed HERE and relayed the same way: forwarding --prompt-stdin to the
   # VM instead would read nothing locally and pipe an empty prompt into ssh, creating the task with no brief
   while [[ $# -gt 0 ]]; do case "$1" in
@@ -1314,11 +1317,14 @@ host_new() { # create the worktree on the VM, then the cmux row here
     -r|--repo) [[ $# -ge 2 ]] || die "new: $1 needs a repo"; repo_request="$2"; args+=("$1" "$2"); shift 2 ;;
     -a|--agent) [[ $# -ge 2 ]] || die "new: $1 needs an agent"; requested_agent="$2"; valid_agent "$requested_agent"; args+=("$1" "$2"); shift 2 ;;
     -m|--model) [[ $# -ge 2 ]] || die "new: $1 needs a model"; need_model "$2"; args+=("$1" "$2"); shift 2 ;;
+    --no-workspace) no_workspace=1; shift ;;
     --model=*|-m?*) die "new: unknown option $1 (use -m <model>)" ;;
     -h|--help) usage; exit 0 ;;
     *) args+=("$1"); shift ;;
   esac; done
-  cmux_ok || die "cmux is not running; start cmux before creating a task on $host"
+  if [[ $no_workspace -eq 0 ]]; then
+    cmux_ok || die "cmux is not running; start cmux before creating a task on $host"
+  fi
   host_new_preflight "$host" "$repo_request" "$requested_agent"
   inspect="wt -H $host list"
   [[ -z "$repo_request" ]] || inspect+=" -r $(shell_join "$repo_request")"
@@ -1343,6 +1349,10 @@ host_new() { # create the worktree on the VM, then the cmux row here
   session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
   [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session; the worktree may exist; inspect with: $inspect before retrying"
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$repo")" ]] || die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying"
+  if [[ $no_workspace -eq 1 ]]; then
+    printf 'start later: wt -H %s attach -r %s %s\n' "$host" "$(shell_join "$repo")" "$(shell_join "$name")"
+    return 0
+  fi
   if [[ -n "$(cmux_row_field "$(row_title "$name" "$repo")" id "$host")" ]]; then
     warn "the worktree was created on $host, but a row with this title is already open; do not run new again"
     warn "close the stale row in cmux, then recover with: wt -H $host attach --restart-agent -r $(shell_join "$repo") $(shell_join "$name")"
@@ -1535,7 +1545,7 @@ reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> — a 
   return 1
 }
 
-host_attach() { # re-attach to the VM's session; starting an agent again is never implicit
+host_attach() { # re-attach to the VM's session; start an agent only for a task never started before
   local host="$1" restart=0 reattach=0 name="" repo=""; shift
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1603,6 +1613,13 @@ host_attach() { # re-attach to the VM's session; starting an agent again is neve
       || die "row $title $(row_tag "$host") is still open; close it in cmux, then re-run: wt -H $host attach --restart-agent -r $(shell_join "$repo") $name"
     remote_row "$host" "$session" "$title" "$(remote_run_cmd "$name" "$path")" --no-focus
     return 0
+  fi
+  if [[ "$state" == none && -z "$id" ]]; then
+    # No tmux session and no started marker means this task has never run; keep lost agents deliberate.
+    if remote_sh "$host" "test ! -e $(shell_join "$path/.git/wt/$name.started") && ! tmux has-session -t $(shell_join "=$session") 2>/dev/null"; then
+      remote_row "$host" "$session" "$title" "$(remote_run_cmd "$name" "$path")" --no-focus
+      return 0
+    fi
   fi
   case "$state" in
     "agent running"|"agent running, detached") ;;

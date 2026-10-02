@@ -274,13 +274,14 @@ and, on a default run, the `set -ag update-environment` line appended to your ow
 |---|---|
 | Start a task locally | Type the brief in the cmux TextBox and press ⏎ (runs `wt new -p <brief>`). The second submit action runs Claude in the current checkout instead |
 | Start a task from a terminal | `wt new fix-auth -a codex -p "…"`, or ⌃⌥⌘N to type `wt new` into the current terminal |
+| Prepare a VM task before starting its agent | `wt -H <vm> new <name> -r <repo> -p "…" --no-workspace` creates the VM worktree and saves its brief, agent and model without a row. Add files there, then run `wt -H <vm> attach -r <repo> <name>` to open the row and start the agent |
 | Start a task anywhere | ⌃⌥⌘T opens the picker (`wt task`): where, then kind, then repo, then name, then brief |
 | Ask the driver | ⌃⌥⌘D opens the `driver` row: "start a task on `<vm>` in repo X to …". It runs `wt -H <vm> new -r X …` and reports the row |
 | See tasks | `wt list [--all]`, `wt show <name>`, `wt -H <vm> list` |
 | Look at the code | Say "show me the worktree code" (the agent runs `wt open`), or run `wt open <name>` / `wt -H <vm> open -r <repo> <name>`. This works from VM sessions too |
 | Shell on a VM | ⌃⌥⌘T → `<vm>` → `vm-shell` (row `shell`, second line `@<vm>`). A host you type that is not a configured alias is tried as-is; requests from inside that VM need a real `Host` entry |
 | Shell in a repo | ⌃⌥⌘T → where → `repo-shell` → repo (row `<repo> shell`) |
-| Re-open a VM task's row | `wt -H <vm> attach -r <repo> <name>`. It recovers a suspended row (see the row below) and reattaches tmux only when a fresh VM check shows the session detached and the row shows a recognizable task-shell prompt. Otherwise it selects the row and prints the exact `--reattach` command; inspect the row before running it. When no agent is running (it exited, or a VM restart took the session), it refuses and prints the `--restart-agent` line, which resumes Claude with `-c` |
+| Re-open a VM task's row | `wt -H <vm> attach -r <repo> <name>`. It starts a task that has never had a tmux session or `.started` marker. It recovers a suspended row (see the row below) and reattaches tmux only when a fresh VM check shows the session detached and the row shows a recognizable task-shell prompt. Otherwise it selects the row and prints the exact `--reattach` command; inspect the row before running it. When a previously started task has lost its agent, it refuses and prints the `--restart-agent` line, which resumes Claude with `-c` |
 | Reconnect after sleep or Wi-Fi loss | After sleep or a brief dropout cmux usually reconnects the row itself. A Wi-Fi network switch can leave it `[ssh:suspended]` with `Error: ssh-pty-attach: The cmux relay on <vm> did not become ready (the host may not allow SSH remote port forwarding). Automatic reconnect paused; use Reconnect to try again.` The port-forwarding warning is misleading: the old SSH session may still hold the row's fixed relay port on the VM after the Mac's IP changes, so pressing **Reconnect** cannot work until that session closes. Run `wt -H <vm> attach -r <repo> <name>`: it maps the row's daemon slot to its relay port, stops only a user-owned `sshd` (or `sshd-session`, OpenSSH 9.8+) listening on that port on any local address while the row is suspended, calls cmux's reconnect RPC for that row and waits up to 30 seconds, then checks the VM session and row screen. It refuses, signalling nothing, when that `sshd`'s connection comes from the Mac's current address, because that session may still be live, and it warns when the VM's sshd has no `ClientAliveInterval` (block 1 of [docs/new-vm.md](docs/new-vm.md) sets one). It reattaches a detached tmux session only at a recognizable task-shell prompt. Otherwise it selects the row and prints the exact `--reattach` command. Inspect the row before running that command. If recovery fails, wait for the VM to drop the old SSH session (about a minute with that keepalive), then press **Reconnect** on the row or re-run the same `attach`. If cmux instead says `remote session was lost; starting a new shell` and the connected row shows a bare shell while the VM still lists its old tmux client, use `--reattach` too. A VM reboot takes the tmux session, so use `--restart-agent` then |
 | Hand back | Report the branch. `wt pr <name>` only when you ask for it |
 | Clean up | `wt rm <name>`, `wt -H <vm> rm -r <repo> <name>`, `wt prune` |
@@ -321,6 +322,9 @@ it. If SSH fails during creation, the result is uncertain: wait and use `wt -H <
 `wt -H <host> list` for all configured repos) before retrying or choosing another host. A disconnected create
 may still be finishing when the first list runs. The checks cannot guarantee that `.wt-setup` or the agent
 itself will run successfully.
+
+With `--no-workspace`, remote `new` skips the cmux check and row creation. It prints the command to start
+the saved task later with plain `attach`.
 
 `wt rm` refuses, with exit status 3, to destroy work: uncommitted changes, commits that are neither merged
 into the base nor pushed, a file copied in through `.wt-include` that no longer matches its source
