@@ -55,13 +55,23 @@ cat >"$TEST_ROOT/remote/.local/bin/wt" <<'WT'
 case "$1" in
   repos) [ "$2" = wt-demo ] || { echo 'repo not found' >&2; exit 1; }
          printf '%s\n' "$REMOTE_REPO" ;;
-  new) cat >/dev/null
-       if [ "$REMOTE_OUTPUT_MODE" = old ]; then
+  new) if [ "$REMOTE_OUTPUT_MODE" = old ]; then
          for arg in "$@"; do
            case "$arg" in -m|--model) echo "wt: new: unknown option $arg" >&2; exit 1 ;; esac
          done
        fi
+       mkdir -p "$REMOTE_REPO/.worktrees/task" "$REMOTE_REPO/.git/wt"
+       cat >"$REMOTE_REPO/.git/wt/task.prompt"
        printf '%s\n' "$@" >"$REMOTE_NEW_MARKER.args"
+       agent=claude model=
+       while [ "$#" -gt 0 ]; do
+         case "$1" in
+           -a|--agent) agent=$2; shift ;;
+           -m|--model) model=$2; shift ;;
+         esac
+         shift
+       done
+       printf '{"agent":"%s","model":"%s"}\n' "$agent" "$model" >"$REMOTE_REPO/.git/wt/task.json"
        : >"$REMOTE_NEW_MARKER"
        [ "$REMOTE_OUTPUT_MODE" != bad ] || { echo 'created ???'; exit 0; }
        printf 'created task\n  path:   %s/.worktrees/task\n  branch: wt/task (from main)\n  repo:   %s\n  session: wt-repo-task\n' "$REMOTE_REPO" "$REMOTE_REPO" ;;
@@ -70,7 +80,8 @@ case "$1" in
         printf '  repo: %s\n  session: wt-repo-task (none)\n' "$REMOTE_REPO" ;;
 esac
 WT
-for tool in tmux claude codex; do
+printf '#!/bin/sh\n[ "$1" != has-session ]\n' >"$TEST_ROOT/remote/.local/bin/tmux"
+for tool in claude codex; do
   printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/remote/.local/bin/$tool"
 done
 chmod +x "$TEST_ROOT/local/bin/"* "$TEST_ROOT/remote/.local/bin/"*
@@ -116,13 +127,29 @@ REMOTE_DEFAULT_AGENT=claude
 run_wt missing-repo claude
 check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'repo not found'* && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'missing repo did not stop creation'
 
+# A deferred task keeps its saved choices without touching cmux; the first attach starts its saved command.
+CMUX_MODE=down
+: >"$TEST_ROOT/cmux.log"
+invoke_wt -H fakevm new task -r wt-demo -a claude -m 'opus[1m]' -p 'deferred brief' --no-workspace
+check "$([[ $WT_RC -eq 0 && -d "$TEST_ROOT/remote/repo/.worktrees/task" && "$WT_OUT" == *'start later: wt -H fakevm attach -r'* ]] && echo yes)" 'deferred remote task was not created'
+check "$([[ $(cat "$TEST_ROOT/remote/repo/.git/wt/task.prompt") == 'deferred brief' && $(jq -r .agent "$TEST_ROOT/remote/repo/.git/wt/task.json") == claude && $(jq -r .model "$TEST_ROOT/remote/repo/.git/wt/task.json") == 'opus[1m]' ]] && echo yes)" 'deferred task lost its brief, agent or model'
+check "$([[ ! -e "$TEST_ROOT/remote/repo/.git/wt/task.started" ]] && ! grep -q '^ssh ' "$TEST_ROOT/cmux.log" && echo yes)" 'deferred task started an agent or row'
+CMUX_MODE=alive
+: >"$TEST_ROOT/cmux.log"
+invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
+check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'row: repo:task @fakevm'* ]] && grep -qF 'run\ task' "$TEST_ROOT/cmux.log" && echo yes)" 'first attach did not start the saved agent command'
+: >"$TEST_ROOT/remote/repo/.git/wt/task.started"
+invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
+check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'has no agent pane (none)'* && "$WT_OUT" == *'--restart-agent'* ]] && echo yes)" 'lost started task did not require restart-agent'
+rm "$TEST_ROOT/remote/repo/.git/wt/task.started" "$TEST_ROOT/remote-new"
+
 # A row failure leaves the remote task intact and tells the caller how to recover it.
 CMUX_MODE=ssh-fail
 run_wt wt-demo claude
 check "$([[ $WT_RC -ne 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'the worktree was created'* && "$WT_OUT" == *'wt -H fakevm attach --restart-agent -r'* ]] && echo yes)" 'row failure lost recovery information'
 CMUX_MODE=alive
 invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
-check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'has no agent pane'* ]] && echo yes)" 'plain attach unexpectedly recovered a task with no agent'
+check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'row: repo:task @fakevm'* ]] && echo yes)" 'plain attach did not recover a never-started task'
 invoke_wt -H fakevm attach --restart-agent -r "$TEST_ROOT/remote/repo" task
 check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'row: repo:task @fakevm'* ]] && echo yes)" 'restart-agent did not recover after row failure'
 rm "$TEST_ROOT/remote-new"
@@ -211,4 +238,4 @@ check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task
 check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex && $(jq -r .model "$SCRATCH_REPO/.git/wt/task.json") == gpt-5.3-codex ]] && echo yes)" 'interrupted setup lost brief, agent or model choice'
 end_scenario
 
-lib_summary 22
+lib_summary 27
