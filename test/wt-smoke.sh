@@ -472,7 +472,9 @@ wt_run() {
            REMOTE_SSH_CONN="$TEST_ROOT/remote-ssh-conn" REMOTE_SSH_DROP="$TEST_ROOT/remote-ssh-drop" \
            REMOTE_SSH_NOISE="$TEST_ROOT/remote-ssh-noise" \
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
+           REMOTE_WT_SESSION="${REMOTE_WT_SESSION:-wt-project-task}" \
            REMOTE_TMUX="$TEST_ROOT/remote-tmux" REMOTE_TMUX_QUEUE="$TEST_ROOT/remote-tmux-queue" \
+           REMOTE_TMUX_DETACH_FAIL="$TEST_ROOT/remote-tmux-detach-fail" \
            "${WT_RELAY_ENV[@]}" \
            CODEX_SANDBOX="$WT_SANDBOX" WT_AGENT_ARGS="$WT_EXTRA" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
            "$WT_BASH" "$WT" "$@" 2>&1 </dev/null)" || WT_RC=$?
@@ -1443,7 +1445,7 @@ STUB
   cat >"$SCRATCH_HOME/.local/bin/wt" <<'STUB'
 #!/bin/sh
 printf 'show %s\n' "$*" >>"$REMOTE_LOG"
-printf '  repo: /vm/repos/project\n  session: wt-project-task (%s)\n' "$(cat "$REMOTE_WT_STATE")"
+printf '  repo: /vm/repos/project\n  session: %s (%s)\n' "$REMOTE_WT_SESSION" "$(cat "$REMOTE_WT_STATE")"
 STUB
   # Each has-session is one probe, answered attached, detached or missing: from the queue while it lasts,
   # then from the fixture. list-clients reports the answer that probe drew.
@@ -1461,7 +1463,11 @@ case "$1" in
     printf '%s\n' "$answer" >"$REMOTE_TMUX.drawn"
     [ "$answer" != missing ] ;;
   list-clients)
-    if [ "$(cat "$REMOTE_TMUX.drawn")" = attached ]; then echo '/dev/pts/3: wt-project-task [200x50 xterm-256color] (utf8)'; fi ;;
+    case "$*" in
+      *'-F #{client_tty}'*) if [ "$(cat "$REMOTE_TMUX")" = attached ]; then echo '/dev/pts/3'; fi ;;
+      *) if [ "$(cat "$REMOTE_TMUX.drawn")" = attached ]; then echo '/dev/pts/3: wt-project-task [200x50 xterm-256color] (utf8)'; fi ;;
+    esac ;;
+  detach-client) [ ! -f "$REMOTE_TMUX_DETACH_FAIL" ] ;;
   *) exit 1 ;;
 esac
 STUB
@@ -1515,16 +1521,63 @@ ROWS
   assert_has "only that sshd was stopped" "$(cat "$TEST_ROOT/remote-log")" 'kill -TERM 4242'
   assert_has "the row-specific reconnect was called" "$(cat "$CMUX_LOG")" 'rpc workspace.remote.reconnect {"workspace_id":"remote-row"}'
   assert_has "reconnect reached connected" "$WT_OUT" 'connected after reconnect'
-  assert_eq "a recovered agent screen is checked for a bounded five reads" 5 "$(grep -c '^read-screen --workspace remote-row$' "$CMUX_LOG" || true)"
+  assert_eq "a recovered agent screen is checked before client replacement" 6 "$(screen_reads)"
   assert_eq "a screen with no prompt never asked the VM's tmux" 0 "$(vm_probes)"
   assert_lacks "an attached agent was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
+  assert_has "a recovered attached client was replaced" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
+  assert_has "replacement keeps the attach recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
   assert_has "uncertain recovery always names the manual step" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
+
+  # The pre-reconnect show can say detached even when the restored client is attached now.
+  set_row_state suspended
+  printf 'agent running, detached\n' >"$TEST_ROOT/remote-wt-state"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "recovery uses the fresh client state" -H fakevm attach task -r /vm/repos/project
+  assert_has "a client that attached during recovery was replaced" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
+  printf 'agent running\n' >"$TEST_ROOT/remote-wt-state"
 
   # A connected row leaves the relay untouched, even when ss would name an sshd.
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "an already connected row is selected" -H fakevm attach task -r /vm/repos/project
   assert_lacks "connected row made no ss check" "$(cat "$TEST_ROOT/remote-log")" 'ss '
   assert_lacks "connected row made no reconnect call" "$(cat "$CMUX_LOG")" 'workspace.remote.reconnect'
+  assert_has "a connected attached client was replaced" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
+  assert_lacks "client replacement never typed into the row" "$(cat "$CMUX_LOG")" 'send --workspace'
+  local expected_line
+  eval "$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt")"
+  expected_line=$(tmux_cmd wt-project-task)
+  assert_has "replacement uses tmux_cmd's exact attach line" "$(cat "$TEST_ROOT/remote-log")" "tmux detach-client -t /dev/pts/3 -E $expected_line"
+
+  : >"$TEST_ROOT/remote-tmux-detach-fail"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "a failed client replacement leaves the task running" -H fakevm attach task -r /vm/repos/project
+  assert_has "replacement failure is reported" "$WT_OUT" 'could not replace wt-project-task'
+  assert_lacks "replacement failure never sent keys" "$(cat "$CMUX_LOG")" 'send --workspace'
+  rm "$TEST_ROOT/remote-tmux-detach-fail"
+
+  # A connected row can be a fresh shell while the old tmux client remains on another pty.
+  printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "a bare-shell row does not replace its stale client" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "bare-shell row left its old client alone" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
+  printf 'agent still running\n' >"$TEST_ROOT/remote-screen"
+
+  # An outdated show result is not enough to replace a client that has since detached.
+  printf 'detached\n' >"$TEST_ROOT/remote-tmux"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "a session with no client is left alone" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "no-client session had no replacement" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
+  printf 'attached\n' >"$TEST_ROOT/remote-tmux"
+
+  # A task attach cannot target the names used by shared VM and repo shell sessions.
+  local shared
+  for shared in main shell-project; do
+    REMOTE_WT_SESSION="$shared"
+    : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+    assert_wt_fails 1 'unexpected output from fakevm' -H fakevm attach task -r /vm/repos/project
+    assert_lacks "shared $shared session was not replaced" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
+  done
+  REMOTE_WT_SESSION=""
 
   # A non-sshd listener and a foreign-owned sshd both fail closed before the RPC.
   jq '(.workspaces[] | select(.id == "remote-row") | .remote.state) = "suspended"' "$WT_ROWS" >"$WT_ROWS.tmp" && mv "$WT_ROWS.tmp" "$WT_ROWS"
@@ -1662,7 +1715,7 @@ ROWS
   rm -f "$TEST_ROOT/remote-screen-count"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "recovery reaches its prompt deadline" -H fakevm attach task -r /vm/repos/project
-  assert_eq "prompt polling was bounded" 5 "$(screen_reads)"
+  assert_eq "prompt polling plus the replacement guard were bounded" 6 "$(screen_reads)"
   assert_eq "ticks with no prompt asked the VM nothing" 0 "$(vm_probes)"
   assert_lacks "late-after-deadline prompt got no send" "$(cat "$CMUX_LOG")" 'send --workspace'
   assert_has "deadline prints explicit re-attach command" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
@@ -1796,6 +1849,7 @@ ROWS
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "a connected row with a detached session is re-attached" -H fakevm attach task -r /vm/repos/project
   assert_eq "the detached session got one tmux command" 1 "$(tmux_sends)"
+  assert_lacks "a detached session was not replaced" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
   assert_eq "the detached session got one return" 1 "$(grep -c '^send-key --workspace remote-row enter$' "$CMUX_LOG" || true)"
   assert_lacks "the VM's own detached report needed no probe" "$(cat "$TEST_ROOT/remote-log")" 'tmux has-session'
   : >"$TEST_ROOT/cmux-send-fail"
@@ -1913,7 +1967,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=561
+FIXED_ASSERTIONS=582
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under

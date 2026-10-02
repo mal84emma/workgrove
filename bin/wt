@@ -47,6 +47,8 @@
 #                                                             plain attach starts it later with its saved brief;
 #                                                             attach recovers a suspended row and re-attaches when
 #                                                             its detached session and shell prompt are confirmed;
+#                                                             for an attached task row, attach restores tmux's
+#                                                             mouse, focus, paste and extended-key terminal modes;
 #                                                             otherwise use --reattach; --restart-agent starts over;
 #                                                             update asks here, so run it from a terminal
 #
@@ -1525,11 +1527,12 @@ recover_suspended_row() { # reconnect one suspended row, after freeing only its 
 ROW_SHELL_LAST=""
 row_shell_prompt() { # row_shell_prompt <id> — 0 when the row's last non-blank line ends in $, # or % and names a
                      # user@host, or is that character alone under a line that does (a two-line theme such as
-                     # workgrove's). A TUI footer such as `Context 100%` names none. ROW_SHELL_LAST is that last line
+                     # workgrove's). A TUI footer such as `Context 100%` names none. 2 means screen unavailable.
+                     # ROW_SHELL_LAST is that last line
   local id="$1" c screen lines above="" nl=$'\n' who='[[:alnum:]_.-]+@[[:alnum:]_.-]+' end='[$#%]$' bare='^[$#%]$'
   ROW_SHELL_LAST=""
-  c=$(cmux_bin) || return 1
-  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 1
+  c=$(cmux_bin) || return 2
+  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 2
   lines=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -2)
   ROW_SHELL_LAST=${lines##*"$nl"}
   [[ "$lines" != *"$nl"* ]] || above=${lines%%"$nl"*}
@@ -1572,6 +1575,27 @@ reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> — a 
     [[ $tick -eq 4 ]] || sleep 1
   done
   return 1
+}
+
+reinit_task_client() { # reinit_task_client <host> <id> <session> — restart only this task's attached tmux clients
+  local host="$1" id="$2" session="$3" line script screen_rc=0
+  [[ "$(row_remote_field "$id" state)" == connected ]] || return 2
+  row_shell_prompt "$id" || screen_rc=$?
+  [[ $screen_rc -eq 1 ]] || return 2   # skip a shell or an unreadable screen
+  line=$(tmux_cmd "$session")
+  # -E replaces the client process on its own pty. A fresh attach sends every terminal mode again;
+  # the row's shell regains its prompt if that attach fails. Never send keystrokes to the pane.
+  IFS= read -r -d '' script <<'WT_CLIENT' || :
+session=$1 line=$2
+clients=$(tmux list-clients -t "$session" -F '#{client_tty}' 2>/dev/null) || exit 1
+[ -n "$clients" ] || exit 2
+# The task row normally owns one client; -d would evict another attached client.
+[[ "$clients" != *$'\n'* ]] || exit 2
+tmux detach-client -t "$clients" -E "$line"
+WT_CLIENT
+  remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$line") <<'WT_CLIENT'
+$script
+WT_CLIENT" >/dev/null 2>&1
 }
 
 host_attach() { # re-attach to the VM's session; start an agent only for a task never started before
@@ -1665,9 +1689,19 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     what=re-attached
     send_tmux_line "$id" "$session"
   fi
+  if [[ "$what" == selected && ( "$state" == 'agent running' || ( $recovered -eq 1 && "$state" == 'agent running, detached' ) ) ]]; then
+    local reinit_rc=0
+    reinit_task_client "$host" "$id" "$session" || reinit_rc=$?
+    if [[ $reinit_rc -eq 0 ]]; then what=re-initialized
+    elif [[ $reinit_rc -ne 2 ]]; then warn "could not replace $session's tmux client on $host; inspect the row, then re-run attach if its terminal settings are missing"
+    fi
+  fi
   CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
   printf 'row: %s %s (%s)\n' "$title" "$(row_tag "$host")" "$what"
-  if [[ $recovered -eq 1 && "$what" != re-attached ]]; then
+  if [[ "$what" == re-initialized ]]; then
+    printf 'if the replacement attach fails, the row returns to its shell prompt; recover with: wt -H %s attach --reattach -r %s %s\n' "$host" "$(shell_join "$repo")" "$name"
+  fi
+  if [[ $recovered -eq 1 && "$what" == selected ]]; then
     warn "re-attach this row if it shows a bare shell: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
   fi
 }
