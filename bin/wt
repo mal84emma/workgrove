@@ -1720,7 +1720,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     else warn "did not re-attach $title; inspect the row, then use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
     fi
   fi
-  if [[ "$what" == selected && ( "$state" == 'agent running' || ( $recovered -eq 1 && "$state" == 'agent running, detached' ) ) ]]; then
+  if [[ "$what" == selected ]]; then   # a detached report can be stale by the time the row is checked
     local reinit_rc=0
     reinit_task_client "$host" "$id" "$session" || reinit_rc=$?
     if [[ $reinit_rc -eq 0 ]]; then what=re-initialized

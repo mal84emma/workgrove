@@ -1908,6 +1908,7 @@ ROWS
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "a stale detached state cannot type into an agent screen" -H fakevm attach task -r /vm/repos/project
   assert_eq "an agent screen got no tmux command" 0 "$(tmux_sends)"
+  assert_has "a client attached after show is re-initialized" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
   printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
   printf 'detached\n' >"$TEST_ROOT/remote-tmux"
   : >"$TEST_ROOT/cmux-send-fail"
@@ -2025,7 +2026,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=595
+FIXED_ASSERTIONS=596
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
