@@ -1577,23 +1577,40 @@ reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> — a 
   return 1
 }
 
-reinit_task_client() { # reinit_task_client <host> <id> <session> — restart only this task's attached tmux clients
-  local host="$1" id="$2" session="$3" line script screen_rc=0
+reinit_task_client() { # reinit_task_client <host> <id> <session> — restart this task row's attached tmux client
+  local host="$1" id="$2" session="$3" line script screen_rc=0 nonce proof screen c
   [[ "$(row_remote_field "$id" state)" == connected ]] || return 2
   row_shell_prompt "$id" || screen_rc=$?
   [[ $screen_rc -eq 1 ]] || return 2   # skip a shell or an unreadable screen
   line=$(tmux_cmd "$session")
-  # -E replaces the client process on its own pty. A fresh attach sends every terminal mode again;
-  # the row's shell regains its prompt if that attach fails. Never send keystrokes to the pane.
+  nonce="WT_REINIT_${RANDOM}_${RANDOM}_$$_$(date +%s)"
+  # A restored row may show a cached agent screen while its old client is on an abandoned pty.
+  # A fresh tmux status message proves this row is displaying that client's output; it sends no pane input.
   IFS= read -r -d '' script <<'WT_CLIENT' || :
-session=$1 line=$2
-clients=$(tmux list-clients -t "$session" -F '#{client_tty}' 2>/dev/null) || exit 1
+session=$1 nonce=$2
+clients=$(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}' 2>/dev/null) || exit 1
 [ -n "$clients" ] || exit 2
-# The task row normally owns one client; -d would evict another attached client.
-[[ "$clients" != *$'\n'* ]] || exit 2
-tmux detach-client -t "$clients" -E "$line"
+[[ "$clients" =~ ^[0-9]+[[:space:]]+/dev/pts/[0-9]+$ ]] || exit 2
+tmux display-message -d 5000 -t "$session" "$nonce" || exit 1
+printf '%s\n' "$clients"
 WT_CLIENT
-  remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$line") <<'WT_CLIENT'
+  proof=$(remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$nonce") <<'WT_CLIENT'
+$script
+WT_CLIENT" 2>/dev/null) || return $?
+  proof=${proof##*$'\n'}
+  [[ "$proof" =~ ^[0-9]+[[:space:]]+/dev/pts/[0-9]+$ ]] || return 2
+  c=$(cmux_bin) || return 1
+  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 2
+  [[ "$screen" == *"$nonce"* && "$(row_remote_field "$id" state)" == connected ]] || return 2
+  # -E replaces the client process on its own pty. A fresh attach sends every terminal mode again;
+  # the row's shell regains its prompt if that attach fails. Recheck the client after the screen proof.
+  IFS= read -r -d '' script <<'WT_CLIENT' || :
+session=$1 expected=$2 line=$3
+clients=$(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}' 2>/dev/null) || exit 1
+[[ "$clients" == "$expected" ]] || exit 2
+tmux detach-client -t "${clients#* }" -E "$line"
+WT_CLIENT
+  remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$proof" "$line") <<'WT_CLIENT'
 $script
 WT_CLIENT" >/dev/null 2>&1
 }

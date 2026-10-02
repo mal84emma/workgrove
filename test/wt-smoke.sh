@@ -381,6 +381,10 @@ if [ "$1" = read-screen ]; then
   else
     cat "$CMUX_STUB_SCREEN"
   fi
+  if [ -f "$CMUX_STUB_NONCE" ]; then
+    if [ ! -f "$CMUX_STUB_NONCE_STALE" ]; then cat "$CMUX_STUB_NONCE"; fi
+    rm -f "$CMUX_STUB_NONCE"
+  fi
   exit 0
 fi
 if [ "$1" = send ] && [ -f "$CMUX_STUB_SEND_FAIL" ]; then exit 1; fi
@@ -464,6 +468,7 @@ wt_run() {
            CMUX_STUB_WINDOWS="$WT_WINDOWS" CMUX_STUB_ROWS_DIR="$WT_ROWS_DIR" \
            CMUX_STUB_SCREEN="$TEST_ROOT/remote-screen" CMUX_STUB_SCREEN_DELAY="$TEST_ROOT/remote-screen-delay" \
            CMUX_STUB_SCREEN_COUNT="$TEST_ROOT/remote-screen-count" CMUX_STUB_SCREEN_QUEUE="$TEST_ROOT/remote-screen-queue" \
+           CMUX_STUB_NONCE="$TEST_ROOT/remote-tmux-nonce" CMUX_STUB_NONCE_STALE="$TEST_ROOT/remote-tmux-nonce-stale" \
            CMUX_STUB_STATE_AT_READ="$TEST_ROOT/remote-state-at-read" CMUX_STUB_SEND_FAIL="$TEST_ROOT/cmux-send-fail" \
            CMUX_STUB_RECONNECT_STATES="$TEST_ROOT/reconnect-states" CMUX_STUB_STATE_QUEUE="$TEST_ROOT/state-queue" \
            REMOTE_LOG="$TEST_ROOT/remote-log" \
@@ -1464,9 +1469,12 @@ case "$1" in
     [ "$answer" != missing ] ;;
   list-clients)
     case "$*" in
-      *'-F #{client_tty}'*) if [ "$(cat "$REMOTE_TMUX")" = attached ]; then echo '/dev/pts/3'; fi ;;
+      *'-F #{client_pid} #{client_tty}'*) if [ "$(cat "$REMOTE_TMUX")" = attached ]; then echo '4242 /dev/pts/3'; fi ;;
       *) if [ "$(cat "$REMOTE_TMUX.drawn")" = attached ]; then echo '/dev/pts/3: wt-project-task [200x50 xterm-256color] (utf8)'; fi ;;
     esac ;;
+  display-message)
+    for arg do nonce=$arg; done
+    printf '%s\n' "$nonce" >"$CMUX_STUB_NONCE" ;;
   detach-client) [ ! -f "$REMOTE_TMUX_DETACH_FAIL" ] ;;
   *) exit 1 ;;
 esac
@@ -1521,7 +1529,7 @@ ROWS
   assert_has "only that sshd was stopped" "$(cat "$TEST_ROOT/remote-log")" 'kill -TERM 4242'
   assert_has "the row-specific reconnect was called" "$(cat "$CMUX_LOG")" 'rpc workspace.remote.reconnect {"workspace_id":"remote-row"}'
   assert_has "reconnect reached connected" "$WT_OUT" 'connected after reconnect'
-  assert_eq "a recovered agent screen is checked before client replacement" 6 "$(screen_reads)"
+  assert_eq "a recovered agent screen is checked before client replacement" 7 "$(screen_reads)"
   assert_eq "a screen with no prompt never asked the VM's tmux" 0 "$(vm_probes)"
   assert_lacks "an attached agent was not typed into" "$(cat "$CMUX_LOG")" 'send --workspace'
   assert_has "a recovered attached client was replaced" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
@@ -1547,6 +1555,13 @@ ROWS
   eval "$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt")"
   expected_line=$(tmux_cmd wt-project-task)
   assert_has "replacement uses tmux_cmd's exact attach line" "$(cat "$TEST_ROOT/remote-log")" "tmux detach-client -t /dev/pts/3 -E $expected_line"
+
+  # The old client can still exist while cmux has opened a fresh shell but shows a cached agent screen.
+  : >"$TEST_ROOT/remote-tmux-nonce-stale"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "a stale agent screen does not prove the active client" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "stale screen never replaced the abandoned pty" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
+  rm "$TEST_ROOT/remote-tmux-nonce-stale"
 
   : >"$TEST_ROOT/remote-tmux-detach-fail"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
@@ -1967,7 +1982,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=582
+FIXED_ASSERTIONS=584
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under

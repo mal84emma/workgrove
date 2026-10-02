@@ -189,7 +189,7 @@ differs in. It was a VM that caught the suite building its fixtures at whatever 
 to be: Ubuntu's 002 made a `~/.bashrc` group-writable, which `install.sh` declines to rewrite, so a scenario
 that meant to test the rewrite tested the refusal instead, and only there. Both suites now pin `umask 022`.
 
-`bash test/wt-smoke.sh` is the other one: 592 assertions over sixteen groups against throwaway git repos, with
+`bash test/wt-smoke.sh` is the other one: 615 assertions over sixteen groups against throwaway git repos, with
 cmux stubbed out, so it needs no cmux, no network and no VM. It covers what `wt` records in a sidecar,
 including a task model passed to Claude and Codex on later launches, and how a base is pinned (`@`, `HEAD^0`,
 `--head` on a detached checkout — the spellings that would otherwise compare a
@@ -200,12 +200,13 @@ that claims to be 2.34), that `wt prune` keeps exactly what `wt rm` refuses, tha
 that a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its mapped
 port, on any local address, over a connection that is not from the Mac's current address, that a recovered
 row, `--reattach` included, is typed into only at a shell prompt naming `user@host` (on its own line or the
-one above) while the row is still connected and the VM lists no tmux client on the session, that `bin/wt`
+one above) while the row is still connected and the VM lists no tmux client on the session. Client
+replacement requires a fresh status message visible in that row. The suite also checks that `bin/wt`
 parses under `/bin/bash` (the 3.2 a fresh Mac ships), and that `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists and on which
 field of `cmux list-windows` is a window. The last group is the odd one out: it tests `test/lib.sh`'s own
 `rm -rf`, which no real run reaches, because both suites build their scratch root with `mktemp -d` and refuse
 one inside the real home before arming the trap that calls it — and a branch nothing exercises is a branch
-nobody knows is broken. Run on a VM it makes 561: scenario 8 is about the Mac's row list, and `bin/wt` has no
+nobody knows is broken. Run on a VM it makes 584: scenario 8 is about the Mac's row list, and `bin/wt` has no
 `FORCE_OS` to lie to `is_remote()` with, so there `wt new` asks the Mac for a row over the relay and never
 consults cmux at all. Both suites carry an expected-total guard, because a scenario that silently skips its
 assertions is the failure mode a green run hides. The SSH and cmux recovery checks use fakes; neither suite
