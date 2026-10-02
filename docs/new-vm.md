@@ -188,10 +188,13 @@ run `exec bash` in that pane or open a new tmux window.
   row, stops the stale listener on its relay port (a user-owned `sshd`, or `sshd-session` from OpenSSH 9.8,
   on any local address), and asks cmux to reconnect it. It refuses, and signals nothing, when that `sshd`'s
   connection comes from the Mac's current address, because that session may still be live. It reattaches
-  tmux only when a fresh VM check shows the session detached and the row shows a recognizable task-shell
-  prompt. Otherwise it selects the row and prints the exact `--reattach` command; inspect the row before
-  running it. If recovery fails, wait for the VM to drop the old SSH session (about a minute with block 1's
-  keepalive), then press **Reconnect** on the row or re-run `wt -H <vm> attach -r <repo> <name>`.
+  tmux when a fresh VM check shows the session detached and the row shows a recognizable task-shell prompt.
+  If the task's client is attached, it restores tmux's terminal settings only after a fresh tmux status
+  message appears in that connected row. If the wheel types arrow keys, or paste or Shift+Enter misbehaves,
+  run the same attach command. Otherwise it selects the row and prints the exact `--reattach` command;
+  inspect the row before running it. If recovery fails, wait for the VM to drop the old SSH session (about
+  a minute with block 1's keepalive), then press **Reconnect** on the row or re-run
+  `wt -H <vm> attach -r <repo> <name>`.
   A normal SSH reload does not end existing sessions, so block 1's keepalive setting only
   shortens future stale connections to about a minute. A VM set up before that setting existed gets it by
   pasting just block 1's keepalive lines, from its `sshd_config.d` comment to the end; they are idempotent.
