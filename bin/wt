@@ -1701,10 +1701,10 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     # The show above predates the reconnect, and a prompt-shaped footer alone says nothing about what holds
     # the pty, so this waits for a prompt and asks the VM again, just before any send.
     if reattach_recovered_row "$host" "$id" "$session"; then what=re-attached; fi
-  elif [[ "$state" == *detached ]]; then   # a row that never dropped: the VM reported no tmux client, so the row
-                                           # kept its ssh but lost the pty that held tmux
-    what=re-attached
-    send_tmux_line "$id" "$session"
+  elif [[ "$state" == *detached ]]; then   # show may be stale; prove the prompt and detached session again
+    if reattach_shell_row "$id" "$session" "$host"; then what=re-attached
+    else warn "did not re-attach $title; inspect the row, then use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
+    fi
   fi
   if [[ "$what" == selected && ( "$state" == 'agent running' || ( $recovered -eq 1 && "$state" == 'agent running, detached' ) ) ]]; then
     local reinit_rc=0

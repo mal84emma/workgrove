@@ -479,6 +479,7 @@ wt_run() {
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
            REMOTE_WT_SESSION="${REMOTE_WT_SESSION:-wt-project-task}" \
            REMOTE_TMUX="$TEST_ROOT/remote-tmux" REMOTE_TMUX_QUEUE="$TEST_ROOT/remote-tmux-queue" \
+           REMOTE_TMUX_CLIENT_QUEUE="$TEST_ROOT/remote-tmux-client-queue" \
            REMOTE_TMUX_DETACH_FAIL="$TEST_ROOT/remote-tmux-detach-fail" \
            "${WT_RELAY_ENV[@]}" \
            CODEX_SANDBOX="$WT_SANDBOX" WT_AGENT_ARGS="$WT_EXTRA" PATH="${WT_PATH_PREFIX:+$WT_PATH_PREFIX:}$FAKE_BIN:$PATH" \
@@ -1469,7 +1470,11 @@ case "$1" in
     [ "$answer" != missing ] ;;
   list-clients)
     case "$*" in
-      *'-F #{client_pid} #{client_tty}'*) if [ "$(cat "$REMOTE_TMUX")" = attached ]; then echo '4242 /dev/pts/3'; fi ;;
+      *'-F #{client_pid} #{client_tty}'*)
+        if [ -s "$REMOTE_TMUX_CLIENT_QUEUE" ]; then
+          head -1 "$REMOTE_TMUX_CLIENT_QUEUE"
+          tail -n +2 "$REMOTE_TMUX_CLIENT_QUEUE" >"$REMOTE_TMUX_CLIENT_QUEUE.tmp" && mv "$REMOTE_TMUX_CLIENT_QUEUE.tmp" "$REMOTE_TMUX_CLIENT_QUEUE"
+        elif [ "$(cat "$REMOTE_TMUX")" = attached ]; then echo '4242 /dev/pts/3'; fi ;;
       *) if [ "$(cat "$REMOTE_TMUX.drawn")" = attached ]; then echo '/dev/pts/3: wt-project-task [200x50 xterm-256color] (utf8)'; fi ;;
     esac ;;
   display-message)
@@ -1562,6 +1567,12 @@ ROWS
   assert_wt_ok "a stale agent screen does not prove the active client" -H fakevm attach task -r /vm/repos/project
   assert_lacks "stale screen never replaced the abandoned pty" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
   rm "$TEST_ROOT/remote-tmux-nonce-stale"
+
+  printf '4242 /dev/pts/3\n9999 /dev/pts/4\n' >"$TEST_ROOT/remote-tmux-client-queue"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "a client change after the screen proof is left alone" -H fakevm attach task -r /vm/repos/project
+  assert_lacks "changed client was not replaced" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
+  rm "$TEST_ROOT/remote-tmux-client-queue"
 
   : >"$TEST_ROOT/remote-tmux-detach-fail"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
@@ -1857,16 +1868,30 @@ ROWS
   assert_has "--reattach selected the row to look at" "$(cat "$CMUX_LOG")" 'workspace select remote-row'
   assert_has "--reattach names the re-run" "$WT_OUT" 're-run: wt -H fakevm attach --reattach -r /vm/repos/project task'
 
-  # A row that never dropped, whose VM reports its session detached, gets the tmux line through the same
-  # helper and no probe. A send that fails there names the line to type by hand.
+  # A row that never dropped needs the same fresh prompt and detached-session proof before any send.
   set_row_state connected
   printf 'agent running, detached\n' >"$TEST_ROOT/remote-wt-state"
+  printf 'detached\n' >"$TEST_ROOT/remote-tmux"
+  printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "a connected row with a detached session is re-attached" -H fakevm attach task -r /vm/repos/project
   assert_eq "the detached session got one tmux command" 1 "$(tmux_sends)"
   assert_lacks "a detached session was not replaced" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
   assert_eq "the detached session got one return" 1 "$(grep -c '^send-key --workspace remote-row enter$' "$CMUX_LOG" || true)"
-  assert_lacks "the VM's own detached report needed no probe" "$(cat "$TEST_ROOT/remote-log")" 'tmux has-session'
+  assert_has "the detached report was verified again" "$(cat "$TEST_ROOT/remote-log")" 'tmux has-session -t =wt-project-task'
+
+  # The client can attach after show; even a shell-looking screen then must receive no command.
+  printf 'attached\n' >"$TEST_ROOT/remote-tmux"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "stale detached state does not send to an attached client" -H fakevm attach task -r /vm/repos/project
+  assert_eq "an attached client got no tmux command" 0 "$(tmux_sends)"
+  assert_has "stale detached state names manual recovery" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
+  printf 'agent still running\n' >"$TEST_ROOT/remote-screen"
+  : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
+  assert_wt_ok "a stale detached state cannot type into an agent screen" -H fakevm attach task -r /vm/repos/project
+  assert_eq "an agent screen got no tmux command" 0 "$(tmux_sends)"
+  printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
+  printf 'detached\n' >"$TEST_ROOT/remote-tmux"
   : >"$TEST_ROOT/cmux-send-fail"
   assert_wt_fails 1 "cmux send failed for remote-row; type this in the row instead: tmux attach -d -t '=wt-project-task'" \
     -H fakevm attach task -r /vm/repos/project
@@ -1982,7 +2007,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=584
+FIXED_ASSERTIONS=591
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
