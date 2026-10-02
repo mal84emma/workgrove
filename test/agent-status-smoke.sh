@@ -21,7 +21,7 @@ printf '%s\n' "$*" >> "$CMUX_LOG"
 [[ ${CMUX_FAIL:-} == "$1" ]] && exit 142
 case $1 in
   list-windows) echo 'window:1 AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' ;;
-  workspace) echo '{"workspaces":[{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}]}' ;;
+  workspace) echo '{"workspaces":[{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"repo:task","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}]}' ;;
   set-status|clear-status|notify) echo OK ;;
 esac
 CMUX
@@ -74,6 +74,44 @@ check_contains "$CMUX_LOG" '|claude|idle|'
 status=running status_only=1 event PermissionRequest
 check_contains "$CMUX_LOG" '--title Codex --body needs approval'
 check_missing "$CMUX_LOG" '--title Codex status'
+end_scenario
+
+begin_scenario 'a VM can close only its own task row after self-removal'
+cat > "$TEST_ROOT/ssh" <<'SSH'
+#!/bin/sh
+printf '%s\n' "$*" >> "$SSH_LOG"
+case "$*" in *' path task -r /vm/repos/repo')
+  [ -e "$REMOTE_TASK_EXISTS" ] && { echo '/vm/repos/repo/.worktrees/task'; exit 0; }
+  echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
+  exit 1 ;;
+esac
+SSH
+chmod +x "$TEST_ROOT/ssh"
+export PATH="$TEST_ROOT:$PATH" SSH_LOG="$TEST_ROOT/ssh.log" REMOTE_TASK_EXISTS="$TEST_ROOT/remote-task-exists"
+close_hook() {
+  CMUX_NOTIFICATION_TITLE=wt-close CMUX_NOTIFICATION_SUBTITLE='' \
+    CMUX_NOTIFICATION_BODY="$1" CMUX_NOTIFICATION_WORKSPACE_ID="${2:-$CMUX_WORKSPACE_ID}" \
+    bash "$REPO/bin/cmux-hook" </dev/null
+}
+: > "$CMUX_LOG"
+out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
+if [[ $out == *'"record":false'* ]]; then pass; else fail 'row-close control notification was visible'; fi
+check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
+check_contains "$SSH_LOG" 'path task -r /vm/repos/repo'
+check_contains "$SSH_LOG" "test-vm exec tmux kill-session -t '=wt-repo-task'"
+: > "$CMUX_LOG"; : > "$SSH_LOG"
+: > "$REMOTE_TASK_EXISTS"
+close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}' >/dev/null
+check_missing "$CMUX_LOG" 'workspace close'
+check_missing "$SSH_LOG" 'kill-session'
+rm "$REMOTE_TASK_EXISTS"
+: > "$CMUX_LOG"; : > "$SSH_LOG"
+close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"other"}' >/dev/null
+check_missing "$CMUX_LOG" 'workspace close'
+check_missing "$SSH_LOG" 'kill-session'
+close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}' CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC >/dev/null
+check_missing "$CMUX_LOG" 'workspace close'
+check_missing "$SSH_LOG" 'kill-session'
 end_scenario
 
 begin_scenario 'Mac Running, Idle, clear and event ordering'
@@ -188,4 +226,4 @@ rm -rf "$XDG_STATE_HOME/cmux-agent-status"
 WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
 if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
 end_scenario
-lib_summary 51
+lib_summary 61

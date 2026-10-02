@@ -1223,6 +1223,40 @@ scenario_prune_agrees() {
   end_scenario
 }
 
+# A VM agent removing its own task must leave row and session cleanup to the Mac hook. Its refusal still
+# leaves both alone, and all paths here are scratch fixtures despite the simulated relay environment.
+scenario_self_rm_vm() {
+  begin_scenario "7b. a VM task can remove itself after changing to its main checkout"
+  local r fake session
+  r="$(new_repo self-rm)"
+  stub_cmux dead
+  assert_wt_ok "wt new self" new self --no-workspace -r "$r"
+  session="wt-$(basename "$r")-self"
+  fake="$TEST_ROOT/self-tmux-bin"; mkdir -p "$fake"
+  cat >"$fake/tmux" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SELF_TMUX_LOG"
+case "$1" in display-message) printf '%s\n' "$SELF_TMUX_SESSION" ;; esac
+STUB
+  chmod +x "$fake/tmux"
+  stub_cmux alive
+  WT_PATH_PREFIX="$fake" WT_CWD="$r"
+  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SOCKET_PATH=127.0.0.1:23456" "CMUX_WORKSPACE_ID=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"
+                "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=$session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
+  printf 'unsaved\n' >"$r/.worktrees/self/scratch.txt"
+  assert_wt_fails 3 "1 uncommitted change(s)" rm self -r "$r"
+  assert_dir "refusal kept the worktree" "$r/.worktrees/self"
+  assert_lacks "refusal sent no row-close request" "$(cat "$CMUX_LOG")" "notify --title wt-close"
+  guard_scratch_root "$r/.worktrees/self"; rm -f "$r/.worktrees/self/scratch.txt"
+  assert_wt_ok "VM self-removal" rm self -r "$r"
+  assert_gone "self-removal removed the worktree" "$r/.worktrees/self"
+  assert_branch "$r" wt/self no
+  assert_has "self-removal asked the Mac to close the row" "$(cat "$CMUX_LOG")" "--title wt-close"
+  assert_lacks "VM did not kill its own tmux session first" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
+  WT_RELAY_ENV=() WT_PATH_PREFIX="" WT_CWD=""
+  end_scenario
+}
+
 # 8. cmux. DARWIN-ONLY, all of it: is_remote() is true on anything that is not a Mac, and on that side
 # `wt new` asks the Mac for a row through the relay instead of talking to cmux at all, and check_identity
 # asks tmux rather than the row list. See DARWIN_ASSERTIONS.
@@ -1858,7 +1892,7 @@ expected_assertions() {
 }
 
 # Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=544
+FIXED_ASSERTIONS=554
 # The assertions that only a Mac can make, counted apart so the total is right on both platforms.
 # is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
 # lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
@@ -1884,6 +1918,7 @@ main() {
   scenario_rm_refusals
   scenario_squash_merge
   scenario_prune_agrees
+  scenario_self_rm_vm
   scenario_cmux
   scenario_host_args
   scenario_suspended_attach

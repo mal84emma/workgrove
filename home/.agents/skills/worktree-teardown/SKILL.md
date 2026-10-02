@@ -5,7 +5,7 @@ description: Safely remove task worktrees and their branches, and clean up finis
 
 # Tear down worktrees
 
-Remove only when the user asks, and check for a live agent first.
+Remove only when the user asks. Check for a live agent first; the agent in the worktree being removed is the one exception when it is carrying out the user's teardown request.
 
 ```bash
 wt show <name>                       # row:, dirty files, commits vs base (pushed state is checked by
@@ -14,7 +14,7 @@ wt -H <vm> show -r <repo> <name>     # VM: also "session: wt-<repo>-<name> (agen
                                      # with ", detached" appended when no tmux client is attached
 ```
 
-An agent still running means: do not remove. Ask the user to finish or stop it first.
+If another agent is still running there, do not remove it. Ask the user to finish or stop that agent first. Your own session may remove its worktree when the user asks.
 
 ```bash
 wt rm <name>                         # removes worktree, its wt/<name> branch, sidecar and cmux row
@@ -25,6 +25,16 @@ wt -H <vm> rm -r <repo> <name>       # the same on a VM: worktree, branch, row, 
 wt prune --dry-run                   # list worktrees whose branch is merged into base and whose tree is clean
 wt prune                             # remove those
 ```
+
+## Removing your own worktree
+
+Inspect it with `wt show <name>` first. Tell the user the branch, commits, test results, and what will be removed **before** the final command: removing your own cmux row ends this agent session. Take the absolute `repo:` path from `wt show`, then run the following as one shell command so `wt rm` starts from that main checkout. Changing directory for this command is the exception to `worktree-work`'s stay-inside rule; do no task edits there.
+
+```bash
+cd <absolute-repo-path> && wt rm <name> -r <absolute-repo-path>
+```
+
+On a VM, run that command on the VM, not through `wt -H`. After removal, `wt` asks the Mac to close this row; the Mac then stops its tmux session. The tool call or agent may be cut off as the row closes, so give the user the summary first. If `wt rm` refuses, the row stays open: report the reason and leave the worktree. If it reports that the Mac row was not closed, tell the user to close that row and its tmux session from the Mac.
 
 ## Safety contract (enforced by `wt rm`, exit code 3 on refusal)
 
@@ -37,6 +47,6 @@ wt prune                             # remove those
 1. **Check liveness, then inspect.** `wt show <name>` (or `wt -H <vm> show -r <repo> <name>`) before anything, and tell the user what would be lost.
 2. **Never pass `--force` or `--discard-commits` on your own initiative.** Use either only when the user has explicitly said to discard that worktree's work in this conversation. If `wt rm` refuses, report the reason and offer: report the branch and leave it, `--keep-branch`, discarding the commits alone with `--discard-commits` (when the refusal is only about commits — a squash the base then edited or reverted — the other checks still run), or discarding everything with `--force`. `wt pr <name>` only if the user asks for a PR.
 3. **Never remove a worktree the user has not asked you to remove**, including ones you created yourself.
-4. **Cannot run from inside the worktree being removed**; `cd` to the main checkout first (its path is in `wt list`).
+4. **Run `wt rm` outside the worktree being removed.** For your own task, change to the main checkout just for the teardown command as shown above.
 5. `wt prune` is safe by construction (merged + clean only) and can be run when the user asks to "clean up".
 6. If a worktree directory was deleted by hand, `git worktree prune` inside the repo (`wt prune` runs it) fixes the stale registration.

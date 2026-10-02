@@ -24,6 +24,8 @@
 #                                                             that branch, an edited or newly created .wt-include file
 #                                                             — unless --force; --discard-commits waives the commit
 #                                                             reason alone (a squash the base later edited or reverted)
+#                                                             from its own VM tmux session, asks the Mac to close its row
+#                                                             and stop that session after removal
 #   wt prune [--dry-run]                                      remove worktrees whose branch is merged (either way) and
 #                                                             tree is clean
 #   wt repos [<name>] [--porcelain|--table]                   every git repo in $WT_REPOS_DIR: on a terminal a table of
@@ -1066,9 +1068,18 @@ cmd_rm() {
   fi
   rm -f "$(wt_meta "$name")" "$(wt_prompt "$name")" "$(wt_started "$name")"
   git -C "$REPO" worktree prune
-  if is_remote; then tmux kill-session -t "=$(wt_session "$name" "$REPO")" 2>/dev/null || true   # the Mac owns the row
-  else close_workspace "$name"; fi
   printf 'removed %s%s\n' "$name" "$([[ $keep -eq 1 ]] && echo " (branch $B kept)")"
+  if is_remote; then
+    local session; session=$(wt_session "$name" "$REPO")
+    if [[ -n ${TMUX:-} && "$(tmux display-message -p '#S' 2>/dev/null || true)" == "$session" ]]; then
+      # Closing this session here would kill the agent before its Mac row can be closed.
+      if ! hook_ok_repo || ! notify_mac wt-close host "$(wt_host)" repo "$REPO" task "$name"; then
+        warn "worktree removed, but its Mac row was not closed; close the row and tmux session from the Mac"
+      fi
+    else
+      tmux kill-session -t "=$session" 2>/dev/null || true   # the Mac owns the row
+    fi
+  else close_workspace "$name"; fi
 }
 
 cmd_prune() {

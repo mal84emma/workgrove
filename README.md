@@ -329,6 +329,11 @@ an older `wt` holding the literal `HEAD`, which resolves to the worktree's own t
 count read as nothing to lose. It names what blocked it. `--force` overrides. `wt prune` is stricter still:
 it only removes worktrees whose branch is merged and whose tree is clean.
 
+An agent asked to remove its own task first reports its work, then changes to the main checkout and runs
+`wt rm <name> -r <absolute-repo-path>`. `wt rm` still refuses if its command runs inside the worktree being
+removed. Closing its own row ends the agent session. On a VM, a task running in its own tmux session asks
+the Mac to close that row after removal; the Mac then stops the tmux session. A refusal leaves both open.
+
 "Merged" is either of two things. The branch is an ancestor of the base: a merge commit or a fast-forward.
 Or its work is all in the base without its commits being there, which is what GitHub's "squash and merge"
 leaves — one new commit on `main` carrying the whole diff, the head branch deleted — and equally what a
