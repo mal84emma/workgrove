@@ -1,7 +1,7 @@
-# Everything from here down to the `### !!! previous zsh config` marker is the stock oh-my-zsh .zshrc
-# template (https://github.com/ohmyzsh/ohmyzsh, MIT), with the theme and plugin lines filled in. It is kept
-# close to stock so that an upstream change to the template is easy to diff in; the configuration specific
-# to this setup starts at that marker.
+# From here down to the `### !!! previous zsh config` marker, this file is the stock oh-my-zsh .zshrc
+# template (https://github.com/ohmyzsh/ohmyzsh, MIT). This copy fills in the theme and plugin lines.
+# This part stays close to stock, so that an upstream change to the template is easy to diff in. The
+# configuration that is specific to this setup starts at that marker.
 
 # If you come from bash you might have to change your $PATH.
 # export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$PATH
@@ -121,8 +121,8 @@ source $ZSH/oh-my-zsh.sh
 
 ### !!! previous zsh config
 
-# put a new line before every command except the first: this body runs once, at the first prompt, and its
-# only effect is to redefine precmd as the inner one, which every prompt after that runs instead.
+# Put a new line before every command except the first. This outer body runs once, at the first prompt.
+# Its only effect is to redefine precmd as the inner function, which every later prompt runs instead.
 precmd() {
     precmd() {
         echo
@@ -131,22 +131,23 @@ precmd() {
 
 case "$(uname -s)" in
   Darwin)
-    # add homebrew to path
+    # Add Homebrew to PATH.
     export PATH="/opt/homebrew/bin:$PATH"
     ;;
 esac
 
-# load fuzzy find
+# Load fzf (fuzzy find).
 if command -v fzf >/dev/null 2>&1; then
   source <(fzf --zsh)
 fi
 
-# activate mise managed tools — keep after other PATH managers
+# Activate the tools that mise manages. Keep this after the other PATH managers.
 if command -v mise >/dev/null 2>&1; then
   eval "$(mise activate zsh)"
 fi
 
-# Machine-local additions: personal aliases, tools, paths (never versioned).
+# Machine-local additions (personal aliases, tools, and paths) go in ~/.zshrc.local,
+# which is never versioned.
 if [ -f "$HOME/.zshrc.local" ]; then
   . "$HOME/.zshrc.local"
 fi

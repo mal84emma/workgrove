@@ -1,31 +1,33 @@
 # shellcheck shell=bash
 #
-# test/lib.sh: the assertion vocabulary test/install-smoke.sh and test/wt-smoke.sh both speak.
-# Sourced, never run, and it sets no shell options — the suite that sources it owns those.
+# test/lib.sh: the assertion vocabulary that test/install-smoke.sh and test/wt-smoke.sh both use.
+# A suite sources this file; nothing runs it directly. It sets no shell options, because the suite that
+# sources it owns those.
 #
-# Why it exists: this vocabulary was written once, inside install-smoke.sh, and wt-smoke.sh was about to
-# make a second copy of it. A counter incremented in two files drifts, and an assert_eq fixed in one file
-# and not the other is worse than no assert_eq at all — so the two suites share one body and each keeps
-# only the fixtures and helpers that are actually its own.
+# Why it exists: this vocabulary was first written inside install-smoke.sh, and wt-smoke.sh was about to
+# make a second copy of it. A counter that two files increment drifts. An assert_eq that is fixed in one
+# file but not in the other is worse than no assert_eq. So the two suites share one body, and each suite
+# keeps only the fixtures and helpers that are its own.
 #
-# Nothing here is installed anywhere. install.sh links home/, bin/ and the skills and never looks at test/,
-# and remove_retired_links only ever walks directories under $HOME (see its `dirs` list), so a new file in
-# test/ is invisible to both: adding this one cannot change what a machine gets or what a rerun retires.
+# Nothing here is installed: install.sh links home/, bin/ and the skills, and never looks at test/.
+# remove_retired_links walks only directories under $HOME (see its `dirs` list). So neither install.sh nor
+# remove_retired_links sees a new file in test/. Adding this file therefore cannot change what a machine
+# gets or what a rerun retires.
 #
 # What a caller sets before the first call:
-#   REPO             the workgrove checkout root — assert_link compares link targets against it
-#   TEST_ROOT        this run's scratch directory — lib_cleanup is what removes it, and a suite owns
-#                    checking that it is somewhere safe: lib_cleanup only refuses the roots that could
-#                    never be one ("/", the home directory, or any ancestor of it)
-#   KEEP_LABEL       what lib_cleanup calls what it keeps ("scratch homes", "scratch repos")
-#   LIB_BASE_LABEL   optional: how the <base> half of a <base> <rel> pair reads in a failure message.
-#                    install-smoke.sh sets "~", because every base it passes IS a scratch HOME and "~/.zshrc"
-#                    is how that file is spoken about; left unset, the real base path is printed, which is
-#                    what a suite whose bases are repositories rather than homes wants.
+#   REPO             the workgrove checkout root. assert_link compares link targets with it.
+#   TEST_ROOT        this run's scratch directory, which lib_cleanup removes. lib_cleanup refuses only the
+#                    roots that can never be safe ("/", the home directory, or any ancestor of it). So the
+#                    suite must check that its root is in a safe place.
+#   KEEP_LABEL       the name that lib_cleanup gives to what it keeps ("scratch homes", "scratch repos").
+#   LIB_BASE_LABEL   optional: how the <base> part of a <base> <rel> pair reads in a failure message.
+#                    install-smoke.sh sets "~", because every base it passes IS a scratch HOME, and
+#                    "~/.zshrc" is the usual name of that file. When LIB_BASE_LABEL is unset, lib_label
+#                    prints the real base path. A suite whose bases are repositories, not homes, wants that.
 #
-# Assertions are silent when they hold and loud when they do not. They never return non-zero for a failed
-# assertion — a suite under `set -e` would exit at the first one and report nothing about the rest — so a
-# caller that needs to branch on the result checks the thing itself.
+# Assertions are silent when they hold and loud when they fail. A failed assertion never returns non-zero,
+# because a suite under `set -e` would then exit at the first failure and report nothing about the rest.
+# So a caller that must branch on the result checks the condition itself.
 
 PASS=0
 FAIL=0
@@ -37,7 +39,7 @@ lib_label() {
   printf '%s/%s' "${LIB_BASE_LABEL:-$1}" "$2"
 }
 
-# describe <path>: what is actually there, for a failure message that names found as well as expected.
+# describe <path>: what is at <path>. A failure message shows it next to what the assertion expected.
 describe() {
   if [[ -L "$1" ]]; then
     echo "a symlink -> $(readlink "$1")"
@@ -75,7 +77,7 @@ assert_link() {
   pass
 }
 
-# assert_absent <base> <rel>: nothing there at all, not even a dangling link.
+# assert_absent <base> <rel>: nothing is at base/rel, not even a dangling link.
 assert_absent() {
   local p="$1/$2"
   if [[ -e "$p" || -L "$p" ]]; then
@@ -85,7 +87,8 @@ assert_absent() {
   pass
 }
 
-# assert_regular <base> <rel>: a real file, not a symlink — the shape a stranger's own dotfile must keep.
+# assert_regular <base> <rel>: base/rel is a regular file, not a symlink. A stranger's own dotfile must
+# keep this shape.
 assert_regular() {
   local p="$1/$2"
   if [[ -L "$p" || ! -f "$p" ]]; then
@@ -95,7 +98,8 @@ assert_regular() {
   pass
 }
 
-# assert_not_link <base> <rel>: weaker than assert_absent, for a path a fallback legitimately creates.
+# assert_not_link <base> <rel>: base/rel is not a symlink. It is weaker than assert_absent, for a path
+# that a fallback is allowed to create.
 assert_not_link() {
   local p="$1/$2"
   if [[ -L "$p" ]]; then
@@ -113,7 +117,7 @@ assert_eq() {   # <what> <expected> <actual>
   pass
 }
 
-# assert_grep <what> <file> <fixed string>: the file still carries a line the user wrote.
+# assert_grep <what> <file> <fixed string>: the file still contains a line that the user wrote.
 assert_grep() {
   if [[ ! -f "$2" ]]; then
     fail "$1: expected '$3' in $2, but $2 is $(describe "$2")"
@@ -139,18 +143,19 @@ end_scenario() {
   fi
 }
 
-# lib_cleanup: the EXIT trap both suites install. KEEP=1 keeps the scratch tree for inspection, and so does
-# any failure — a failed assertion is exactly when you want to look at what was left behind.
+# lib_cleanup: the EXIT trap that both suites install. KEEP=1 keeps the scratch tree for inspection. Any
+# failure also keeps it, because a failed assertion is when you most want to examine what was left behind.
 #
-# The `rm -rf` is the one destructive line in this file, and the only path a suite reaches without passing
-# through a guard of its own: both suites build $TEST_ROOT with `mktemp -d`, resolve it with `pwd -P` and
-# refuse a root inside the real home BEFORE arming this trap, and every fixture path they touch afterwards
-# goes through their own guard_scratch_root. None of that is visible from here, and this file is written to
-# be sourced by a suite that does not exist yet, so the paths that can only ever be a mistake are refused
-# here too: "/", the home directory itself, and any ancestor of it. A root that cannot be resolved at all is
-# left alone rather than guessed at. This is a backstop, not the check — a suite still owns validating its
-# own root, because "not obviously catastrophic" is a much weaker promise than "inside this run's scratch
-# root", which is the one the suites make.
+# The `rm -rf` is the only destructive line in this file. It is also the only path that a suite reaches
+# without a guard of its own. Both suites make $TEST_ROOT with `mktemp -d`, resolve it with `pwd -P`, and
+# refuse a root inside the real home BEFORE they arm this trap. After that, every fixture path that they
+# touch goes through their own guard_scratch_root.
+#
+# This file cannot see any of that, and it is written for suites that do not exist yet. So lib_cleanup
+# also refuses the paths that can only be a mistake: "/", the home directory itself, and any ancestor of
+# it. If a root cannot be resolved, lib_cleanup leaves it alone and does not guess. This is a backstop,
+# not the check. A suite must still validate its own root, because "not obviously catastrophic" is a much
+# weaker promise than "inside this run's scratch root". The suites make the second promise.
 lib_cleanup() {
   [[ -n "${TEST_ROOT:-}" ]] || return 0
   if [[ -n "${KEEP:-}" || $FAIL -gt 0 ]]; then
@@ -171,10 +176,10 @@ lib_cleanup() {
   rm -rf "$root"
 }
 
-# lib_summary <expected assertions>: the count line, and the check that catches the failure mode a pass/fail
-# count cannot see — a scenario that stops asserting rather than starts failing. One mutation quietly took
-# install-smoke.sh from 323 assertions to 318 that way, with every scenario still green. Exits non-zero on
-# either kind of failure, so it is the last thing a suite's main() runs.
+# lib_summary <expected assertions>: prints the count line. It also catches the failure mode that a
+# pass/fail count cannot see: a scenario that stops asserting, instead of starting to fail. One mutation
+# silently took install-smoke.sh from 323 assertions to 318 that way, and every scenario stayed green. On
+# either kind of failure, lib_summary exits non-zero, so it is the last thing that a suite's main() runs.
 lib_summary() {
   echo "$((PASS + FAIL)) assertions: $PASS passed, $FAIL failed"
   if [[ $((PASS + FAIL)) -ne $1 ]]; then

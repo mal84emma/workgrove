@@ -1,80 +1,91 @@
 #!/usr/bin/env bash
-# wt — task worktrees for coding agents (git worktree + cmux workspace + VS Code on demand).
+# wt — task worktrees for coding agents (git worktree + cmux row + VS Code on demand).
 #
-# One task = one worktree at <repo>/.worktrees/<name> on branch wt/<name>.
+# One task is one worktree at <repo>/.worktrees/<name> on branch wt/<name>.
 # Every command is safe to run from the main checkout or from inside any worktree.
 #
 # Usage:
 #   wt new  [name] [-p|--prompt TEXT] [--prompt-stdin] [-b|--base REF] [--head]
 #           [-a|--agent claude|codex|none] [-m|--model MODEL] [--no-workspace] [-r|--repo PATH]
-#                                                             create a worktree (+ a cmux row running `wt run`);
-#                                                             --no-workspace leaves it ready for `wt attach`
+#                                                             create a worktree and a cmux row that runs `wt run`.
+#                                                             --no-workspace leaves the worktree ready for `wt attach`
 #   wt run  <name> [-r PATH]                                  run the worktree's agent with its brief (cmux runs this)
 #   wt list [--all] [-r PATH]                                 list worktrees (--all: every repo in $WT_REPOS_DIR)
-#   wt show <name> [--diff] [-r PATH]                         status summary; --diff also opens a cmux diff pane
+#   wt show <name> [--diff] [-r PATH]                         show a status summary. --diff also opens a cmux diff pane
 #   wt open [name] [-r PATH]                                  open a worktree in VS Code (default: the one you are in)
 #   wt diff <name>                                            = wt show <name> --diff
 #   wt attach <name> [-a AGENT] [-p TEXT] [-r PATH]           open a cmux row for an existing worktree
 #   wt sync <name> [--merge]                                  rebase (default) or merge the worktree branch onto its base
-#   wt pr <name> [--draft]                                    push the branch and open a GitHub PR (gh)
+#   wt pr <name> [--draft]                                    push the branch and open a GitHub pull request (with gh)
 #   wt rm <name> [--force] [--keep-branch] [--discard-commits]
-#                                                             remove a worktree; refuses to destroy work — uncommitted
-#                                                             changes, commits on the branch that are neither merged
-#                                                             (as ancestors, or as a squash merge whose changes are all
-#                                                             in the base) nor still on a remote, a HEAD that is not
-#                                                             that branch, an edited or newly created .wt-include file
-#                                                             — unless --force; --discard-commits waives the commit
-#                                                             reason alone (a squash the base later edited or reverted)
-#                                                             from its own VM tmux session, asks the Mac to close its row
-#                                                             and stop that session after removal
-#   wt prune [--dry-run]                                      remove worktrees whose branch is merged (either way) and
-#                                                             tree is clean
-#   wt repos [<name>] [--porcelain|--table]                   every git repo in $WT_REPOS_DIR: on a terminal a table of
-#                                                             name, task count and location; piped, "<name><tab><path>"
-#                                                             per repo. Given a name or path, just that repo's path
+#                                                             remove a worktree. To protect work, rm refuses if it finds
+#                                                             any of these:
+#                                                             - uncommitted changes
+#                                                             - commits on the branch that are not merged and are not
+#                                                               still on a remote. "Merged" means an ancestor of the
+#                                                               base, or a squash merge whose changes are all in the base
+#                                                             - a HEAD that is not that branch
+#                                                             - an edited or newly created .wt-include file
+#                                                             --force waives all of these refusals.
+#                                                             --discard-commits waives only the commit refusal
+#                                                             (for a squash that the base later edited or reverted).
+#                                                             When rm runs in the task's own VM tmux session, it asks
+#                                                             the Mac to close the task's row and to stop that session
+#                                                             after removal
+#   wt prune [--dry-run]                                      remove worktrees whose branch is merged (by ancestry or
+#                                                             as a squash) and whose tree is clean
+#   wt repos [<name>] [--porcelain|--table]                   list every git repo in $WT_REPOS_DIR.
+#                                                             On a terminal: a table of name, task count and location.
+#                                                             Piped: "<name><tab><path>" per repo.
+#                                                             With a name or path: print only that repo's path
 #   wt hosts [--json]                                         probe SSH aliases for reachability, CPU, RAM and GPUs
 #   wt task [--where local|<host>] [-a claude|codex|repo-shell|vm-shell] [-r REPO] [-p TEXT]
-#                                                             pick where/kind/repo/name/brief, then start it (Mac, needs fzf)
+#                                                             the task picker: choose where, kind, repo, name and brief,
+#                                                             then start the task (on the Mac; needs fzf)
 #   wt driver                                                 open (or select) the driver row (@local)
-#   wt update [--refresh-config]                              show what git pull would bring in, then, once you confirm,
-#                                                             pull this repo and re-run install.sh
+#   wt update [--refresh-config]                              show what git pull would bring in. After you confirm,
+#                                                             wt pulls this repo and re-runs install.sh
 #   wt path <name> [-r PATH] | wt current | wt help
 #
 #   wt -H <host> <new|attach|list|show|rm|path|open|repos|update|help> …
-#                                                             run wt on that VM over ssh and keep the cmux row local;
-#                                                             show/rm/path/open/attach need -r;
-#                                                             new --no-workspace leaves the VM task unstarted;
-#                                                             plain attach starts it later with its saved brief;
-#                                                             attach recovers a suspended row and re-attaches when
-#                                                             its detached session and shell prompt are confirmed;
-#                                                             for an attached task row, attach restores tmux's
-#                                                             mouse, focus, paste and extended-key terminal modes;
-#                                                             otherwise use --reattach; --restart-agent starts over;
-#                                                             update asks here, so run it from a terminal
+#                                                             run wt on that VM over ssh. The cmux row stays local.
+#                                                             show, rm, path, open and attach need -r.
+#                                                             new --no-workspace leaves the VM task unstarted.
+#                                                             A plain attach starts it later with its saved brief.
+#                                                             attach recovers a suspended row. It reattaches when it
+#                                                             confirms the task's detached tmux session and the row's
+#                                                             shell prompt.
+#                                                             For an attached task row, attach restores tmux's mouse,
+#                                                             focus, paste and extended-key terminal modes.
+#                                                             Otherwise, use --reattach.
+#                                                             --restart-agent starts over.
+#                                                             update asks you to confirm here, so run it from a terminal
 #
-# Where it runs: on a Mac wt drives cmux directly; on a VM (see is_remote) it only prepares worktrees and
-# asks the Mac for rows and VS Code windows through `cmux notify` over the relay socket. A VM task's row is a
-# plain `cmux ssh` row whose shell runs tmux_cmd: it creates or takes over that task's tmux session.
+# Where it runs: on the Mac, wt drives cmux directly. On a VM (see is_remote), wt only prepares worktrees and
+# asks the Mac for rows and VS Code windows. It sends these requests through `cmux notify` over the relay socket.
+# A VM task's row is a plain `cmux ssh` row whose shell runs tmux_cmd, which creates or takes over that task's
+# tmux session.
 #
-# Identity: cmux row titled "<repo>:<name>" with "@local"/"@<host>" as its description (the sidebar's second
-# line), tmux session "wt-<repo>-<name>", <repo> = repo basename
-# with anything outside [A-Za-z0-9-] replaced by '-'. Task names: ^[a-z0-9][a-z0-9_-]{0,62}$ (no '.').
+# Identity: the cmux row is titled "<repo>:<name>". Its description (the sidebar's second line) is "@local" or
+# "@<host>". The tmux session is "wt-<repo>-<name>". <repo> is the repo basename, with each character outside
+# [A-Za-z0-9-] replaced by '-'. Task names match ^[a-z0-9][a-z0-9_-]{0,62}$ (no '.').
 #
 # Task files (never committed): <repo>/.git/wt/<name>.json    base, created, agent, model, title, session, includes
-#                               <repo>/.git/wt/<name>.prompt  the brief, passed to the agent by `wt run`
-#                               <repo>/.git/wt/<name>.started marker: Claude resumes with -c after this exists
+#                               <repo>/.git/wt/<name>.prompt  the brief, which `wt run` passes to the agent
+#                               <repo>/.git/wt/<name>.started marker: once it exists, Claude resumes with -c
 #
 # Environment / git config:
-#   WT_REPOS_DIR        ':'-separated folders `wt list --all`, `wt repos` and `wt new -r <name>` search, in order,
-#                       for repos; a name found in two of them must be given as a path (default ~/Documents/Repositories)
-#   WT_HOST             on a VM: this machine's alias in the Mac's ~/.ssh/config (set by install.sh in ~/.zshenv.local)
+#   WT_REPOS_DIR        ':'-separated folders that `wt list --all`, `wt repos` and `wt new -r <name>` search for
+#                       repos, in order (default ~/Documents/Repositories). If a repo name is in two of these
+#                       folders, give that repo as a path
+#   WT_HOST             on a VM: this VM's alias in the Mac's ~/.ssh/config (install.sh sets it in ~/.zshenv.local)
 #   WT_AGENT            default agent for `wt new`                                              (default claude)
-#   WT_AGENT_ARGS       extra agent args; a task's -m model overrides model options and Claude's fallback here
+#   WT_AGENT_ARGS       extra agent args. A task's -m model overrides the model options and Claude's --fallback-model here
 #   git config wt.dir   per-repo override of the worktree folder name                           (default .worktrees)
 #
 # Per-repo hooks:
-#   .wt-include         gitignore-style patterns of *ignored* files to copy into each new worktree (.env etc.)
-#   .wt-setup           executable run inside each new worktree after creation (install deps, etc.)
+#   .wt-include         gitignore-style patterns of *ignored* files to copy into each new worktree (.env and similar)
+#   .wt-setup           an executable that runs inside each new worktree after creation (for example, to install deps)
 set -euo pipefail
 
 REPOS_PATH="${WT_REPOS_DIR:-$HOME/Documents/Repositories}"   # ':'-separated, searched in order (see repos_entries)
@@ -87,12 +98,13 @@ have() { command -v "$1" >/dev/null 2>&1; }
 usage() { awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; }
 shell_join() { local out="" a; for a in "$@"; do printf -v a '%q' "$a"; out="${out:+$out }$a"; done; printf '%s' "$out"; }
 
-# The EXIT trap. meta_set builds each sidecar in a temp file beside the real one and moves it into place, so
-# a signal arriving between the two would leave <name>.json.new.<pid> in .git/wt for good: list_names reads
-# `git worktree list` and never that directory, and cmd_rm removes only the .json, .prompt and .started, so
-# nothing else in this file would ever see it again. An EXIT trap runs on SIGINT and SIGTERM too, which is
-# when this matters. Nothing here uses exec, so the trap is always reached; the exec's in this file are all
-# inside command strings sent to a VM, where they belong to that shell and not to this one.
+# The EXIT trap. meta_set builds each sidecar in a temp file beside the real one, then moves it into place.
+# A signal between these two steps would leave <name>.json.new.<pid> in .git/wt permanently. In this file,
+# list_names reads `git worktree list` and never that directory, and cmd_rm removes only the .json, .prompt
+# and .started files. So nothing else in this file would ever see the temp file again. An EXIT trap also
+# runs on SIGINT and SIGTERM, which is when this matters. No code here uses exec, so the shell always
+# reaches the trap. Each exec in this file is inside a command string sent to a VM, so it belongs to the
+# VM's shell, not to this one.
 WT_TMPFILES=()
 wt_cleanup() {
   if [[ -n ${WT_STATUS_FILE:-} && -n ${WT_STATUS_HEARTBEAT_PID:-} ]]; then
@@ -117,8 +129,9 @@ cmux_bin() {
 cmux_ok() { local c; c=$(cmux_bin) || return 1; CMUX_QUIET=1 "$c" ping >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------- which side of the ssh we are on
-# A cmux remote pane, a cmux relay socket, or simply not a Mac: then this machine hosts worktrees and the
-# Mac drives cmux. CMUX_SURFACE_ID is cleared inside remote tmux panes by design — never test it.
+# In a cmux remote pane, with a cmux relay socket, or on a machine that is not a Mac, is_remote is true.
+# Then this machine hosts the worktrees and the Mac drives cmux. CMUX_SURFACE_ID is cleared inside remote
+# tmux panes by design, so never test it.
 is_remote() { [[ -n ${CMUX_SSH_ATTEMPT_ID:-} ]] || [[ ${CMUX_SOCKET_PATH:-} == *:[0-9]* ]] || [[ $(uname -s) != Darwin ]]; }
 mac_only()  { if is_remote; then die "wt $1: run this on the Mac"; fi; }
 
@@ -129,12 +142,13 @@ wt_host() { # this VM's alias in the Mac's ~/.ssh/config
   printf '%s' "$WT_HOST"
 }
 
-# How to reach the Mac's cmux: the identity of this pane, overridden by the tmux session environment (cmux
-# rebinds it there on every attach, which ~/.tmux.conf's update-environment line is what carries). All six,
-# because cmux authorises a relayed request against the SURFACE and the WORKSPACE it reads from the
-# environment — a pane holding the ids of the connection that started it is refused after cmux reconnects the
-# row, with remote_relay_surface_denied. A pane's own environment is never rewritten, only the session's, so
-# these are re-read at call time and handed to the cmux child explicitly rather than inherited.
+# How to reach the Mac's cmux: use the identity of this pane, but let the tmux session environment override
+# it. On every attach, cmux rebinds the identity in the session environment, and ~/.tmux.conf's
+# update-environment line is what carries it there. Read all six variables, because cmux authorizes a
+# relayed request against the SURFACE and the WORKSPACE in the environment. After cmux reconnects the row,
+# it refuses, with remote_relay_surface_denied, a pane that holds the ids of the connection that started
+# the pane. Only the session's environment is rewritten, never a pane's own. So re-read these at call time
+# and hand them to the cmux child explicitly; do not let it inherit them.
 # bin/agent-notify uses the same precedence over the same list.
 RELAY_VARS="CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID"
 RELAY_SOCKET=""; RELAY_WS=""; RELAY_IDENT=()
@@ -158,7 +172,7 @@ relay_env() { # sets RELAY_SOCKET, RELAY_WS and RELAY_IDENT; non-zero when this 
   [[ "$RELAY_SOCKET" == *:[0-9]* ]]
 }
 
-# Mirrors safe_path in bin/cmux-hook: the Mac hook drops anything else, so never relay such a path.
+# Mirrors safe_path in bin/cmux-hook. The Mac hook drops any other path, so never relay a path that fails this.
 hook_safe_path() { [[ "$1" == /* && "$1" != *$'\n'* && "$1" != *//* && "$1" != */ && "$1" != *'/../'* && "$1" != */.. && "$1" != *[\'\"\`\$\\\;]* ]]; }
 hook_ok_repo() { # both relayed bodies carry $REPO (wt-open sends a path inside it)
   hook_safe_path "$REPO" && return 0
@@ -171,16 +185,17 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
   body=$(jq -cn "${args[@]+"${args[@]}"}" '$ARGS.named')
   relay_env || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
   c=$(cmux_bin) || { warn "cmux CLI not found here; run the line below on the Mac"; return 1; }
-  # Belt and braces, not the mechanism: on cmux 0.64 --workspace neither authorises the request nor changes
-  # which workspace it is recorded against — both come from the environment set below, whatever is named
-  # (measured). It names this row, which is what the Mac hook's from_row_on_host wants anyway, so it agrees
-  # with that environment rather than contradicting it, and stays right if a later cmux does read it.
+  # --workspace is a second safeguard, not the mechanism. On cmux 0.64, --workspace does not authorize the
+  # request and does not change the row that cmux records it against (measured). Both come from the
+  # environment set below, whatever --workspace names. The flag names this row, which is what the Mac
+  # hook's from_row_on_host wants anyway. So the flag agrees with that environment, and it stays correct if
+  # a later cmux does read it.
   if [[ -n "$RELAY_WS" ]]; then ws=(--workspace "$RELAY_WS"); fi
   env -u CMUX_SOCKET "${RELAY_IDENT[@]+"${RELAY_IDENT[@]}"}" "$c" notify "${ws[@]+"${ws[@]}"}" --title "$title" --body "$body" >/dev/null 2>&1 \
     || { warn "cmux notify failed; run the line below on the Mac"; return 1; }
 }
 
-# Resolve the MAIN checkout root for a path (follows linked worktrees back to the primary).
+# Resolve the MAIN checkout root for a path. A linked worktree resolves back to its main checkout.
 main_root_of() {
   local p="$1" common
   common=$(git -C "$p" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
@@ -191,7 +206,7 @@ main_root_of() {
 REPO=""      # main checkout root
 WT_DIRNAME=""
 set_repo() { REPO=$(main_root_of "$1") || return 1; WT_DIRNAME=$(git -C "$REPO" config --get wt.dir 2>/dev/null || echo .worktrees); }
-lookup_repo() { # a path is taken as given; a name is searched along $WT_REPOS_DIR, and must be in one folder only
+lookup_repo() { # uses a path as given; looks up a name along $WT_REPOS_DIR, where it must be in one folder only
   local want="${1:-}" hits
   if [[ -n "$want" ]]; then
     if [[ ! -d "$want" ]]; then
@@ -215,8 +230,8 @@ wt_prompt() { printf '%s/.git/wt/%s.prompt' "$REPO" "$1"; }
 wt_started(){ printf '%s/.git/wt/%s.started' "$REPO" "$1"; }
 wt_branch() { printf 'wt/%s' "$1"; }
 
-# Identity — bin/cmux-hook mirrors these formats and tags the rows it relays the same way; keep
-# them byte-compatible. A row's title says which task, its description (row_tag) which machine.
+# Identity. bin/cmux-hook mirrors these formats and tags the rows that it relays in the same way, so keep
+# them byte-compatible. A row's title tells which task it is. Its description (row_tag) tells which machine.
 repo_id()    { printf '%s' "${1##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'; }
 where_am_i() { if is_remote; then printf '%s' "${WT_HOST:-remote}"; else printf 'local'; fi; }
 row_title()  { printf '%s:%s' "$(repo_id "$2")" "$1"; }                     # row_title <name> <repo>
@@ -276,14 +291,15 @@ default_base() {
     git -C "$REPO" show-ref -q --verify "refs/remotes/origin/$b" && { printf 'origin/%s' "$b"; return; }
     git -C "$REPO" show-ref -q --verify "refs/heads/$b" && { printf '%s' "$b"; return; }
   done
-  # the branch checked out here, or its commit when HEAD is detached; never the literal "HEAD", which
-  # resolves in every worktree to that worktree's own tip and so compares a worktree with itself
+  # Fall back to the branch checked out here, or to the HEAD commit when HEAD is detached. Never use the
+  # literal "HEAD": in every worktree it resolves to that worktree's own tip, so it compares a worktree with
+  # itself.
   git -C "$REPO" symbolic-ref -q --short HEAD || git -C "$REPO" rev-parse HEAD
 }
 
 meta_get() { # meta_get <name> <key> — "" for a missing key, and for a key stored as null
-  # `.[$k] // ""` looks right and is not: // also fires on a stored `false`, which would read as "".
-  # has/tojson is exact — and a non-string (a number, a bool) comes back as JSON, so `false` is "false".
+  # `.[$k] // ""` looks correct but is not: // also fires on a stored `false`, which would then read as "".
+  # has/tojson is exact. A non-string (a number, a bool) comes back as JSON, so `false` reads as "false".
   local f; f=$(wt_meta "$1"); [[ -f "$f" ]] || return 1
   jq -r --arg k "$2" 'if has($k) and .[$k] != null then .[$k] else "" end
                       | if type == "string" then . else tojson end' "$f"
@@ -294,10 +310,11 @@ meta_get_pair() { # meta_get_pair <name> <key> <key> — one read for fields use
     [.[$a], .[$b]] | map(if . == null then "" elif type == "string" then . else tojson end) | join($fs)' "$f"
 }
 meta_set() { # meta_set <name> key=value ...  — a key with no '=' is stored with an empty value
-  # jq cannot write the file it is reading, so this goes through a temp file; the mv also makes meta_set
-  # crash-safe, which json.dump(d, open(f,'w')) was not — an interrupted write used to truncate the sidecar.
-  # index("=") is null when there is no '=', and null+1 is 1 in jq, so the no-'=' arm is not optional:
-  # without it `meta_set x bare` would slice the key and store the wrong one.
+  # jq cannot write the file that it reads, so meta_set writes through a temp file. The mv also makes
+  # meta_set crash-safe. The earlier json.dump(d, open(f,'w')) was not: an interrupted write used to truncate
+  # the sidecar.
+  # In jq, index("=") is null when there is no '=', and null+1 is 1. So the no-'=' arm is necessary: without
+  # it, `meta_set x bare` would slice the key and store the wrong one.
   local f t; f=$(wt_meta "$1"); shift; mkdir -p "$(dirname "$f")"; t="$f.new.$$"
   WT_TMPFILES+=("$t")                    # a signal between the jq below and the mv would otherwise orphan it
   if ! { if [[ -f "$f" ]]; then cat "$f"; else printf '{}\n'; fi; } \
@@ -314,8 +331,8 @@ require_wt() { # require_wt <name>  -> sets P (path), B (branch)
   local n="$1"; valid_name "$n" || die "invalid worktree name: $n"
   P=$(wt_path "$n"); B=$(wt_branch "$n")
   if git -C "$REPO" worktree list --porcelain | grep -qxF "worktree $P"; then
-    # a registration whose directory was deleted outside wt (rm -rf, a lost VM disk) still has a branch and
-    # metadata that only `wt rm` can clear, so let it through; the other commands simply find no files there
+    # A registration whose directory was deleted outside wt (rm -rf, a lost VM disk) still has a branch and
+    # metadata. Only `wt rm` can clear them, so let it through. The other commands find no files there.
     [[ -d "$P" ]] || warn "$P is registered but missing (deleted outside wt?); clean it up with: wt rm $n"
     return 0
   fi
@@ -324,27 +341,34 @@ require_wt() { # require_wt <name>  -> sets P (path), B (branch)
 }
 
 rows_json() { # rows_json — every cmux row, in every window, as one {"workspaces":[…]} document.
-  # `workspace list --json` answers for ONE window: the caller's, or --window's. A row the user dragged into
-  # a second window — which is the only way cmux can show two tasks side by side, since a window displays one
-  # workspace at a time — is then simply absent, and every lookup built on this reads that as "no such row":
-  # `wt rm` leaves the row open, remote_row builds a second row beside the one already there, check_identity
-  # misses a title clash, and the hook's from_row_on_host fails closed so a VM's `wt open` does nothing.
-  # Only the LISTING is window-scoped, which is why merging the lists is the whole fix and nothing that acts
-  # on a row changes. Measured on cmux 0.64: a workspace keeps its uuid, its title and even its workspace:N
-  # ref when it is moved between windows, refs are allocated globally so two windows cannot collide, and
-  # read-screen, send, workspace-action and workspace close each reach a row in another window with no
-  # --window. Windows are enumerated by uuid and never by the index list-windows prints first: opening a
-  # window renumbers the rest — a new window took index 0 and pushed the existing one to 1 — the uuid is fixed.
-  # `.workspaces?` and not `.workspaces`: cmux may hand back a bare array, and jq's `//` does not catch the
-  # error `Cannot index array with "workspaces"` — only the `?` turns that into the empty it can fall back from.
+  # `workspace list --json` answers for ONE window: the caller's window, or the one that --window names.
+  # A window displays one row at a time. So the only way to show two tasks side by side in cmux is to drag a
+  # row into a second window. That row is then absent from the list, and every lookup built on this reads
+  # that as "no such row":
+  # - `wt rm` leaves the row open;
+  # - remote_row builds a second row beside the one already there;
+  # - check_identity misses a title clash;
+  # - the hook's from_row_on_host fails closed, so a VM's `wt open` does nothing.
+  # Only the LISTING is window-scoped. That is why merging the lists is the whole fix, and why nothing that
+  # acts on a row changes. Measured on cmux 0.64:
+  # - a row keeps its uuid, its title and even its workspace:N ref when it moves between windows;
+  # - cmux allocates refs globally, so two windows cannot collide;
+  # - read-screen, send, workspace-action and workspace close each reach a row in another window with no
+  #   --window.
+  # Enumerate windows by uuid, never by the index that list-windows prints first. Opening a window renumbers
+  # the others: a new window took index 0 and pushed the existing one to 1. The uuid stays fixed.
+  # Use `.workspaces?`, not `.workspaces`: cmux may hand back a bare array, and jq's `//` does not catch the
+  # error `Cannot index array with "workspaces"`. Only the `?` turns that error into the empty value that `//`
+  # can fall back from.
   local c w out docs=""
   c=$(cmux_bin) || return 0
   for w in $(CMUX_QUIET=1 "$c" list-windows 2>/dev/null | awk '{print $2}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' || true); do
     out=$(CMUX_QUIET=1 "$c" workspace list --json --window "$w" 2>/dev/null) || continue   # a window closed mid-loop
     docs="$docs$out"
   done
-  # No window list at all — an older cmux without the subcommand, or output this cannot parse — falls back to
-  # the single-window call that was here before, so such a cmux behaves exactly as it did rather than not at all.
+  # An older cmux without the list-windows subcommand, or output that this code cannot parse, gives no
+  # window list at all. Then fall back to the old single-window call, so such a cmux behaves exactly as it
+  # did and does not stop working.
   [[ -n "$docs" ]] || docs=$(CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null) || true
   printf '%s' "$docs" | jq -s -c '{workspaces: (map(.workspaces? // .) | add // [])}' 2>/dev/null || true
 }
@@ -427,8 +451,8 @@ copy_includes() { # copy gitignored files listed in .wt-include into the new wor
   [[ -f "$REPO/.wt-include" ]] || return 0   # the worktree from a file changed in the main checkout since
   git -C "$REPO" ls-files --others --ignored --exclude-standard -z | while IFS= read -r -d '' f; do
     if [[ "$f" != "$WT_DIRNAME/"* ]] && include_match "$f"; then
-      # errexit does not reach in here (a pipeline inside $( )), so a failed copy has to be caught by
-      # hand; printing it anyway would record in "includes" a file the worktree does not have
+      # errexit does not reach in here (a pipeline inside $( )), so catch a failed copy by hand. If the loop
+      # printed a failed copy anyway, "includes" would record a file that the worktree does not have.
       mkdir -p "$dest/$(dirname "$f")"
       if cp -p "$REPO/$f" "$dest/$f"; then printf '%s:%s\n' "$f" "$(file_hash "$dest/$f")"
       else warn "could not copy $f into the worktree"; fi
@@ -445,10 +469,11 @@ worktree_includes() { # worktree_includes <path> — ignored files inside the wo
 }
 
 changed_includes() { # changed_includes <name> <path> -> ignored files that removing the worktree would destroy
-  # Two sources, because this protection cannot be a creation-time snapshot: the files recorded at `wt new`
-  # (compared against the hash of what was copied then, so rotating a secret in the main checkout does not
-  # make every existing worktree unremovable), and every ignored file the patterns cover *now* (an .env.local
-  # an agent wrote in there is in no snapshot, and `worktree remove --force` eats it without a word).
+  # This protection cannot be a creation-time snapshot. So it reads the two sources below.
+  # - The files recorded at `wt new`, compared with the hash of what was copied then. So rotating a secret in
+  #   the main checkout does not make every existing worktree unremovable.
+  # - Every ignored file that the patterns cover *now*. An .env.local that an agent wrote in the worktree is
+  #   in no snapshot, and `worktree remove --force` deletes it without a warning.
   local n="$1" p="$2" f h e seen="" list
   list=$(printf '%s\n%s\n' "$(meta_get "$n" includes 2>/dev/null || true)" "$(worktree_includes "$p")")
   while IFS= read -r e; do
@@ -469,9 +494,9 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
 }
 
 porcelain_paths() { # porcelain_paths <checkout> — one path per line for every entry `git status` reports.
-  # -z because a path with a space in it comes back quoted otherwise, and this list is compared by exact
-  # string. A rename or copy emits its source as a second record, which is consumed and dropped: the
-  # destination is the path that is dirty, and the source no longer exists to hash.
+  # Use -z, because without it a path with a space in it comes back quoted, and this list is compared by
+  # exact string. A rename or copy emits its source as a second record. The loop reads that record and drops
+  # it: the destination is the dirty path, and the source no longer exists to hash.
   local p="$1" rec f
   git -C "$p" status --porcelain -z 2>/dev/null | while IFS= read -r -d '' rec; do
     f="${rec:3}"
@@ -481,12 +506,13 @@ porcelain_paths() { # porcelain_paths <checkout> — one path per line for every
 }
 
 setup_dirt() { # setup_dirt <worktree path> — what .wt-setup left in git's way, as "<path>:<sha256>" lines.
-  # Only ever called immediately after the hook ran, so this is the hook's own output and nobody else's.
-  # It is recorded for the same reason copy_includes records a hash: so that rm can tell the work a human
-  # did inside the worktree from the state the worktree was born with. A `.wt-setup` that runs `uv sync` or
-  # `npm ci` rewrites a TRACKED lockfile, which without this makes `git status` dirty from birth and every
-  # `wt rm` a refusal for the worktree's whole life — leaving --force, which discards the unmerged-commit
-  # check too, as the only way to clean up. Ignored files never reach here: `status` does not list them.
+  # wt calls this only immediately after the hook ran, so what it finds is the hook's own output and nobody
+  # else's. This record exists for the same reason that copy_includes records a hash. With it, rm can tell
+  # the work a human did inside the worktree from the state that the worktree was born with. A `.wt-setup`
+  # that runs `uv sync` or `npm ci` rewrites a TRACKED lockfile. Without this record, `git status` is dirty
+  # from birth, and every `wt rm` refuses for the worktree's whole life. The only way to clean up is then
+  # --force, which also discards the unmerged-commit check. Ignored files never reach here: `status` does
+  # not list them.
   local p="$1" f
   porcelain_paths "$p" | while IFS= read -r f; do
     printf '%s:%s\n' "$f" "$(file_hash "$p/$f")"      # a file the hook DELETED hashes to "", and matches as ""
@@ -494,9 +520,10 @@ setup_dirt() { # setup_dirt <worktree path> — what .wt-setup left in git's way
 }
 
 unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-setup did not put there
-  # A recorded path counts as explained only while it still holds exactly what the hook left: edit that
-  # lockfile by hand and the hash stops matching, so it is a reason again. Metadata from before this was
-  # recorded has no "setup" key, so every path is unexplained and the old refusal stands unchanged.
+  # A recorded path counts as explained only while it still holds exactly what the hook left. If someone
+  # edits a recorded lockfile by hand, the hash stops matching, so the path is a reason again. Metadata
+  # from before wt recorded this has no "setup" key. Then every path is unexplained, and the old refusal
+  # stays unchanged.
   local n="$1" p="$2" recorded f h e explained
   recorded=$(meta_get "$n" setup 2>/dev/null || true)
   [[ -n "$recorded" ]] || { porcelain_paths "$p"; return 0; }
@@ -510,10 +537,10 @@ unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-s
 }
 
 branch_pushed() { # branch_pushed <branch> — 0 only when the remote still has every commit of that branch.
-  # A remote-tracking ref is not proof: refs/remotes/origin/wt/x outlives the remote branch (abandoned PR,
-  # `git push origin :wt/x`, someone else's cleanup), and the next fetch with fetch.prune drops it and leaves
-  # those commits unreachable with no reflog. So ask the remote itself, and count an unreachable remote as
-  # not pushed: refusing while offline is the safe direction, and --force is one keystroke away.
+  # A remote-tracking ref is not proof. refs/remotes/origin/wt/x outlives the remote branch (an abandoned PR,
+  # `git push origin :wt/x`, someone else's cleanup). The next fetch with fetch.prune then drops it, and
+  # those commits become unreachable with no reflog. So ask the remote itself, and count an unreachable
+  # remote as not pushed. Refusing while offline is the safe direction, and --force is one keystroke away.
   local b="$1" remote
   git -C "$REPO" rev-parse -q --verify "$b@{u}" >/dev/null 2>&1 || return 1
   [[ -z "$(git -C "$REPO" log "$b@{u}..$b" --oneline 2>/dev/null)" ]] || return 1
@@ -540,28 +567,31 @@ LANDED_WHY=""      # set by branch_landed when it says no: what it checked, for 
 branch_landed() { # branch_landed <branch> <base> — 0 when every change the branch made since it left the
                   # base is already in the base's tip, the shape a squash merge leaves behind.
   # A PR merged with GitHub's "squash and merge" (the default on most repos) lands as ONE new commit on
-  # main whose tree is the merge's tree, and the head branch is deleted. Nothing on wt/<name> is then an
-  # ancestor of anything, branch_pushed finds the remote branch gone, and the only way past `wt rm` was
-  # --force, which also waives the dirty-tree and .wt-include checks — for a worktree that had, in fact,
-  # nothing left to lose. This is the check that tells that worktree apart from one that really does.
+  # main. That commit's tree is the merge's tree, and the head branch is deleted. Nothing on wt/<name> is
+  # then an ancestor of anything, and branch_pushed finds the remote branch gone. So the only way past
+  # `wt rm` was --force, which also waives the dirty-tree and .wt-include checks. But that worktree had
+  # nothing left to lose. This check tells that worktree apart from one that does have something to lose.
   #
-  # What it asks git is exact, not a heuristic: would merging the branch into the base's tip change
-  # anything? A three-way merge takes, for every region of every file, the base's side where only the base
-  # changed it, the branch's side where only the branch changed it, and either where both made the same
-  # change. So the merged tree equals the base's tree precisely when every change the branch made is
-  # already there — landed by a squash, a rebase-merge, a cherry-pick into another branch that then merged,
-  # or by hand, it does not matter how. What is NOT taken as landed: a change the base later undid (the
-  # merge would put it back, so the tree differs: a squash later reverted, in whole or in part), a change
-  # the base later edited again on the same lines (the merge conflicts), a commit whose change is not in
-  # the base at all (a commit pushed after the PR merged, or never merged). Each of those is a refusal, and
-  # the refusal says which. A branch whose net change is empty — a commit undone by a later one on the
-  # same branch — passes the merge trivially and proves nothing, so it is refused too, as it always was.
+  # The question it asks git is exact, not a heuristic: would a merge of the branch into the base's tip
+  # change anything? A three-way merge looks at every region of every file. It takes the base's side where
+  # only the base changed the region, and the branch's side where only the branch changed it. Where both made
+  # the same change, it takes either side. So the merged tree equals the base's tree precisely when every
+  # change that the branch made is already there. How it landed does not matter: by a squash, a rebase-merge,
+  # a cherry-pick into another branch that then merged, or by hand.
+  # branch_landed does NOT take these cases as landed:
+  # - A change that the base later undid, for example a squash that was later reverted, in whole or in part.
+  #   The merge would put it back, so the tree differs.
+  # - A change that the base later edited again on the same lines. The merge conflicts.
+  # - A commit whose change is not in the base at all: a commit pushed after the PR merged, or never merged.
+  # Each of these cases is a refusal, and the refusal says which case it is.
+  # A branch whose net change is empty (a commit undone by a later one on the same branch) passes the merge
+  # trivially and proves nothing. So it is refused too, as it always was.
   #
-  # `git merge-tree --write-tree` (2.38+) does the merge in memory, hunk by hunk, without touching any
-  # index or working tree, and exits 1 with conflicts. Older git gets `read-tree -m` into a throwaway
-  # index, which merges file by file: a file both sides changed is unmerged whatever the hunks say, and
-  # `write-tree` refuses an unmerged index, which reads here as not landed. Stricter, and safe in the
-  # same direction: a merge that would change nothing is the only thing either path ever calls landed.
+  # `git merge-tree --write-tree` (2.38+) does the merge in memory, hunk by hunk. It does not touch any index
+  # or working tree, and it exits 1 on conflicts. Older git gets `read-tree -m` into a throwaway index, which
+  # merges file by file. There, a file that both sides changed is unmerged, whatever the hunks say. Then
+  # `write-tree` refuses the unmerged index, which reads here as not landed. That path is stricter, and safe
+  # in the same direction: either path calls a branch landed only when the merge would change nothing.
   local b="$1" base="$2" m tree_b tree_t="" out rc=0 n idx
   LANDED_WHY=""
   m=$(git -C "$REPO" merge-base "$b" "$base" 2>/dev/null) || { LANDED_WHY="$b has no common history with $base"; return 1; }
@@ -596,18 +626,21 @@ branch_landed() { # branch_landed <branch> <base> — 0 when every change the br
 }
 
 WT_FETCHED="${TMPDIR:-/tmp}/wt-fetched.$$"   # which bases fetch_base has tried this run; see there
-fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as origin/main. 0 when it was,
-               # 1 when the fetch failed (now, or earlier this run), 2 when the base is not a remote's branch
-               # and there was nothing to do, 3 when it was already refreshed this run.
-  # A squash merge lands on GitHub, and the next thing typed is `wt rm`: origin/main here is whatever the
+fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as origin/main. Returns:
+               # 0 when it refreshed the base; 1 when the fetch failed (now, or earlier this run);
+               # 2 when the base is not a remote's branch and there was nothing to do;
+               # 3 when the base was already refreshed this run.
+  # A squash merge lands on GitHub, and the next command typed is `wt rm`. Here, origin/main is whatever the
   # last fetch left, which is from before the merge, and branch_landed compares against that. So when the
-  # offline checks say no and the base is a remote's branch, fetch that one branch and ask again. Offline
-  # this fails quietly — the same 5-second ceiling branch_pushed already accepts — and the offline verdict
-  # stands, with the refusal saying the base could not be refreshed. A local base (`main`) is never fetched.
-  # Once per run: `wt prune` asks rm_reasons about every worktree, and asks again through cmd_rm for the
-  # ones it removes, each time in a command substitution — a subshell, whose variables never reach back.
-  # So the record of what was fetched is a file, named after this process and removed on exit; cmd_rm and
-  # cmd_prune clear it before their first question, so a file a killed run left behind cannot answer.
+  # offline checks say no and the base is a remote's branch, fetch that one branch and ask again. Offline,
+  # the fetch fails quietly within the same 5-second ceiling that branch_pushed already accepts. The offline
+  # verdict then stands, and the refusal says that the base could not be refreshed. A local base (`main`) is
+  # never fetched.
+  # Fetch once per run. `wt prune` asks rm_reasons about every worktree, and asks again through cmd_rm for
+  # the ones it removes. Each time, it asks in a command substitution: a subshell, whose variables never
+  # reach back. So the record of what was fetched is a file, named after this process and removed on exit.
+  # cmd_rm and cmd_prune clear it before their first question, so a file that a killed run left behind
+  # cannot answer.
   local base="$1" remote
   [[ "$base" == */* ]] || return 2
   remote="${base%%/*}"
@@ -633,23 +666,25 @@ RM_DISCARD_COMMITS=0   # `wt rm --discard-commits`: waive the unmerged-commit re
 rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this worktree would destroy work,
                # one reason per line; nothing at all when there is nothing to lose. `wt rm` and `wt prune`
                # (dry run included) both read this, so the two can never disagree.
-  # Every commit check is about the BRANCH, never the worktree's HEAD: under `git bisect`, `git checkout <sha>`
-  # or `--detach` the HEAD is usually an ancestor of the base, so a HEAD-based check reads "clean, 0 ahead,
-  # merged" while `branch -D` still destroys every commit the branch holds, its reflog with it. $B resolves
-  # whether or not it is checked out; refs are shared with the main checkout, so ask $REPO about it.
+  # Every commit check is about the BRANCH, never the worktree's HEAD. Under `git bisect`, `git checkout <sha>`
+  # or `--detach`, the HEAD is usually an ancestor of the base. A HEAD-based check then reads "clean, 0 ahead,
+  # merged". But `branch -D` still destroys every commit that the branch holds, and its reflog too. $B
+  # resolves whether or not it is checked out. The worktree shares its refs with the main checkout, so ask
+  # $REPO about it.
   local n="$1" p="$2" b="$3" base="$4" dirty ahead=0 merged=0 base_ok=0 head_ref f why="" rc
   dirty=$(unexplained_dirt "$n" "$p" | wc -l | tr -d ' ')      # what .wt-setup itself wrote is not a reason
   [[ "$dirty" -gt 0 ]] && printf '%s uncommitted change(s)\n' "$dirty"
-  # a base that no longer resolves fails both checks below, and each failure reads as "nothing to lose"; the
-  # literal HEAD (metadata from before wt canonicalised the base) resolves in every worktree to that
-  # worktree's own tip and reads the same way. So settle the base first and let either case be a refusal.
+  # A base that no longer resolves fails both checks below, and each failure reads as "nothing to lose". The
+  # literal HEAD (metadata from before wt canonicalized the base) resolves in every worktree to that
+  # worktree's own tip, and reads the same way. So settle the base first, and make either case a refusal.
   if [[ "$base" != HEAD ]] && git -C "$REPO" rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1; then
     base_ok=1
-    # merged is either of two things: the branch is an ancestor of the base (a merge commit, a fast-forward),
-    # or its work is all in the base's tip without the commits being there (a squash merge; see
-    # branch_landed). The second is asked offline first, then once more after refreshing a remote base, in
-    # case the merge is newer than the last fetch. With --discard-commits neither is asked: the reason is
-    # waived whatever the answer, and there is nothing to go online for.
+    # merged means one of two things:
+    # - the branch is an ancestor of the base (a merge commit, a fast-forward);
+    # - all its work is in the base's tip without its commits (a squash merge; see branch_landed).
+    # Check the second case offline first. Then, in case the merge is newer than the last fetch, refresh a
+    # remote base and check once more. With --discard-commits, check neither: the reason is waived whatever
+    # the answer, so there is nothing to go online for.
     if git -C "$REPO" merge-base --is-ancestor "$b" "$base" 2>/dev/null; then merged=1
     elif [[ $RM_DISCARD_COMMITS -eq 1 ]]; then merged=0
     elif branch_landed "$b" "$base"; then merged=1
@@ -667,8 +702,8 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
   if [[ "$ahead" -gt 0 && $merged -eq 0 && $RM_DISCARD_COMMITS -eq 0 ]] && ! branch_pushed "$b"; then
     printf '%s commit(s) on %s not merged into %s and not on a remote%s\n' "$ahead" "$b" "$base" "$why"
   fi
-  # the checks above are about $b, so a HEAD that is not $b is its own reason: the worktree holds a state
-  # (a bisect, a detached checkout) that removing it throws away, and that no branch is keeping
+  # The checks above are about $b, so a HEAD that is not $b is a reason of its own. The worktree then holds a
+  # state (a bisect, a detached checkout) that no branch keeps, and removing the worktree throws it away.
   if [[ -d "$p" ]]; then
     head_ref=$(git -C "$p" symbolic-ref -q --short HEAD 2>/dev/null || true)
     if [[ -z "$head_ref" ]]; then printf 'HEAD is detached at %s (bisect, or a detached checkout), not on %s\n' \
@@ -683,8 +718,9 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
 
 open_code() { # open_code <folder uri> <label>   (no --new-window: a repeat call focuses the window)
   have code || die "VS Code CLI 'code' not found (install it from VS Code: Shell Command: Install 'code' command in PATH)"
-  # On the Mac, code hands the launch to a detached `open` and exits 0 whatever that does, and Codex's sandbox
-  # (which sets CODEX_SANDBOX) blocks Launch Services, so from there no window opens and nothing says so.
+  # On the Mac, code hands the launch to a detached `open` and exits 0 whatever that does. Codex's sandbox
+  # (which sets CODEX_SANDBOX) blocks Launch Services. So from inside that sandbox, no window opens and
+  # nothing says so.
   [[ -z "${CODEX_SANDBOX:-}" ]] \
     || die "the Codex sandbox blocks app launches, so VS Code cannot open $2 from here; rerun this command with escalation"
   local err
@@ -730,22 +766,25 @@ wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<
   local n="$1" p b base ahead behind dirty last merged='?' why=""
   p=$(wt_path "$n"); b=$(wt_branch "$n")
   base=$(meta_get "$n" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
-  # counted against the BRANCH, not HEAD: the column is labelled with the branch, and inside a worktree that
-  # is mid-bisect or on a detached checkout the two differ — which is the shape of the bug wt rm had.
+  # Count against the BRANCH, not HEAD, because the column is labeled with the branch. In a worktree that is
+  # mid-bisect or on a detached checkout, the two differ. That is the shape of the bug that wt rm had.
   ahead=$(git -C "$p" rev-list --count "$base..$b" 2>/dev/null || echo '?')
   behind=$(git -C "$p" rev-list --count "$b..$base" 2>/dev/null || echo '?')
   dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
   last=$(git -C "$p" log -1 --format='%cr' 2>/dev/null || echo '-')
   local cur; cur=$(git -C "$p" branch --show-current 2>/dev/null || true)   # empty, exit 0, on a detached HEAD
   [[ -n "$cur" ]] || cur="$b (HEAD detached)"
-  # merged, the way `wt rm` will judge it: "yes" when every commit is in the base (an ahead of 0 is exactly
-  # that), "squash" when the commits are not but their work is (branch_landed, the check rm makes), "no"
-  # with the reason otherwise, "?" when there is no base to compare with. A squash-merged branch used to
-  # show as 2 ahead here, which reads as unmerged work, and the worktree-show skill told agents to judge
-  # merged by a 0. This never fetches — `wt list` is offline — so right after a PR merges it says "no"
-  # until something refreshes the base, which `wt rm`, `wt prune` and `wt new` all do; the same caveat the
-  # AHEAD and BEHIND columns have always carried. The literal HEAD as a base resolves to the worktree's own
-  # tip and would read as 0 ahead, so it is a "?" here as it is a refusal in rm_reasons.
+  # merged, judged the way `wt rm` will judge it:
+  # - "yes" when every commit is in the base (an ahead of 0 is exactly that);
+  # - "squash" when the commits are not in the base but their work is (branch_landed, the check rm makes);
+  # - "no", with the reason, otherwise;
+  # - "?" when there is no base to compare with.
+  # A squash-merged branch used to show as 2 ahead here, which reads as unmerged work. The worktree-show
+  # skill also told agents to judge merged by a 0. This never fetches, because `wt list` is offline. So
+  # right after a PR merges, the column says "no" until something refreshes the base. `wt rm`, `wt prune`
+  # and `wt new` all refresh it. The AHEAD and BEHIND columns have always carried the same caveat. The
+  # literal HEAD as a base resolves to the worktree's own tip and would read as 0 ahead. So a HEAD base
+  # shows "?" here, as it is a refusal in rm_reasons.
   if [[ "$base" != HEAD && "$ahead" =~ ^[0-9]+$ ]]; then
     if [[ "$ahead" -eq 0 ]]; then merged=yes
     elif branch_landed "$b" "$base"; then merged=squash
@@ -796,13 +835,13 @@ cmd_new() {
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (kept by wt rm --keep-branch, or by a removal git would not call merged, or left behind by a worktree deleted outside wt); inspect it (git -C $REPO log $b), then delete it (git -C $REPO branch -D $b) or pick another name"
   check_identity "$name"
-  if [[ $workspace -eq 1 ]] && is_remote; then   # the row request needs it; fail before anything exists
+  if [[ $workspace -eq 1 ]] && is_remote; then   # the row request needs the host; fail before anything exists
     wt_host >/dev/null
   fi
 
   # --head is this checkout's HEAD: its branch name, or its commit when HEAD is detached (mid-rebase, a
-  # checked-out tag). Never the literal "HEAD": that resolves in every worktree to the worktree's own tip,
-  # so the base would compare the worktree with itself and rm and prune would read it as nothing to lose.
+  # checked-out tag). Never use the literal "HEAD": it resolves in each worktree to that worktree's own tip.
+  # The base would then compare the worktree with itself, and rm and prune would find nothing to lose.
   if [[ $from_head -eq 1 ]]; then
     base=$(git -C "$PWD" symbolic-ref -q --short HEAD 2>/dev/null || git -C "$PWD" rev-parse HEAD 2>/dev/null) \
       || base=$(git -C "$REPO" symbolic-ref -q --short HEAD || git -C "$REPO" rev-parse HEAD)
@@ -812,14 +851,15 @@ cmd_new() {
     git -C "$REPO" fetch -q origin "${base#origin/}" 2>/dev/null || warn "fetch of $base failed; using local ref"
   fi
   git -C "$REPO" rev-parse -q --verify "$base^{commit}" >/dev/null || die "base ref not found: $base"
-  # "HEAD", "@", "HEAD^0", "@{0}" … are all the same thing and re-resolve in every worktree to that
-  # worktree's own tip, so a base stored that way would compare the worktree with itself and rm and prune
-  # would read it as nothing to lose. Canonicalise instead of blacklisting spellings: only a plain ref name
-  # means the same thing in every worktree tomorrow, so keep the ref (--symbolic-full-name names it, in the
-  # shorthand it was given in) and pin anything else — an expression or a raw sha — to the commit it means now.
+  # "HEAD", "@", "HEAD^0", "@{0}" … are all the same thing. Each one re-resolves in every worktree to that
+  # worktree's own tip. A base stored in that form would compare the worktree with itself, and rm and prune
+  # would find nothing to lose. So canonicalize the base; do not try to block each bad spelling. Only a
+  # plain ref name means the same thing in every worktree tomorrow, so keep a ref in its given shorthand
+  # (--symbolic-full-name names it). Pin anything else (an expression or a raw sha) to the commit that it
+  # means now.
   local sym; sym=$(git -C "$REPO" rev-parse --symbolic-full-name "$base" 2>/dev/null || true)
-  # --symbolic-full-name prints the bare word HEAD for a detached checkout, which is not a ref and is exactly
-  # the spelling this block exists to catch: only a refs/… answer names the same thing in every worktree.
+  # For a detached checkout, --symbolic-full-name prints the bare word HEAD. That word is not a ref, and it is
+  # the spelling that this block exists to catch. Only a refs/… answer names the same thing in every worktree.
   case "$sym" in refs/*) ;; *) sym="" ;; esac
   case "$base" in
     "$sym"|"${sym#refs/heads/}"|"${sym#refs/remotes/}"|"${sym#refs/tags/}") ;;
@@ -828,8 +868,8 @@ cmd_new() {
 
   mkdir -p "$(wt_root)"
   git -C "$REPO" worktree add -q -b "$b" "$p" "$base" || die "git worktree add failed"
-  # The worktree is now registered. Persist its brief, agent and model before slow copy/setup work: if the
-  # SSH channel closes during a hook, attach --restart-agent must still know what to run.
+  # The worktree is now registered. Save its brief, agent and model before the slow copy/setup work.
+  # If the SSH channel closes during a hook, attach --restart-agent must still know what to run.
   mkdir -p "$REPO/.git/wt"
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; fi
   meta_set "$name" "base=$base" "created=$(date -u +%FT%TZ)" "agent=$agent" "model=$model" \
@@ -840,7 +880,7 @@ cmd_new() {
   local setup=""
   if [[ -x "$REPO/.wt-setup" ]]; then
     ( cd "$p" && WT_NAME="$name" WT_REPO="$REPO" "$REPO/.wt-setup" ) || warn ".wt-setup exited non-zero"
-    setup=$(setup_dirt "$p")               # recorded even when the hook failed: it may have written half of it
+    setup=$(setup_dirt "$p")               # recorded even when the hook failed: it may have written part of it
     meta_set "$name" "setup=$setup"
   fi
 
@@ -851,7 +891,7 @@ cmd_new() {
   return 0
 }
 
-cmd_run() { # run the worktree's agent here; cmux types this into the row's shell, which stays after it exits
+cmd_run() { # run the task's agent here; cmux types this into the row's shell, which stays after the agent exits
   local name="" repo=""
   while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) [[ $# -ge 2 ]] || die "run: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "run: unknown option $1";; *) [[ -z "$name" ]] || die "run: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "run: worktree name required (wt run <name> -r <repo>)"
@@ -868,7 +908,7 @@ cmd_run() { # run the worktree's agent here; cmux types this into the row's shel
   esac
   valid_model "$model" || [[ -z "$model" ]] || die "invalid model '$model' in $(wt_meta "$name")"
   [[ "$agent" != codex || "$model" != *'['* ]] || die "Claude-style model suffix in $(wt_meta "$name") for Codex"
-  f=$(wt_prompt "$name")                         # a command substitution would eat the trailing newline
+  f=$(wt_prompt "$name")                         # a command substitution would remove the trailing newline
   if [[ -f "$f" ]]; then IFS= read -r -d '' brief <"$f" || true; fi
   local extra=() filtered=() model_arg=() args=() i=0
   if [[ -n "${WT_AGENT_ARGS:-}" ]]; then
@@ -876,8 +916,8 @@ cmd_run() { # run the worktree's agent here; cmux types this into the row's shel
     extra=($WT_AGENT_ARGS)
   fi
   if [[ -n "$model" ]]; then
-    # Remove machine-wide model choices and Claude's fallback before adding this task's choice. Neither
-    # CLI needs to decide which repeated model flag wins, including on a Claude -c resume.
+    # Remove machine-wide model choices and Claude's fallback before adding this task's choice. Then neither
+    # CLI has to decide which repeated model flag wins, even on a Claude -c resume.
     while [[ $i -lt ${#extra[@]} ]]; do
       case "${extra[$i]}" in
         -m|--model|--fallback-model) i=$((i + 2)); continue ;;
@@ -895,7 +935,7 @@ cmd_run() { # run the worktree's agent here; cmux types this into the row's shel
   if [[ "$agent" == claude && -e "$(wt_started "$name")" ]]; then
     args=(-c)                                    # resume this worktree's last conversation
   elif [[ -n "$brief" ]]; then
-    args=(-- "$brief")                           # codex always restarts from the brief
+    args=(-- "$brief")                           # Codex always restarts from the brief
   fi
   : > "$(wt_started "$name")"
   if is_remote && [[ ${WT_STATUS_BRIDGE:-} == 1 && -n ${TMUX:-} && ${CMUX_SOCKET_PATH:-} == *:[0-9]* ]]; then
@@ -955,7 +995,7 @@ cmd_show() {
   [[ "$ah" =~ ^[0-9]+$ ]] || ah='?'; [[ "$be" =~ ^[0-9]+$ ]] || be='?'; [[ "$di" =~ ^[0-9]+$ ]] || di=0
   local title model; IFS="$WT_FS" read -r title model <<<"$(meta_get_pair "$name" title model 2>/dev/null || true)"
   [[ -n "$title" ]] || title=$(row_title "$name" "$REPO")
-  case "$mg" in   # the list column, with room here for what it rests on
+  case "$mg" in   # wt list's MERGED value, with room here for the reason behind it
     squash) mg="squash (every change on $br is in $base, though no commit is)" ;;
     no)     mg="no ($why)" ;;
     '?')    mg="? (no base to compare with)" ;;
@@ -1060,24 +1100,25 @@ cmd_rm() {
     fi
   fi
   if [[ $self_remote -eq 1 ]]; then
-    # Check relay setup only after the reasons above, while the worktree is still intact.
+    # Check the relay setup only after the reasons above, while the worktree is still intact.
     host=$(wt_host)
     hook_ok_repo || die "cannot request Mac row cleanup for $REPO"
     relay_env || die "cannot find the Mac cmux relay in this session"
   fi
-  # remaining ignored files are unchanged copies or build output, so --force is the normal path here
+  # the ignored files that remain are unchanged copies or build output, so --force is normal here
   if [[ -d "$P" ]]; then
     git -C "$REPO" worktree remove --force "$P" || die "git worktree remove failed for $P; free it, then: rm -rf $P && git -C $REPO worktree prune"
   else
-    git -C "$REPO" worktree prune          # the directory went away outside wt; drop the registration
+    git -C "$REPO" worktree prune          # the directory was removed outside wt; drop its registration
   fi
   if [[ $keep -eq 0 ]]; then
-    # branch -d, so git's own merged-check is the last line of defence behind the reasons above; --force and
-    # --discard-commits are the deliberate ways to discard commits, and otherwise the branch is kept and
-    # said to be kept. One more case gets -D: git's -d knows nothing of squash merges, so a branch whose
-    # work branch_landed found in the base is one git declines to delete (unless a stale remote-tracking
-    # ref still equals it, which -d takes as merged upstream). The reasons above already let the worktree
-    # go on exactly that finding, and the base is where the check was made, so the branch goes with it.
+    # Use branch -d, so git's own merged check is the last safeguard behind the reasons above. The flags
+    # --force and --discard-commits are the deliberate ways to discard commits. Otherwise wt keeps the
+    # branch and says so. One more case gets -D: a branch whose work branch_landed found in the base.
+    # Git's -d knows nothing of squash merges, so it declines to delete that branch. The exception is when
+    # a stale remote-tracking ref still equals the branch: -d takes that as merged upstream. The reasons
+    # above already let the worktree go on that same finding, made against this same base, so the branch
+    # goes with it.
     if ! git -C "$REPO" branch -d "$B" >/dev/null 2>&1; then
       if [[ $force -eq 1 || $RM_DISCARD_COMMITS -eq 1 ]] || { [[ "$base" != HEAD ]] && branch_landed "$B" "$base"; }; then
         git -C "$REPO" branch -D "$B" >/dev/null 2>&1 || true
@@ -1091,7 +1132,8 @@ cmd_rm() {
   if is_remote; then
     [[ -n "$session" ]] || session=$(wt_session "$name" "$REPO")
     if [[ $self_remote -eq 1 ]]; then
-      # The Mac hook closes the row and kills this session. If we survive its deadline, cleanup did not finish.
+      # The Mac hook closes the row and kills this session.
+      # If this process is still alive after the hook's deadline, the cleanup did not finish.
       if notify_mac wt-close host "$host" repo "$REPO" task "$name"; then
         local close_wait="${WT_CLOSE_WAIT_SECONDS:-22}" i
         [[ "$close_wait" =~ ^[0-9]+$ ]] || close_wait=22
@@ -1110,9 +1152,9 @@ cmd_prune() {
   while [[ $# -gt 0 ]]; do case "$1" in --dry-run|-n) dry=1;; -r|--repo) [[ $# -ge 2 ]] || die "prune: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; *) die "prune: unknown option $1";; esac; shift; done
   resolve_repo "$repo"
   local names n p base why
-  reset_fetched           # one fetch per base for the whole run, cmd_rm's questions included; see fetch_base
-  names=$(list_names)     # before `git worktree prune`: a directory deleted by hand would otherwise lose its
-                          # registration here and never be examined, leaving its branch and metadata forever
+  reset_fetched           # one fetch per base for the whole run, also for cmd_rm's checks; see fetch_base
+  names=$(list_names)     # before `git worktree prune`; otherwise a directory deleted by hand loses its
+                          # registration here and is never examined, so its branch and metadata stay forever
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
     p=$(wt_path "$n"); base=$(meta_get "$n" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
@@ -1130,10 +1172,10 @@ cmd_path() {
   [[ -n "$name" ]] || die "path: worktree name required"
   resolve_repo "$repo"; require_wt "$name"; printf '%s\n' "$P"
 }
-cmd_repos()   { # wt repos [<name>] [--porcelain|--table]. No name: every repo, as a table (name, how many task
-                # worktrees it holds, location) when stdout is a terminal or with --table, which is how
-                # `wt -H <host> repos` asks a VM for one; as "<name><tab><path>" per repo, the picker's two
-                # columns, when piped or with --porcelain. A name or path: just that repo's path (also over ssh).
+cmd_repos()   { # wt repos [<name>] [--porcelain|--table]. No name: list every repo. Print a table (name, number
+                # of task worktrees, location) when stdout is a terminal, or with --table; `wt -H <host> repos`
+                # asks a VM for a table that way. Print "<name><tab><path>" per repo (the task picker's two
+                # columns) when piped or with --porcelain. A name or path: only that repo's path (also over ssh).
   local mode="" name=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1165,8 +1207,8 @@ cmd_current() {
 }
 
 # ---------------------------------------------------------------- driver and self-update
-cmd_driver() { # the session that spawns tasks; its cwd is a repos folder, so `wt new` there needs -r
-  # the args are parsed, not ignored: `wt driver -h` used to create or select the row instead of printing usage
+cmd_driver() { # the driver session, which starts tasks; its cwd is a repos folder, so `wt new` there needs -r
+  # parse the args, do not ignore them: `wt driver -h` once created or selected the row instead of printing usage
   while [[ $# -gt 0 ]]; do case "$1" in -h|--help) usage; exit 0;; *) die "driver: unexpected argument $1 (wt driver takes none)";; esac; done
   mac_only driver
   cmux_ok || die "cmux is not running; start cmux, then: wt driver"
@@ -1185,8 +1227,8 @@ cmd_driver() { # the session that spawns tasks; its cwd is a repos folder, so `w
 }
 
 cmd_update() { # pull this repo and re-run its installer
-  # install.sh's own flags are forwarded rather than rejected: the opt-ins are sticky, so a plain update
-  # keeps what this machine chose, but opting IN later has to be possible through the command the docs name.
+  # Forward install.sh's own flags; do not reject them. The opt-ins are sticky, so a plain update keeps what
+  # this machine chose. But a user must be able to opt IN later through the command that the docs name.
   local pass=()
   while [[ $# -gt 0 ]]; do case "$1" in --refresh-config|--opinionated-config|--with-*) pass+=("$1");; -h|--help) usage; exit 0;; *) die "update: unknown option $1";; esac; shift; done
   local s="$0" dir
@@ -1198,8 +1240,8 @@ cmd_update() { # pull this repo and re-run its installer
   git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 \
     || die "$dir has no upstream branch; set one: git -C $dir branch --set-upstream-to origin/main"
   git -C "$dir" fetch --quiet || die "git fetch failed in $dir"
-  # containment, not equality: a clone that is merely ahead (a local commit, normal on the machine where you
-  # edit bin/wt) has nothing incoming, and comparing tips would show your own work as an incoming deletion
+  # Test containment, not equality. A clone that is only ahead (a local commit, normal on the machine where
+  # you edit bin/wt) has nothing incoming. Comparing tips would show your own work as an incoming deletion.
   if git -C "$dir" merge-base --is-ancestor '@{u}' HEAD 2>/dev/null; then
     printf 'Already up to date.\n'
   else                                                     # `wt update` runs install.sh, so show the code first
@@ -1215,7 +1257,7 @@ cmd_update() { # pull this repo and re-run its installer
 }
 
 # ---------------------------------------------------------------- wt -H <host> …
-remote_sh_raw() { # leave SSH's exit status intact for callers that must distinguish a refusal from a drop
+remote_sh_raw() { # keep SSH's exit status intact for callers that must tell a refusal from a dropped connection
   ssh -o BatchMode=yes -o ConnectTimeout=5 "$1" "$2"
 }
 remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means transport failure
@@ -1226,12 +1268,12 @@ remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means transport
 }
 remote_wt() { local host="$1"; shift; remote_sh "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
 remote_wt_raw() { local host="$1"; shift; remote_sh_raw "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the VM this terminal when we have one,
-                  # so a command that asks before it acts (wt update) can read the answer. Never for a caller
-                  # that captures stdout: a pty folds stderr into it and turns every \n into \r\n. Without a
-                  # local terminal there is nothing to lend, and the VM's own refusal is the right answer.
+remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the VM this terminal when there is one,
+                  # so a command that asks before it acts (wt update) can read the answer. Never use it for a
+                  # caller that captures stdout: a pty folds stderr into stdout and turns every \n into \r\n.
+                  # Without a local terminal there is nothing to lend, and the VM's own refusal is correct.
   local host="$1" cmd="$2" rc=0 tty=()
-  [[ -t 0 ]] && tty=(-t)                                   # -t and BatchMode=yes agree: BatchMode only gags prompts
+  [[ -t 0 ]] && tty=(-t)                                   # -t works with BatchMode=yes, which only blocks prompts
   ssh -o BatchMode=yes -o ConnectTimeout=5 "${tty[@]+"${tty[@]}"}" "$host" "$cmd" || rc=$?
   if [[ $rc -eq 255 ]]; then die "host unreachable: is the VM running? (ssh $host)"; fi
   return $rc
@@ -1251,7 +1293,7 @@ remote_run_cmd() {
 
 tag_row() { # tag_row <workspace ref or ""> <title> <host> — write the row's description
   local ref="$1"
-  for _ in 1 2 3; do                    # no workspace:N in the output: the row list lags ~1s behind create
+  for _ in 1 2 3; do                    # no workspace:N in the output: the row list lags ~1s behind a create
     [[ -n "$ref" ]] && break
     sleep 1; ref=$(cmux_row_field "$2" id "$3")
   done
@@ -1261,16 +1303,18 @@ tag_row() { # tag_row <workspace ref or ""> <title> <host> — write the row's d
 }
 
 tmux_cmd() { # tmux_cmd <session> [command] [shared]
-  # The line a VM row's shell runs: create that tmux session (running <command>, then a shell) or take over
-  # the one already there. A task row owns its session, so it attaches with -d and hands the session THIS
-  # row's relay socket and workspace id, which is what makes `cmux notify` from inside it light up this row.
-  # The shell cmux starts after "remote session was lost" carries none of the CMUX_* variables, and
-  # ~/.tmux.conf carries both in update-environment (install.sh links home/.tmux.conf with --with-tmux-conf,
-  # or appends that one line to the file you already have), so attaching from it would mark them removed in the
-  # session and silence `cmux notify` there. Each is therefore taken from the session when the shell has
-  # none (the row's old relay port stays bound to the row), and only set when it is non-empty.
-  # A session you may also be sitting in yourself (the VM shell, a repo shell) is passed "shared" instead:
-  # the row joins your clients rather than evicting them, and leaves their relay socket as it is.
+  # The line that a VM row's shell runs. It creates that tmux session (running <command>, then a shell) or
+  # takes over the session that is already there. A task row owns its session, so it attaches with -d. It
+  # hands the session THIS row's relay socket and workspace id. That makes `cmux notify` from inside the
+  # session light up this row.
+  # After "remote session was lost", cmux starts a shell that carries none of the CMUX_* variables.
+  # The file ~/.tmux.conf lists CMUX_SOCKET_PATH and CMUX_WORKSPACE_ID in update-environment (install.sh
+  # links home/.tmux.conf with --with-tmux-conf, or appends that one line to the file you already have).
+  # So an attach from that shell would mark them removed in the session and silence `cmux notify` there.
+  # Therefore, when the shell has none, the line takes each variable from the session (the row's old relay
+  # port stays bound to the row). It sets each one only when it is non-empty.
+  # A session that you may also be in yourself (the VM shell, a repo shell) gets "shared" instead. Then the
+  # row joins your clients and does not evict them, and it leaves their relay socket as it is.
   # bin/cmux-hook mirrors this function; keep the two byte-for-byte.
   local run=""
   [[ -n "${2:-}" ]] && printf -v run '%q' "$2; exec bash"
@@ -1282,9 +1326,9 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared]
 }
 
 remote_row() { # remote_row <host> <session> <title> <command> [shared] [cmux flags…] — the local ssh row for a
-               # VM tmux session. One row per title and host: a row that is already there is re-tagged and
-               # (unless --no-focus) selected, never typed into, because its pane may hold a running agent
-               # whose prompt would swallow the tmux line. Only host_attach's detached branch sends.
+               # VM tmux session. One row per title and host. A row that is already there is re-tagged and
+               # (unless --no-focus) selected. It is never typed into, because its pane may hold a running
+               # agent whose prompt would swallow the tmux line. Only host_attach's detached branch sends.
   local host="$1" session="$2" title="$3" cmd="$4" shared="" c id line out; shift 4
   if [[ "${1:-}" == shared ]]; then shared=shared; shift; fi
   cmux_ok || die "cmux is not running; start cmux, then re-run this command"
@@ -1306,10 +1350,10 @@ remote_row() { # remote_row <host> <session> <title> <command> [shared] [cmux fl
 }
 
 need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer the repo from, so -r is required.
-  # Presence is all this tests: cmd_host has already normalised the value and refused an empty, relative,
-  # '.' or '..' one, so there is nothing left here that a command would have rejected for itself.
-  # -h wins over the requirement: asking what a command takes must answer, not complain that an argument
-  # it is asking about is missing. Each command's own parser then handles -h.
+  # This tests presence only. cmd_host has already normalized the value and refused an empty, relative,
+  # '.' or '..' one. So nothing is left here that a command would have rejected for itself.
+  # -h wins over the requirement. A question about what a command takes must get an answer, not a complaint
+  # that an argument it asks about is missing. Each command's own parser then handles -h.
   local host="$1" sub="$2" a; shift 2
   for a in "$@"; do
     case "$a" in
@@ -1340,8 +1384,8 @@ host_new_preflight() { # read-only checks in the same non-interactive SSH enviro
 
 host_new() { # create the worktree on the VM, then the cmux row here unless --no-workspace
   local host="$1" prompt="" repo_request="" requested_agent="" inspect="" no_workspace=0 args=(); shift
-  # both ways of giving a brief are consumed HERE and relayed the same way: forwarding --prompt-stdin to the
-  # VM instead would read nothing locally and pipe an empty prompt into ssh, creating the task with no brief
+  # Consume both ways of giving a brief HERE, and relay them the same way. A forwarded --prompt-stdin would
+  # read nothing locally and pipe an empty prompt into ssh. The VM would then create the task with no brief.
   while [[ $# -gt 0 ]]; do case "$1" in
     -p|--prompt) [[ $# -ge 2 ]] || die "new: $1 needs a brief"; prompt="$2"; shift 2 ;;
     --prompt-stdin) IFS= read -r -d '' prompt || true; shift ;;
@@ -1399,14 +1443,14 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
 }
 
 agent_on_vm() { # agent_on_vm <host> <session> — 0 when claude or codex holds a pane tty of that tmux session;
-                # the same pgrep session_state runs, so an older wt on the VM cannot hide an agent from us
+                # it runs the same pgrep as session_state, so an older wt on the VM cannot hide an agent
   local q; q=$(shell_join "=$2")
   remote_sh "$1" "for t in \$(tmux list-panes -s -t $q -F '#{pane_tty}' 2>/dev/null); do pgrep -t \"\${t#/dev/}\" -x 'claude|codex' >/dev/null 2>&1 && exit 0; done; exit 1" >/dev/null 2>&1
 }
 
 row_remote_field() { # row_remote_field <id> <field>… — this row's current remote fields (state, daemon slot) from one
-                     # rows_json read, joined by $WT_FS: never a tab, which read would collapse when a field is empty.
-                     # Capture it before splitting it: bash 3.2 applies `IFS=… read` to a here-string's $(…) too
+                     # rows_json read, joined by $WT_FS. Never a tab: read would collapse it when a field is empty.
+                     # Capture it before you split it: bash 3.2 applies `IFS=… read` to a here-string's $(…) too
   local id="$1"; shift
   rows_json | jq -r --arg id "$id" --arg fs "$WT_FS" \
     'first((.workspaces? // .)[] | select(.id == $id) | .remote as $r
@@ -1492,7 +1536,7 @@ recover_suspended_row() { # reconnect one suspended row, after freeing only its 
   local host="$1" id="$2" slot="$3" fallback="$4" c out rc=0 reason result reply body state tick port left=0
   local why="did not connect within 30 seconds"
   [[ -n "$slot" ]] || { warn "suspended row $id has no persistent daemon slot"; die "manual fallback: $fallback"; }
-  # Every refusal the relay script makes is on its stderr, and a VM's login files may print ahead of its result.
+  # The relay script writes every refusal to its stderr. A VM's login files may print before its result.
   out=$(clear_stale_relay "$host" "$slot" 2>&1) || rc=$?
   [[ $rc -ne 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
   if printf '%s\n' "$out" | grep -x 'keepalive missing' >/dev/null; then   # no -q: pipefail and SIGPIPE
@@ -1516,7 +1560,7 @@ recover_suspended_row() { # reconnect one suspended row, after freeing only its 
   for ((tick=0; tick<30; tick++)); do
     state=$(row_remote_field "$id" state)
     if [[ "$state" == connected ]]; then printf 'row: %s connected after reconnect\n' "$id"; return 0; fi
-    # The first reads may still say suspended; suspended again after any other state is cmux giving up.
+    # The first reads may still say suspended. Suspended again after any other state means cmux gave up.
     if [[ "$state" == suspended && $left -eq 1 ]]; then why="went back to suspended after cmux tried to reconnect it"; break; fi
     [[ -z "$state" || "$state" == suspended ]] || left=1
     sleep 1
@@ -1527,8 +1571,8 @@ recover_suspended_row() { # reconnect one suspended row, after freeing only its 
 ROW_SHELL_LAST=""
 row_shell_prompt() { # row_shell_prompt <id> — 0 when the row's last non-blank line ends in $, # or % and names a
                      # user@host, or is that character alone under a line that does (a two-line theme such as
-                     # workgrove's). A TUI footer such as `Context 100%` names none. 2 means screen unavailable.
-                     # ROW_SHELL_LAST is that last line
+                     # workgrove's). A TUI footer such as `Context 100%` names none. 2: the screen is unavailable.
+                     # ROW_SHELL_LAST holds that last line
   local id="$1" c screen lines above="" nl=$'\n' who='[[:alnum:]_.-]+@[[:alnum:]_.-]+' end='[$#%]$' bare='^[$#%]$'
   ROW_SHELL_LAST=""
   c=$(cmux_bin) || return 2
@@ -1549,14 +1593,14 @@ send_tmux_line() { # send_tmux_line <id> <session> — type the row's tmux attac
 }
 
 vm_session_detached() { # vm_session_detached <host> <session> — 0 only when the VM has that tmux session and lists no
-                        # client on it; one ssh call, and any failure, ssh's own included, is "not proven"
+                        # client on it. One ssh call; any failure, ssh's own included, counts as "not proven"
   local q; q=$(shell_join "=$2")
   remote_sh_raw "$1" "tmux has-session -t $q 2>/dev/null && c=\$(tmux list-clients -t $q 2>/dev/null) && [ -z \"\$c\" ]" >/dev/null 2>&1
 }
 
-reattach_shell_row() { # reattach_shell_row <id> <session> [host] — send the tmux line only to a row at a shell prompt;
-                       # with a host (after a reconnect) the row must also still be connected and that VM must list
-                       # no client on the session, checked in that order just before the send
+reattach_shell_row() { # reattach_shell_row <id> <session> [host] — send the tmux line only to a row at a shell prompt.
+                       # With a host (after a reconnect), the row must also still be connected, and that VM must list
+                       # no client on the session. The checks run in that order, immediately before the send
   local id="$1" session="$2" host="${3:-}"
   row_shell_prompt "$id" || return 1
   if [[ -n "$host" ]]; then   # the connection can drop again, and a restored pty can still hold tmux
@@ -1567,7 +1611,7 @@ reattach_shell_row() { # reattach_shell_row <id> <session> [host] — send the t
 }
 
 reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> — a reconnected row can say connected before its
-                           # new login shell paints a prompt, so try for 5 ticks ~1 s apart; each tick reads the screen
+                           # new login shell paints a prompt, so try for 5 ticks ~1 s apart. Each tick reads the screen
                            # first (local) and asks the VM only when that shows a prompt. 1: never proven, nothing sent
   local tick
   for ((tick=0; tick<5; tick++)); do
@@ -1585,7 +1629,7 @@ reinit_task_client() { # reinit_task_client <host> <id> <session> — restart th
   line=$(tmux_cmd "$session")
   nonce="WT_REINIT_${RANDOM}_${RANDOM}_$$_$(date +%s)"
   # A restored row may show a cached agent screen while its old client is on an abandoned pty.
-  # A fresh tmux status message proves this row is displaying that client's output; it sends no pane input.
+  # A fresh tmux status message proves that this row shows that client's output. It sends no pane input.
   IFS= read -r -d '' script <<'WT_CLIENT' || :
 session=$1 nonce=$2
 clients=$(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}' 2>/dev/null) || exit 1
@@ -1602,8 +1646,8 @@ WT_CLIENT" 2>/dev/null) || return $?
   c=$(cmux_bin) || return 1
   screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 2
   [[ "$screen" == *"$nonce"* && "$(row_remote_field "$id" state)" == connected ]] || return 2
-  # -E replaces the client process on its own pty. A fresh attach sends every terminal mode again;
-  # the row's shell regains its prompt if that attach fails. Recheck the client after the screen proof.
+  # -E replaces the client process on its own pty. A fresh attach sends every terminal mode again.
+  # If that attach fails, the row's shell gets its prompt back. Recheck the client after the screen proof.
   IFS= read -r -d '' script <<'WT_CLIENT' || :
 session=$1 expected=$2 line=$3
 clients=$(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}' 2>/dev/null) || exit 1
@@ -1662,12 +1706,13 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     fi
   fi
   if [[ $reattach -eq 1 ]]; then  # A dropped connection can leave the row with a fresh login shell while the VM
-                                  # keeps the pty that holds tmux, so the abandoned client is still listed and
+                                  # keeps the pty that holds tmux. The abandoned client is then still listed, and
                                   # session_state cannot call the session detached. The flag is the user's word
-                                  # that the row shows a shell; the screen check is the backstop that stops the
-                                  # tmux line from being typed into a running agent's prompt. A row reconnected
-                                  # just now may still show its pre-suspension screen and its restored pty may
-                                  # still hold tmux, which the user cannot have seen, so it gets recovery's proof.
+                                  # that the row shows a shell. The screen check is the backstop: it stops the
+                                  # tmux line from going into a running agent's prompt. A row that reconnected
+                                  # a moment ago may still show its pre-suspension screen, and its restored pty
+                                  # may still hold tmux. The user cannot have seen that, so the row gets
+                                  # reattach_recovered_row's proof.
     [[ -n "$id" ]] || die "no row $title $(row_tag "$host") is open; wt -H $host attach -r $(shell_join "$repo") $name opens one"
     c=$(cmux_bin)
     if [[ $recovered -eq 1 ]]; then
@@ -1689,7 +1734,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     fi
     remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
     close_row "$(cmux_row_field "$title" id "$host")"
-    for _ in 1 2 3; do                     # remote_row only ever creates when no row is left, so wait it out
+    for _ in 1 2 3; do                     # remote_row creates a row only when no row is left, so wait for that
       [[ -n "$(cmux_row_field "$title" id "$host")" ]] || break
       sleep 1
     done
@@ -1699,7 +1744,8 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     return 0
   fi
   if [[ "$state" == none && -z "$id" ]]; then
-    # No tmux session and no started marker means this task has never run; keep lost agents deliberate.
+    # No tmux session and no started marker means that this task has never run. Restarting a lost agent
+    # must stay a deliberate choice.
     if remote_sh "$host" "test ! -e $(shell_join "$path/.git/wt/$name.started") && ! tmux has-session -t $(shell_join "=$session") 2>/dev/null"; then
       remote_row "$host" "$session" "$title" "$(remote_run_cmd "$name" "$path")" --no-focus
       return 0
@@ -1712,8 +1758,8 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   [[ -n "$id" ]] || { remote_row "$host" "$session" "$title" ""; return 0; }
   c=$(cmux_bin)
   if [[ $recovered -eq 1 ]]; then
-    # The show above predates the reconnect, and a prompt-shaped footer alone says nothing about what holds
-    # the pty, so this waits for a prompt and asks the VM again, just before any send.
+    # The show above ran before the reconnect. A prompt-shaped footer alone says nothing about what holds
+    # the pty. So wait for a prompt, and ask the VM again immediately before any send.
     if reattach_recovered_row "$host" "$id" "$session"; then what=re-attached; fi
   elif [[ "$state" == *detached ]]; then   # show may be stale; prove the prompt and detached session again
     if reattach_shell_row "$id" "$session" "$host"; then what=re-attached
@@ -1751,8 +1797,8 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   local host="$1" name="" repo="" args=(); shift
   while [[ $# -gt 0 ]]; do case "$1" in -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift 2;; -h|--help) usage; exit 0;; -*) args+=("$1"); shift;; *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1"; shift;; esac; done
   [[ -n "$name" ]] || die "rm: worktree name required (wt -H $host rm -r <repo> <name>)"
-  # the row's identity is built from -r, which cmd_host has already refused unless it is an absolute path or
-  # a plain repo name — a relative '.' or '..' would make repo_id '-' and close_row would close nothing
+  # The row's identity comes from -r. cmd_host has already refused -r unless it is an absolute path or
+  # a plain repo name. A relative '.' or '..' would make repo_id '-', and close_row would close nothing.
   local session title; session=$(wt_session "$name" "$repo"); title=$(row_title "$name" "$repo")
   remote_wt "$host" rm "$name" -r "$repo" "${args[@]+"${args[@]}"}"
   close_row "$(cmux_row_field "$title" id "$host")"
@@ -1762,11 +1808,11 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
 cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac caches nothing about VMs
   local host="$1" sub="${2:-}" args=() v scoped=0; shift 2
   valid_host "$host" || die "invalid host '$host' (an ssh alias: letters, digits, '.', '_' and '-')"
-  while [[ $# -gt 0 ]]; do   # normalise -r once: a trailing '/' would change repo_id, and so the identity
+  while [[ $# -gt 0 ]]; do   # normalize -r once: a trailing '/' would change repo_id, and so the identity
     case "$1" in
       -r|--repo) [[ $# -ge 2 ]] || die "$sub: $1 needs a repo"; v="$2"; while [[ "$v" == */ && "$v" != / ]]; do v="${v%/}"; done
-                 # a relative path means nothing on the VM and its basename is not the repo's: host_rm would
-                 # then build a row title nobody has ('.' -> '-') and close a row that does not exist
+                 # a relative path means nothing on the VM, and its basename is not the repo's. host_rm would
+                 # then build a row title that no row has ('.' -> '-') and close a row that does not exist
                  case "$v" in /*) ;; ""|.|..|*/*) die "$sub: -r must be an absolute path on $host, or a repo name there (wt -H $host repos lists them)" ;; esac
                  args+=("$1" "$v"); shift 2 ;;
       *) args+=("$1"); shift ;;
@@ -1791,7 +1837,7 @@ cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac c
 }
 
 # ---------------------------------------------------------------- wt task
-task_exit() { # the launcher row closes on exit, so let a message be read first
+task_exit() { # the launcher row closes on exit, so give the user time to read a message first
   local rc=$?
   if [[ $rc -ne 0 && -t 0 ]]; then read -r -p 'press return' _ || true; fi
 }
@@ -1803,9 +1849,9 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
   local out_file err_file ssh_pid rc=0 tick
   out_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stdout.XXXXXX") || return 1
   err_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stderr.XXXXXX") || { rm -f "$out_file"; return 1; }
-  # Remote timeout bounds nvidia-smi that ignores TERM. The client deadline also bounds a remote
-  # command stuck in uninterruptible I/O: SSH may remain connected and answer keepalives forever.
-  # Redirect SSH to files so an unkillable child cannot hold open this function's output pipes.
+  # The remote timeout limits an nvidia-smi that ignores TERM. The client deadline also limits a remote
+  # command that is stuck in uninterruptible I/O: SSH may stay connected and answer keepalives forever.
+  # Redirect SSH to files, so that an unkillable child cannot hold this function's output pipes open.
   ssh -T -o BatchMode=yes -o NumberOfPasswordPrompts=0 -o StrictHostKeyChecking=yes \
       -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=5 \
       -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" <<'PROBE' &
@@ -1941,11 +1987,11 @@ cmd_hosts() {
       | { if have column; then column -t -s $'\t'; else cat; fi; }
   fi
 }
-repo_menu() { # repo_menu [table] — lays out cmd_repos' "<name><tab><path>[<tab><tasks>]" lines. Default: picker
-              # rows "<name><tab><path><tab><display>", the display being the name padded to the widest, then a
-              # grey location. "table": the terminal listing, a grey header then name, task count ("-" for none)
-              # and location per repo. The location is "~" for this home, then at most the three folders above
-              # the repo, never the repo itself.
+repo_menu() { # repo_menu [table] — lays out cmd_repos' "<name><tab><path>[<tab><tasks>]" lines.
+              # Default: task picker rows "<name><tab><path><tab><display>". The display is the name padded
+              # to the widest name, then a gray location. "table": the terminal listing. It has a gray header,
+              # then name, task count ("-" for none) and location per repo. The location is "~" for this
+              # home, then at most the three folders above the repo, never the repo itself.
   awk -F'\t' -v home="$HOME" -v table="${1:-}" -v grey=$'\033[90m' -v off=$'\033[0m' '
     function loc(p,   par, m, a) {   # the local home as "~", then the three folders above the repo, never the repo
       if (home != "" && index(p, home "/") == 1) p = "~" substr(p, length(home) + 1)
@@ -2017,7 +2063,7 @@ cmd_task() {
 
   if [[ "$kind" != vm-shell && -z "$repo" ]]; then
     local list sel                               # "<name><tab><path>": two folders can hold the same basename,
-    if [[ "$where" == local ]]; then             # so the path column, not the name, is what starts the task
+    if [[ "$where" == local ]]; then             # so the path column, not the name, starts the task
       list=$(cmd_repos) || exit 1                # cmd_repos has already said what is wrong; do not repeat it
       [[ -n "$list" ]] || die "task: no repos in WT_REPOS_DIR ($REPOS_PATH); clone one, or pass -r <path>"
     else
@@ -2058,12 +2104,12 @@ cmd_task() {
 }
 
 # ---------------------------------------------------------------- dispatch
-# One guard, not one per caller: jq reads and writes every sidecar (meta_get/meta_set), reads cmux's row list
-# and builds the relay body, so a missing jq is not a per-command problem. Left to fail where it is used it
-# fails quietly — meta_get's error is swallowed at every call site and `base` silently becomes default_base(),
-# which is the base `wt rm` then judges "not merged" against — or halfway through `wt new`, after
-# `git worktree add` has already registered a worktree. So refuse up front, and leave `wt help` readable
-# so the line that fixes it is still one command away.
+# One guard, not one per caller. jq reads and writes every sidecar (meta_get/meta_set), reads cmux's row
+# list and builds the relay body, so a missing jq is not a per-command problem. Left to fail where it is used,
+# it fails in one of two ways. It can fail quietly: every call site swallows meta_get's error, and `base`
+# silently becomes default_base(), the base that `wt rm` then judges "not merged" against. Or it can fail
+# halfway through `wt new`, after `git worktree add` has already registered a worktree. So refuse up front,
+# but keep `wt help` readable, so that the line that fixes the problem is still one command away.
 need_jq() { have jq || die "jq not found (brew install jq, or sudo apt-get install -y jq)"; }
 if [[ "${1:-}" == -H || "${1:-}" == --host ]]; then
   [[ $# -ge 3 ]] || die "usage: wt -H <host> <command> [args] (wt help)"

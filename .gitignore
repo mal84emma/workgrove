@@ -4,9 +4,9 @@
 # Machine-local overrides (~/.zshrc.local, ~/.gitconfig.local, ~/.zshenv.local).
 *.local
 
-# Worktrees wt makes inside this very repo. ~/.gitignore_global carries these too,
-# but install.sh will not overwrite an excludesFile you already have, so a clone
-# cannot depend on it.
+# Worktrees that wt makes inside this repo. ~/.gitignore_global lists them too,
+# but install.sh does not overwrite an excludesFile that you already have. So a
+# clone cannot depend on ~/.gitignore_global.
 .worktrees/
 .claude/worktrees/
 
@@ -14,8 +14,8 @@
 tmp/
 */tmp/
 
-# The mutable copies install.sh generates from the .base templates; only the
-# templates are versioned.
+# The machine-local copies that install.sh makes from the .base templates. Only
+# the templates are versioned.
 home/.claude/settings.json
 home/.claude.json
 home/.codex/config.toml
@@ -35,5 +35,5 @@ id_rsa*
 id_ed25519*
 id_ecdsa*
 
-# A real ssh config; the repo ships docs/ssh-config.example instead.
+# A real ssh config. The repo ships docs/ssh-config.example instead.
 home/.ssh/config
