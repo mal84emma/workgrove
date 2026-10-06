@@ -103,7 +103,9 @@ Apply the guide to the prose that you write or edit in these files:
 - the `#` comments in `docs/ssh-config.example`
 - `AGENTS.md` and `CLAUDE.md` at the repository root
 - `home/.claude/AGENTS.md` and the skills in `home/.agents/skills/`
-- the code comments in `bin/`, `install.sh`, `test/`, and the files in `home/`
+- the code comments in `bin/`, `install.sh`, `test/`, the files in `home/`, `Brewfile`, `.gitignore`,
+  and `vscode/settings-snippet.jsonc`
+- the help text of `wt` and `azml-ssh-host` (see [Edit comments and help text](#edit-comments-and-help-text))
 
 ### Keep code and literals exact
 
@@ -130,6 +132,22 @@ If you must change one, update every file that cites it in the same change.
 | `### Recover a VM row` in `README.md` | The README's Daily use table, and `docs/azml-compute.md` (`../README.md#recover-a-vm-row`) |
 | `## Opening apps` in `home/.claude/AGENTS.md` | The worktree-show skill ("`AGENTS.md`, Opening apps") |
 | The `name:` of each skill | `home/.claude/AGENTS.md`, the other skills, and the README's skills table |
+
+### Edit comments and help text
+
+- Change only the comment text. A heredoc body and a quoted string are code, also when they hold
+  an embedded awk, perl, or jq program or a script for a VM. Do not change their comments.
+- Keep `# shellcheck` directives exact, and keep each one directly above the line that it applies to.
+  Keep commented-out code and settings exact, for example `# brew "azure-cli"` in `Brewfile`.
+- Do not change lines 2–121 of `home/.zshrc`. They are the stock oh-my-zsh template, which is kept close
+  to upstream so that upstream changes are easy to compare.
+- `usage()` in `bin/wt` and `bin/azml-ssh-host` prints the file's leading `#` block as the help text.
+  Keep that block contiguous, and keep the syntax and alignment of each usage line.
+  `test/wt-smoke.sh` checks for the text `wt new  [name]`, with two spaces.
+- `test/wt-smoke.sh` compares `tmux_cmd` in `bin/wt` and in `bin/cmux-hook` with the full-line
+  comments removed. So a trailing comment inside `tmux_cmd` must be the same in both files.
+- `test/wt-smoke.sh` reads the `jq -s -c '…'` program and the `grep -Ex '…'` pattern out of
+  `bin/cmux-hook` with `sed`. Do not put a `'` in a trailing comment on those lines.
 
 ### Edit agent instructions with care
 
