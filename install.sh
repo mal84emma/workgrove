@@ -656,9 +656,9 @@ bashrc_hooked() {
   [[ $first == "$BASHRC_SRC"* ]]       # with any comment that an older version of this script put after it
 }
 
-# check_bashrc: hook_bashrc runs seventh, long after files have moved, so its three refusals would land on a
-# half-installed machine. This function makes them instead, while nothing has been touched, with the same
-# wording. Two cases are not refusals:
+# check_bashrc: hook_bashrc runs after the linking steps, long after files have moved. So its three refusals
+# would land on a half-installed machine. This function makes them instead, while nothing has been touched,
+# with the same wording. Two cases are not refusals:
 #   - A ~/.bashrc that is a live symlink. hook_bashrc skips it and says so at the point of the skip, so the
 #     warning is not buried under the output of the whole install.
 #   - A mode that hook_bashrc will never copy. On a Linux VM, an image that ships a 664 ~/.bashrc (umask 002,
@@ -1122,7 +1122,7 @@ configure_git() {
 }
 
 # report: the EXIT trap, armed when files start to move. It has two jobs:
-#   1. It removes the half-built files that the two mktemp steps leave behind when a signal arrives between
+#   1. It removes the half-built files that the mktemp steps leave behind when a signal arrives between
 #      building one and moving it into place. An EXIT trap runs on SIGINT and SIGTERM too. So without this
 #      job, a ^C mid-run orphans a ~/.claude/settings.json.XXXXXX for good.
 #   2. It says where anything that was in the way ended up. But a die() reaches the trap in the same way as a
@@ -1151,7 +1151,7 @@ report() {
 # report_skipped: names each piece of opt-in config that this run did not install, and the flag that would
 # install it. A default install deliberately leaves the user's own shell, git and tmux alone. A user who wanted
 # the author's prompt should not have to read this script to find out why it never arrived.
-# --with-claude-ui is listed the same way, though what it leaves out is three keys of ~/.claude/settings.json,
+# --with-claude-ui is listed the same way, though what it leaves out is the UI keys of ~/.claude/settings.json,
 # not a file of its own. --with-cmux-config is listed too, though what it leaves out is the rest of a file whose
 # one machinery entry hook_cmux_config merged in anyway.
 # This function is deliberately not part of report(). report() is the EXIT trap, so it also runs after a die().

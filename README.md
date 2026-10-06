@@ -574,10 +574,12 @@ any of these:
 
 - Uncommitted changes.
 - Commits that are neither merged into the base nor pushed.
-- A file copied in through `.wt-include` that no longer matches its source in the main checkout (the repo's primary working tree, not a worktree).
-- A base ref that it cannot compare the worktree against. This is a base ref that was deleted since, or a
+- A base ref that it cannot compare the branch with. This is a base ref that was deleted since, or a
   sidecar from an older `wt` that holds the literal `HEAD`. `HEAD` resolves to the worktree's own tip, so every
   other count would read as nothing to lose.
+- A HEAD that is not on the task's branch `wt/<name>`, for example during a `git bisect` or after a
+  detached checkout. No branch keeps that state, so removing the worktree would lose it.
+- A file that `.wt-include` covers and that was edited or created inside the worktree.
 
 > **Warning:** `--force` overrides these refusals. It also discards unmerged commits.
 
@@ -587,7 +589,7 @@ merged and whose tree is clean.
 When you ask an agent to remove its own task, the agent does these steps:
 
 1. It reports its work.
-2. It changes to the main checkout.
+2. It changes to the main checkout (the repo's primary working tree, not a worktree).
 3. It runs `wt rm <name> -r <absolute-repo-path>`.
 
 `wt rm` still refuses if its command runs inside the worktree that it removes. When the agent closes its own
