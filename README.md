@@ -747,6 +747,7 @@ own.
 - Task work happens in a worktree made with `wt new`.
 - A session inside `.worktrees/<name>` stays there and commits on `wt/<name>`.
 - Each session reports its row and branch.
+- Each session writes short, plain messages, leads with the result, and names what it did not check.
 
 The file also states explicitly that these rules are a convention and not a sandbox.
 

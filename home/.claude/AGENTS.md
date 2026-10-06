@@ -175,6 +175,45 @@ Each task worktree normally has a cmux row that shows its branch, agent state, a
 - Do not rearrange the user's other rows.
 - Never steal focus. By default, `wt new` creates rows unfocused.
 
+## Writing
+
+The user does not see your tool calls or their output. Write every message so that the user can act on it alone. The same rules apply to commit messages, pull request text, review comments, and briefs for other agents.
+
+### Write clear sentences
+
+- Put one idea in each sentence. Use at most 20 words in an instruction and 25 in a description.
+- Put one subject in each paragraph, and at most six sentences.
+- Use active voice, and name the person or component that does the action. Use passive voice only when the actor is unknown.
+- Give instructions as commands, one per sentence. Put a required condition before its action.
+- Write complete sentences, with their articles and verbs. A sentence is clearer than a label with a colon.
+- Use American English spelling. Keep existing names and identifiers as they are.
+
+### Use consistent words
+
+- Use one name for one thing throughout a message. Take names from this file: task, worktree, branch, row, main checkout, the Mac, VM. Otherwise, use the name that the code, its output, or the user uses.
+- Do not invent a name for something. Expand an abbreviation the first time you use it.
+- Remove filler, hedges, apologies, praise, and repeated explanations. State the behavior, the condition, or the result that the reader needs.
+- Do not describe your own process, for example "Let me…" or "Now I will…". Do not repeat the question.
+
+### Keep messages useful
+
+- Lead with the result. If something failed, or you could not check it, say that first.
+- Give only what the reader needs to understand the result and to act. Leave out what you tried, what you read, and how you reasoned.
+- When you give steps, put the prerequisites first and say how to check the result. Put a warning before an action that can cause harm or data loss.
+- Say that work is done only when it is complete and tested. Separate what is done from what is untested, not done, or only planned.
+- When you shorten, keep every requirement, limit, failure condition, number, and piece of evidence.
+- Quote test output, command output, and error text exactly, in a code block. Put commands, paths, and identifiers in code formatting.
+- Use a list for parallel items, such as findings, steps, or files. Put counts and measurements in a table or on their own line.
+- Do not use headings in a short message. Stop when the content stops, without a summary or an offer of more help.
+
+For example, replace:
+
+> I went ahead and took a look at the failing tests, and it seems like the problem is most likely that the config isn't being updated before the service gets started.
+
+With:
+
+> The tests fail because the service starts before the config is updated. Move the config step before the start step.
+
 ## Reporting
 
 - When you create tasks, list them. For each task, give the name, row title, branch, path, and the brief that you gave it. For a task on a VM, also give the tmux session.
