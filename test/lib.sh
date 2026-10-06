@@ -1,12 +1,12 @@
 # shellcheck shell=bash
 #
-# test/lib.sh: the assertion vocabulary that test/install-smoke.sh and test/wt-smoke.sh both use.
+# test/lib.sh: the assertion vocabulary that every suite in test/ uses.
 # A suite sources this file; nothing runs it directly. It sets no shell options, because the suite that
 # sources it owns those.
 #
 # Why it exists: this vocabulary was first written inside install-smoke.sh, and wt-smoke.sh was about to
 # make a second copy of it. A counter that two files increment drifts. An assert_eq that is fixed in one
-# file but not in the other is worse than no assert_eq. So the two suites share one body, and each suite
+# file but not in the other is worse than no assert_eq. So the suites share one body, and each suite
 # keeps only the fixtures and helpers that are its own.
 #
 # Nothing here is installed: install.sh links home/, bin/ and the skills, and never looks at test/.
@@ -143,13 +143,13 @@ end_scenario() {
   fi
 }
 
-# lib_cleanup: the EXIT trap that both suites install. KEEP=1 keeps the scratch tree for inspection. Any
+# lib_cleanup: the EXIT trap that every suite installs. KEEP=1 keeps the scratch tree for inspection. Any
 # failure also keeps it, because a failed assertion is when you most want to examine what was left behind.
 #
 # The `rm -rf` is the only destructive line in this file. It is also the only path that a suite reaches
-# without a guard of its own. Both suites make $TEST_ROOT with `mktemp -d`, resolve it with `pwd -P`, and
-# refuse a root inside the real home BEFORE they arm this trap. After that, every fixture path that they
-# touch goes through their own guard_scratch_root.
+# without a guard of its own. Every suite makes $TEST_ROOT with `mktemp -d`, resolves it with `pwd -P`, and
+# refuses a root inside the real home BEFORE it arms this trap. After that, install-smoke.sh and wt-smoke.sh
+# also check their fixture paths with a guard of their own: guard_scratch_home and guard_scratch_root.
 #
 # This file cannot see any of that, and it is written for suites that do not exist yet. So lib_cleanup
 # also refuses the paths that can only be a mistake: "/", the home directory itself, and any ancestor of

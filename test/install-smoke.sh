@@ -570,7 +570,8 @@ scenario_default_empty() {
     # ... and so must tmux's update-environment line, appended, not linked.
     assert_regular "$h" .tmux.conf
     assert_eq "update-environment lines in ~/.tmux.conf" 1 "$(count_matches "$h/.tmux.conf" "$TMUX_LINE")"
-    # report_skipped must name all six, or a user who wanted them never learns that the flag exists.
+    # report_skipped must name each flag that the run did not get, or a user who wanted one never learns that
+    # the flag exists. Scenario 17a checks the Mac-only --with-cmux-config.
     local f
     for f in "${FIVE_FLAG[@]}"; do
       assert_grep "install.sh output names $f as skipped" "$log" "$f"
@@ -652,7 +653,7 @@ scenario_opinionated() {
     done
     assert_link "$h" "$THEME_DST" "$THEME_SRC"
     assert_status_line "$h" yes
-    assert_claude_ui "$h" yes                # --opinionated-config is all six, the UI keys included
+    assert_claude_ui "$h" yes                # --opinionated-config includes --with-claude-ui
     # Exactly one backup dir, holding all five originals with their own content.
     n=0
     bk=""
@@ -800,11 +801,11 @@ scenario_unknown_flag() {
   end_scenario
 }
 
-# 8. The sixth flag. It differs from the other five in one way: it installs no file; it gates keys inside a
-#    COPIED ~/.claude/settings.json. It is like them in the way that matters: it is sticky, and its record is
-#    the keys themselves. A refactor is most likely to get this second part wrong. This part also decides
-#    whether `wt update --refresh-config`, which cannot forward the flag, keeps a machine's UI settings or
-#    silently deletes them.
+# 8. --with-claude-ui. It differs from the other --with-… flags in one way: it installs no file; it gates
+#    keys inside a COPIED ~/.claude/settings.json. It is like them in the way that matters: it is sticky, and
+#    its record is the keys themselves. A refactor is most likely to get this second part wrong. This part
+#    also decides whether `wt update --refresh-config`, which cannot forward the flag, keeps a machine's UI
+#    settings or silently deletes them.
 scenario_claude_ui() {
   begin_scenario "8a. --with-claude-ui keeps the UI keys and links no file"
   local h log i f

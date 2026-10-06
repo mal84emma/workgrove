@@ -24,6 +24,8 @@
 #                                                             - commits on the branch that are not merged and are not
 #                                                               still on a remote. "Merged" means an ancestor of the
 #                                                               base, or a squash merge whose changes are all in the base
+#                                                             - a base ref that rm cannot compare the branch with
+#                                                               (a deleted ref, or a literal HEAD from an older wt)
 #                                                             - a HEAD that is not that branch
 #                                                             - an edited or newly created .wt-include file
 #                                                             --force waives all of these refusals.
@@ -668,7 +670,7 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
                # (dry run included) both read this, so the two can never disagree.
   # Every commit check is about the BRANCH, never the worktree's HEAD. Under `git bisect`, `git checkout <sha>`
   # or `--detach`, the HEAD is usually an ancestor of the base. A HEAD-based check then reads "clean, 0 ahead,
-  # merged". But `branch -D` still destroys every commit that the branch holds, and its reflog too. $B
+  # merged". But `branch -D` still destroys every commit that the branch holds, and its reflog too. $b
   # resolves whether or not it is checked out. The worktree shares its refs with the main checkout, so ask
   # $REPO about it.
   local n="$1" p="$2" b="$3" base="$4" dirty ahead=0 merged=0 base_ok=0 head_ref f why="" rc

@@ -648,8 +648,8 @@ if [[ $ctrl == false ]] && tokenize "$cmd"; then
   exit 0
 fi
 # The command is not one clean simple command. The hook answers only a command that STARTS with one of the
-# four. The start is the one place where the hook can find a guarded command without a shell parser. Later in
-# the command, a `git push` could equally be a line of a commit message in a heredoc.
+# commands in GUARDED. The start is the one place where the hook can find a guarded command without a shell
+# parser. Later in the command, a `git push` could equally be a line of a commit message in a heredoc.
 lead='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(cd[[:space:]]+[^[:space:]&;|]+[[:space:]]*&&[[:space:]]*)?'
 if [[ $cmd =~ $lead$GUARDED ]]; then
   deny "${BASH_REMATCH[3]} is approved only as one simple command: no pipe, redirect, && or ;, no \$(...), \

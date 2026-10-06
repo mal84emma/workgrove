@@ -11,10 +11,9 @@
 # both ways. Otherwise bin/wt stays untested under the interpreter that matters. Scenario 11 at least parses
 # bin/wt with /bin/bash -n on every run, so a green 5.x run cannot hide a 3.2 syntax error.
 #
-# Why this file exists: bin/wt is 1500 lines that create and DESTROY work. `wt rm` deletes a worktree, its
-# branch and its uncommitted files. `wt prune` does the same in a loop, and it does not ask twice. Only
-# rm_reasons stands between a task and a lost afternoon. Each of its branches is a bug that was found the
-# hard way:
+# Why this file exists: bin/wt creates and DESTROYS work. `wt rm` deletes a worktree, its branch and its
+# uncommitted files. `wt prune` does the same in a loop, and it does not ask twice. Only rm_reasons stands
+# between a task and a lost afternoon. Each of its branches is a bug that was found the hard way:
 #   - a base stored as the literal "HEAD", which compares a worktree with itself
 #   - a commit count taken from a detached HEAD instead of from the branch
 #   - an .env that .wt-include copied in, which is in no git and no backup
@@ -28,7 +27,7 @@
 # The absolute rule: nothing here may touch anything outside this run's scratch root. Nothing here may touch
 # cmux, tmux, ssh or the network. Every repository is an mktemp -d under $TEST_ROOT. Every wt run goes
 # through wt_run, which pins HOME to a scratch home. wt_run also points WT_REPOS_DIR at the scratch repos
-# and CMUX_BUNDLED_CLI_PATH at a stub. It unsets the four CMUX_*/WT_* variables that would otherwise let
+# and CMUX_BUNDLED_CLI_PATH at a stub. It unsets the CMUX_*/WT_* variables that would otherwise let
 # this machine's real session leak in. guard_scratch_root refuses any path outside the scratch root. The
 # suite asserts first that the guard refuses: scenario 0 is that proof. Every git command that builds a
 # fixture goes through fixture_git, which guards the same way. So no fixture step can reach a repository
@@ -323,7 +322,7 @@ set_line() {
 # Each of those characters is a way for a shell to mangle a string that it must only carry.
 PROMPT_FIXTURE=$'first "line": $HOME `date` \'quoted\' back\\slash\nsecond line: café — ünïcode ✓'
 
-# stub_cmux dead|alive: cmux_bin (bin/wt:~76) prefers $CMUX_BUNDLED_CLI_PATH when it is executable. So
+# stub_cmux dead|alive: cmux_bin in bin/wt prefers $CMUX_BUNDLED_CLI_PATH when it is executable. So
 # this setting alone decides what cmux_ok believes. "dead" logs its argv and exits 1, like a cmux that is not
 # running. "alive" answers ping with 0 and serves $WT_ROWS for `workspace list --json`. Both truncate the
 # log, so assert_cmux_calls always reads the calls of one scenario only.
@@ -2005,8 +2004,8 @@ scenario_shared_tmux_cmd() {
   end_scenario
 }
 
-# 11. lib_cleanup's backstop, which no real run reaches. Both suites build $TEST_ROOT with mktemp -d, and
-# both refuse one inside the real home before they arm the trap. So the refusal below fires only for a suite
+# 12. lib_cleanup's backstop, which no real run reaches. Every suite builds $TEST_ROOT with mktemp -d, and
+# refuses one inside the real home before it arms the trap. So the refusal below fires only for a suite
 # that did neither. Nobody knows that a branch is broken when nothing exercises it. Both cases run on
 # directories inside this run's own scratch root, with HOME pointed at one of them. So even if the guard
 # were wrong, nothing outside the scratch root is so much as named.
@@ -2049,7 +2048,7 @@ expected_assertions() {
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
 FIXED_ASSERTIONS=596
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
-# is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
+# is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
 #   - Scenario 8 is skipped whole. There, `wt new` without --no-workspace asks the Mac for a row over the
 #     relay and never consults cmux. check_identity asks tmux, not the row list. So neither the "row
