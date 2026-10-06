@@ -1,20 +1,20 @@
-# Security baseline: keep local writes inside the selected workspace and require
-# an approval before crossing the sandbox boundary. That approval is granted by a
-# model, not by you: with approvals_reviewer = "auto_review" Codex reviews its own
-# escalation requests and can approve them in seconds with no human prompt, so the
-# sandbox boundary is a speed bump, not a consent gate. Set approvals_reviewer =
-# "user" to be asked yourself.
+# Security baseline: keep local writes inside the selected workspace, and require
+# an approval before Codex crosses the sandbox boundary. A model grants that
+# approval, not you. With approvals_reviewer = "auto_review", Codex reviews its own
+# escalation requests and can approve them in seconds with no human prompt. So the
+# sandbox boundary is a speed bump, not a consent gate. To get the prompt
+# yourself, set approvals_reviewer = "user".
 approval_policy = "on-request"
 approvals_reviewer = "auto_review"
 sandbox_mode = "workspace-write"
 allow_login_shell = false
 
-# Keep command-line network access off. Hosted search remains available through
-# the lower-exposure cached search index.
+# Keep command-line network access off. Hosted search stays available through
+# the cached search index, which has lower exposure.
 web_search = "cached"
 
-# Cache credentials in the macOS Keychain rather than a plaintext ~/.codex/auth.json.
-# install.sh drops this line on Linux, where there is no Keychain to store them in.
+# Cache credentials in the macOS Keychain, not in a plaintext ~/.codex/auth.json.
+# On Linux, install.sh drops this line, because Linux has no Keychain for them.
 cli_auth_credentials_store = "keyring"
 
 model = "gpt-5.6-sol"
@@ -24,26 +24,26 @@ service_tier = "default"
 [sandbox_workspace_write]
 network_access = false
 
-# Connected apps: keep the destructive and open-world classes off entirely, and
-# gate their other tools behind an approval. As above, that approval is reviewed
-# by a model rather than by you; set approvals_reviewer = "user" here too to be
-# asked yourself.
+# Connected apps: keep the destructive and open-world classes fully off, and put
+# their other tools behind an approval. As above, a model reviews that approval,
+# not you. To get the prompt yourself, set approvals_reviewer = "user" here too.
 [apps._default]
 approvals_reviewer = "auto_review"
 default_tools_approval_mode = "prompt"
 destructive_enabled = false
 open_world_enabled = false
 
-# Pass the full environment to spawned commands, but automatically remove common
-# secret-bearing variable names. inherit = "core" would hand them a reduced
-# environment instead: HOME, PATH, USER and a handful more, nothing else.
+# Pass the full environment to spawned commands, but automatically remove the
+# variables with common secret-bearing names. With inherit = "core", spawned
+# commands would get a reduced environment instead: HOME, PATH, USER, and a few
+# more, nothing else.
 [shell_environment_policy]
 inherit = "all"
 ignore_default_excludes = false
 
 # ignore_default_excludes = false keeps Codex's own default excludes, which
-# already strip *KEY*, *SECRET* and *TOKEN*, so the last three entries below are
-# belt-and-braces; only AWS_*, AZURE_* and GITHUB_* add anything.
+# already strip *KEY*, *SECRET*, and *TOKEN*. So the last three entries below are
+# a redundant safeguard. Only AWS_*, AZURE_*, and GITHUB_* add anything.
 [shell_environment_policy.filters]
 "AWS_*" = "exclude"
 "AZURE_*" = "exclude"
@@ -52,13 +52,13 @@ ignore_default_excludes = false
 "*SECRET*" = "exclude"
 "*KEY*" = "exclude"
 
-# Do not persist new CLI transcript history locally. Existing history is left
-# untouched so that deleting it remains an explicit user decision.
+# Do not persist new CLI transcript history locally. This setting leaves existing
+# history untouched, so that deleting it stays an explicit user decision.
 [history]
 persistence = "none"
 
-# Do not export local telemetry, and never include prompt text if telemetry is
-# enabled later.
+# Do not export local telemetry. If telemetry is enabled later, never include
+# prompt text.
 [otel]
 exporter = "none"
 log_user_prompt = false

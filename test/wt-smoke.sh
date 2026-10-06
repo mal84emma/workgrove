@@ -1,63 +1,71 @@
 #!/usr/bin/env bash
 #
 # test/wt-smoke.sh: run bin/wt against throwaway repositories and assert what it did.
-#   bash test/wt-smoke.sh            (KEEP=1 leaves the scratch repos behind for inspection)
-#   WT_BASH=/bin/bash bash test/wt-smoke.sh    (which bash runs bin/wt — see below)
+#   bash test/wt-smoke.sh            (KEEP=1 keeps the scratch repos for inspection.)
+#   WT_BASH=/bin/bash bash test/wt-smoke.sh    (WT_BASH selects the bash that runs bin/wt. See below.)
 #
-# Two interpreters, and they are not the same question. This file is run by whatever bash invoked it;
-# bin/wt is run by $WT_BASH, printed in the header line. They default to the same `bash` from PATH, which on
-# the author's Mac is Homebrew's 5.x — but bin/wt starts `#!/usr/bin/env bash` and a fresh Mac has no bash
-# but /bin/bash 3.2.57, so 3.2 is the interpreter bin/wt gets there until Homebrew arrives. Run this file
-# both ways, or the one that matters goes untested under the one that matters. Scenario 11 does at least
-# parse bin/wt with /bin/bash -n on every run, so a 3.2 syntax error cannot hide behind a green 5.x run.
+# Two interpreters are in use, and they answer different questions. The bash that started this file runs it.
+# $WT_BASH runs bin/wt, and the header line prints it. Both default to the same `bash` from PATH. On the
+# author's Mac, that is Homebrew's 5.x. But bin/wt starts with `#!/usr/bin/env bash`, and a fresh Mac has no
+# bash but /bin/bash 3.2.57. So on a fresh Mac, bin/wt gets 3.2 until Homebrew is installed. Run this file
+# both ways. Otherwise bin/wt stays untested under the interpreter that matters. Scenario 11 at least parses
+# bin/wt with /bin/bash -n on every run, so a green 5.x run cannot hide a 3.2 syntax error.
 #
-# Why this file exists: bin/wt is 1500 lines that create and DESTROY work — `wt rm` deletes a worktree, its
-# branch and its uncommitted files, and `wt prune` does it in a loop without being asked twice. Everything
-# standing between a task and a lost afternoon is rm_reasons, whose branches are each a bug that was found
-# the hard way: a base stored as the literal "HEAD" that compares a worktree with itself, a commit count
-# taken from a detached HEAD instead of from the branch, an .env copied in by .wt-include that is in no git
-# and no backup — and, the other way round, a squash-merged branch that only --force could remove, which
-# waived the other checks too. None of that was covered by anything. These scenarios cover the refusals first, then
-# what `wt new` records (the sidecar every later command reads), how a base is canonicalised (the invariant
-# the refusals rest on), the name rules, the read-only commands, and the argument handling of `wt -H`.
+# Why this file exists: bin/wt is 1500 lines that create and DESTROY work. `wt rm` deletes a worktree, its
+# branch and its uncommitted files. `wt prune` does the same in a loop, and it does not ask twice. Only
+# rm_reasons stands between a task and a lost afternoon. Each of its branches is a bug that was found the
+# hard way:
+#   - a base stored as the literal "HEAD", which compares a worktree with itself
+#   - a commit count taken from a detached HEAD instead of from the branch
+#   - an .env that .wt-include copied in, which is in no git and no backup
+#   - the other way round, a squash-merged branch that only --force could remove, and --force also waived
+#     the other checks
+# Nothing covered any of these cases. These scenarios cover the refusals first. Next comes what `wt new`
+# records: the sidecar that every later command reads. Then comes how a base is canonicalized, which is the
+# invariant that the refusals rest on. Last come the name rules, the read-only commands, and the argument
+# handling of `wt -H`.
 #
-# The absolute rule: nothing here may touch anything outside this run's scratch root, and nothing here may
-# touch cmux, tmux, ssh or the network. Every repository is an mktemp -d under $TEST_ROOT and every wt run
-# goes through wt_run, which pins HOME to a scratch home, points WT_REPOS_DIR at the scratch repos and
-# CMUX_BUNDLED_CLI_PATH at a stub, and unsets the four CMUX_*/WT_* variables that would otherwise let this
-# machine's real session leak in. guard_scratch_root refuses any path outside the scratch root and is
-# asserted, first, to refuse — scenario 0 is that proof. Every git command that builds a fixture goes
-# through fixture_git, which guards the same way, so no fixture step can reach a repository of the user's.
+# The absolute rule: nothing here may touch anything outside this run's scratch root. Nothing here may touch
+# cmux, tmux, ssh or the network. Every repository is an mktemp -d under $TEST_ROOT. Every wt run goes
+# through wt_run, which pins HOME to a scratch home. wt_run also points WT_REPOS_DIR at the scratch repos
+# and CMUX_BUNDLED_CLI_PATH at a stub. It unsets the four CMUX_*/WT_* variables that would otherwise let
+# this machine's real session leak in. guard_scratch_root refuses any path outside the scratch root. The
+# suite asserts first that the guard refuses: scenario 0 is that proof. Every git command that builds a
+# fixture goes through fixture_git, which guards the same way. So no fixture step can reach a repository
+# of the user's.
 #
-# What a green run does NOT exercise: real ssh (scenario 10 uses a fake SSH server, and scenario 9 only
-# asserts the paths that return before remote_sh), cmux itself (a stub answers for it), tmux, the
-# `wt task`/`wt driver` pickers, `wt pr`, `wt sync`, `wt update` and VS Code (`wt open` runs a stub `code`).
+# What a green run does NOT exercise:
+#   - real ssh: scenario 10 uses a fake SSH server, and scenario 9 asserts only the paths that return before
+#     remote_sh
+#   - cmux itself (a stub answers for it), tmux, the `wt task`/`wt driver` pickers, `wt pr`, `wt sync`,
+#     `wt update`, and VS Code (`wt open` runs a stub `code`)
 #
-# is_remote() is true on anything that is not a Mac, and bin/wt has no FORCE_OS to lie to it with the way
-# install.sh does — adding one would be a change to the code under test. So the assertions that depend on
-# being the Mac side of the ssh are guarded by $OS and counted as DARWIN_ASSERTIONS: see the comment there
-# for what that leaves uncovered on Linux.
+# is_remote() is true on any machine that is not a Mac. Unlike install.sh, bin/wt has no FORCE_OS to fake
+# that result, and adding one would change the code under test. So the $OS check guards the assertions
+# that depend on the Mac side of the ssh, and DARWIN_ASSERTIONS counts them. The comment there says what
+# that leaves uncovered on Linux.
 #
-# Assertions are silent when they hold and loud when they do not; the script prints one line per scenario
-# and a pass/fail count, and exits non-zero if any assertion failed. The count itself is asserted, against
-# expected_assertions below, because a scenario that quietly stops checking things still prints "ok".
+# An assertion is silent when it holds and loud when it fails. The script prints one line per scenario and
+# a pass/fail count. It exits non-zero if any assertion failed. The suite also asserts the count itself,
+# against expected_assertions below, because a scenario that silently stops checking still prints "ok".
 set -euo pipefail
 
-# Fixtures are created with plain redirection, so their modes come from the ambient umask unless a scenario
-# sets one on purpose. Ubuntu with user-private groups defaults to 002 and macOS to 022, which made the two
-# platforms build DIFFERENT fixtures from the same line and test different things: install.sh refuses to
-# rewrite a group-writable dotfile, so a ~/.bashrc scenario that meant to exercise the rewrite exercised the
-# refusal instead, and only on Linux. Pin it. The scenarios that are about the mode chmod it themselves.
+# Plain redirection creates the fixtures, so their modes come from the ambient umask, unless a scenario sets
+# a mode on purpose. Ubuntu with user-private groups defaults to 002, and macOS defaults to 022. So the two
+# platforms built DIFFERENT fixtures from the same line and tested different things. install.sh refuses to
+# rewrite a group-writable dotfile, so a ~/.bashrc scenario meant to exercise the rewrite exercised the
+# refusal instead, and only on Linux. This line pins the umask. The scenarios that are about the mode set it
+# with chmod themselves.
 umask 022
 
 REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
 OS="$(uname -s)"
 WT="$REPO/bin/wt"
-KEEP_LABEL="scratch repos"           # what lib_cleanup calls what KEEP=1 leaves behind
+KEEP_LABEL="scratch repos"           # lib_cleanup's name for what KEEP=1 leaves behind
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
 
-# The interpreter bin/wt itself is run under; see the header. Resolved to an absolute path here, once.
+# The interpreter that runs bin/wt itself (see the header). This block resolves it to an absolute path once.
 WT_BASH="${WT_BASH:-bash}"
 WT_BASH_ABS="$(command -v "$WT_BASH" 2>/dev/null || true)"
 if [[ -z "$WT_BASH_ABS" ]]; then
@@ -70,15 +78,15 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-# Resolved before anything else runs: everything below compares against this.
+# Resolved before anything else runs, because everything below compares against it.
 REAL_HOME="$(cd "$HOME" && pwd -P)"
 
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wt-smoke.XXXXXX")"
 TEST_ROOT_REAL="$(cd "$TEST_ROOT" && pwd -P)"
-# …and from here on the physical path is the only one used. $TMPDIR on a Mac is a symlink, and bin/wt
-# reports the physical path of everything it touches (main_root_of asks git for it, `wt rm` compares it
-# with `pwd -P`), so a fixture built under the symlinked spelling would never compare equal to what wt
-# printed — and a scenario that could only fail on a Mac is worse than no scenario.
+# …and from here on, the suite uses only the physical path. On a Mac, $TMPDIR is a symlink. But bin/wt
+# reports the physical path of everything that it touches: main_root_of asks git for it, and `wt rm`
+# compares it with `pwd -P`. So a fixture built under the symlinked spelling would never compare equal to
+# what wt printed. A scenario that can fail only on a Mac is worse than no scenario.
 TEST_ROOT="$TEST_ROOT_REAL"
 case "$TEST_ROOT_REAL/" in
   "$REAL_HOME"/*)
@@ -89,12 +97,12 @@ trap lib_cleanup EXIT
 
 # ---------------------------------------------------------------------------- scratch root safety
 
-# guard_scratch_root <dir>: the check this whole file is built around, and the first thing scenario 0
-# proves. bin/wt runs `git worktree remove --force`, `git branch -D` and `rm -f` on paths it derives from
-# its arguments, so a fixture built in the wrong place would be destroyed for real. Every repository, every
-# worktree path and every fixture git call is passed through here first. Both sides are resolved with
-# `pwd -P`, because $TMPDIR on a Mac is a symlink and a path that only LOOKS outside the home is no defence.
-# Aborts the run outright — this is not a countable assertion failure.
+# guard_scratch_root <dir>: the check that this whole file is built around, and the first thing that
+# scenario 0 proves. bin/wt runs `git worktree remove --force`, `git branch -D` and `rm -f` on paths that it
+# derives from its arguments. So a fixture built in the wrong place would be destroyed for real. Every
+# repository, every worktree path and every fixture git call goes through this check first. It resolves
+# both sides with `pwd -P`, because $TMPDIR on a Mac is a symlink. A path that only LOOKS outside the home
+# is no defense. A failed check aborts the run outright; it is not a countable assertion failure.
 guard_scratch_root() {
   local d="$1" resolved
   if [[ ! -d "$d" ]]; then
@@ -117,17 +125,19 @@ guard_scratch_root() {
 
 SCRATCH_HOME="$TEST_ROOT/home"
 REPOS_DIR="$TEST_ROOT/repos"          # $WT_REPOS_DIR for wt_run; a scenario may point it somewhere else
-FAKE_BIN="$TEST_ROOT/bin"             # first on wt_run's PATH: the agent `wt run` starts lives here
-CMUX_LOG="$TEST_ROOT/cmux-calls.log"  # every argv the cmux stub was called with, one per line
-AGENT_LOG="$TEST_ROOT/agent-argv.log" # the argv `wt run` handed the agent
+FAKE_BIN="$TEST_ROOT/bin"             # first on wt_run's PATH: the agent that `wt run` starts lives here
+CMUX_LOG="$TEST_ROOT/cmux-calls.log"  # every argv that the cmux stub got, one per line
+AGENT_LOG="$TEST_ROOT/agent-argv.log" # the argv that `wt run` gave the agent
 mkdir -p "$SCRATCH_HOME" "$REPOS_DIR" "$FAKE_BIN"
 
 # ---------------------------------------------------------------------------- assertions
 # describe, pass, fail, assert_eq, assert_grep, assert_link, assert_absent, assert_regular and
-# assert_not_link are in test/lib.sh, sourced above. What follows is what only this suite needs.
+# assert_not_link are in test/lib.sh, which is sourced above. The functions below are the ones that only
+# this suite needs.
 
-# assert_has <what> <haystack> <fixed string>: the string is somewhere in the text. Fixed, never a pattern:
-# every message this suite looks for contains a path, and a path is full of characters grep would read.
+# assert_has <what> <haystack> <fixed string>: the string occurs somewhere in the text. It is a fixed string,
+# never a pattern, because every message that this suite looks for contains a path. A path is full of
+# characters that grep would read as pattern syntax.
 assert_has() {
   case "$2" in
     *"$3"*) pass ;;
@@ -135,8 +145,8 @@ assert_has() {
   esac
 }
 
-# assert_lacks <what> <haystack> <fixed string>: the string is nowhere in the text — for the line a run must
-# NOT print, such as a second fetch of a base that was refreshed a moment ago.
+# assert_lacks <what> <haystack> <fixed string>: the string occurs nowhere in the text. It is for a line
+# that a run must NOT print, for example a second fetch of a base that was refreshed a moment ago.
 assert_lacks() {
   case "$2" in
     *"$3"*) fail "$1: did not expect '$3' in the output, got: $(printf '%s' "$2" | tr '\n' '|' | cut -c1-200)" ;;
@@ -168,16 +178,16 @@ assert_matches() {  # <what> <regex> <actual>
   if [[ "$3" =~ $2 ]]; then pass; else fail "$1: expected something matching /$2/, found '$3'"; fi
 }
 
-# assert_branch <repo> <branch> <yes|no>: whether that ref exists. `wt rm` deleting a branch, or declining
-# to, is half of what it does, and the worktree directory says nothing about it.
+# assert_branch <repo> <branch> <yes|no>: whether that ref exists. Deleting a branch, or declining to, is
+# half of what `wt rm` does, and the worktree directory says nothing about it.
 assert_branch() {
   local have=no
   if fixture_git "$1" show-ref -q --verify "refs/heads/$2"; then have=yes; fi
   assert_eq "branch $2 in $(basename "$1")" "$3" "$have"
 }
 
-# assert_registered <repo> <name> <yes|no>: git's own worktree list, not just the directory. A worktree
-# whose directory exists but whose registration is gone is a different animal, and require_wt says so.
+# assert_registered <repo> <name> <yes|no>: checks git's own worktree list, not only the directory. A
+# worktree whose directory exists but whose registration is gone is a different case, and require_wt says so.
 assert_registered() {
   local p have=no
   p="$1/.worktrees/$2"
@@ -185,9 +195,9 @@ assert_registered() {
   assert_eq "$2 is registered in $(basename "$1")" "$3" "$have"
 }
 
-# assert_meta <repo> <name> <key> <value>: the sidecar every later command reads. A missing key reads as
-# "(missing)" rather than "", because a key stored empty and a key that was never written are not the same
-# bug: meta_get maps both to "" on purpose, and this is the one place that has to tell them apart.
+# assert_meta <repo> <name> <key> <value>: checks the sidecar that every later command reads. A missing key
+# reads as "(missing)", not as "", because a key stored empty and a key never written are different bugs.
+# meta_get maps both to "" on purpose, and this is the one place that has to tell them apart.
 assert_meta() {
   local f="$1/.git/wt/$2.json" got
   if [[ ! -f "$f" ]]; then
@@ -209,9 +219,9 @@ assert_meta_matches() {  # <repo> <name> <key> <regex>
   assert_matches "$2.json $3" "$4" "$got"
 }
 
-# assert_cmux_calls <what> <expected log>: every argv the stub was called with since the last stub_cmux,
-# newline separated. The point is as much what is NOT there as what is: `wt new` against a cmux that is not
-# running must ask `ping` and then give up, not go on to create rows.
+# assert_cmux_calls <what> <expected log>: every argv that the stub got since the last stub_cmux, newline
+# separated. What is NOT there matters as much as what is there. `wt new` against a cmux that is not
+# running must ask `ping` and then give up. It must not go on to create rows.
 assert_cmux_calls() {
   local got=""
   if [[ -f "$CMUX_LOG" ]]; then got="$(cat "$CMUX_LOG")"; fi
@@ -220,10 +230,10 @@ assert_cmux_calls() {
 
 # ---------------------------------------------------------------------------- fixtures
 
-# fixture_git <repo> <git args…>: every git command this suite runs to BUILD a fixture, and the only one.
-# It guards the path first, so no fixture step can reach a repository outside the scratch root, and it runs
-# with the scratch HOME so the author's own git config cannot change what a fixture is — a global
-# commit.gpgsign or core.hooksPath would otherwise decide whether these repositories can be committed to.
+# fixture_git <repo> <git args…>: runs every git command that BUILDS a fixture, and nothing else does. It
+# guards the path first, so no fixture step can reach a repository outside the scratch root. It runs with
+# the scratch HOME, so the author's own git config cannot change what a fixture is. Otherwise a global
+# commit.gpgsign or core.hooksPath would decide whether these repositories accept commits.
 fixture_git() {
   local r="$1"
   shift
@@ -232,17 +242,17 @@ fixture_git() {
       HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" git -C "$r" "$@"
 }
 
-# fixture_commit <repo-or-worktree> <file> <text>: one commit, in whichever checkout it is pointed at.
+# fixture_commit <repo-or-worktree> <file> <text>: makes one commit, in the checkout that it is given.
 fixture_commit() {
   printf '%s\n' "$3" >"$1/$2"
   fixture_git "$1" add -- "$2"
   fixture_git "$1" commit -q -m "$2"
 }
 
-# new_repo [name]: a throwaway repository under $REPOS_DIR with one commit on main. The identity and the
-# default branch are set per repository rather than inherited, so nothing here depends on the machine.
-# mktemp's suffix is alphanumeric, so the basename survives repo_id unchanged and the row title a scenario
-# expects is just "<basename>:<name>" — scenario 3 tests the substitution rule separately.
+# new_repo [name]: makes a throwaway repository under $REPOS_DIR with one commit on main. It sets the
+# identity and the default branch per repository, instead of inheriting them, so nothing here depends on
+# the machine. The suffix from mktemp is alphanumeric, so repo_id does not change the basename, and the row
+# title that a scenario expects is "<basename>:<name>". Scenario 3 tests the substitution rule separately.
 new_repo() {
   local r
   r="$(mktemp -d "$REPOS_DIR/${1:-repo}-XXXXXX")"
@@ -254,16 +264,16 @@ new_repo() {
   printf '%s\n' "$r"
 }
 
-# sha256_of <file>: computed here rather than through bin/wt's file_hash, which is the thing being checked.
+# sha256_of <file>: computed here, not with bin/wt's file_hash, because file_hash is what the suite checks.
 sha256_of() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
   else sha256sum "$1" | cut -d' ' -f1; fi
 }
 
-# add_origin <repo>: give a scratch repo a bare "origin" under the scratch root, push main to it and set
-# origin/HEAD, so that default_base answers origin/main the way it does for a real clone. Prints the path
-# of a second clone, the "editor": the machine on which PRs get squash-merged and head branches deleted,
-# which is what GitHub does and what the repo under test then has to notice from a stale origin/main.
+# add_origin <repo>: gives a scratch repo a bare "origin" under the scratch root, pushes main to it and sets
+# origin/HEAD. Then default_base answers origin/main, as it does for a real clone. It prints the path of a
+# second clone, the "editor". The editor is the machine where PRs get squash-merged and head branches get
+# deleted, as GitHub does. The repo under test must then notice that from a stale origin/main.
 add_origin() {
   local r="$1" o e
   guard_scratch_root "$r"
@@ -279,9 +289,10 @@ add_origin() {
   printf '%s\n' "$e"
 }
 
-# land_squash <editor> <branch> <message>: what "Squash and merge" plus "delete branch" does on GitHub —
-# one new commit on main carrying the branch's whole diff, the head branch gone from the remote. The repo
-# under test has fetched nothing: its origin/main and origin/<branch> are exactly as they were.
+# land_squash <editor> <branch> <message>: does what "Squash and merge" plus "delete branch" does on GitHub.
+# It makes one new commit on main that carries the branch's whole diff, and it deletes the head branch from
+# the remote. The repo under test has fetched nothing: its origin/main and origin/<branch> are exactly as
+# they were.
 land_squash() {
   fixture_git "$1" fetch -q origin
   fixture_git "$1" checkout -q main
@@ -292,8 +303,8 @@ land_squash() {
   fixture_git "$1" push -q origin --delete "$2"
 }
 
-# editor_commit <editor> <file> <text|"">: one more commit on main after a squash, pushed. An empty text
-# deletes the file, which is how a squash gets partially reverted.
+# editor_commit <editor> <file> <text|"">: pushes one more commit on main after a squash. An empty text
+# deletes the file. That is how a squash gets partially reverted.
 editor_commit() {
   if [[ -n "$3" ]]; then printf '%s\n' "$3" >"$1/$2"; fixture_git "$1" add -- "$2"
   else fixture_git "$1" rm -q -- "$2"; fi
@@ -301,26 +312,26 @@ editor_commit() {
   fixture_git "$1" push -q origin main
 }
 
-# set_line <file> <n> <text>: replace line n of a file, portably (BSD and GNU sed disagree about -i).
+# set_line <file> <n> <text>: replaces line n of a file, portably (BSD and GNU sed disagree about -i).
 set_line() {
   local tmp="$1.tmp"
   awk -v n="$2" -v t="$3" 'NR == n { print t; next } { print }' "$1" >"$tmp" && mv "$tmp" "$1"
 }
 
-# The brief scenario 1 writes and reads back. Quotes, a '$', backticks, a backslash, a newline and
-# non-ASCII: `wt new` writes it with printf '%s' and `wt run` reads it back with read -r -d '', and every
-# one of those characters is a way for a shell to mangle a string it is only supposed to carry.
+# The brief that scenario 1 writes and reads back. It holds quotes, a '$', backticks, a backslash, a
+# newline and non-ASCII. `wt new` writes it with printf '%s', and `wt run` reads it back with read -r -d ''.
+# Each of those characters is a way for a shell to mangle a string that it must only carry.
 PROMPT_FIXTURE=$'first "line": $HOME `date` \'quoted\' back\\slash\nsecond line: café — ünïcode ✓'
 
-# stub_cmux dead|alive: cmux_bin (bin/wt:~76) prefers $CMUX_BUNDLED_CLI_PATH when it is executable, so this
-# is all it takes to decide what cmux_ok believes. "dead" logs its argv and exits 1, which is a cmux that is
-# not running; "alive" answers ping 0 and serves $WT_ROWS for `workspace list --json`. Both truncate the log,
-# so assert_cmux_calls always reads one scenario's worth.
+# stub_cmux dead|alive: cmux_bin (bin/wt:~76) prefers $CMUX_BUNDLED_CLI_PATH when it is executable. So
+# this setting alone decides what cmux_ok believes. "dead" logs its argv and exits 1, like a cmux that is not
+# running. "alive" answers ping with 0 and serves $WT_ROWS for `workspace list --json`. Both truncate the
+# log, so assert_cmux_calls always reads the calls of one scenario only.
 CMUX_DEAD="$TEST_ROOT/cmux-dead/cmux"
 CMUX_ALIVE="$TEST_ROOT/cmux-alive/cmux"
 WT_STUB="$CMUX_DEAD"
 WT_ROWS="$TEST_ROOT/rows.json"
-WT_WINDOWS="$TEST_ROOT/windows.txt"          # what `cmux list-windows` prints; empty = a one-window cmux
+WT_WINDOWS="$TEST_ROOT/windows.txt"          # what `cmux list-windows` prints; empty means a one-window cmux
 WT_ROWS_DIR="$TEST_ROOT/rows-by-window"      # <window uuid>.json: the rows `workspace list --window` serves
 mkdir -p "$(dirname "$CMUX_DEAD")" "$(dirname "$CMUX_ALIVE")" "$WT_ROWS_DIR"
 cat >"$CMUX_DEAD" <<'STUB'
@@ -400,18 +411,20 @@ stub_cmux() {
     *) echo "ABORT: stub_cmux takes dead or alive, not '$1'" >&2; exit 1 ;;
   esac
   : >"$CMUX_LOG"
-  # back to a one-window cmux; stub_windows opts in again. Guarded like every other path this suite
-  # destroys: this is the only rm in the file that takes a glob, and the header promises all of them go
-  # through guard_scratch_root before anything is removed.
+  # Emptying $WT_WINDOWS resets the stub to a one-window cmux; stub_windows opts in again.
+  # guard_scratch_root checks this path, like every other path that this suite destroys. This is the only
+  # rm in the file that takes a glob. The header promises that every path goes through guard_scratch_root
+  # before anything is removed.
   : >"$WT_WINDOWS"; guard_scratch_root "$WT_ROWS_DIR"; rm -f "$WT_ROWS_DIR"/*.json
 }
 
-# stub_windows <window uuid…>: what `cmux list-windows` prints, in cmux's own format, and an empty row list
-# for each window named. A scenario then fills "$WT_ROWS_DIR/<uuid>.json" for the window it cares about.
-# Called after stub_cmux, which resets this: with no call, list-windows prints nothing, rows_json falls back
-# to the single-window call it made before windows were merged, and every other scenario sees the same cmux
-# it always saw. The uuids must LOOK like uuids — rows_json takes only uuid-shaped fields from that output,
-# so that a cmux which prints something else entirely is treated as one that cannot be enumerated.
+# stub_windows <window uuid…>: writes what `cmux list-windows` prints, in cmux's own format, and an empty
+# row list for each window that it names. A scenario then fills "$WT_ROWS_DIR/<uuid>.json" for the window
+# that it tests. Call it after stub_cmux, because stub_cmux resets this. Without a call, list-windows prints
+# nothing, and rows_json falls back to the single-window call that it made before windows were merged. So
+# every other scenario sees the same cmux that it always saw. The uuids must LOOK like uuids, because
+# rows_json takes only uuid-shaped fields from that output. That filter is there so that rows_json treats a
+# cmux that prints something else entirely as a cmux that cannot be enumerated.
 stub_windows() {
   local u i=0
   : >"$WT_WINDOWS"
@@ -422,7 +435,7 @@ stub_windows() {
   done
 }
 
-# The agent `wt run` starts. It is first on wt_run's PATH so the real claude can never be reached, and it
+# The agent that `wt run` starts. It is first on wt_run's PATH, so the real claude can never be reached. It
 # records its argv, which is the only way to see that the brief survived the round trip.
 cat >"$FAKE_BIN/claude" <<'AGENT'
 #!/bin/sh
@@ -434,21 +447,22 @@ cp "$FAKE_BIN/claude" "$FAKE_BIN/codex"
 
 # ---------------------------------------------------------------------------- running bin/wt
 
-# wt_run <args…>: the only place bin/wt is ever invoked. Sets WT_OUT (stdout and stderr together, because
-# every refusal this suite reads is on stderr) and WT_RC; never fails the caller, so `set -e` cannot end the
-# run at the first non-zero exit — a non-zero exit is usually the assertion.
+# wt_run <args…>: the only place that invokes bin/wt. It sets WT_OUT (stdout and stderr together, because
+# every refusal that this suite reads is on stderr) and WT_RC. It never fails the caller, so `set -e` cannot
+# end the run at the first non-zero exit. A non-zero exit is usually what the assertion checks.
 #   HOME is a scratch directory: cmux_bin falls back to $HOME/.cmux/bin/cmux, open_workspace builds a
-#   command out of $HOME/.local/bin/wt and repo_menu prints paths relative to it.
+#   command out of $HOME/.local/bin/wt, and repo_menu prints paths relative to it.
 #   GIT_CONFIG_GLOBAL/SYSTEM/COUNT are unset because any of them would override HOME for every `git config`
-#   and every `git -C` bin/wt runs, and reach the author's own config through it.
-#   CMUX_SSH_ATTEMPT_ID and CMUX_SOCKET_PATH are unset because is_remote() reads both, and this suite runs
-#   inside a cmux pane that sets them — with either one inherited, every `wt new` would take the VM branch.
+#   and every `git -C` that bin/wt runs. Through that override, bin/wt would reach the author's own config.
+#   CMUX_SSH_ATTEMPT_ID and CMUX_SOCKET_PATH are unset because is_remote() reads both. This suite runs
+#   inside a cmux pane that sets them. If either one were inherited, every `wt new` would take the VM branch.
 #   CMUX_WORKSPACE_ID is unset because relay_env would otherwise address a real row on this machine.
-#   WT_AGENT and WT_HOST are unset because the author's shell exports them and each one changes what `wt new`
-#   records or which branch it takes. WT_AGENT_ARGS is replaced with WT_EXTRA for precedence checks.
-#   CODEX_SANDBOX is pinned to $WT_SANDBOX, empty unless a scenario sets it: Codex sets it inside its
-#   sandbox, and `wt open` refuses there — so a run of this suite from a Codex session would fail otherwise.
-#   stdin is /dev/null so nothing can block on a read.
+#   WT_AGENT and WT_HOST are unset because the author's shell exports them. Each one changes what `wt new`
+#   records or which branch it takes. WT_EXTRA replaces WT_AGENT_ARGS for the precedence checks.
+#   CODEX_SANDBOX is pinned to $WT_SANDBOX, which is empty unless a scenario sets it. Codex sets it inside
+#   its sandbox, and `wt open` refuses there. So without the pin, a run of this suite from a Codex session
+#   would fail.
+#   stdin is /dev/null, so nothing can block on a read.
 WT_OUT=""
 WT_RC=0
 WT_CWD=""          # where the next wt_run runs; empty means the scratch root, which is not a git repo
@@ -488,7 +502,7 @@ wt_run() {
   return 0
 }
 
-# assert_wt_ok <what> <args…>: run it and fail loudly, with the output, if it did not exit 0.
+# assert_wt_ok <what> <args…>: runs wt and fails loudly, with the output, if wt did not exit 0.
 assert_wt_ok() {
   local what="$1"
   shift
@@ -501,9 +515,9 @@ assert_wt_ok() {
   pass
 }
 
-# assert_wt_fails <expected rc> <fixed string> <args…>: the other half. Every refusal bin/wt makes is
-# supposed to be made BEFORE it changes anything, so each caller also asserts that nothing moved; that is
-# the half a mutation deleting a guard would otherwise pass.
+# assert_wt_fails <expected rc> <fixed string> <args…>: the other half. Every refusal that bin/wt makes
+# must come BEFORE it changes anything, so each caller also asserts that nothing moved. Without that
+# assertion, a mutation that deletes a guard would pass.
 assert_wt_fails() {
   local want="$1" msg="$2"
   shift 2
@@ -512,8 +526,8 @@ assert_wt_fails() {
   assert_has "wt $* said why it refused" "$WT_OUT" "$msg"
 }
 
-# refuses <repo> <name> <fixed string>: `wt rm` refuses with 3, names the reason, and the worktree is still
-# there. Three assertions, and the third is the one that matters.
+# refuses <repo> <name> <fixed string>: `wt rm` refuses with 3, names the reason, and leaves the worktree in
+# place. That is three assertions, and the third one is the one that matters.
 refuses() {
   assert_wt_fails 3 "$3" rm "$2" -r "$1"
   assert_dir "wt rm $2 left the worktree alone" "$1/.worktrees/$2"
@@ -525,8 +539,8 @@ forced() {
   assert_gone "wt rm --force $2 removed the worktree" "$1/.worktrees/$2"
 }
 
-# wt_line <name>: the columns wt list printed for one worktree, whitespace normalised, without the
-# relative-time column (which has spaces in it and says nothing this suite can pin down).
+# wt_line <name>: the columns that wt list printed for one worktree, with whitespace normalized. It drops
+# the relative-time column, which has spaces in it and says nothing that this suite can pin down.
 wt_line() {
   printf '%s\n' "$WT_OUT" | awk -v n="$1" '$1 == n { print $1, $2, $3, $4, $5, $6, $7; exit }'
 }
@@ -538,8 +552,8 @@ merged_of() {
 
 # ---------------------------------------------------------------------------- scenarios
 
-# 0. The guard, first, because every other scenario trusts it. Each branch is provoked in a subshell: the
-# guard aborts the run, so a caller that wants to see it refuse cannot be in the same shell.
+# 0. The guard comes first, because every other scenario trusts it. Each branch is provoked in a subshell,
+# because the guard aborts the run. So a caller that wants to see it refuse cannot be in the same shell.
 scenario_guard() {
   begin_scenario "0. guard_scratch_root refuses anything outside this run's scratch root"
   local out rc
@@ -563,7 +577,7 @@ scenario_guard() {
   end_scenario
 }
 
-# 1. What `wt new` makes, and the sidecar every later command reads back.
+# 1. What `wt new` makes, and the sidecar that every later command reads back.
 scenario_new_and_sidecar() {
   begin_scenario "1. wt new: the worktree, the branch, the sidecar and the brief"
   local r id p
@@ -586,13 +600,13 @@ scenario_new_and_sidecar() {
   assert_meta "$r" demo includes ""
   assert_meta_matches "$r" demo created '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 
-  # the brief, byte for byte: printf '%s' writes it with no trailing newline, and that is what `wt run`
-  # reads back with `read -r -d ''`
+  # The brief, byte for byte. printf '%s' writes it with no trailing newline, and `wt run` reads exactly
+  # that back with `read -r -d ''`.
   printf '%s' "$PROMPT_FIXTURE" >"$TEST_ROOT/expected.prompt"
   assert_same_bytes "the .prompt file" "$TEST_ROOT/expected.prompt" "$r/.git/wt/demo.prompt"
   assert_absent "$r/.git/wt" demo.started
 
-  # `wt run` is what creates .started, and what hands the brief to the agent
+  # `wt run` creates .started, and it hands the brief to the agent.
   rm -f "$AGENT_LOG"
   assert_wt_ok "wt run demo" run demo -r "$r"
   assert_has "wt run started the agent on this suite's PATH" "$WT_OUT" "FAKE-AGENT ran"
@@ -682,9 +696,9 @@ scenario_task_model() {
   end_scenario
 }
 
-# 2. Base resolution and canonicalisation. bin/wt spends six lines of comment on this: a base that
-# re-resolves in every worktree to that worktree's own tip compares a worktree with itself, and rm and
-# prune then read it as "nothing to lose". Nothing checked it until now.
+# 2. Base resolution and canonicalization. bin/wt spends six lines of comment on this. A base that
+# re-resolves in every worktree to that worktree's own tip compares a worktree with itself. Then rm and
+# prune read the result as "nothing to lose". Nothing checked this until now.
 scenario_base_resolution() {
   begin_scenario "2. wt new: the base is canonicalised, so rm and prune can trust it"
   local r sha
@@ -695,7 +709,7 @@ scenario_base_resolution() {
   assert_wt_ok "wt new b-default" new b-default --no-workspace -r "$r"
   assert_meta "$r" b-default base main          # a plain ref name means the same thing in every worktree
 
-  # every spelling of "wherever this worktree is" is pinned to the commit it meant at creation
+  # Every spelling of "wherever this worktree is" is pinned to the commit that it meant at creation.
   assert_wt_ok "wt new -b HEAD" new b-head --no-workspace -r "$r" -b HEAD
   assert_meta "$r" b-head base "$sha"
   assert_wt_ok "wt new -b @" new b-at --no-workspace -r "$r" -b '@'
@@ -705,8 +719,8 @@ scenario_base_resolution() {
   assert_wt_ok "wt new -b main~0" new b-expr --no-workspace -r "$r" -b 'main~0'
   assert_meta "$r" b-expr base "$sha"
 
-  # …while a plain ref name is kept AS a ref, because that is the one thing that still means the same
-  # branch tomorrow
+  # …while a plain ref name is kept AS a ref, because only a ref name still means the same branch
+  # tomorrow.
   fixture_git "$r" branch feature main
   assert_wt_ok "wt new -b feature" new b-ref --no-workspace -r "$r" -b feature
   assert_meta "$r" b-ref base feature
@@ -717,10 +731,11 @@ scenario_base_resolution() {
   assert_wt_ok "wt new --head from a detached HEAD" new b-detached --head --no-workspace
   assert_meta "$r" b-detached base "$sha"
 
-  # The regression this guards: from a DETACHED checkout `git rev-parse --symbolic-full-name HEAD` prints
-  # the bare word "HEAD", which used to match the "it is already a plain ref" arm — so the literal "HEAD",
-  # the one value the comment above that case says must never be stored, was stored after all. rm_reasons
-  # caught it downstream, so nothing was destroyed, but the worktree was unremovable without --force.
+  # The regression that this guards against: in a DETACHED checkout,
+  # `git rev-parse --symbolic-full-name HEAD` prints the bare word "HEAD". That word used to match the
+  # "it is already a plain ref" arm. So the literal "HEAD" was stored, although the comment above that case
+  # says that this one value must never be stored. rm_reasons caught it downstream, so nothing was
+  # destroyed. But the worktree could not be removed without --force.
   assert_wt_ok "wt new -b HEAD from a detached HEAD" new b-literal --no-workspace -b HEAD
   assert_meta "$r" b-literal base "$sha"
   WT_CWD=""
@@ -730,8 +745,8 @@ scenario_base_resolution() {
   assert_wt_fails 1 "base ref not found: nosuch" new b-bad --no-workspace -r "$r" -b nosuch
   assert_gone "a base that does not resolve makes nothing" "$r/.worktrees/b-bad"
 
-  # git allows '|' in a branch name, and a base like 'feat|x' used to shift every column of the status
-  # line right; WT_FS is why it does not any more
+  # git allows '|' in a branch name. A base such as 'feat|x' used to shift every column of the status line
+  # to the right. WT_FS is why it does not any more.
   fixture_git "$r" branch 'feat|x' main
   assert_wt_ok "wt new -b 'feat|x'" new b-pipe --no-workspace -r "$r" -b 'feat|x'
   assert_meta "$r" b-pipe base 'feat|x'
@@ -753,9 +768,9 @@ scenario_names_and_collisions() {
   assert_has "tidy_name lowercases and joins on whitespace" "$WT_OUT" "created fix-auth"
   assert_dir "…and that is the directory it made" "$r/.worktrees/fix-auth"
 
-  # Deliberate: an uppercase name is tidied, not refused — need_name never sees the original. `wt new
-  # "Fix Auth"` is a natural thing to type, and tidy_name runs on the reading side too (the task picker),
-  # so the capitalised spelling still finds the worktree. Only git and tmux see the lowercase name.
+  # Deliberate: an uppercase name is tidied, not refused; need_name never sees the original. `wt new
+  # "Fix Auth"` is a natural thing to type. tidy_name runs on the reading side too (the task picker), so the
+  # capitalized spelling still finds the worktree. Only git and tmux see the lowercase name.
   assert_wt_ok "wt new ABC" new ABC --no-workspace -r "$r"
   assert_has "an uppercase name is lowercased rather than refused" "$WT_OUT" "created abc"
 
@@ -784,8 +799,8 @@ scenario_names_and_collisions() {
   end_scenario
 }
 
-# 4. The read-only commands. --json was removed in b317fbc; it must now be refused like any other
-# unknown option rather than silently ignored.
+# 4. The read-only commands. Commit b317fbc removed --json, so wt must now refuse it like any other unknown
+# option, not ignore it silently.
 scenario_list_show_path() {
   begin_scenario "4. wt list / show / path / open"
   local saved="$REPOS_DIR" ra rb base
@@ -819,8 +834,8 @@ scenario_list_show_path() {
   assert_wt_fails 1 "list: unknown option --json" list --json -r "$ra"
   assert_wt_fails 1 "show: unknown option --json" show a1 --json -r "$ra"
 
-  # a worktree whose HEAD is detached at the BASE while its branch is one commit ahead: the counts are
-  # supposed to be the branch's, not HEAD's — HEAD's would read 0 and call this nothing to lose
+  # A worktree whose HEAD is detached at the BASE while its branch is one commit ahead. The counts must be
+  # the branch's, not HEAD's. HEAD's counts would read 0 and call this nothing to lose.
   assert_wt_ok "wt new det" new det --no-workspace -r "$ra"
   base="$(fixture_git "$ra" rev-parse main)"
   fixture_commit "$ra/.worktrees/det" work.txt 'one commit ahead'
@@ -836,8 +851,8 @@ scenario_list_show_path() {
     assert_eq "no session line on the Mac side" "0" \
               "$(printf '%s\n' "$WT_OUT" | grep -c 'session:' || true)"
     # …and wt open is the one command here that launches an app, so it must not claim a launch that did not
-    # happen. The stub `code` is first on PATH, so the real VS Code is never started. It exits 0 first,
-    # which is what the real one does inside Codex's sandbox while no window opens.
+    # happen. The stub `code` is first on PATH, so the real VS Code never starts. This stub exits 0 first,
+    # as the real one does inside Codex's sandbox while no window opens.
     printf '#!/bin/sh\nexit 0\n' >"$FAKE_BIN/code"
     chmod +x "$FAKE_BIN/code"
     WT_SANDBOX=seatbelt
@@ -879,9 +894,9 @@ scenario_include_and_setup() {
   printf 'SECRET=1\n' >"$r/.env"
   printf 'noise\n' >"$r/other.log"
   printf '%s\n' '.env' >"$r/.wt-include"
-  # the hook writes to a gitignored name here on purpose, so that this half tests the hook and nothing else;
-  # a hook that dirties the worktree is the last block of this scenario, and scenario 6 has dirt on its own
-  # shellcheck disable=SC2016   # the hook is a script: those are for it to expand, not for this file
+  # The hook writes to a gitignored name here on purpose, so that this half tests the hook and nothing else.
+  # The last block of this scenario tests a hook that dirties the worktree, and scenario 6 has its own dirt.
+  # shellcheck disable=SC2016   # the hook is a script: those are for the hook to expand, not for this file
   printf '%s\n' '#!/bin/sh' 'printf "%s %s\n" "$WT_NAME" "$WT_REPO" >setup-ran.log' >"$r/.wt-setup"
   chmod +x "$r/.wt-setup"
   stub_cmux dead
@@ -895,7 +910,7 @@ scenario_include_and_setup() {
   assert_eq ".wt-setup ran in the worktree with WT_NAME and WT_REPO set" "inc $r" \
             "$(cat "$p/setup-ran.log")"
 
-  # an untouched copy is not a reason to refuse: it is still byte-identical to what was recorded
+  # An untouched copy is not a reason to refuse, because it is still byte-identical to what was recorded.
   assert_wt_ok "wt rm inc" rm inc -r "$r"
   assert_gone "…so the worktree goes" "$p"
 
@@ -904,12 +919,12 @@ scenario_include_and_setup() {
   assert_has "…it warns" "$WT_OUT" ".wt-setup exited non-zero"
   assert_dir "…and the worktree is there" "$r/.worktrees/badsetup"
 
-  # A hook that rewrites a TRACKED file — `uv sync`, `npm ci`, anything that regenerates a committed
-  # lockfile — leaves the worktree dirty from birth. What the hook wrote is hashed into the sidecar at
-  # creation and subtracted from rm's dirty count, because otherwise every worktree in such a repo would be
-  # unremovable for its whole life and --force, which also discards unmerged commits, would be the only way
-  # to tidy up. The subtraction is by content, not by name: the file is excused only while it still holds
-  # exactly what the hook left in it.
+  # A hook that rewrites a TRACKED file (`uv sync`, `npm ci`, or anything else that regenerates a committed
+  # lockfile) leaves the worktree dirty from birth. At creation, wt hashes what the hook wrote and stores the
+  # hash in the sidecar, and rm subtracts those files from its dirty count. Otherwise every worktree in such
+  # a repo would be unremovable for its whole life. Then the only way to tidy up would be --force, which also
+  # discards unmerged commits. The subtraction is by content, not by name: wt excuses the file only while it
+  # still holds exactly what the hook left in it.
   printf 'lock v1\n' >"$r/lock.txt"
   fixture_git "$r" add lock.txt
   fixture_git "$r" commit -q -m lock
@@ -928,8 +943,8 @@ scenario_include_and_setup() {
   end_scenario
 }
 
-# 6. The refusals. Every branch of rm_reasons, each one a way to lose work that `git worktree remove
-# --force` would take without a word. If one of these stops firing, that is a data-loss regression and the
+# 6. The refusals: every branch of rm_reasons. Each one is a way to lose work that `git worktree remove
+# --force` would take without a word. If one of these stops firing, that is a data-loss regression: the
 # test is right and the code is wrong.
 scenario_rm_refusals() {
   begin_scenario "6. wt rm refuses to destroy work, and --force is the one way past it"
@@ -952,7 +967,7 @@ scenario_rm_refusals() {
   fixture_git "$r/.worktrees/det" switch -q --detach HEAD
   refuses "$r" det "HEAD is detached at"
 
-  # d) a HEAD that is some other branch: the checks above are all about wt/<name>, so this is its own reason
+  # d) a HEAD on some other branch: the checks above are all about wt/<name>, so this is its own reason
   assert_wt_ok "wt new other" new other --no-workspace -r "$r"
   fixture_git "$r/.worktrees/other" switch -q -c sidebranch
   refuses "$r" other "HEAD is on sidebranch, not wt/other"
@@ -964,8 +979,8 @@ scenario_rm_refusals() {
   fixture_git "$r" branch -D tmpbase >/dev/null
   refuses "$r" gonebase "base 'tmpbase' cannot be compared with wt/gonebase"
 
-  # f) an .wt-include copy edited inside the worktree: in no git, in no backup, and `worktree remove
-  # --force` eats it without a word
+  # f) an .wt-include copy edited inside the worktree: it is in no git and in no backup, and
+  # `worktree remove --force` deletes it without a word
   ri="$(new_repo include)"
   printf '%s\n' '.env' >"$ri/.gitignore"
   fixture_git "$ri" add .gitignore
@@ -984,7 +999,7 @@ scenario_rm_refusals() {
   forced "$r" gonebase
   forced "$ri" edited
 
-  # you are standing in it
+  # the run's cwd is inside the worktree
   assert_wt_ok "wt new inside" new inside --no-workspace -r "$r"
   WT_CWD="$r/.worktrees/inside"
   assert_wt_fails 1 "you are inside inside; cd out first" rm inside -r "$r"
@@ -996,9 +1011,9 @@ scenario_rm_refusals() {
   assert_has "…and says the branch was kept" "$WT_OUT" "removed inside (branch wt/inside kept)"
   assert_branch "$r" wt/inside yes
 
-  # git's own merged-check is the last line of defence behind the reasons above: this branch is merged into
-  # its BASE (so nothing refuses) but not into the main checkout's HEAD, and `branch -d` declines. The
-  # worktree goes; the branch is kept, and said to be kept.
+  # git's own merged check is the last line of defense behind the reasons above. This branch is merged into
+  # its BASE (so nothing refuses) but not into the main checkout's HEAD, so `branch -d` declines. The
+  # worktree goes; wt keeps the branch and says so.
   side="$r/.worktrees/kept"
   fixture_git "$r" branch side main
   assert_wt_ok "wt new kept -b side" new kept --no-workspace -r "$r" -b side
@@ -1013,14 +1028,14 @@ scenario_rm_refusals() {
   end_scenario
 }
 
-# 6b. The reason scenario 6 could not provoke the other way round: a branch whose work has landed on the
-# base without any of its commits becoming an ancestor of it. GitHub's "squash and merge" — the default on
-# most repos — lands a PR as one new commit and deletes the head branch, after which every commit on
-# wt/<name> is unmerged by ancestry and gone from the remote, and `wt rm` used to leave --force as the only
-# way out, which waives the dirty-tree and .wt-include checks too. branch_landed asks git whether merging
-# the branch into the base would change anything; these cases are the shapes that answer yes and no.
-# Each squash happens on a second clone, the "editor", and the repo under test has not fetched: its
-# origin/main is from before the merge, as it is when the next thing typed after merging a PR is `wt rm`.
+# 6b. The reason that scenario 6 could not provoke, the other way round: a branch whose work has landed on
+# the base. Yet none of its commits has become an ancestor of the base. GitHub's "squash and merge" is the
+# default on most repos. It lands a PR as one new commit and deletes the head branch. After that, every
+# commit on wt/<name> is unmerged by ancestry and gone from the remote. Then `wt rm` used to leave --force
+# as the only way out, and --force waives the dirty-tree and .wt-include checks too. branch_landed asks git
+# whether merging the branch into the base would change anything. These cases are the shapes that answer
+# yes and no. Each squash happens on a second clone, the "editor", and the repo under test has not fetched.
+# Its origin/main is from before the merge, as it is when the user types `wt rm` right after merging a PR.
 scenario_squash_merge() {
   begin_scenario "6b. wt rm after a squash merge: work that landed is not a reason, work that did not still is"
   local r e stale fresh dry n verdict want shim hunks=no
@@ -1030,11 +1045,11 @@ scenario_squash_merge() {
   fixture_git "$r" add lines.txt
   fixture_git "$r" commit -q -m lines
   e="$(add_origin "$r")"
-  # whether the real git merges hunk by hunk, judged by bin/wt's own function, lifted out of it
+  # Whether the real git merges hunk by hunk, as judged by bin/wt's own function, copied out of bin/wt.
   if "$WT_BASH" -c "$(sed -n '/^git_merges_trees()/,/^}/p' "$WT"); git_merges_trees" 2>/dev/null; then hunks=yes; fi
 
-  # every worktree first: `wt new` fetches its base, so all of the landing below has to come after the last
-  # of them for origin/main to be stale when wt is asked, which is the shape this scenario is about
+  # Every worktree first: `wt new` fetches its base. So all of the landing below must come after the last
+  # `wt new`, for origin/main to be stale when wt is asked. That is the shape that this scenario is about.
   for n in sq sq2 past picked stack rev conf hunk zero; do
     assert_wt_ok "wt new $n" new "$n" --no-workspace -r "$r"
   done
@@ -1043,8 +1058,8 @@ scenario_squash_merge() {
   fixture_commit "$r/.worktrees/sq" two.txt 'two'
   fixture_git "$r/.worktrees/sq" push -q -u origin wt/sq
   land_squash "$e" wt/sq 'sq (#1)'
-  # b) the same, with the stale origin/wt/sq2 gone as well (a fetch with fetch.prune): git's own `branch -d`
-  # then has nothing to call the branch merged into, and it is wt's finding that has to delete it
+  # b) the same, with the stale origin/wt/sq2 gone as well (as after a fetch with fetch.prune). Then git's own
+  # `branch -d` has nothing to call the branch merged into, so wt's finding must delete it
   fixture_commit "$r/.worktrees/sq2" three.txt 'three'
   fixture_git "$r/.worktrees/sq2" push -q -u origin wt/sq2
   land_squash "$e" wt/sq2 'sq2 (#2)'
@@ -1074,8 +1089,8 @@ scenario_squash_merge() {
   set_line "$e/lines.txt" 5 'l5 by the editor'
   fixture_git "$e" commit -q -am 'editor: line 5 again'
   fixture_git "$e" push -q origin main
-  # g) a squash after which the base edited ANOTHER line of the same file: landed to a hunk-level merge
-  # (git 2.38+), not to the file-level fallback older git gets
+  # g) a squash after which the base edited ANOTHER line of the same file. A hunk-level merge (git 2.38+)
+  # finds it landed. The file-level fallback that older git gets does not.
   set_line "$r/.worktrees/hunk/lines.txt" 1 'l1 by hunk'
   fixture_git "$r/.worktrees/hunk" commit -q -am hunk
   fixture_git "$r/.worktrees/hunk" push -q -u origin wt/hunk
@@ -1083,7 +1098,7 @@ scenario_squash_merge() {
   set_line "$e/lines.txt" 10 'l10 by the editor'
   fixture_git "$e" commit -q -am 'editor: line 10'
   fixture_git "$e" push -q origin main
-  # h) two commits that cancel out: merging changes nothing, which proves nothing, so it is refused as ever
+  # h) two commits that cancel out: merging changes nothing, which proves nothing, so wt refuses it as always
   fixture_commit "$r/.worktrees/zero" ten.txt 'ten'
   fixture_git "$r/.worktrees/zero" rm -q ten.txt
   fixture_git "$r/.worktrees/zero" commit -q -m 'undo ten'
@@ -1092,8 +1107,8 @@ scenario_squash_merge() {
   assert_wt_ok "wt list before anything fetched" list -r "$r"
   assert_eq "sq against a stale origin/main" no "$(merged_of sq)"
 
-  # prune --dry-run first: every verdict at once, with the base refreshed once for all of them — the offline
-  # check comes first, and once the fetch has happened nothing is left to go online for
+  # prune --dry-run first: every verdict at once, with the base refreshed once for all of them. The offline
+  # check comes first, and after the fetch nothing is left to go online for.
   stale="$(fixture_git "$r" rev-parse origin/main)"
   assert_wt_ok "wt prune --dry-run" prune --dry-run -r "$r"
   dry="$WT_OUT"
@@ -1107,7 +1122,7 @@ scenario_squash_merge() {
     if [[ "$verdict" == keep ]]; then want="keep $n ("; else want="would remove $n ("; fi
     assert_has "prune's verdict on $n" "$dry" "$want"
   done
-  # …and the reasons say what was checked, not just that it failed
+  # …and the reasons say what was checked, not only that it failed
   assert_has "past: a commit past the squash" "$dry" \
     "keep past (2 commit(s) on wt/past not merged into origin/main and not on a remote (merging wt/past into origin/main would still change 1 path(s)))"
   assert_has "rev: a partial revert" "$dry" \
@@ -1136,8 +1151,8 @@ scenario_squash_merge() {
   else assert_dir "prune kept hunk (file-level merge)" "$r/.worktrees/hunk"; fi
   for n in past rev conf zero; do assert_dir "prune kept $n" "$r/.worktrees/$n"; done
 
-  # --discard-commits waives the commit reason and nothing else: a dirty tree still refuses, without a word
-  # about commits, and once the tree is clean the worktree and the branch go
+  # --discard-commits waives the commit reason and nothing else. A dirty tree still refuses, without a word
+  # about commits. Once the tree is clean, the worktree and the branch go.
   printf 'unsaved\n' >"$r/.worktrees/past/scratch.txt"
   assert_wt_fails 3 "1 uncommitted change(s)" rm past -r "$r" --discard-commits
   assert_lacks "…and the waived reason is not among them" "$WT_OUT" "commit(s) on wt/past"
@@ -1155,8 +1170,9 @@ scenario_squash_merge() {
   refuses "$r" conf "(merging wt/conf into origin/main would"
   forced "$r" conf
 
-  # older git: a `git` that says it is 2.34 and hands everything else to the real one drives the file-level
-  # fallback, which lands a plain squash and refuses one whose file the base edited again, hunks or not
+  # Older git: a `git` that says it is 2.34, and hands everything else to the real one, drives the
+  # file-level fallback. That fallback lands a plain squash, but it refuses a squash whose file the base
+  # edited again, even when the edits are in different hunks.
   shim="$TEST_ROOT/oldgit"; mkdir -p "$shim"
   # shellcheck disable=SC2016   # the $1 and $@ are for the shim's own sh to expand
   printf '#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.34.1"; exit 0; fi\nexec %s "$@"\n' \
@@ -1194,7 +1210,7 @@ scenario_squash_merge() {
   end_scenario
 }
 
-# 7. rm_reasons has two callers and bin/wt's comment says "the two can never disagree". Nothing checked it.
+# 7. rm_reasons has two callers, and bin/wt's comment says "the two can never disagree". Nothing checked it.
 scenario_prune_agrees() {
   begin_scenario "7. wt prune --dry-run keeps exactly what wt rm refuses"
   local r n verdict want
@@ -1232,8 +1248,8 @@ scenario_prune_agrees() {
   end_scenario
 }
 
-# A VM agent removing its own task must leave row and session cleanup to the Mac hook. Its refusal still
-# leaves both alone, and all paths here are scratch fixtures despite the simulated relay environment.
+# A VM agent that removes its own task must leave the row and session cleanup to the Mac hook. Its refusal
+# still leaves both alone. All paths here are scratch fixtures, despite the simulated relay environment.
 scenario_self_rm_vm() {
   begin_scenario "7b. a VM task can remove itself after changing to its main checkout"
   local r fake session
@@ -1276,9 +1292,9 @@ STUB
   end_scenario
 }
 
-# 8. cmux. DARWIN-ONLY, all of it: is_remote() is true on anything that is not a Mac, and on that side
-# `wt new` asks the Mac for a row through the relay instead of talking to cmux at all, and check_identity
-# asks tmux rather than the row list. See DARWIN_ASSERTIONS.
+# 8. cmux. DARWIN-ONLY, all of it: is_remote() is true on any machine that is not a Mac. On that side,
+# `wt new` asks the Mac for a row through the relay and does not talk to cmux at all. There, check_identity
+# asks tmux, not the row list. See DARWIN_ASSERTIONS.
 scenario_cmux() {
   begin_scenario "8. a cmux that is not running, and one that is"
   if [[ $OS != Darwin ]]; then
@@ -1296,7 +1312,7 @@ scenario_cmux() {
   assert_dir "…and the worktree is there anyway" "$r/.worktrees/ws"
   assert_cmux_calls "…and cmux was only ever asked whether it is there" "$(printf 'ping\nping')"
 
-  # running, and the row title this name would take belongs to another repo
+  # running, and the row title that this name would take belongs to another repo
   stub_cmux alive
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[
@@ -1306,8 +1322,8 @@ ROWS
   assert_wt_fails 1 "row '$id:taken' already belongs to" new taken --no-workspace -r "$r"
   assert_gone "…and refuses before it makes anything" "$r/.worktrees/taken"
 
-  # two rows share a title; only the host tells them apart, and with no host asked for it is the local row
-  # that answers. Here the local row is this repo's own, so the name is free.
+  # Two rows share a title, and only the host tells them apart. With no host asked for, the local row
+  # answers. Here the local row is this repo's own, so the name is free.
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[
   {"id":"workspace:1","title":"$id:dup","description":"@vm1",
@@ -1328,10 +1344,10 @@ ROWS
   assert_wt_fails 1 "row '$id:swap' already belongs to" new swap --no-workspace -r "$r"
   assert_gone "…and again refuses before it makes anything" "$r/.worktrees/swap"
 
-  # The same two lookups with the row sitting in a SECOND cmux window, which is how two tasks are put side
-  # by side: a cmux window shows one workspace at a time. `workspace list --json` answers for one window, so
-  # until rows_json merged them both assertions below quietly went the other way — the clash was not seen,
-  # and `wt rm` closed no row while still reporting the worktree removed.
+  # The same two lookups, with the row in a SECOND cmux window. That is how two tasks are put side by side,
+  # because a cmux window displays only one row at a time. `workspace list --json` answers for one window.
+  # So until rows_json merged the windows, both assertions below quietly went the other way. The clash was
+  # not seen, and `wt rm` closed no row but still reported the worktree removed.
   local w1=AAAAAAAA-0000-0000-0000-00000000000A w2=BBBBBBBB-0000-0000-0000-00000000000B
   stub_cmux alive
   stub_windows "$w1" "$w2"
@@ -1345,7 +1361,7 @@ ROWS
   assert_gone "…and makes nothing, though the row is in the other window" "$r/.worktrees/moved"
   assert_has "…having enumerated the windows to find it" "$(cat "$CMUX_LOG")" "list-windows"
 
-  # and the row `wt rm` has to close is reached there too
+  # and the row that `wt rm` must close is reached there too
   stub_cmux alive
   stub_windows "$w1" "$w2"
   printf '{"workspaces":[]}\n' >"$WT_ROWS"
@@ -1370,8 +1386,9 @@ ROWS
   assert_wt_ok "wt rm uses the saved title" rm custom -r "$r"
   assert_has "…and closes the renamed row" "$(cat "$CMUX_LOG")" "workspace close custom-row"
 
-  # A cmux that cannot be enumerated — no list-windows, or output that is not a window list — must keep the
-  # single-window behaviour rather than lose the lookup altogether. stub_cmux has just reset it to that.
+  # A cmux that cannot be enumerated must keep the single-window behavior, and must not lose the lookup
+  # altogether. Such a cmux has no list-windows, or prints output that is not a window list. The stub_cmux
+  # call below resets the stub to such a cmux.
   stub_cmux alive
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[
@@ -1384,8 +1401,8 @@ ROWS
 }
 
 # 9. `wt -H <host>`: the argument handling, and only that. Every case below returns from cmd_host or need_r
-# BEFORE remote_sh is reached, so no host has to exist and nothing is sent anywhere — the host name is a
-# .invalid one so that a case that ever did reach ssh would fail this suite rather than dial out.
+# BEFORE it reaches remote_sh. So no host has to exist, and nothing is sent anywhere. The host name is a
+# .invalid one, so that a case that ever did reach ssh would fail this suite instead of dialing out.
 scenario_host_args() {
   begin_scenario "9. wt -H: the checks that happen before any ssh"
   local h=smoke.invalid sub
@@ -1396,21 +1413,21 @@ scenario_host_args() {
     assert_wt_fails 1 "$sub: -r <repo> is required with -H" -H "$h" "$sub" x
   done
 
-  # …and what it is given has to mean something on the other machine
+  # …and the value of -r must mean something on the other machine
   assert_wt_fails 1 "show: -r must be an absolute path on $h" -H "$h" show -r '' x
   assert_wt_fails 1 "show: -r must be an absolute path on $h" -H "$h" show -r . x
   assert_wt_fails 1 "show: -r must be an absolute path on $h" -H "$h" show -r .. x
   assert_wt_fails 1 "show: -r must be an absolute path on $h" -H "$h" show -r rel/path x
-  # a trailing slash is normalised away rather than refused: it would otherwise change repo_id, and with it
-  # the row title host_rm closes
+  # A trailing slash is normalized away, not refused. Otherwise it would change repo_id, and with it the row
+  # title that host_rm closes.
   assert_wt_fails 1 "does not run remotely" -H "$h" badsub -r /abs/path/
 
   assert_wt_fails 1 "wt -H: 'badsub' does not run remotely" -H "$h" badsub
   assert_wt_fails 1 "invalid host '-bad'" -H -bad list
   assert_wt_fails 1 "usage: wt -H <host> <command>" -H "$h"
 
-  # -h wins over the -r requirement: asking what a command takes must answer, not complain about an
-  # argument it is asking about
+  # -h wins over the -r requirement. A question about what a command takes must get an answer, not a
+  # complaint about the argument that it asks about.
   for sub in attach open rm new; do
     assert_wt_ok "wt -H $h $sub -h prints usage" -H "$h" "$sub" -h
     assert_has "…the usage, locally" "$WT_OUT" "wt new  [name]"
@@ -1418,10 +1435,11 @@ scenario_host_args() {
   end_scenario
 }
 
-# 10. A fake SSH server runs the relay check in a scratch HOME. Its ss, ps and kill shims prove that
-# attach signals only the process owning the suspended row's port, and only when that process's SSH session
-# comes from an address other than the fake SSH_CONNECTION's, then asks cmux to reconnect that row. Its tmux
-# shim answers the VM probe that must agree with a shell prompt on the row's screen before anything is typed.
+# 10. A fake SSH server runs the relay check in a scratch HOME. Its ss, ps and kill shims prove that attach
+# signals only the process that owns the suspended row's port. They also prove that attach signals it only
+# when that process's SSH session comes from an address other than the fake SSH_CONNECTION's. Then attach
+# asks cmux to reconnect that row. The tmux shim answers the VM probe. That probe must agree with a shell
+# prompt on the row's screen before anything is typed.
 
 # Scenario 10's row state, and what its fakes logged since the logs were last emptied.
 set_row_state() {   # <state>: remote-row's .remote.state in $WT_ROWS
@@ -1454,8 +1472,8 @@ STUB
 printf 'show %s\n' "$*" >>"$REMOTE_LOG"
 printf '  repo: /vm/repos/project\n  session: %s (%s)\n' "$REMOTE_WT_SESSION" "$(cat "$REMOTE_WT_STATE")"
 STUB
-  # Each has-session is one probe, answered attached, detached or missing: from the queue while it lasts,
-  # then from the fixture. list-clients reports the answer that probe drew.
+  # Each has-session is one probe, answered attached, detached or missing. The answer comes from the queue
+  # while the queue lasts, then from the fixture. list-clients reports the answer that the probe drew.
   cat >"$fake/tmux" <<'STUB'
 #!/bin/sh
 printf 'tmux %s\n' "$*" >>"$REMOTE_LOG"
@@ -1706,7 +1724,8 @@ ROWS
   assert_lacks "a transport failure did not reconnect" "$(cat "$CMUX_LOG")" 'workspace.remote.reconnect'
   rm -f "$TEST_ROOT/remote-ssh-drop"
 
-  # cmux may still say suspended just after the RPC; connecting then suspended again is it giving up.
+  # cmux may still say suspended right after the RPC. A change to connecting and then back to suspended
+  # means that cmux gave up.
   printf 'suspended\nconnecting\nsuspended\n' >"$TEST_ROOT/reconnect-states"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_fails 1 'went back to suspended after cmux tried to reconnect it' -H fakevm attach task -r /vm/repos/project
@@ -1738,8 +1757,8 @@ ROWS
   assert_has "the recovered row was re-attached" "$WT_OUT" '(re-attached)'
   rm -f "$TEST_ROOT/remote-ss-est-user"
 
-  # The row may become connected before the login shell paints its prompt. The fourth tick sees it, and only
-  # that tick asks the VM: the screen, a local read, comes first.
+  # The row may become connected before the login shell paints its prompt. The fourth tick sees the prompt,
+  # and only that tick asks the VM, because the screen, a local read, comes first.
   set_row_state suspended
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
   for n in 1 2 3; do printf 'connecting\n' >"$TEST_ROOT/remote-screen-queue/$n"; done
@@ -1791,7 +1810,7 @@ ROWS
   assert_has "attached-state uncertainty gets a manual command" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
 
   # A client can re-attach on the VM after the prompt was read, and the screen then shows the agent. The probe
-  # just before the send is what sees it; the later footer ticks ask nothing.
+  # right before the send is what sees it. The later footer ticks ask nothing.
   set_row_state suspended
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
   printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen-queue/1"
@@ -1804,7 +1823,7 @@ ROWS
   assert_has "changed-screen uncertainty gets a manual command" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
   rm -f "$TEST_ROOT/remote-screen-queue/1"
 
-  # Each prompt tick asks the VM afresh: a client listed at the first probe and gone by the second gets one
+  # Each prompt tick asks the VM again. A client listed at the first probe and gone by the second gets one
   # send, on the second tick.
   set_row_state suspended
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
@@ -1857,8 +1876,8 @@ ROWS
     assert_has "recovery at '$shape' says re-attached" "$WT_OUT" '(re-attached)'
   done
 
-  # --reattach on a suspended row is the user's word about a screen seen before the reconnect: it waits for
-  # the new shell's prompt, and still needs the row connected and the VM's session detached.
+  # --reattach on a suspended row is the user's word about a screen seen before the reconnect. It waits for
+  # the new shell's prompt, and it still needs the row connected and the VM's session detached.
   set_row_state suspended
   printf '%s\n' 'LISTEN 0 128 127.0.0.1:65353 0.0.0.0:* users:(("sshd",pid=4242,fd=8))' >"$TEST_ROOT/remote-ss"
   for n in 1 2; do printf 'Context 100%%\n' >"$TEST_ROOT/remote-screen-queue/$n"; done   # the pre-suspension screen
@@ -1917,8 +1936,9 @@ ROWS
   rm -f "$TEST_ROOT/cmux-send-fail"
   printf 'agent running\n' >"$TEST_ROOT/remote-wt-state"
 
-  # Explicit --reattach on a row that did not drop takes the user's word about the VM, which still lists the
-  # abandoned client the flag exists for, so the screen is its only check, and every common prompt passes it.
+  # Explicit --reattach on a row that did not drop takes the user's word about the VM. The VM still lists the
+  # abandoned client that the flag exists for. So the screen is the only check, and every common prompt
+  # passes it.
   printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "explicit --reattach still sends tmux" -H fakevm attach task -r /vm/repos/project --reattach
@@ -1951,12 +1971,13 @@ ROWS
   end_scenario
 }
 
-# 11. The invariants two files promise each other in comments and nothing enforced: bin/cmux-hook's copy
-# of tmux_cmd must match bin/wt's line for line (the command is the one bin/cmux-hook's own comment gives), and
-# the two must merge the per-window row lists identically. First, though, the promise bin/wt's own shebang
-# makes: it must PARSE under /bin/bash, which on a Mac is 3.2.57 and once choked on a case pattern inside a
-# heredoc inside $(…) that every newer bash accepted — a whole-suite run under WT_BASH=/bin/bash catches
-# that too, but only when someone remembers to make one. This check is made on every run, whatever runs it.
+# 11. The invariants that two files promise each other in comments, and that nothing enforced. The copy of
+# tmux_cmd in bin/cmux-hook must match bin/wt's line for line (the command is the one that bin/cmux-hook's
+# own comment gives). The two files must also merge the per-window row lists identically. But first, the
+# promise that bin/wt's own shebang makes: bin/wt must PARSE under /bin/bash. On a Mac, that is 3.2.57.
+# That bash once choked on a case pattern inside a heredoc inside $(…) that every newer bash accepted. A
+# whole-suite run under WT_BASH=/bin/bash catches that too, but only when someone remembers to make one.
+# The suite makes this check on every run, whatever bash runs it.
 scenario_shared_tmux_cmd() {
   begin_scenario "11. bin/wt parses under /bin/bash, and agrees with bin/cmux-hook on tmux_cmd and the row list"
   local a b sys=/bin/bash out=""
@@ -1968,27 +1989,27 @@ scenario_shared_tmux_cmd() {
   assert_has "bin/wt has a tmux_cmd" "$a" "tmux new-session"
   assert_has "bin/cmux-hook has one too" "$b" "tmux new-session"
   assert_eq "the two bodies are identical" "$a" "$b"
-  # The second promise: rows_json in wt and ws_load in the hook both merge the per-window row lists, and a
-  # row the two disagreed about would be one wt could act on and the hook could not, or the reverse. They
-  # cannot share the body — the hook wraps every cmux call in its deadline — so what is compared is the jq
-  # program that does the merging.
+  # The second promise: rows_json in wt and ws_load in the hook both merge the per-window row lists. If the
+  # two disagreed about a row, wt could act on it and the hook could not, or the reverse. They cannot share
+  # the body, because the hook wraps every cmux call in its deadline. So the check compares the jq program
+  # that does the merging.
   a="$(sed -n "s/.*| jq -s -c '\(.*\)'.*/\1/p" "$REPO/bin/wt")"
   b="$(sed -n "s/.*| jq -s -c '\(.*\)'.*/\1/p" "$REPO/bin/cmux-hook")"
   assert_has "bin/wt merges the windows' row lists" "$a" "workspaces"
   assert_eq "bin/cmux-hook merges them the same way" "$a" "$b"
-  # …and they must agree on which fields of `cmux list-windows` count as a window, for the same reason:
-  # a pattern that matched in one file and not the other would give the two a different set of windows.
+  # …and they must agree on which fields of `cmux list-windows` count as a window, for the same reason. A
+  # pattern that matched in one file and not in the other would give the two files different sets of windows.
   a="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/wt")"
   b="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/cmux-hook")"
   assert_eq "the two take the same window uuids" "$a" "$b"
   end_scenario
 }
 
-# 11. lib_cleanup's backstop, which no real run reaches: both suites build $TEST_ROOT with mktemp -d and
-# refuse one inside the real home before arming the trap, so the refusal below only ever fires for a suite
-# that did neither — and a branch nothing exercises is a branch nobody knows is broken. Both cases are
-# played out on directories inside this run's own scratch root, with HOME pointed at one of them, so
-# nothing outside it is so much as named even if the guard were wrong.
+# 11. lib_cleanup's backstop, which no real run reaches. Both suites build $TEST_ROOT with mktemp -d, and
+# both refuse one inside the real home before they arm the trap. So the refusal below fires only for a suite
+# that did neither. Nobody knows that a branch is broken when nothing exercises it. Both cases run on
+# directories inside this run's own scratch root, with HOME pointed at one of them. So even if the guard
+# were wrong, nothing outside the scratch root is so much as named.
 # shellcheck disable=SC2016   # the $1 in the bash -c program is for THAT bash to expand, not this file
 scenario_cleanup_guard() {
   begin_scenario "12. lib_cleanup refuses a scratch root it must not remove"
@@ -1996,17 +2017,17 @@ scenario_cleanup_guard() {
   mkdir -p "$bad/home/inner" "$good/inner"
   guard_scratch_root "$bad"
   guard_scratch_root "$good"
-  # In a bash of its own, not a subshell: TEST_ROOT and HOME reach it as environment, so this run's own
-  # values are never shadowed even for an instant, and what runs is test/lib.sh exactly as a suite sources
-  # it. A non-zero exit cannot abort this suite either — it would show up in the assertions below instead.
+  # This runs in a bash of its own, not in a subshell. TEST_ROOT and HOME reach it as environment, so this
+  # run's own values are never shadowed, even for an instant. What runs is test/lib.sh exactly as a suite
+  # sources it. A non-zero exit cannot abort this suite either; it would show up in the assertions below.
 
   # a root with the home directory inside it: refused, and nothing removed
   out="$(TEST_ROOT="$bad" HOME="$bad/home" KEEP='' "$BASH" -c '. "$1"; lib_cleanup' _ "$REPO/test/lib.sh" 2>&1)" || true
   assert_has "it says which root it refused" "$out" "refusing to remove"
   assert_dir "…and removed nothing" "$bad"
 
-  # …and a root that is plainly this run's own is still removed, or the guard would have stopped the trap
-  # from doing its job at all, which is a worse bug than the one it is here to prevent.
+  # …and a root that is plainly this run's own is still removed. Otherwise the guard would stop the trap
+  # from doing its job at all. That is a worse bug than the one that the guard is here to prevent.
   out="$(TEST_ROOT="$good" KEEP='' "$BASH" -c '. "$1"; lib_cleanup' _ "$REPO/test/lib.sh" 2>&1)" || true
   assert_gone "a root with nothing of the user's under it is still removed" "$good"
   assert_eq "…and says nothing about it" "" "$out"
@@ -2015,26 +2036,26 @@ scenario_cleanup_guard() {
 
 # ---------------------------------------------------------------------------- main
 
-# expected_assertions: what a complete run makes. Asserting the TOTAL is what catches the failure mode a
-# pass/fail count cannot see — a scenario that stops asserting rather than starts failing. The same guard in
-# test/install-smoke.sh once caught a mutation that took it from 323 assertions to 318 with every scenario
-# still green.
+# expected_assertions: the count that a complete run makes. Asserting the TOTAL catches the failure mode that
+# a pass/fail count cannot see: a scenario that stops asserting instead of failing. The same guard in
+# test/install-smoke.sh once caught a mutation that took that suite from 323 assertions to 318, with every
+# scenario still green.
 expected_assertions() {
   local n=$FIXED_ASSERTIONS
   if [[ $OS == Darwin ]]; then n=$((n + DARWIN_ASSERTIONS)); fi
   echo "$n"
 }
 
-# Everything that is not Darwin-only. Bump it in the same commit as the assertion you added.
+# All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
 FIXED_ASSERTIONS=596
-# The assertions that only a Mac can make, counted apart so the total is right on both platforms.
-# is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one, and bin/wt has no FORCE_OS to
-# lie to it with — install.sh has one, but adding the equivalent here would be a change to the code under
-# test. So on Linux: scenario 8 is skipped whole (there, `wt new` without --no-workspace asks the Mac for a
-# row over the relay and never consults cmux, and check_identity asks tmux instead of the row list, so
-# neither the "row belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable),
-# and scenario 4 does not assert that `wt show` prints no session: line, because there it prints one, nor
-# run `wt open`, which there asks the Mac over the relay instead of running `code`.
+# The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
+# is_remote() (bin/wt:~88) is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
+# fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
+#   - Scenario 8 is skipped whole. There, `wt new` without --no-workspace asks the Mac for a row over the
+#     relay and never consults cmux. check_identity asks tmux, not the row list. So neither the "row
+#     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
+#   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
+#   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
 DARWIN_ASSERTIONS=31
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one

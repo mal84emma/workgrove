@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise remote creation failures through scratch ssh/cmux stubs; no real host is contacted.
+# Exercise remote creation failures with scratch ssh and cmux stubs. The suite contacts no real host.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -110,12 +110,12 @@ check() { if [[ "$1" ]]; then pass; else fail "$2; output: $WT_OUT"; fi; }
 
 begin_scenario 'remote preflight and recovery'
 
-# Local cmux failure must stop before the first SSH command.
+# A local cmux failure must stop creation before the first SSH command.
 CMUX_MODE=down
 run_wt wt-demo codex
 check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/ssh.log" ]] && echo yes)" 'cmux refusal made an SSH call'
 
-# A missing requested agent or repo must stop before remote new.
+# If the requested agent or repo is missing, creation must stop before remote new.
 CMUX_MODE=alive
 rm "$TEST_ROOT/remote/.local/bin/codex"
 run_wt wt-demo codex
@@ -127,7 +127,8 @@ REMOTE_DEFAULT_AGENT=claude
 run_wt missing-repo claude
 check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'repo not found'* && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'missing repo did not stop creation'
 
-# A deferred task keeps its saved choices without touching cmux; the first attach starts its saved command.
+# A deferred task keeps its saved choices and does not touch cmux.
+# The first attach starts its saved command.
 CMUX_MODE=down
 : >"$TEST_ROOT/cmux.log"
 invoke_wt -H fakevm new task -r wt-demo -a claude -m 'opus[1m]' -p 'deferred brief' --no-workspace
@@ -170,7 +171,7 @@ check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'row: re
 check "$([[ $(grep -xcF -- '-m' "$TEST_ROOT/remote-new.args") -eq 1 && $(grep -xcF -- 'opus[1m]' "$TEST_ROOT/remote-new.args") -eq 1 ]] && echo yes)" 'remote model flag or value was not forwarded intact'
 rm "$TEST_ROOT/remote-new"
 
-# An old VM parser rejects the option before making a task, and the Mac names the update command.
+# An old VM parser rejects the -m option before it makes a task, and the Mac names the update command.
 REMOTE_OUTPUT_MODE=old
 run_wt wt-demo claude fable
 check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'wt -H fakevm update'* ]] && echo yes)" 'old remote wt did not give a safe update path'
@@ -182,14 +183,14 @@ REMOTE_OUTPUT_MODE=normal
 run_wt wt-demo claude 'two words'
 check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'invalid model'* ]] && echo yes)" 'invalid remote model reached task creation'
 
-# Combined spellings are not accepted by the VM parser, so reject them before any SSH call.
+# The VM parser does not accept combined spellings, so the Mac rejects them before any SSH call.
 rm -f "$TEST_ROOT/ssh.log"
 invoke_wt -H fakevm new task -r wt-demo --model=fable
 check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'use -m <model>'* && ! -e "$TEST_ROOT/ssh.log" && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'combined long model option reached SSH'
 invoke_wt -H fakevm new task -r wt-demo -mfable
 check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'use -m <model>'* && ! -e "$TEST_ROOT/ssh.log" && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'combined short model option reached SSH'
 
-# An installed Mac hook enables the bridge without reloading all cmux settings during task creation.
+# With the Mac hook installed, task creation enables the bridge and does not reload all cmux settings.
 mkdir -p "$TEST_ROOT/local/.local/bin" "$TEST_ROOT/local/.config/cmux"
 printf 'CMUX_NOTIFICATION_SUBTITLE\n' > "$TEST_ROOT/local/.local/bin/cmux-hook"
 printf '{"notifications":{"hooks":[{"id":"wt","command":"~/.local/bin/cmux-hook"}]}}\n' > "$TEST_ROOT/local/.config/cmux/cmux.json"
@@ -204,14 +205,14 @@ run_wt wt-demo claude
 check "$([[ $WT_RC -eq 1 && "$WT_OUT" == *"worktree 'task' already exists"* && "$WT_OUT" != *'could not confirm'* && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'VM refusal was described as a disconnect'
 SSH_MODE=ok
 
-# Success with malformed output may still have created the task: print an inspection path.
+# A success with malformed output may still have created the task, so the Mac prints an inspection path.
 REMOTE_OUTPUT_MODE=bad
 run_wt wt-demo claude
 check "$([[ $WT_RC -ne 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'inspect with: wt -H fakevm list -r wt-demo'* ]] && echo yes)" 'malformed success omitted inspection advice'
 REMOTE_OUTPUT_MODE=normal
 rm "$TEST_ROOT/remote-new"
 
-# A row left after an older task was removed must not make the new task look started.
+# A row that remains after an older task was removed must not make the new task look started.
 CMUX_MODE=existing
 run_wt wt-demo claude
 check "$([[ $WT_RC -ne 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'row with this title is already open'* && "$WT_OUT" == *'attach --restart-agent'* ]] && echo yes)" 'leftover row falsely reported success'

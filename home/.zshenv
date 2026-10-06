@@ -1,7 +1,7 @@
-# Environment for every zsh (login, interactive and non-interactive).
-# Machine-local additions go in ~/.zshenv.local (never versioned).
+# Environment for every zsh: login, interactive, and non-interactive.
+# Put machine-local additions in ~/.zshenv.local, which is never versioned.
 
-# Tools installed per user, incl. wt and the agent CLIs.
+# Tools installed per user, including wt and the agent CLIs.
 export PATH="$HOME/.local/bin:$PATH"
 
 # gh: no interactive prompts in agent sessions.

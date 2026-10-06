@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Agent lifecycle hook → notification. Remote cmux pane: relay to the Mac. Local cmux pane: no-op. Elsewhere on a Mac: banner.
+# Agent lifecycle hook → notification. In a remote cmux pane: send it through the relay to the Mac.
+# In a local cmux pane: do nothing. Elsewhere on a Mac: show a banner.
 #
-# Claude prompt timestamps gate short local Mac banners. VM lifecycle events also update the cmux row.
+# Claude prompt timestamps gate the local Mac banners: a short turn gets none.
+# VM lifecycle events also update the cmux row.
 set -u
 : "${HOME:?agent-notify: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 [[ -t 0 ]] && payload= || payload=$(cat)
@@ -12,8 +14,8 @@ status=''; status_only=''; body=''; sound=''
 interrupted=0
 if [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -z $payload ]]; then
   [[ -n ${WT_STATUS_FILE:-} && -r $WT_STATUS_FILE ]] || exit 0
-  # The file is also written by lifecycle hooks, which drop their update if they wait long for the lock.
-  # Hold it to read and to write, not while scanning the transcript: a long turn can take seconds to parse.
+  # Lifecycle hooks also write this file. If they wait long for the lock, they drop their update.
+  # Hold the lock to read and write, not while scanning the transcript: a long turn can take seconds to parse.
   exec 9>"$WT_STATUS_FILE.lock"
   if command -v flock >/dev/null; then flock -w 1 9 || exit 0; fi
   payload=$(cat "$WT_STATUS_FILE" 2>/dev/null) || exit 0
@@ -49,8 +51,8 @@ event=$(printf '%s' "$payload" | jq -r '.hook_event_name // empty' 2>/dev/null |
 session=$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null | tr -cd 'A-Za-z0-9-' || true)
 stamps="${XDG_STATE_HOME:-$HOME/.local/state}/claude-start-times"   # private state, not /tmp: TMPDIR is empty on the VMs
 quiet_seconds=${AGENT_NOTIFY_MIN_SECONDS:-180}   # a turn shorter than this finishes without a banner
-# Validated for the same reason the stamp is: both land in the (( )) below, where bash expands identifiers
-# and evaluates array subscripts, so a typo aborts the script under set -u and a crafted value runs commands.
+# Validated for the same reason as the stamp: both go into the (( )) below, where bash expands identifiers
+# and evaluates array subscripts. So under set -u a typo aborts the script, and a crafted value runs commands.
 [[ $quiet_seconds =~ ^[0-9]+$ ]] || quiet_seconds=180
 
 case $event in
@@ -85,10 +87,11 @@ case $event in
 esac
 [[ $interrupted == 1 ]] && status=idle
 
-# The same list and the same precedence as relay_env in bin/wt, and for the same reason: cmux authorises a
-# relayed notification against the surface and workspace in the environment, and a pane keeps the identity of
-# whichever cmux connection started it. Only the tmux SESSION environment is rebound on reattach, so re-read
-# it here and hand the values to cmux explicitly instead of letting the child inherit this pane's stale ones.
+# cmux authorizes a relayed notification against the surface and workspace in the environment. A pane keeps
+# the identity of the cmux connection that started it, and a reattach rebinds only the tmux SESSION
+# environment. So re-read that environment here and give the values to cmux explicitly, instead of letting
+# the child inherit the stale values of this pane. The relay_env function in bin/wt uses the same list and
+# the same precedence, for the same reason.
 relay_vars="CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID"
 socket=${CMUX_SOCKET_PATH:-}; ws=${CMUX_WORKSPACE_ID:-}; ident=()
 s=""
@@ -107,8 +110,8 @@ for n in $relay_vars; do
   esac
 done
 
-# Only the agent started by `wt run` owns a VM row. Hooks from other panes, nested agents, and
-# a child `wt new -p` before its own row exists must not change the parent's status.
+# Only the agent that `wt run` started owns a VM row. Hooks from other panes, from nested agents, and
+# from a child `wt new -p` before its own row exists must not change the status of the parent.
 status_owner() {
   [[ -n ${WT_STATUS_OWNER_PID:-} && ${TMUX_PANE:-} == "${WT_STATUS_OWNER_PANE:-}" ]] || return 1
   local pid=$PPID parent comm agents=0
@@ -131,8 +134,8 @@ relay_notify() {
   fi
 }
 
-# frontmost_terminal: true when the app this agent runs in is the one already on screen, so a banner would
-# tell the user what they are looking at. cmux rows never reach here; this is for a bare terminal window.
+# frontmost_terminal: true when the app that this agent runs in is the one already on screen. So a banner
+# would tell the user what they are looking at. cmux rows never get here; this is for a bare terminal window.
 frontmost_terminal() {
   local front t=
   case ${TERM_PROGRAM:-} in
@@ -147,15 +150,15 @@ frontmost_terminal() {
   [[ $front == "$t" ]]
 }
 
-# short_turn: true when this session's prompt was submitted less than quiet_seconds ago. No stamp — or one
-# that is not a plain count of seconds — means the agent does not keep one, so the turn is never called short.
+# short_turn: true when this session's prompt was submitted less than quiet_seconds ago. No stamp, or a stamp
+# that is not a plain count of seconds, means that the agent keeps none. So the turn is never called short.
 short_turn() {
   local start now
   [[ -n $session ]] || return 1
   start=$(cat "$stamps/$session" 2>/dev/null || true)
-  # Digits only, checked before (( )) ever sees it: bash re-expands identifiers inside arithmetic and
-  # evaluates array subscripts, so a stamp reading `session[$(…)]` would run that command. A partial write
-  # or another tool's file is not a stamp either, and under set -u it would abort the Stop notification here.
+  # Digits only, checked before (( )) sees the value. Bash re-expands identifiers inside arithmetic and
+  # evaluates array subscripts, so a stamp that reads `session[$(…)]` would run that command. A partial write
+  # or another tool's file is not a stamp either. Under set -u, each would abort the Stop notification here.
   [[ $start =~ ^[0-9]+$ ]] || return 1
   now=$(date +%s)
   (( now >= start )) || return 1   # the clock stepped back (NTP, or a stamp dir shared with a faster host):
@@ -164,9 +167,9 @@ short_turn() {
 }
 
 if [[ $socket == *:[0-9]* ]]; then
-  # cmux 0.64's SSH relay accepts notifications but has no sidebar or agent lifecycle method. The Mac-side
-  # cmux-hook turns this private control notification into the same status pill local agent hooks show.
-  # It verifies that cmux assigned the notification to a row on WT_HOST before changing that row.
+  # cmux 0.64's SSH relay accepts notifications, but it has no sidebar or agent lifecycle method. The Mac hook,
+  # cmux-hook, turns this private control notification into the same status pill that local agent hooks show.
+  # It verifies that cmux assigned the notification to a row on WT_HOST before it changes that row.
   case $title in 'Claude Code') agent=claude ;; Codex) agent=codex ;; *) agent= ;; esac
   send_status=0
   if [[ $status == running || $status == idle || $status == clear || $status == renew ]] && [[ -n $agent && ${WT_HOST:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] &&
@@ -206,7 +209,7 @@ if [[ $socket == *:[0-9]* ]]; then
       exec 9>&-
     fi
   fi
-  # Record the new state before a heartbeat can read it; send completion before sidebar network work.
+  # Record the new state before a heartbeat can read it. Send the completion before the sidebar network work.
   if [[ -z $status_only ]]; then
     relay_notify --title "$title" --body "$body" ||
       echo 'agent-notify: relay failed; close and reopen this cmux row (wt -H <host> attach …)' >&2

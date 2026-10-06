@@ -1,39 +1,49 @@
 #!/usr/bin/env bash
 # azml-ssh-host — turn an Azure ML compute instance into a Host block in ~/.ssh/config.
 #
-# An SSH-enabled compute instance is an ordinary Linux host: one public IP, a per-instance port, an
-# admin user, and a public key fixed when the instance was created. This reads those facts from
-# Azure Resource Manager, finds the matching private key in ~/.ssh, writes one marked block into the
-# ssh config and verifies the login. After that `ssh <instance>`, VS Code Remote-SSH, the `wt task`
-# picker and `wt -H <instance> …` all work, because they all read the same file.
+# An SSH-enabled compute instance is an ordinary Linux host. It has one public IP, a port of its own,
+# an admin user, and a public key that was fixed when the instance was created. This helper reads
+# those facts from Azure Resource Manager (ARM) and finds the matching private key in ~/.ssh. Then it
+# writes one marked block into the ssh config and verifies the login. After that, `ssh <instance>`,
+# VS Code Remote-SSH, the task picker (`wt task`) and `wt -H <instance> …` all work, because they all
+# read the same file.
 #
 # Usage:
-#   azml-ssh-host [-F <file>] add <instance>    read the instance, write/update its block, verify
+#   azml-ssh-host [-F <file>] add <instance>    read the instance, write or update its block, verify
 #   azml-ssh-host [-F <file>] list              every SSH-enabled compute instance this account sees
-#   azml-ssh-host [-F <file>] rm <instance>     remove the block written by add
+#   azml-ssh-host [-F <file>] rm <instance>     remove the block that add wrote
 #   azml-ssh-host help
 #
 #   -F <file>   the ssh config to manage, default ~/.ssh/config (mirrors ssh's own -F)
 #
-# Requires: az (logged in), jq, ssh, ssh-keygen. The stale `az ml` extension is never used; every
-# call goes through `az resource list` and `az rest` with an explicit api-version.
+# Requires: az (logged in), jq, ssh, ssh-keygen. The helper never uses the stale `az ml` extension.
+# Every call goes through `az resource list` and `az rest`, with an explicit api-version.
 #
-# Writes only between its own markers, which always sit at the top of the file, because ssh keeps
-# the first value it is given and an earlier `Host *` or `Match host …` would otherwise win:
+# The helper writes only between its own markers:
 #     # >>> azml-ssh-host <instance>
 #     Host <instance> …
 #     # <<< azml-ssh-host <instance>
-# Everything outside the markers is left byte for byte as it was — with one caveat: awk truncates a line at
-# the first NUL, which an ssh config cannot contain — and `rm` restores the content
-# exactly as `add` found it; the mode is normalised to 600 whenever the file is written, so a config
-# that was 644 comes back 600. Every write builds the whole file in a temporary file in the same folder
-# and renames it into place, keeping the previous file as <config>.bak, so an interrupted or failed run
-# cannot leave a truncated config behind. A config that is itself a symlink, as a dotfiles checkout makes it,
-# is followed to the real file first, so the link survives the write and the .bak lands beside its target; a
-# link with no target is refused rather than turned into a file. A `Host`/`Match` line naming the instance
-# outside the markers is refused rather than edited, and markers that do not pair are refused rather than repaired; a run
-# that refuses leaves the file alone, mode included. The file is created 600, in a 700 ~/.ssh.
-# UseKeychain is written on macOS only; Linux OpenSSH rejects it.
+# The markers always sit at the top of the file, because ssh keeps the first value that it gets.
+# Otherwise an earlier `Host *` or `Match host …` would win.
+#
+# How the helper changes the file:
+#   - Everything outside the markers stays byte for byte as it was. One caveat: awk truncates a line
+#     at the first NUL, but an ssh config cannot contain a NUL.
+#   - `rm` restores the content exactly as `add` found it.
+#   - The helper normalizes the mode to 600 whenever it writes the file. So a config that was 644
+#     comes back 600.
+#   - Every write builds the whole file in a temporary file in the same folder, and renames it into
+#     place. So an interrupted or failed run cannot leave a truncated config behind.
+#   - Each write keeps the previous file as <config>.bak.
+#   - A config can itself be a symlink, as a dotfiles checkout makes it. The helper first follows the
+#     link to the real file. So the link survives the write, and the .bak lands beside the real file.
+#   - The helper refuses a link with no target. It does not turn the link into a file.
+#   - The helper refuses a `Host`/`Match` line that names the instance outside the markers. It does
+#     not edit that line.
+#   - The helper refuses markers that do not pair. It does not repair them.
+#   - A run that refuses leaves the file alone, mode included.
+#   - A new file gets mode 600, in a ~/.ssh with mode 700.
+#   - The helper writes UseKeychain on macOS only, because Linux OpenSSH rejects it.
 set -euo pipefail
 : "${HOME:?azml-ssh-host: HOME is not set}"  # name the script; bash alone says only "HOME: unbound variable"
 
@@ -59,7 +69,7 @@ tilde() { # every printed path goes through this, so messages read like the docu
   esac
 }
 
-parent_dir() { # the folder holding a path; a builtin, so it works before require_tools
+parent_dir() { # the folder that holds a path; shell builtins only, so it works before require_tools
   local d
   case "$1" in
     */*) d="${1%/*}"; printf '%s' "${d:-/}" ;;
@@ -70,8 +80,8 @@ parent_dir() { # the folder holding a path; a builtin, so it works before requir
 cleanup() { if [ ${#TMPFILES[@]} -gt 0 ]; then rm -f "${TMPFILES[@]}"; fi; }
 trap cleanup EXIT
 
-tmpfile() { # tmpfile <var>: a temp file whose path lands in <var>; never call this in a subshell,
-              # or cleanup would not see it
+tmpfile() { # tmpfile <var>: make a temp file and put its path in <var>. Never call this in a
+              # subshell, or cleanup would not see the file.
   local f
   f=$(mktemp "${TMPDIR:-/tmp}/azml-ssh-host.XXXXXX" 2>/dev/null) \
     || die "could not create a temporary file in ${TMPDIR:-/tmp}; point TMPDIR at a writable folder, then re-run"
@@ -88,7 +98,7 @@ require_tools() { # each error names the command that fixes it
   [ -n "$SUB" ] || die "not logged in: az login"
 }
 
-need_instance() { # it becomes a Host alias, which wt and cmux-hook must accept
+need_instance() { # the name becomes a Host alias, which wt and cmux-hook must accept
   [ -n "${1:-}" ] || die "usage: azml-ssh-host [-F <file>] add|rm <instance>"
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,63}$ ]] \
     || die "invalid instance name '$1' (letters, digits and '-', 64 at most, starting with a letter or digit)"
@@ -100,7 +110,7 @@ ws_url() { # ws_url <workspace> <group> <suffix> — an ARM URL under one worksp
     "$SUB" "$2" "$1" "$3" "$API"
 }
 
-workspaces() { # "<name><tab><group>" per Azure ML workspace visible in this subscription
+workspaces() { # one "<name><tab><group>" per Azure ML workspace that is visible in this subscription
   az resource list --resource-type Microsoft.MachineLearningServices/workspaces \
     --query '[].[name,resourceGroup]' -o tsv </dev/null \
     || die "could not list Azure ML workspaces in subscription $SUB; check the account: az account show"
@@ -108,8 +118,8 @@ workspaces() { # "<name><tab><group>" per Azure ML workspace visible in this sub
 
 is_json() { printf '%s' "$1" | jq -e . >/dev/null 2>&1; }
 
-find_compute() { # find_compute <instance>: sets JSON, WORKSPACE, GROUP and URL; the first workspace that
-                 # has it wins
+find_compute() { # find_compute <instance>: sets JSON, WORKSPACE, GROUP and URL. The first workspace that
+                 # has the instance wins.
   local list ws group url out badurl="" badws=""
   list=$(workspaces)
   [ -n "$list" ] \
@@ -136,7 +146,8 @@ EOF
   az account list -o table shows what you are logged into; az account set -s <other>, or az login --tenant <tenant> for another directory"
 }
 
-read_facts() { # read_facts <instance>: STATE, ADMIN, PORT, IP, PUBKEY from JSON, with the hard stops
+read_facts() { # read_facts <instance>: sets STATE, ADMIN, PORT, IP, PUBKEY from JSON, and dies at
+               # the hard stops
   local tsv access ctype
   ctype=$(jq -r '.properties.computeType // "unknown"' <<<"$JSON")
   [ "$ctype" = ComputeInstance ] \
@@ -173,11 +184,12 @@ match_key() { # match_key <instance>: the ~/.ssh key whose public half is the on
 start_marker() { printf '# >>> azml-ssh-host %s' "$1"; }
 end_marker()   { printf '# <<< azml-ssh-host %s' "$1"; }
 
-resolve_config_path() { # a config managed by stow, chezmoi or this repo's own install.sh is a symlink into a
-                        # dotfiles checkout. Renaming the new file onto the link would replace the link with a
-                        # regular file and quietly detach it, so the link is followed to the real file once, up
-                        # front, and every write below lands there. readlink -f is GNU and absent on macOS, so
-                        # the chain is walked a link at a time; a relative target is read from the link's folder.
+resolve_config_path() { # when stow, chezmoi or this repo's own install.sh manages the config, it is a symlink
+                        # into a dotfiles checkout. A rename of the new file onto the link would replace the link
+                        # with a regular file and quietly detach it. So this follows the link to the real file
+                        # once, up front, and every write below lands there. On macOS, readlink has no -f (a
+                        # GNU option), so this walks the chain one link at a time. It reads a relative target
+                        # from the link's folder.
   local orig="$CONFIG" p="$CONFIG" target n=0
   while [ -L "$p" ]; do
     n=$((n + 1))
@@ -196,7 +208,7 @@ resolve_config_path() { # a config managed by stow, chezmoi or this repo's own i
   CONFIG="$p"
 }
 
-check_config_path() { # -F must name a file this can read and write; nothing is created here
+check_config_path() { # -F must name a file that the helper can read and write; this check creates nothing
   local dir
   resolve_config_path                        # first, so the checks and every later write see the real file
   [ ! -d "$CONFIG" ] || die "$(tilde "$CONFIG") is a directory; -F takes an ssh config file (default ~/.ssh/config)"
@@ -211,9 +223,9 @@ check_config_path() { # -F must name a file this can read and write; nothing is 
   [ -w "$CONFIG" ] || die "cannot write $(tilde "$CONFIG"); check it: ls -l $(tilde "$CONFIG")"
 }
 
-ensure_config() { # ~/.ssh is 700, the config is 600; neither is created before it is needed. An existing
-                  # file keeps its mode here; write_config normalises it to 600 when it writes, so a run
-                  # that refuses or finds the block unchanged does not touch the file at all.
+ensure_config() { # ~/.ssh is 700 and the config is 600. This creates neither before it is needed. An
+                  # existing file keeps its mode here. When write_config writes, it normalizes the mode to
+                  # 600. So a run that refuses, or finds the block unchanged, does not touch the file at all.
   local dir
   if [ ! -e "$CONFIG" ]; then
     dir=$(parent_dir "$CONFIG")
@@ -244,9 +256,9 @@ block_text() { # block_text <instance>: the managed block, markers included
   end_marker "$1"; printf '\n'
 }
 
-# Marker lines are compared with trailing blanks and a CR stripped, so a stray space cannot make a
-# start and its end look like different lines.
-check_markers() { # check_markers <instance>: every start marker closed, in order, or nothing is touched
+# Each marker comparison first strips trailing blanks and a CR from the line. So a stray space cannot
+# make a start and its end look like different lines.
+check_markers() { # check_markers <instance>: every start marker must close, in order, or the file stays untouched
   [ -f "$CONFIG" ] || return 0
   awk -v s="$(start_marker "$1")" -v e="$(end_marker "$1")" '
     { line = $0; sub(/[ \t\r]+$/, "", line) }
@@ -280,9 +292,9 @@ read_block() { # read_block <instance>: the first managed block as it stands, em
     inb && line == e { inb = 0; done_one = 1 }' "$CONFIG"
 }
 
-strip_blocks() { # strip_blocks <instance>: the file without its managed blocks. Every block takes the
-                 # blank line after it, which is the separator add itself writes, so add and rm are
-                 # exact inverses however many blocks the file holds and whatever order they go in.
+strip_blocks() { # strip_blocks <instance>: the file without its managed blocks. Each block also takes
+                 # the blank line after it, which is the separator that add itself writes. So add and rm
+                 # are exact inverses, however many blocks the file holds and in whatever order.
   awk -v s="$(start_marker "$1")" -v e="$(end_marker "$1")" '
     { line = $0; sub(/[ \t\r]+$/, "", line) }
     !inb && line == s { inb = 1; next }
@@ -292,12 +304,12 @@ strip_blocks() { # strip_blocks <instance>: the file without its managed blocks.
     { print }' "$CONFIG"
 }
 
-# Only `Host`/`Match` lines in this file, with the usual whitespace between keyword and value, are
-# looked at: not the `Host=<name>` form, and not files pulled in by `Include`. That is enough, because
-# the managed block is written at line 1 and ssh keeps the first value it is given, so anything this
-# misses is overridden by the block rather than overriding it; the point of the check is only to avoid
-# silently shadowing a block the user wrote by hand.
-unmanaged_host() { # unmanaged_host <instance>: a Host or Match line naming it outside the managed blocks
+# This check looks only at `Host`/`Match` lines in the config file itself, with the usual whitespace
+# between keyword and value. It does not look at the `Host=<name>` form, or at files that `Include`
+# pulls in. That is enough, because the managed block is at line 1 and ssh keeps the first value that
+# it gets. So the block overrides anything that this check misses, not the other way around. The check
+# exists only to avoid silently shadowing a block that the user wrote by hand.
+unmanaged_host() { # unmanaged_host <instance>: a Host or Match line that names it outside the managed blocks
   [ -f "$CONFIG" ] || return 1
   awk -v s="$(start_marker "$1")" -v e="$(end_marker "$1")" -v h="$1" '
     { line = $0; sub(/[ \t\r]+$/, "", line) }
@@ -311,7 +323,7 @@ unmanaged_host() { # unmanaged_host <instance>: a Host or Match line naming it o
 }
 
 precheck_block() { # precheck_block <instance>: the refusals that need only the config file, so they can
-                   # run before anything is asked of Azure
+                   # run before the helper asks Azure anything
   check_markers "$1"
   if [ "$(block_count "$1")" = 0 ] && unmanaged_host "$1"; then
     die "Host $1 is already in $(tilde "$CONFIG") and was not written by azml-ssh-host.
@@ -320,12 +332,12 @@ precheck_block() { # precheck_block <instance>: the refusals that need only the 
 }
 
 write_config() { # write_config <instance> [<block file>]: the block first, then the file without its blocks.
-                 # The new file is built in full beside the target and moved onto it, so an interruption, a
-                 # full disk or any failure below leaves the config exactly as it was; the previous file is
-                 # kept as <config>.bak (the suffix .gitignore already reserves).
+                 # This builds the new file in full beside the target and moves it onto the target. So an
+                 # interruption, a full disk or any failure below leaves the config exactly as it was. This
+                 # keeps the previous file as <config>.bak (the suffix that .gitignore already reserves).
   local rest out new nonl=0
   if [ -s "$CONFIG" ] && [ -n "$(tail -c 1 "$CONFIG")" ]; then
-    nonl=1                                   # awk ends every line, so put that back afterwards
+    nonl=1                                   # awk ends every line, so undo that afterwards
   fi
   tmpfile rest; tmpfile out
   strip_blocks "$1" >"$rest"
@@ -343,14 +355,14 @@ write_config() { # write_config <instance> [<block file>]: the block first, then
   TMPFILES+=("$new")                         # cleanup removes it if anything below fails
   chmod 600 "$new" || die "could not set the mode of the new $(tilde "$CONFIG")"
   if [ "$nonl" = 1 ] && [ -s "$out" ]; then
-    # Drop exactly the one newline awk added, by byte count. "$(cat …)" would strip every trailing
-    # newline, silently deleting a run of blank lines at the end of the file, and would lose NUL bytes
-    # on the way through the shell. head -c takes the same count on macOS and GNU.
+    # Drop exactly the one newline that awk added, by byte count. "$(cat …)" would strip every
+    # trailing newline, and so silently delete a run of blank lines at the end of the file. It would
+    # also lose NUL bytes on the way through the shell. head -c takes the same count on macOS and GNU.
     head -c "$(( $(wc -c <"$out") - 1 ))" "$out" >"$new" || die "could not write the new $(tilde "$CONFIG")"
   else
     cat "$out" >"$new" || die "could not write the new $(tilde "$CONFIG")"
   fi
-  if [ -e "$CONFIG" ]; then                  # the previous file is kept before anything replaces it
+  if [ -e "$CONFIG" ]; then                  # keep the previous file before anything replaces it
     rm -f "$CONFIG.bak"                      # an old .bak may be a symlink; cp would write through it
     cp "$CONFIG" "$CONFIG.bak" || die "could not back up $(tilde "$CONFIG") to $(tilde "$CONFIG").bak"
     chmod 600 "$CONFIG.bak" || die "could not set the mode of $(tilde "$CONFIG").bak"
@@ -358,7 +370,7 @@ write_config() { # write_config <instance> [<block file>]: the block first, then
   mv "$new" "$CONFIG" || die "could not replace $(tilde "$CONFIG"); it is unchanged, and $(tilde "$CONFIG").bak holds a copy"
 }
 
-install_block() { # install_block <instance>: unchanged, or written at the top of the file
+install_block() { # install_block <instance>: leave the block unchanged, or write it at the top of the file
   local new count line
   precheck_block "$1"
   tmpfile new
@@ -378,7 +390,8 @@ install_block() { # install_block <instance>: unchanged, or written at the top o
 }
 
 # ---------------------------------------------------------------- verify and report
-verify() { # verify <instance>: one non-interactive login, with the two failures that have a next command
+verify() { # verify <instance>: one non-interactive login. For the two failures that have a next
+           # command, it names that command.
   local out rc=0
   out=$(ssh -F "$CONFIG" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new \
     "$1" 'echo "connected as $(whoami) on $(hostname)"' 2>&1) || rc=$?

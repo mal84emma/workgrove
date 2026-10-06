@@ -1,11 +1,11 @@
-# One block per VM, in ~/.ssh/config on the Mac. This file is never versioned.
+# One block per VM, in ~/.ssh/config on the Mac. Your ~/.ssh/config is never versioned.
 #
-# For an Azure ML compute instance do not write a block by hand: run `azml-ssh-host add <instance>`, which
-# reads the instance from Azure and writes its own block at the top of the file (docs/azml-compute.md).
+# For an Azure ML compute instance, do not write a block by hand. Run `azml-ssh-host add <instance>` instead
+# (docs/azml-compute.md). It reads the instance from Azure and writes its own block at the top of the file.
 #
-# The alias on the Host line is the WT_HOST value install.sh records when it runs on that VM, and the name
-# `wt -H <vm> …`, the ⌃⌥⌘T picker and VS Code Remote-SSH all use. Keep it short, lower-case and
-# free of dots if you can: it ends up in row descriptions as @<vm>.
+# The alias on the Host line is the WT_HOST value that install.sh records when it runs on that VM.
+# `wt -H <vm> …`, the task picker (⌃⌥⌘T) and VS Code Remote-SSH all use this name too.
+# If you can, keep it short, lowercase and free of dots: it ends up on the row's second line as @<vm>.
 
 Host vm-a
     HostName 203.0.113.10        # the VM's public IP or DNS name

@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# test/github-guard-smoke.sh: feed bin/github-guard hook payloads and assert what it answers.
+# test/github-guard-smoke.sh: feed hook payloads to bin/github-guard and assert what it answers.
 #   bash test/github-guard-smoke.sh                       (KEEP=1 leaves the scratch repo behind)
 #   GUARD_BASH=/bin/bash bash test/github-guard-smoke.sh  (run the guard under macOS's bash 3.2)
 #
-# The guard runs before every Bash command an agent sends, and since Bash(gh api *), Bash(git push *),
-# Bash(gh pr create *) and Bash(wt pr *) left the deny list it is the only thing that denies any of them, so
-# both directions are asserted: that what it approves really is a read, or a write to this repository's pull
-# requests or issues of a kind it lists, and that a command which merely mentions one of them gets no answer.
-# `gh` is stubbed: `gh api <endpoint>` answers from fixtures by running the guard's own --jq filter over them,
-# so the filters are tested too, and an endpoint with no fixture fails the way a 404 does.
+# The guard runs before every Bash command that an agent sends. Bash(gh api *), Bash(git push *),
+# Bash(gh pr create *) and Bash(wt pr *) left the deny list. Since then, the guard is the only thing that
+# denies any of them. So this suite asserts both directions. First, everything that the guard approves is
+# in fact a read, or a listed kind of write to this repository's pull requests or issues. Second, a command
+# that only mentions one of those four commands gets no answer.
+# `gh` is a stub: `gh api <endpoint>` answers from fixtures through the guard's own --jq filter, so the
+# filters are tested too. An endpoint with no fixture fails as a 404 does.
 # Nothing here contacts GitHub: the remotes name github.com, but nothing fetches from or pushes to them.
 set -euo pipefail
 umask 022
@@ -26,10 +27,10 @@ KEEP_LABEL='guard test files'
 trap lib_cleanup EXIT
 GUARD=${GUARD:-$REPO/bin/github-guard}   # overridable, so a mutated copy can be run against the same cases
 
-# The user's own git config could rewrite a github.com URL (url.<base>.insteadOf) under the guard's feet.
+# The user's own git config (url.<base>.insteadOf) could rewrite a github.com URL that the guard reads.
 export GIT_CONFIG_GLOBAL="$TEST_ROOT/gitconfig" GIT_CONFIG_NOSYSTEM=1
 : >"$GIT_CONFIG_GLOBAL"
-unset GH_REPO GH_HOST   # the guard reads both, so the runner's own would decide every write below
+unset GH_REPO GH_HOST   # the guard reads both, so the runner's own values would decide every write below
 mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/home" "$TEST_ROOT/api" "$TEST_ROOT/elsewhere"
 cat >"$TEST_ROOT/bin/gh" <<'GH'
 #!/usr/bin/env bash
@@ -66,9 +67,9 @@ fixture api/repos__acme__widgets__issues__12 '{"user": {"login": "me"}}'
 fixture 'api/repos__{owner}__{repo}__issues__12' '{"user": {"login": "me"}}'
 fixture 'api/repos__{owner}__{repo}__issues__13' '{"user": {"login": "someone-else"}}'
 
-# The repository an agent would be in: a task branch, a default branch called trunk (so "is it the default
-# branch" is not only "is it called main"), and one remote for each way a push could leave GitHub or find the
-# default branch wrongly.
+# The repository that an agent would be in. It has a task branch and a default branch called trunk, so
+# "is it the default branch" is not only "is it called main". It has one remote for each way that a push
+# could leave GitHub or find the wrong default branch.
 W="$TEST_ROOT/widgets"
 git init -q -b trunk "$W"
 git -C "$W" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
@@ -94,9 +95,10 @@ OUTSIDE="$REPO/README.md"   # a real file outside both the session's repository 
 
 CWD=$W      # the session's directory, as the payload's cwd field reports it
 
-# guard_payload <json>: run the hook on a raw payload and print its decision — allow, deny, none for no
-# answer, exit<N> for a non-zero status (a bug: exit 2 would block every Bash command) — leaving the reason in
-# $TEST_ROOT/reason for expect to read, since this runs in a command substitution.
+# guard_payload <json>: run the hook on a raw payload and print its decision. The decision is allow, deny,
+# none for no answer, or exit<N> for a non-zero status (a bug: exit 2 would block every Bash command). It
+# leaves the reason in $TEST_ROOT/reason for expect to read, because this function runs in a command
+# substitution.
 guard_payload() {
   local out rc=0
   out=$(env HOME="$TEST_ROOT/home" PATH="$TEST_ROOT/bin:$PATH" TEST_ROOT="$TEST_ROOT" \
@@ -114,8 +116,9 @@ guard() {
     '{hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: {command: $c}, cwd: $d}')"
 }
 
-# expect <decision> <command> [reason fragment]: one assertion, and a second when a fragment of the reason
-# is named — the reason is what the agent reads to find the approved form, so it is part of the contract.
+# expect <decision> <command> [reason fragment]: one assertion, and a second one when the caller names a
+# fragment of the reason. The agent reads the reason to find the approved form, so the reason is part of
+# the contract.
 expect() {
   local got reason
   got=$(guard "$2")

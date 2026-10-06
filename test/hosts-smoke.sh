@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Scratch SSH aliases and a fake ssh; never contact a configured host.
+# This suite uses scratch SSH aliases and a fake ssh, and never contacts a configured host.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)

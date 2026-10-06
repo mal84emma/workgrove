@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# VM lifecycle relay and Mac status hook, with scratch cmux and no configured host contact.
+# Test the VM lifecycle relay and the Mac status hook with a scratch cmux.
+# The suite contacts no configured host.
 set -euo pipefail
 ORIGINAL_HOME=$HOME
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -188,7 +189,7 @@ check_contains "$CMUX_LOG" 'set-status vm-codex Idle'
 assert_eq 'stale Running stays Idle' idle "$(awk '{print $4}' "$XDG_STATE_HOME/cmux-agent-status/$CMUX_WORKSPACE_ID-codex")"
 : > "$CMUX_LOG"
 status_hook "$(control test-vm running 1000000000000000012)" >/dev/null
-# The Idle event is lost; its heartbeat has the same transition sequence as that event.
+# The Idle event is lost. Its heartbeat has the same transition sequence as that event.
 status_hook "$(control test-vm idle 1000000000000000013)" >/dev/null
 assert_eq 'missed Idle is recovered' idle "$(awk '{print $4}' "$XDG_STATE_HOME/cmux-agent-status/$CMUX_WORKSPACE_ID-codex")"
 end_scenario

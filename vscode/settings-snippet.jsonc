@@ -1,4 +1,4 @@
-// Paste these keys into VS Code: Settings (JSON) — Settings Sync then propagates them to your other machines.
+// Paste these keys into the VS Code Settings (JSON) file. Settings Sync then copies them to your other machines.
 "git.detectWorktrees": true,
 "window.title": "${dirty}${activeRepositoryBranchName}${separator}${rootName}${separator}${remoteName}",
 "remote.SSH.defaultExtensions": ["anthropic.claude-code", "eamodio.gitlens"],

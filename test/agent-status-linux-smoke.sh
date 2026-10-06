@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise the real Linux /proc owner gate and Claude transcript watcher with scratch state.
+# Exercise the real Linux /proc owner gate and the Claude transcript watcher with scratch state.
 set -euo pipefail
 [[ $(uname -s) == Linux ]] || { echo 'Linux only'; exit 0; }
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -164,7 +164,8 @@ if [[ ! -e $WT_STATUS_FILE ]]; then pass; else fail 'old Stop recreated ended st
 if grep -qF '|codex|idle|' "$CMUX_LOG"; then fail 'old Stop was relayed after clear'; else pass; fi
 end_scenario
 
-# A long turn can take seconds to parse; hooks that arrive meanwhile must neither wait for nor lose to the scan.
+# A long turn can take seconds to parse. Hooks that arrive during the scan must not wait for it.
+# The scan must not overwrite the newer state that those hooks write.
 begin_scenario 'a slow transcript scan does not hold the status lock'
 cat > "$ROOT/shim/tail" <<'TAIL'
 #!/usr/bin/env bash
@@ -172,7 +173,7 @@ cat > "$ROOT/shim/tail" <<'TAIL'
 exec /usr/bin/tail "$@"
 TAIL
 chmod +x "$ROOT/shim/tail"
-scan() { # scan — start a heartbeat whose transcript read takes two seconds, and wait until it is reading
+scan() { # scan: start a heartbeat whose transcript read takes two seconds, and wait until it is reading
   rm -f "$ROOT/scanning"
   SLOW_SCAN="$ROOT/scanning" WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE='Claude Code' bash "$REPO/bin/agent-notify" </dev/null &
   heartbeat=$!
@@ -193,7 +194,7 @@ agent_event claude "$payload"
 printf '%s\n' '{"type":"user","message":{"content":"[Request interrupted by user]"}}' >> "$TRANSCRIPT"
 : > "$CMUX_LOG"
 scan
-agent_event claude "$payload"   # the next prompt lands while the heartbeat is still reading the Esc marker
+agent_event claude "$payload"   # the next prompt arrives while the heartbeat is still reading the Esc marker
 new_seq=$(jq -r .seq "$WT_STATUS_FILE")
 wait "$heartbeat"
 assert_eq 'scan does not overwrite a newer prompt' running "$(jq -r .state "$WT_STATUS_FILE")"
@@ -208,7 +209,7 @@ start=$SECONDS
 CMUX_SLEEP_NOTIFY=1 agent_event codex '{"hook_event_name":"UserPromptSubmit","session_id":"timeout"}'
 if (( SECONDS - start < 4 )); then pass; else fail 'relay exceeded its one-second cap'; fi
 
-# Run the actual wt lifecycle: its cleanup sends Clear after deleting the heartbeat file.
+# Run the real wt lifecycle: its cleanup deletes the heartbeat file, then sends Clear.
 mkdir -p "$HOME/.local/bin" "$ROOT/repo"
 cat > "$HOME/.local/bin/codex" <<'AGENT'
 #!/usr/bin/env bash
