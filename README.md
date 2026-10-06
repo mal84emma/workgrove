@@ -90,6 +90,8 @@ The tree below shows the files in this repo, with a short note on what most of t
 ```
 workgrove/
 ├── README.md
+├── AGENTS.md                  rules for agents that work on this repo
+├── CLAUDE.md                  one line: @AGENTS.md
 ├── LICENSE
 ├── install.sh                 links this repo into $HOME (Mac and Ubuntu)
 ├── Brewfile                   fzf gh jq shellcheck (azure-cli commented out); casks cmux, VS Code, GCM
@@ -127,6 +129,7 @@ workgrove/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
     ├── azml-compute.md        Azure ML compute instances over ssh
+    ├── documentation-style.md the writing rules for docs, agent instructions and comments
     └── ssh-config.example     the Host block a VM alias needs
 ```
 
