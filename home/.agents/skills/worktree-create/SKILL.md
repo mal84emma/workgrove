@@ -5,7 +5,12 @@ description: Create an isolated git worktree for a task, optionally with its own
 
 # Create a task worktree
 
-Tool: `wt new` (see `wt help`). One task = one worktree at `<repo>/.worktrees/<name>` on branch `wt/<name>`, one cmux row titled `<repo>:<name>` whose second line reads `@local` or `@<host>`.
+Use this skill to create a task: a worktree, and optionally a row with an agent in it.
+
+Tool: `wt new` (see `wt help`). One task is:
+
+- one worktree at `<repo>/.worktrees/<name>` on branch `wt/<name>`
+- one cmux row titled `<repo>:<name>`, whose second line reads `@local` or `@<host>`
 
 ## Command
 
@@ -20,29 +25,74 @@ wt new <name> -r <repo-name-or-path> -p "<prompt>"    # target another repo in $
 wt -H <vm> new <name> -r <repo> -p "<prompt>" --no-workspace  # prepare a VM task before opening its row
 ```
 
-`wt new` prints the path, branch, repo and session. It runs from anywhere inside the repo, including from another worktree (it always resolves the main checkout). In a driver session, whose cwd is the first existing folder in `$WT_REPOS_DIR` and not a repo, `-r <repo>` is required. A repo name is searched along `$WT_REPOS_DIR` (several folders, separated by `:`); if the same name sits in two of them, `wt` refuses it and you pass the path.
+`wt new` prints the path, branch, repo, and session.
 
-When the user names a model, pass `-m <model>` with either Claude or Codex, locally or with `wt -H <vm> new`. The stored choice overrides a model in `WT_AGENT_ARGS` on every launch. This replaces staging `.claude/settings.local.json` through `.wt-include`.
+### Where to run it
+
+- `wt new` runs from anywhere inside the repo, including from another worktree, because it always resolves the main checkout.
+- In a driver session, you must pass `-r <repo>`. This is because the session's cwd (current working directory) is the first existing folder in `$WT_REPOS_DIR`, and that folder is not a repo.
+- `wt` searches for a repo name along `$WT_REPOS_DIR`, which can hold several folders separated by `:`.
+- If the same repo name is in two of these folders, `wt` refuses it. In that case, pass the path instead.
+
+### Choose a model
+
+When the user names a model, pass `-m <model>`. This works with Claude or Codex, locally or with `wt -H <vm> new`. On every launch, the stored choice overrides a model in `WT_AGENT_ARGS`. The `-m` option replaces staging `.claude/settings.local.json` through `.wt-include`.
 
 ## Rules
 
-1. **Name** = short kebab-case slug of the task (`fix-login-redirect`, `paper-figures-v2`), no `.`. Omit it only if you pass `-p`; the slug is then derived from the prompt.
-2. **Prompt is the whole brief.** The new session has no memory of this conversation. Include: goal, constraints, files or areas involved, and how to know it is done (tests, expected behaviour, deliverable). Mention that the session is already inside its worktree and must not `cd` to the main checkout.
+1. **Name** = a short kebab-case slug of the task (`fix-login-redirect`, `paper-figures-v2`), with no `.`. Omit the name only if you pass `-p`. In that case, `wt` derives the slug from the prompt.
+2. **Prompt is the whole brief.** The new session has no memory of this conversation. Include these items:
+   - the goal
+   - the constraints
+   - the files or areas involved
+   - how to know that it is done (tests, expected behavior, deliverable)
+
+   In the prompt, say that the session is already inside its worktree and must not `cd` to the main checkout.
 3. **Independence.** Only split work that will not touch the same files as another running task. Overlapping work belongs in one session.
-4. **Do not open VS Code unless asked.** Launch opens a cmux row and nothing else. The user asks for `wt show` or `wt open` when they want to look (see `worktree-show`).
-5. **Report back** the worktree name, row title, branch, path and what the agent was told to do — plus the tmux session on a VM. For deferred creation, report the row only after attach succeeds. Do not wait on or poll the new session.
+4. **Do not open VS Code unless asked.** Launching a task opens a cmux row and nothing else. When the user wants to look, they ask for `wt show` or `wt open` (see `worktree-show`).
+5. **Report back** these items:
+   - the worktree name
+   - the row title
+   - the branch
+   - the path
+   - what you told the agent to do (the brief)
+   - on a VM, the tmux session
+
+   Deferred creation means that `new` prepares the task without a row and a later `attach` opens the row, as in "VM tasks from the Mac". For deferred creation, report the row only after attach succeeds. Do not wait on or poll the new session.
 
 ## VM tasks from the Mac
 
-Use `wt -H <vm> new <name> -r <repo> -a <agent> -p "<complete task prompt>" --no-workspace`, adding `-m <model>` when chosen. For a brief already in a local file, use `--prompt-stdin < brief-file` instead of `-p`. This records the brief, agent and model on the VM without opening a row or starting the agent. Use the absolute worktree path printed by `new` (or `wt -H <vm> path -r <repo> <name>`) as the destination for any task-specific files sent with `scp` or `rsync`. Verify that required files arrived before launching. If a staged brief file carries task details, make the saved prompt tell the agent to read it. Use `-m` for a model and stage `.claude/settings.local.json` only when other per-task settings are needed.
+Create the task on the VM first, send its files, and then attach.
 
-Then run `wt -H <vm> attach -r <repo> <name>` from the Mac. For a task that has never started, plain `attach` opens the local cmux row and starts the agent with its saved brief. If file transfer or attach fails, leave the worktree intact and report its path and the attach command so the user can recover without creating it again. Report the row only after attach succeeds.
+1. Run `wt -H <vm> new <name> -r <repo> -a <agent> -p "<complete task prompt>" --no-workspace`.
+   - When the user chose a model, add `-m <model>`.
+   - For a brief that is already in a local file, use `--prompt-stdin < brief-file` instead of `-p`.
+   - If you will stage a brief file that carries task details, make the brief tell the agent to read that file.
+
+   This command records the brief, agent, and model on the VM. It does not open a row or start the agent.
+2. Send any task-specific files with `scp` or `rsync`. Stage `.claude/settings.local.json` only when per-task settings other than the model are necessary; use `-m` for a model. Use the absolute worktree path as the destination. `new` prints this path, or you can get it with `wt -H <vm> path -r <repo> <name>`.
+3. Before launch, verify that the required files arrived.
+4. Run `wt -H <vm> attach -r <repo> <name>` from the Mac. For a task that has never started, plain `attach` opens the local cmux row and starts the agent with its saved brief.
+
+If the file transfer or attach fails, do this:
+
+- Leave the worktree intact.
+- Report its path and the attach command. With these, the user can recover without creating the task again.
+
+Report the row only after attach succeeds.
 
 ## On the VM itself
 
-On a VM, `wt new` prepares the worktree and asks the Mac to open its row; report the row `<repo>:<name>`, whose second line reads `@<host>`, and the printed recovery command. For several tasks, or a task on a VM from the Mac, see `task-driver`.
+On a VM, `wt new` prepares the worktree and asks the Mac to open its row. Report these items:
+
+- the row `<repo>:<name>`, whose second line reads `@<host>`
+- the printed recovery command
+
+For several tasks, or for a task on a VM from the Mac, see `task-driver`.
 
 ## Per-repo setup (once, on request)
 
-- `.wt-include` in the repo root: gitignore-style patterns of ignored files to copy into each new worktree (`.env`, local configs).
-- `.wt-setup` executable in the repo root: runs inside every new worktree after creation (`uv sync`, `npm ci`, `conda env` activation notes, etc.).
+Add these files to a repo only when the user asks. Each repo needs them once.
+
+- `.wt-include` in the repo root: gitignore-style patterns of ignored files to copy into each new worktree (for example, `.env` or local configs).
+- `.wt-setup` executable in the repo root: runs inside every new worktree after creation (for example, `uv sync`, `npm ci`, or `conda env` activation notes).
