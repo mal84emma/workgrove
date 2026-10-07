@@ -342,6 +342,10 @@ cat >"$CMUX_ALIVE" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CMUX_STUB_LOG"
 if [ "$1" = ping ]; then exit 0; fi
+if [ "$1" = workspace ] && [ "$2" = close ] && [ "${CMUX_STUB_FAIL_CLOSE:-}" = 1 ]; then
+  echo 'Error: socket access denied' >&2
+  exit 1
+fi
 if [ "$1" = list-windows ]; then
   if [ -s "$CMUX_STUB_WINDOWS" ]; then cat "$CMUX_STUB_WINDOWS"; fi
   exit 0
@@ -1255,12 +1259,17 @@ scenario_self_rm_vm() {
   r="$(new_repo self-rm)"
   stub_cmux dead
   assert_wt_ok "wt new self" new self --no-workspace -r "$r"
+  assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
+  assert_wt_ok "wt new tmux-denied" new tmux-denied --no-workspace -r "$r"
   session="wt-$(basename "$r")-self"
   fake="$TEST_ROOT/self-tmux-bin"; mkdir -p "$fake"
   cat >"$fake/tmux" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SELF_TMUX_LOG"
-case "$1" in display-message) printf '%s\n' "$SELF_TMUX_SESSION" ;; esac
+case "$1" in display-message)
+  if [ "${SELF_TMUX_FAIL:-}" = 1 ]; then echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1; fi
+  printf '%s\n' "$SELF_TMUX_SESSION" ;;
+esac
 STUB
   chmod +x "$fake/tmux"
   stub_cmux alive
@@ -1281,6 +1290,25 @@ STUB
   assert_wt_fails 1 "WT_HOST is not set" rm self -r "$r"
   assert_dir "missing host left the worktree intact" "$r/.worktrees/self"
   WT_RELAY_ENV[0]="WT_HOST=test-vm"
+  WT_RELAY_ENV[4]="SELF_TMUX_SESSION=wt-$(basename "$r")-sandboxed"
+  WT_SANDBOX=seatbelt
+  assert_wt_fails 1 "rerun this command with escalation" rm sandboxed -r "$r"
+  assert_dir "sandbox refusal kept the VM worktree" "$r/.worktrees/sandboxed"
+  assert_branch "$r" wt/sandboxed yes
+  assert_regular "$r" .git/wt/sandboxed.json
+  assert_lacks "sandbox refusal sent no row-close request" "$(cat "$CMUX_LOG")" "--title wt-close"
+  assert_lacks "sandbox refusal did not stop tmux" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
+  WT_SANDBOX=""
+  : >"$CMUX_LOG"; : >"$TEST_ROOT/self-tmux.log"
+  WT_RELAY_ENV+=("SELF_TMUX_FAIL=1")
+  assert_wt_fails 1 "cannot read the current tmux session" rm tmux-denied -r "$r"
+  assert_has "tmux refusal reports the socket error" "$WT_OUT" "Operation not permitted"
+  assert_dir "tmux query failure kept the worktree" "$r/.worktrees/tmux-denied"
+  assert_lacks "tmux query failure sent no row-close request" "$(cat "$CMUX_LOG")" "--title wt-close"
+  assert_lacks "tmux query failure did not stop tmux" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
+  WT_RELAY_ENV[${#WT_RELAY_ENV[@]}-1]="SELF_TMUX_FAIL=0"
+  WT_RELAY_ENV[4]="SELF_TMUX_SESSION=$session"
+  : >"$CMUX_LOG"; : >"$TEST_ROOT/self-tmux.log"
   assert_wt_ok "VM self-removal" rm self -r "$r"
   assert_gone "self-removal removed the worktree" "$r/.worktrees/self"
   assert_branch "$r" wt/self no
@@ -1384,6 +1412,38 @@ ROWS
 ROWS
   assert_wt_ok "wt rm uses the saved title" rm custom -r "$r"
   assert_has "…and closes the renamed row" "$(cat "$CMUX_LOG")" "workspace close custom-row"
+
+  # A sandbox can block the cmux socket after Git removes the worktree.
+  stub_cmux alive
+  assert_wt_ok "wt new sandboxed" new sandboxed --no-workspace -r "$r"
+  WT_CWD="$r" WT_SANDBOX=seatbelt
+  stub_cmux dead
+  assert_wt_fails 1 "rerun this command with escalation" rm sandboxed -r "$r"
+  assert_dir "sandbox refusal kept the local worktree" "$r/.worktrees/sandboxed"
+  assert_branch "$r" wt/sandboxed yes
+  assert_regular "$r" .git/wt/sandboxed.json
+  assert_lacks "sandbox refusal sent no row-close command" "$(cat "$CMUX_LOG")" "workspace close"
+  WT_SANDBOX=""
+  stub_cmux alive
+  assert_wt_ok "wt new unsandboxed" new unsandboxed --no-workspace -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"sandbox-row","title":"$id:unsandboxed","description":"@local","current_directory":"$r"}]}
+ROWS
+  assert_wt_ok "local teardown from the main checkout outside the sandbox" rm unsandboxed -r "$r"
+  assert_has "local teardown closed the row" "$(cat "$CMUX_LOG")" "workspace close sandbox-row"
+  WT_CWD=""
+
+  assert_wt_ok "wt new close-failed" new close-failed --no-workspace -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"failed-row","title":"$id:close-failed","description":"@local","current_directory":"$r"}]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_FAIL_CLOSE=1")
+  wt_run rm close-failed -r "$r"
+  assert_eq "row-close failure exits nonzero" "1" "$WT_RC"
+  assert_has "row-close failure names the row" "$WT_OUT" "could not close cmux row failed-row"
+  assert_has "row-close failure reports the socket error" "$WT_OUT" "socket access denied"
+  assert_gone "row-close failure reports an already removed worktree" "$r/.worktrees/close-failed"
+  WT_RELAY_ENV=()
 
   # A cmux that cannot be enumerated must keep the single-window behavior, and must not lose the lookup
   # altogether. Such a cmux has no list-windows, or prints output that is not a window list. The stub_cmux
@@ -2046,7 +2106,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=596
+FIXED_ASSERTIONS=611
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
@@ -2055,7 +2115,7 @@ FIXED_ASSERTIONS=596
 #     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
 #   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
 #   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=31
+DARWIN_ASSERTIONS=46
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {

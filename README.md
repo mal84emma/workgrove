@@ -329,7 +329,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 627 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 657 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -340,6 +340,8 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     second clone that plays GitHub, and once more under a `git` that claims to be 2.34.
   - That `wt prune` keeps exactly what `wt rm` refuses.
   - That a VM task can remove itself only after it leaves its worktree.
+  - That sandboxed removal keeps the worktree, branch, and sidecar until the agent retries with escalation.
+  - That a failed tmux session query keeps the worktree, and a failed cmux row close reports its error.
   - That a row in a second cmux window is still found and still closed.
   - That a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its
     mapped port. The port can be on any local address, and the connection must not be from the Mac's current
@@ -357,7 +359,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 596 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 611 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -591,6 +593,11 @@ When you ask an agent to remove its own task, the agent does these steps:
 1. It reports its work.
 2. It changes to the main checkout (the repo's primary working tree, not a worktree).
 3. It runs `wt rm <name> -r <absolute-repo-path>`.
+
+If Codex runs in a sandbox, the agent runs the teardown command with escalation.
+Changing directories does not give the command access to the cmux or tmux sockets.
+`wt rm` refuses sandboxed removal before it deletes the worktree, so the agent can retry with escalation.
+If a row close fails after removal, `wt rm` reports the error and the cmux command to close that row.
 
 `wt rm` still refuses if its command runs inside the worktree that it removes. When the agent closes its own
 row, the agent session ends.

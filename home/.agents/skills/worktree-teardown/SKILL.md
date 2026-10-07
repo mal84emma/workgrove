@@ -50,7 +50,13 @@ cd <absolute-repo-path> && wt rm <name> -r <absolute-repo-path>
 
 This change of directory is the exception to the stay-inside rule of `worktree-work`. Do no task edits in the main checkout.
 
-If `wt rm` refuses, the row stays open. Report the reason and leave the worktree.
+If Codex runs in a sandbox, run the teardown command with escalation.
+The sandbox can block the cmux and tmux sockets even after you change directories.
+`wt rm` refuses sandboxed removal before it deletes the worktree, so you can retry with escalation.
+The user's teardown request authorizes removal. Do not ask for permission again unless the tool requires approval.
+
+If `wt rm` refuses for another reason, the row stays open. Report the reason and leave the worktree.
+If the row close fails after removal, run the printed cmux command on the Mac with escalation when needed.
 
 ### On a VM
 

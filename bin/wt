@@ -416,14 +416,19 @@ open_workspace() { # open_workspace <name> — always unfocused: a new task row 
 
 close_workspace() { # close_workspace <name> [title] — use the saved title after rm deletes the sidecar
   local title="${2:-}"
-  cmux_ok || return 0
   [[ -n "$title" ]] || title=$(meta_get "$1" title 2>/dev/null || true)
   [[ -n "$title" ]] || title=$(row_title "$1" "$REPO")
+  cmux_ok || { warn "cmux is unreachable; skipped row cleanup for $title @local"; return 0; }
   close_row "$(cmux_row_field "$title" id)"
 }
 close_row() { # close_row <row id> — silent when the row is already gone
   [[ -n "$1" ]] || return 0
-  CMUX_QUIET=1 "$(cmux_bin)" workspace close "$1" >/dev/null 2>&1 || true
+  local err
+  err=$(CMUX_QUIET=1 "$(cmux_bin)" workspace close "$1" 2>&1) || {
+    warn "could not close cmux row $1${err:+: $err}"
+    warn "on the Mac: cmux workspace close $1"
+    return 1
+  }
 }
 
 file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shasum, Linux sha256sum)
@@ -1081,12 +1086,6 @@ cmd_rm() {
   resolve_repo "$repo"; require_wt "$name"
   local here there; here=$(pwd -P); there=$(cd "$P" 2>/dev/null && pwd -P) || there="$P"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
-  if is_remote && [[ -n ${TMUX:-} ]]; then
-    session=$(wt_session "$name" "$REPO")
-    if [[ "$(tmux display-message -p '#S' 2>/dev/null || true)" == "$session" ]]; then
-      self_remote=1
-    fi
-  fi
   local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
   reset_fetched
   if [[ $force -eq 0 ]]; then
@@ -1100,6 +1099,17 @@ cmd_rm() {
       case "${reasons[*]}" in *' not merged into '*) printf 'wt: --discard-commits waives only the commit reason (a squash merge the base later edited or reverted); the other checks stay.\n' >&2 ;; esac
       exit 3
     fi
+  fi
+  # Socket access can fail after Git deletes the worktree. Require escalation before removal.
+  [[ -z "${CODEX_SANDBOX:-}" ]] \
+    || die "the Codex sandbox can block cmux or tmux cleanup; rerun this command with escalation"
+  if is_remote && [[ -n ${TMUX:-} ]]; then
+    local current
+    session=$(wt_session "$name" "$REPO")
+    current=$(tmux display-message -p '#S' 2>&1) \
+      || die "cannot read the current tmux session: $current; rerun this command with escalation if a sandbox blocks the socket"
+    [[ -n "$current" ]] || die "cannot read the current tmux session: tmux returned no session name"
+    if [[ "$current" == "$session" ]]; then self_remote=1; fi
   fi
   if [[ $self_remote -eq 1 ]]; then
     # Check the relay setup only after the reasons above, while the worktree is still intact.
