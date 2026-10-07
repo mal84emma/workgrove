@@ -342,9 +342,18 @@ cat >"$CMUX_ALIVE" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CMUX_STUB_LOG"
 if [ "$1" = ping ]; then exit 0; fi
+if [ "$1" = workspace ] && [ "$2" = close ] && [ "${CMUX_STUB_AGENTS:-0}" -gt 0 ] && [ "${4:-}" != --force ]; then
+  echo 'Error: confirmation_required: Workspace has a running process; retry with --force' >&2
+  exit 1
+fi
 if [ "$1" = workspace ] && [ "$2" = close ] && [ "${CMUX_STUB_FAIL_CLOSE:-}" = 1 ]; then
   echo 'Error: socket access denied' >&2
   exit 1
+fi
+if [ "$1" = top ]; then
+  if [ "${CMUX_STUB_FAIL_TOP:-}" = 1 ]; then exit 1; fi
+  printf '{"caller":{"workspace_id":"%s"},"coding_agents":[{"resources":{"process_count":%s}}]}\n' "${CMUX_STUB_CALLER:-other-row}" "${CMUX_STUB_AGENTS:-0}"
+  exit 0
 fi
 if [ "$1" = list-windows ]; then
   if [ -s "$CMUX_STUB_WINDOWS" ]; then cat "$CMUX_STUB_WINDOWS"; fi
@@ -476,7 +485,7 @@ WT_EXTRA=""        # machine-wide agent args for model precedence checks
 wt_run() {
   WT_RC=0
   WT_OUT="$(cd "${WT_CWD:-$TEST_ROOT}" \
-    && env -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u CMUX_WORKSPACE_ID \
+    && env -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u CMUX_WORKSPACE_ID -u CMUX_TUI_SOCKET \
            -u WT_AGENT -u WT_AGENT_ARGS -u WT_HOST \
            -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT \
            HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" \
@@ -1266,12 +1275,18 @@ scenario_self_rm_vm() {
   cat >"$fake/tmux" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SELF_TMUX_LOG"
-case "$1" in display-message)
+case "$1" in show-environment)
+  [ "${SELF_TMUX_NATIVE:-}" = 1 ] && [ "$4" = WT_CMUX_CLOSE_ON_EXIT ] && echo WT_CMUX_CLOSE_ON_EXIT=1 ;; list-panes)
+  [ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ] && echo /dev/pts/123 ;; display-message)
   if [ "${SELF_TMUX_FAIL:-}" = 1 ]; then echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1; fi
   printf '%s\n' "$SELF_TMUX_SESSION" ;;
 esac
 STUB
-  chmod +x "$fake/tmux"
+  cat >"$fake/pgrep" <<'STUB'
+#!/bin/sh
+[ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ]
+STUB
+  chmod +x "$fake/tmux" "$fake/pgrep"
   stub_cmux alive
   WT_PATH_PREFIX="$fake" WT_CWD="$r"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SOCKET_PATH=127.0.0.1:23456" "CMUX_WORKSPACE_ID=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"
@@ -1315,6 +1330,23 @@ STUB
   assert_has "self-removal asked the Mac to close the row" "$(cat "$CMUX_LOG")" "--title wt-close"
   assert_has "an unanswered request warns about incomplete cleanup" "$WT_OUT" "Mac row or tmux session is still open"
   assert_lacks "VM did not kill its own tmux session first" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
+  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=other-session"
+                "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_OTHER_ACTIVE=1")
+  assert_wt_fails 1 "another agent is running" rm sandboxed --force -r "$r"
+  assert_dir "another VM agent kept the worktree" "$r/.worktrees/sandboxed"
+  assert_branch "$r" wt/sandboxed yes
+  WT_RELAY_ENV=("CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=wt-$(basename "$r")-sandboxed"
+                "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_NATIVE=1")
+  : >"$CMUX_LOG"; : >"$TEST_ROOT/self-tmux.log"
+  WT_RELAY_ENV+=("WT_HOST=test-vm" "CMUX_TUI_SOCKET=/tmp/native" "SELF_TMUX_NATIVE=0")
+  assert_wt_fails 1 "this row predates native teardown" rm sandboxed -r "$r"
+  assert_dir "an older native row kept its worktree" "$r/.worktrees/sandboxed"
+  WT_RELAY_ENV[${#WT_RELAY_ENV[@]}-1]="SELF_TMUX_NATIVE=1"
+  assert_wt_ok "native VM self-removal needs no TCP relay" rm sandboxed -r "$r"
+  assert_gone "native VM self-removal removed its worktree" "$r/.worktrees/sandboxed"
+  assert_branch "$r" wt/sandboxed no
+  assert_has "native VM ends its own terminal through tmux" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session -t =wt-$(basename "$r")-sandboxed"
+  assert_lacks "native VM needs no Mac hook" "$(cat "$CMUX_LOG")" "--title wt-close"
   WT_RELAY_ENV=() WT_PATH_PREFIX="" WT_CWD=""
   end_scenario
 }
@@ -1432,6 +1464,51 @@ ROWS
   assert_wt_ok "local teardown from the main checkout outside the sandbox" rm unsandboxed -r "$r"
   assert_has "local teardown closed the row" "$(cat "$CMUX_LOG")" "workspace close sandbox-row"
   WT_CWD=""
+
+  for agent in claude codex; do
+    assert_wt_ok "$agent test worktree" new "self-$agent" --no-workspace -r "$r"
+    cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"own-$agent","title":"$id:self-$agent","description":"@local","current_directory":"$r"}]}
+ROWS
+    WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=1")
+    assert_wt_fails 1 "another agent is running" rm "self-$agent" --force -r "$r"
+    assert_dir "another $agent agent kept the worktree" "$r/.worktrees/self-$agent"
+    assert_branch "$r" "wt/self-$agent" yes
+    assert_regular "$r" ".git/wt/self-$agent.json"
+    WT_RELAY_ENV+=("CMUX_STUB_FAIL_TOP=1")
+    assert_wt_fails 1 "cannot check the agent" rm "self-$agent" -r "$r"
+    assert_dir "failed $agent status query kept the worktree" "$r/.worktrees/self-$agent"
+    WT_RELAY_ENV=("CMUX_STUB_CALLER=own-$agent" "CMUX_STUB_AGENTS=1")
+    : >"$CMUX_LOG"
+    assert_wt_ok "$agent self-removal from the main checkout" rm "self-$agent" -r "$r"
+    assert_has "$agent self-close bypassed cmux confirmation" "$(cat "$CMUX_LOG")" "workspace close own-$agent --force"
+    assert_gone "$agent removed its own worktree" "$r/.worktrees/self-$agent"
+    assert_branch "$r" "wt/self-$agent" no
+    WT_RELAY_ENV=()
+  done
+
+  local fake="$TEST_ROOT/active-row-bin"
+  mkdir -p "$fake"
+  cat >"$fake/ssh" <<'STUB'
+#!/bin/sh
+printf 'ssh %s\n' "$*" >>"$CMUX_STUB_LOG"
+[ "${VM_AGENT_ACTIVE:-}" = 1 ] && exit 0
+exit 99
+STUB
+  chmod +x "$fake/ssh"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"active-vm-row","title":"$id:active-vm","remote":{"enabled":true,"destination":"smoke.invalid"}}]}
+ROWS
+  WT_PATH_PREFIX="$fake" WT_RELAY_ENV=("CMUX_STUB_AGENTS=1")
+  : >"$CMUX_LOG"
+  assert_wt_fails 1 "another agent is running" -H smoke.invalid rm active-vm --force -r "$r"
+  assert_lacks "a Mac removal refuses an active VM row before SSH" "$(cat "$CMUX_LOG")" "ssh "
+  WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_ACTIVE=1")
+  : >"$CMUX_LOG"
+  assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
+  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$CMUX_LOG")" "for t in"
+  assert_lacks "an older VM wt cannot remove the active task" "$(cat "$CMUX_LOG")" "rm active-vm"
+  WT_PATH_PREFIX="" WT_RELAY_ENV=()
 
   assert_wt_ok "wt new close-failed" new close-failed --no-workspace -r "$r"
   cat >"$WT_ROWS" <<ROWS
@@ -1639,7 +1716,7 @@ ROWS
   assert_lacks "client replacement never typed into the row" "$(cat "$CMUX_LOG")" 'send --workspace'
   local expected_line
   eval "$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt")"
-  expected_line=$(tmux_cmd wt-project-task)
+  expected_line=$(tmux_cmd wt-project-task "" "" reinit)
   assert_has "replacement uses tmux_cmd's exact attach line" "$(cat "$TEST_ROOT/remote-log")" "tmux detach-client -t /dev/pts/3 -E $expected_line"
 
   if REMOTE_LOG="$TEST_ROOT/remote-log" CMUX_STUB_NONCE="$TEST_ROOT/remote-tmux-nonce" \
@@ -2061,6 +2138,34 @@ scenario_shared_tmux_cmd() {
   a="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/wt")"
   b="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/cmux-hook")"
   assert_eq "the two take the same window uuids" "$a" "$b"
+  local fake="$TEST_ROOT/tmux-cmd-bin" line
+  mkdir -p "$fake"
+  cat >"$fake/tmux" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >>"$TMUX_CMD_LOG"
+STUB
+  chmod +x "$fake/tmux"
+  a="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt")"
+  line=$(eval "$a"; tmux_cmd wt-test)
+  : >"$TEST_ROOT/tmux-cmd.log"
+  env PATH="$fake:$PATH" TMUX_CMD_LOG="$TEST_ROOT/tmux-cmd.log" \
+    CMUX_TUI_SOCKET=/tmp/native CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
+    "$WT_BASH" -c "$line; echo shell-remains >> \"\$TMUX_CMD_LOG\""
+  assert_has "native launch records terminal-exit cleanup" "$(cat "$TEST_ROOT/tmux-cmd.log")" "set-environment -t =wt-test WT_CMUX_CLOSE_ON_EXIT 1"
+  assert_lacks "native launch execs its client and cannot return to a shell" "$(cat "$TEST_ROOT/tmux-cmd.log")" "shell-remains"
+  line=$(eval "$a"; tmux_cmd wt-test "" "" reinit)
+  : >"$TEST_ROOT/tmux-cmd.log"
+  env PATH="$fake:$PATH" TMUX_CMD_LOG="$TEST_ROOT/tmux-cmd.log" \
+    CMUX_TUI_SOCKET=/tmp/native CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
+    "$WT_BASH" -c "$line"
+  assert_lacks "client replacement preserves an older row's cleanup contract" "$(cat "$TEST_ROOT/tmux-cmd.log")" "WT_CMUX_CLOSE_ON_EXIT 1"
+  line=$(eval "$a"; tmux_cmd wt-test)
+  : >"$TEST_ROOT/tmux-cmd.log"
+  env PATH="$fake:$PATH" TMUX_CMD_LOG="$TEST_ROOT/tmux-cmd.log" \
+    CMUX_TUI_SOCKET= CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
+    "$WT_BASH" -c "$line; echo shell-remains >> \"\$TMUX_CMD_LOG\""
+  assert_has "legacy launch retains its relay shell" "$(cat "$TEST_ROOT/tmux-cmd.log")" "shell-remains"
+
   end_scenario
 }
 
@@ -2106,7 +2211,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=611
+FIXED_ASSERTIONS=627
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
@@ -2115,7 +2220,7 @@ FIXED_ASSERTIONS=611
 #     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
 #   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
 #   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=46
+DARWIN_ASSERTIONS=79
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {

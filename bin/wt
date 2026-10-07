@@ -423,12 +423,29 @@ close_workspace() { # close_workspace <name> [title] — use the saved title aft
 }
 close_row() { # close_row <row id> — silent when the row is already gone
   [[ -n "$1" ]] || return 0
-  local err
-  err=$(CMUX_QUIET=1 "$(cmux_bin)" workspace close "$1" 2>&1) || {
+  local err args=()
+  [[ ${2:-} == self ]] && args=(--force)
+  err=$(CMUX_QUIET=1 "$(cmux_bin)" workspace close "$1" "${args[@]+"${args[@]}"}" 2>&1) || {
     warn "could not close cmux row $1${err:+: $err}"
-    warn "on the Mac: cmux workspace close $1"
+    warn "on the Mac: cmux workspace close $1${args[*]:+ ${args[*]}}"
     return 1
   }
+}
+
+RM_ROW=""; RM_SELF=""
+check_row_removal() { # Permit an agent's own row, but refuse another row with a running agent.
+  RM_ROW="$1"; RM_SELF=""
+  [[ -n "$RM_ROW" ]] || return 0
+  local state
+  state=$(CMUX_QUIET=1 "$(cmux_bin)" top --workspace "$RM_ROW" --json 2>/dev/null) \
+    || die "cannot check the agent in cmux row $RM_ROW; kept the worktree"
+  printf '%s' "$state" | jq -e '.coding_agents | type == "array"' >/dev/null 2>&1 \
+    || die "cannot check the agent in cmux row $RM_ROW; kept the worktree"
+  if printf '%s' "$state" | jq -e --arg id "$RM_ROW" '.caller.workspace_id == $id' >/dev/null; then
+    RM_SELF=self
+  elif printf '%s' "$state" | jq -e 'any(.coding_agents[]; .resources.process_count > 0)' >/dev/null; then
+    die "another agent is running in cmux row $RM_ROW; kept the worktree"
+  fi
 }
 
 file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shasum, Linux sha256sum)
@@ -1080,7 +1097,7 @@ cmd_pr() {
 }
 
 cmd_rm() {
-  local name="" force=0 keep=0 repo="" self_remote=0 host="" session="" title=""
+  local name="" force=0 keep=0 repo="" self_remote=0 host="" session="" title="" native=0
   while [[ $# -gt 0 ]]; do case "$1" in --force|-f) force=1;; --keep-branch) keep=1;; --discard-commits) RM_DISCARD_COMMITS=1;; -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift;; -h|--help) usage; exit 0;; -*) die "rm: unknown option $1";; *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1";; esac; shift; done
   [[ -n "$name" ]] || die "rm: worktree name required"
   resolve_repo "$repo"; require_wt "$name"
@@ -1111,11 +1128,28 @@ cmd_rm() {
     [[ -n "$current" ]] || die "cannot read the current tmux session: tmux returned no session name"
     if [[ "$current" == "$session" ]]; then self_remote=1; fi
   fi
-  if [[ $self_remote -eq 1 ]]; then
+  title=$(meta_get "$name" title 2>/dev/null || true)
+  [[ -n "$title" ]] || title=$(row_title "$name" "$REPO")
+  if is_remote; then
+    [[ -n "$session" ]] || session=$(wt_session "$name" "$REPO")
+    if [[ $self_remote -eq 0 && $(session_state "$name") == *'agent running'* ]]; then
+      die "another agent is running in tmux session $session; kept the worktree"
+    fi
+    if [[ $self_remote -eq 1 && $(tmux show-environment -t "=$session" WT_CMUX_CLOSE_ON_EXIT 2>/dev/null) == WT_CMUX_CLOSE_ON_EXIT=1 ]]; then
+      native=1
+    fi
+  elif cmux_ok; then
+    check_row_removal "$(cmux_row_field "$title" id)"
+  fi
+  if [[ $self_remote -eq 1 && $native -eq 0 ]]; then
     # Check the relay setup only after the reasons above, while the worktree is still intact.
     host=$(wt_host)
     hook_ok_repo || die "cannot request Mac row cleanup for $REPO"
-    relay_env || die "cannot find the Mac cmux relay in this session"
+    if ! relay_env; then
+      [[ -z ${CMUX_TUI_SOCKET:-} ]] \
+        || die "this row predates native teardown; close and reopen this row on the Mac: wt -H $host attach -r $(shell_join "$REPO") $name, then retry"
+      die "cannot find the Mac cmux relay in this session"
+    fi
   fi
   # the ignored files that remain are unchanged copies or build output, so --force is normal here
   if [[ -d "$P" ]]; then
@@ -1143,7 +1177,10 @@ cmd_rm() {
   printf 'removed %s%s\n' "$name" "$([[ $keep -eq 1 ]] && echo " (branch $B kept)")"
   if is_remote; then
     [[ -n "$session" ]] || session=$(wt_session "$name" "$REPO")
-    if [[ $self_remote -eq 1 ]]; then
+    if [[ $native -eq 1 ]]; then
+      # The row execs its tmux client. Stopping this session ends the terminal and its Mac row.
+      tmux kill-session -t "=$session"
+    elif [[ $self_remote -eq 1 ]]; then
       # The Mac hook closes the row and kills this session.
       # If this process is still alive after the hook's deadline, the cleanup did not finish.
       if notify_mac wt-close host "$host" repo "$REPO" task "$name"; then
@@ -1156,6 +1193,7 @@ cmd_rm() {
     else
       tmux kill-session -t "=$session" 2>/dev/null || true   # the Mac owns the row
     fi
+  elif [[ -n "$RM_ROW" ]]; then close_row "$RM_ROW" "$RM_SELF"
   else close_workspace "$name" "$title"; fi
 }
 
@@ -1314,7 +1352,7 @@ tag_row() { # tag_row <workspace ref or ""> <title> <host> — write the row's d
     || die "cmux workspace-action failed; run: cmux workspace-action --workspace $ref --action set-description --description $(row_tag "$3")"
 }
 
-tmux_cmd() { # tmux_cmd <session> [command] [shared]
+tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
   # The line that a VM row's shell runs. It creates that tmux session (running <command>, then a shell) or
   # takes over the session that is already there. A task row owns its session, so it attaches with -d. It
   # hands the session THIS row's relay socket and workspace id. That makes `cmux notify` from inside the
@@ -1328,12 +1366,15 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared]
   # A session that you may also be in yourself (the VM shell, a repo shell) gets "shared" instead. Then the
   # row joins your clients and does not evict them, and it leaves their relay socket as it is.
   # bin/cmux-hook mirrors this function; keep the two byte-for-byte.
-  local run=""
+  # Native cmux closes a row when its terminal exits. Exec the tmux client so self-removal ends that terminal.
+  local run="" native_mark=""
+  # Replacing an old client does not replace its parent shell. Preserve its original cleanup contract.
+  [[ ${4:-} == reinit ]] || native_mark="tmux set-environment -t '=$1' WT_CMUX_CLOSE_ON_EXIT 1; "
   [[ -n "${2:-}" ]] && printf -v run '%q' "$2; exec bash"
   if [[ "${3:-}" == shared ]]; then
     printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux attach -t '=%s'" "$1" "$run" "$1"
   else
-    printf "tmux new-session -d -s '%s' %s 2>/dev/null; [ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1" "$1" "$1"
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; [ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; if [ -n \"\$CMUX_TUI_SOCKET\" ]; then %sexec tmux attach -d -t '=%s'; fi; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1" "$1" "$native_mark" "$1" "$1"
   fi
 }
 
@@ -1638,7 +1679,7 @@ reinit_task_client() { # reinit_task_client <host> <id> <session> — restart th
   [[ "$(row_remote_field "$id" state)" == connected ]] || return 2
   row_shell_prompt "$id" || screen_rc=$?
   [[ $screen_rc -eq 1 ]] || return 2   # skip a shell or an unreadable screen
-  line=$(tmux_cmd "$session")
+  line=$(tmux_cmd "$session" "" "" reinit)
   nonce="WT_REINIT_${RANDOM}_${RANDOM}_$$_$(date +%s)"
   # A restored row may show a cached agent screen while its old client is on an abandoned pty.
   # A fresh tmux status message proves that this row shows that client's output. It sends no pane input.
@@ -1812,6 +1853,14 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   # The row's identity comes from -r. cmd_host has already refused -r unless it is an absolute path or
   # a plain repo name. A relative '.' or '..' would make repo_id '-', and close_row would close nothing.
   local session title; session=$(wt_session "$name" "$repo"); title=$(row_title "$name" "$repo")
+  if cmux_ok; then check_row_removal "$(cmux_row_field "$title" id "$host")"; fi
+  local agent_rc=0
+  agent_on_vm "$host" "$session" || agent_rc=$?
+  case $agent_rc in
+    0) die "another agent is running in tmux session $session on $host; kept the worktree" ;;
+    1) ;;
+    *) die "cannot check the agent in tmux session $session on $host; kept the worktree" ;;
+  esac
   remote_wt "$host" rm "$name" -r "$repo" "${args[@]+"${args[@]}"}"
   close_row "$(cmux_row_field "$title" id "$host")"
   remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true

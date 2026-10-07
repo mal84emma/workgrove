@@ -329,12 +329,15 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 657 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 706 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
     spellings would compare a worktree with itself.
-  - Every reason that `wt rm` refuses, and that `--force` gets past each one.
+  - Every Git data check that `wt rm` makes, and the checks that `--force` waives.
+  - That another running agent blocks removal, even with `wt rm --force`.
+  - That local self-removal passes cmux's `--force` only for the caller's own row.
+  - That native VM self-removal ends its tmux client and keeps older rows until they reopen.
   - That a squash-merged branch is not one of those reasons. A commit made after the squash, a partial
     revert, and a later edit to the same lines still are reasons. These cases run against a bare "origin" and a
     second clone that plays GitHub, and once more under a `git` that claims to be 2.34.
@@ -359,7 +362,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 611 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 627 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -597,15 +600,29 @@ When you ask an agent to remove its own task, the agent does these steps:
 If Codex runs in a sandbox, the agent runs the teardown command with escalation.
 Changing directories does not give the command access to the cmux or tmux sockets.
 `wt rm` refuses sandboxed removal before it deletes the worktree, so the agent can retry with escalation.
+
+Before removal, `wt rm` checks the target row for a running agent.
+It permits the caller's own row and refuses another agent's row, even with `wt rm --force`.
+If cmux cannot report the row's agent status, `wt rm` keeps the worktree.
+For its own row, `wt rm` passes cmux's `--force` to skip the running-process confirmation.
+That cmux flag does not waive Git safety checks.
 If a row close fails after removal, `wt rm` reports the error and the cmux command to close that row.
+
+Claude's automatic approval review can reject self-removal before the command reaches cmux.
+In that case, the agent reports the rejection and leaves the task intact.
 
 `wt rm` still refuses if its command runs inside the worktree that it removes. When the agent closes its own
 row, the agent session ends.
 
 On a VM, these rules apply to a task that runs in its own tmux session:
 
-- Before it removes its own worktree, `wt rm` checks that the VM row has relay configuration.
-- The task asks the Mac to close that row. The Mac then stops the task's tmux session after removal.
+- `wt rm` refuses another running agent's tmux session, even with `wt rm --force`.
+- Native cmux rows replace their shell with the task's tmux client.
+  After removal, stopping that tmux session ends the terminal and closes its Mac row.
+- If `wt rm` reports that a native row predates this change, it keeps the worktree and prints an attach command.
+  Close that row on the Mac, run the attach command, then retry self-removal.
+- Older cmux rows use the TCP relay and Mac hook.
+  The hook closes the verified task row with cmux's `--force`, then stops its tmux session.
 - A refusal leaves both the row and the tmux session open.
 - If the agent is still running after the Mac hook's deadline, `wt rm` warns and names the row and session
   to close from the Mac.

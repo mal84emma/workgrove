@@ -20,6 +20,7 @@ wt -H <vm> show -r <repo> <name>     # VM: also "session: wt-<repo>-<name> (agen
 
 - If another agent is still running in the worktree, do not remove the worktree. Ask the user to finish or stop that agent first.
 - Your own session may remove its worktree when the user asks.
+- `wt rm` checks the row or tmux session before removal and refuses another running agent, even with `wt rm --force`.
 
 ## Commands
 
@@ -55,16 +56,26 @@ The sandbox can block the cmux and tmux sockets even after you change directorie
 `wt rm` refuses sandboxed removal before it deletes the worktree, so you can retry with escalation.
 The user's teardown request authorizes removal. Do not ask for permission again unless the tool requires approval.
 
+`wt rm` uses cmux's `--force` only for the verified caller's own row.
+That flag skips cmux's running-process confirmation. It does not discard Git work or waive `wt rm` safety checks.
+If Claude's automatic approval review rejects self-removal, report the rejection and leave the task intact.
 If `wt rm` refuses for another reason, the row stays open. Report the reason and leave the worktree.
 If the row close fails after removal, run the printed cmux command on the Mac with escalation when needed.
 
 ### On a VM
 
 Run that command on the VM, not through `wt -H`.
-After the removal, `wt` asks the Mac to close the row of this task and then to stop its tmux session.
+For native cmux rows, `wt rm` stops its own tmux session after removal.
+That row runs the tmux client directly, so the terminal exits and its Mac row closes.
+If `wt rm` reports that a native row predates this change, it keeps the worktree and prints an attach command.
+Close that row on the Mac, run the attach command, then retry self-removal.
+
+For older cmux rows, `wt` asks the Mac hook to close the row and then stop its tmux session.
 Closing the row and stopping the session can cut off the tool call or the agent, so give the user the summary first.
 
-`wt rm` waits for the Mac hook. If the session is still active after that wait, the cleanup is incomplete, even if `wt rm` printed `removed`.
+For these older rows, `wt rm` waits for the Mac hook.
+If the session stays active after that wait, the cleanup is incomplete.
+The `removed` message confirms only worktree removal.
 In this case, report its warning. Tell the user to close the named row and tmux session from the Mac. `wt -H <vm> rm` cannot retry after the worktree is gone.
 
 ## Safety contract (enforced by `wt rm`, exit code 3 on refusal)
@@ -102,7 +113,7 @@ Two refusal messages have these meanings:
 ## Rules
 
 1. **Check liveness, then inspect.** Run `wt show <name>` (or `wt -H <vm> show -r <repo> <name>`) before anything else. Tell the user what the removal would lose.
-2. **Never pass `--force` or `--discard-commits` on your own initiative.** Use either flag only when the user has explicitly said to discard that worktree's work in this conversation.
+2. **Never pass `wt rm --force` or `wt rm --discard-commits` on your own initiative.** Use either flag only when the user has explicitly said to discard that worktree's work in this conversation.
    If `wt rm` refuses, report the reason and offer these choices:
    - Report the branch and leave it.
    - Use `--keep-branch`.
