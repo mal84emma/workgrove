@@ -44,6 +44,13 @@ It accepts only native SSH rows and keeps the existing host, path, and task vali
 It dismisses a successful open or attach request by notification ID.
 Closing a row removes that row's notifications.
 
+The rule uses cmux's minimum rate interval and maximum burst allowance.
+Without that setting, cmux admits only one event per second and drops later requests.
+An unrelated notification can consume that default allowance before an open request arrives.
+cmux separately limits all automation rules to 32 concurrent firings.
+It drops requests above that limit with `skipped_backpressure`.
+The [automation engine](https://github.com/manaflow-ai/cmux/blob/v0.65.0/Sources/AutomationEngine.swift) controls both limits.
+
 `install.sh` merges this rule into `~/.cmuxterm/automations.json` on the Mac.
 It backs up an existing regular file before replacement.
 It preserves existing rules and leaves managed symlinks or unreadable configurations unchanged.

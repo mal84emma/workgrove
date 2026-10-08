@@ -131,6 +131,24 @@ has "$CMUX_LOG" "workspace close $ROW_ID --force"
 lacks "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
 end_scenario
 
+begin_scenario 'notification bursts do not consume the open request budget'
+# Model cmux 0.65's admission window for an ordinary notification followed by two open requests.
+# The omitted rate limit admits only the first event, so both open requests disappear.
+admitted_burst() {
+  jq -r '
+    .rules[] | select(.id == "wt-native-relay") |
+    (.rate_limit // {interval_seconds: 1, maximum: 1}) as $limit |
+    reduce [0, 0.121, 0.242][] as $now
+      ({dates: [], admitted: 0};
+       .dates |= map(select(. >= ($now - $limit.interval_seconds))) |
+       if (.dates | length) < $limit.maximum then
+         .dates += [$now] | .admitted += 1
+       else . end) | .admitted'
+}
+assert_eq 'the cmux default reproduces dropped requests' 1 "$(jq 'del(.rules[].rate_limit)' "$REPO/home/.cmuxterm/automations.json" | admitted_burst)"
+assert_eq 'an unrelated notification and two open requests are admitted' 3 "$(admitted_burst < "$REPO/home/.cmuxterm/automations.json")"
+end_scenario
+
 begin_scenario 'automation installation preserves user rules and backups'
 # Load only the merge function. Do not run install.sh or its main function.
 eval "$(sed -n '/^hook_cmux_automation()/,/^}/p' "$REPO/install.sh")"
@@ -167,4 +185,4 @@ rm "$config"
 hook_cmux_automation >/dev/null
 if [[ ! -e $config ]]; then pass; else fail 'Linux installed Mac automation'; fi
 end_scenario
-lib_summary 32
+lib_summary 34
