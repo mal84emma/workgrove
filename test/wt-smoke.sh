@@ -336,6 +336,8 @@ mkdir -p "$(dirname "$CMUX_DEAD")" "$(dirname "$CMUX_ALIVE")" "$WT_ROWS_DIR"
 cat >"$CMUX_DEAD" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CMUX_STUB_LOG"
+if [ "${CMUX_STUB_FAIL_PING:-}" = 1 ]; then echo 'Error: socket access denied' >&2
+else echo 'Error: Socket not found at /tmp/stub-cmux' >&2; fi
 exit 1
 STUB
 cat >"$CMUX_ALIVE" <<'STUB'
@@ -352,16 +354,21 @@ if [ "$1" = workspace ] && [ "$2" = close ] && [ "${CMUX_STUB_FAIL_CLOSE:-}" = 1
 fi
 if [ "$1" = top ]; then
   if [ "${CMUX_STUB_FAIL_TOP:-}" = 1 ]; then exit 1; fi
+  if [ "${CMUX_STUB_BAD_TOP:-}" = 1 ]; then echo '{"coding_agents":[{}]}'; exit 0; fi
   printf '{"caller":{"workspace_id":"%s"},"coding_agents":[{"resources":{"process_count":%s}}]}\n' "${CMUX_STUB_CALLER:-other-row}" "${CMUX_STUB_AGENTS:-0}"
   exit 0
 fi
 if [ "$1" = list-windows ]; then
+  if [ "${CMUX_STUB_FAIL_WINDOWS:-}" = 1 ]; then exit 1; fi
+  if [ "${CMUX_STUB_BAD_WINDOWS:-}" = 1 ]; then echo 'unrecognized window output'; exit 0; fi
   if [ -s "$CMUX_STUB_WINDOWS" ]; then cat "$CMUX_STUB_WINDOWS"; fi
   exit 0
 fi
 if [ "$1" = workspace ] && [ "$2" = list ]; then
   w=""; prev=""
   for a in "$@"; do if [ "$prev" = --window ]; then w="$a"; fi; prev="$a"; done
+  if [ -n "${CMUX_STUB_EMPTY_LIST:-}" ] && [ "$CMUX_STUB_EMPTY_LIST" = "$w" ]; then exit 0; fi
+  if [ -n "${CMUX_STUB_FAIL_LIST:-}" ] && { [ "$CMUX_STUB_FAIL_LIST" = all ] || [ "$CMUX_STUB_FAIL_LIST" = "$w" ]; }; then exit 1; fi
   if [ -z "$w" ]; then
     # After a reconnect RPC armed it, each read takes remote-row's next state from the queue.
     if [ -s "$CMUX_STUB_STATE_QUEUE" ]; then
@@ -1264,19 +1271,35 @@ scenario_prune_agrees() {
 # still leaves both alone. All paths here are scratch fixtures, despite the simulated relay environment.
 scenario_self_rm_vm() {
   begin_scenario "7b. a VM task can remove itself after changing to its main checkout"
-  local r fake session
+  local r fake session probe
   r="$(new_repo self-rm)"
   stub_cmux dead
   assert_wt_ok "wt new self" new self --no-workspace -r "$r"
   assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
   assert_wt_ok "wt new tmux-denied" new tmux-denied --no-workspace -r "$r"
+  for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
+    assert_wt_ok "$probe tmux status test worktree" new "status-$probe" --no-workspace -r "$r"
+  done
   session="wt-$(basename "$r")-self"
   fake="$TEST_ROOT/self-tmux-bin"; mkdir -p "$fake"
   cat >"$fake/tmux" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SELF_TMUX_LOG"
-case "$1" in show-environment)
+case "$1" in has-session)
+  case "${SELF_TMUX_PROBE:-}" in
+    denied) echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1 ;;
+    missing) echo "can't find session: $3" >&2; exit 1 ;;
+    no-server) echo 'no server running on /tmp/fake' >&2; exit 1 ;;
+    no-socket) echo 'error connecting to /tmp/fake (No such file or directory)' >&2; exit 1 ;;
+  esac ;;
+show-environment)
   [ "${SELF_TMUX_NATIVE:-}" = 1 ] && [ "$4" = WT_CMUX_CLOSE_ON_EXIT ] && echo WT_CMUX_CLOSE_ON_EXIT=1 ;; list-panes)
+  case "${SELF_TMUX_PROBE:-}" in
+    panes) echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1 ;;
+    empty) exit 0 ;;
+    invalid) echo not-a-tty; exit 0 ;;
+    pgrep|idle) echo /dev/pts/123; exit 0 ;;
+  esac
   [ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ] && echo /dev/pts/123 ;; display-message)
   if [ "${SELF_TMUX_FAIL:-}" = 1 ]; then echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1; fi
   printf '%s\n' "$SELF_TMUX_SESSION" ;;
@@ -1284,6 +1307,7 @@ esac
 STUB
   cat >"$fake/pgrep" <<'STUB'
 #!/bin/sh
+[ "${SELF_TMUX_PROBE:-}" = pgrep ] && exit 2
 [ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ]
 STUB
   chmod +x "$fake/tmux" "$fake/pgrep"
@@ -1347,6 +1371,24 @@ STUB
   assert_branch "$r" wt/sandboxed no
   assert_has "native VM ends its own terminal through tmux" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session -t =wt-$(basename "$r")-sandboxed"
   assert_lacks "native VM needs no Mac hook" "$(cat "$CMUX_LOG")" "--title wt-close"
+
+  for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
+    WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0"
+                  "SELF_TMUX_SESSION=other-session" "SELF_TMUX_PROBE=$probe" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
+    : >"$TEST_ROOT/self-tmux.log"
+    case "$probe" in
+      missing|no-server|no-socket|idle)
+        assert_wt_ok "$probe tmux status permits removal" rm "status-$probe" -r "$r"
+        assert_gone "$probe tmux status removed the worktree" "$r/.worktrees/status-$probe"
+        assert_branch "$r" "wt/status-$probe" no ;;
+      *)
+        assert_wt_fails 1 "cannot check the agent in tmux session" rm "status-$probe" -r "$r"
+        assert_dir "$probe tmux status kept the worktree" "$r/.worktrees/status-$probe"
+        assert_branch "$r" "wt/status-$probe" yes
+        assert_regular "$r" ".git/wt/status-$probe.json"
+        assert_lacks "$probe tmux status did not stop the session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session" ;;
+    esac
+  done
   WT_RELAY_ENV=() WT_PATH_PREFIX="" WT_CWD=""
   end_scenario
 }
@@ -1478,6 +1520,9 @@ ROWS
     WT_RELAY_ENV+=("CMUX_STUB_FAIL_TOP=1")
     assert_wt_fails 1 "cannot check the agent" rm "self-$agent" -r "$r"
     assert_dir "failed $agent status query kept the worktree" "$r/.worktrees/self-$agent"
+    WT_RELAY_ENV=("CMUX_STUB_BAD_TOP=1")
+    assert_wt_fails 1 "cannot check the agent" rm "self-$agent" -r "$r"
+    assert_dir "an unknown $agent status shape kept the worktree" "$r/.worktrees/self-$agent"
     WT_RELAY_ENV=("CMUX_STUB_CALLER=own-$agent" "CMUX_STUB_AGENTS=1")
     : >"$CMUX_LOG"
     assert_wt_ok "$agent self-removal from the main checkout" rm "self-$agent" -r "$r"
@@ -1487,15 +1532,68 @@ ROWS
     WT_RELAY_ENV=()
   done
 
+  local failure
+  for failure in denied invalid missing null no-id remote windows bad-windows partial empty scalar; do
+    stub_cmux alive
+    assert_wt_ok "$failure row-list test worktree" new "list-$failure" --no-workspace -r "$r"
+    printf '{"workspaces":[]}\n' >"$WT_ROWS"
+    case "$failure" in
+      denied) WT_RELAY_ENV=("CMUX_STUB_FAIL_LIST=all") ;;
+      invalid) printf 'not json\n' >"$WT_ROWS" ;;
+      missing) printf '{"unexpected":[]}\n' >"$WT_ROWS" ;;
+      null) printf '{"workspaces":null}\n' >"$WT_ROWS" ;;
+      no-id) printf '{"workspaces":[{"title":"%s:list-no-id"}]}\n' "$id" >"$WT_ROWS" ;;
+      remote) printf '{"workspaces":[{"id":"bad-row","title":"%s:list-remote","remote":{"enabled":"unknown"}}]}\n' "$id" >"$WT_ROWS" ;;
+      windows) WT_RELAY_ENV=("CMUX_STUB_FAIL_WINDOWS=1") ;;
+      bad-windows) WT_RELAY_ENV=("CMUX_STUB_BAD_WINDOWS=1") ;;
+      partial|empty|scalar)
+        stub_windows "$w1" "$w2"
+        if [[ "$failure" == partial ]]; then WT_RELAY_ENV=("CMUX_STUB_FAIL_LIST=$w2")
+        elif [[ "$failure" == empty ]]; then WT_RELAY_ENV=("CMUX_STUB_EMPTY_LIST=$w2")
+        else printf '42\n' >"$WT_ROWS_DIR/$w2.json"; fi ;;
+    esac
+    : >"$CMUX_LOG"
+    assert_wt_fails 1 "cannot list cmux rows" rm "list-$failure" -r "$r"
+    assert_dir "$failure row list kept the worktree" "$r/.worktrees/list-$failure"
+    assert_branch "$r" "wt/list-$failure" yes
+    assert_regular "$r" ".git/wt/list-$failure.json"
+    assert_lacks "$failure row list sent no close" "$(cat "$CMUX_LOG")" "workspace close"
+    WT_RELAY_ENV=()
+  done
+  stub_cmux alive
+  assert_wt_ok "unreachable cmux test worktree" new ping-denied --no-workspace -r "$r"
+  stub_cmux dead
+  WT_RELAY_ENV=("CMUX_WORKSPACE_ID=own-row")
+  assert_wt_fails 1 "cannot reach cmux" rm ping-denied -r "$r"
+  assert_dir "failed cmux ping kept the worktree" "$r/.worktrees/ping-denied"
+  assert_branch "$r" wt/ping-denied yes
+  assert_regular "$r" .git/wt/ping-denied.json
+  WT_RELAY_ENV=("CMUX_STUB_FAIL_PING=1")
+  assert_wt_fails 1 "cannot reach cmux" rm ping-denied -r "$r"
+  assert_dir "a callerless socket failure kept the worktree" "$r/.worktrees/ping-denied"
+  WT_RELAY_ENV=()
+  stub_cmux alive
+  printf '{"workspaces":[]}\n' >"$WT_ROWS"
+  assert_wt_ok "a successful empty row list permits removal" rm ping-denied -r "$r"
+
   local fake="$TEST_ROOT/active-row-bin"
   mkdir -p "$fake"
   cat >"$fake/ssh" <<'STUB'
 #!/bin/sh
 printf 'ssh %s\n' "$*" >>"$CMUX_STUB_LOG"
 [ "${VM_AGENT_ACTIVE:-}" = 1 ] && exit 0
+if [ "${VM_AGENT_QUERY_FAIL:-}" = 1 ]; then
+  for command in "$@"; do :; done
+  exec bash -c "$command"
+fi
 exit 99
 STUB
-  chmod +x "$fake/ssh"
+  cat >"$fake/tmux" <<'STUB'
+#!/bin/sh
+echo 'error connecting to tmux socket (Operation not permitted)' >&2
+exit 1
+STUB
+  chmod +x "$fake/ssh" "$fake/tmux"
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[{"id":"active-vm-row","title":"$id:active-vm","remote":{"enabled":true,"destination":"smoke.invalid"}}]}
 ROWS
@@ -1506,8 +1604,13 @@ ROWS
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_ACTIVE=1")
   : >"$CMUX_LOG"
   assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
-  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$CMUX_LOG")" "for t in"
+  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$CMUX_LOG")" "tmux_agent"
   assert_lacks "an older VM wt cannot remove the active task" "$(cat "$CMUX_LOG")" "rm active-vm"
+  WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_QUERY_FAIL=1")
+  : >"$CMUX_LOG"
+  assert_wt_fails 1 "cannot check the agent in tmux session" -H smoke.invalid rm active-vm -r "$r"
+  assert_has "the remote probe reports its socket error" "$WT_OUT" "Operation not permitted"
+  assert_lacks "a failed remote probe cannot request removal" "$(cat "$CMUX_LOG")" "rm active-vm"
   WT_PATH_PREFIX="" WT_RELAY_ENV=()
 
   assert_wt_ok "wt new close-failed" new close-failed --no-workspace -r "$r"
@@ -2211,7 +2314,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=627
+FIXED_ASSERTIONS=678
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
@@ -2220,7 +2323,7 @@ FIXED_ASSERTIONS=627
 #     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
 #   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
 #   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=79
+DARWIN_ASSERTIONS=176
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {

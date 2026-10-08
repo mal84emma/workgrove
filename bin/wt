@@ -342,7 +342,7 @@ require_wt() { # require_wt <name>  -> sets P (path), B (branch)
   die "no worktree named '$n' in $REPO (see: wt list)"
 }
 
-rows_json() { # rows_json — every cmux row, in every window, as one {"workspaces":[…]} document.
+rows_json() { # rows_json [checked] — every cmux row, in every window, as one {"workspaces":[…]} document.
   # `workspace list --json` answers for ONE window: the caller's window, or the one that --window names.
   # A window displays one row at a time. So the only way to show two tasks side by side in cmux is to drag a
   # row into a second window. That row is then absent from the list, and every lookup built on this reads
@@ -362,29 +362,55 @@ rows_json() { # rows_json — every cmux row, in every window, as one {"workspac
   # Use `.workspaces?`, not `.workspaces`: cmux may hand back a bare array, and jq's `//` does not catch the
   # error `Cannot index array with "workspaces"`. Only the `?` turns that error into the empty value that `//`
   # can fall back from.
-  local c w out docs=""
-  c=$(cmux_bin) || return 0
-  for w in $(CMUX_QUIET=1 "$c" list-windows 2>/dev/null | awk '{print $2}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' || true); do
-    out=$(CMUX_QUIET=1 "$c" workspace list --json --window "$w" 2>/dev/null) || continue   # a window closed mid-loop
+  local c w out windows docs=""
+  c=$(cmux_bin) || { [[ ${1:-} != checked ]] || return 1; return 0; }
+  windows=$(CMUX_QUIET=1 "$c" list-windows 2>/dev/null) || {
+    [[ ${1:-} != checked ]] || return 1
+  }
+  if [[ ${1:-} == checked && -n "$windows" ]]; then
+    if printf '%s\n' "$windows" | awk '{print $2}' | grep -Eqv '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then return 1; fi
+  fi
+  for w in $(printf '%s\n' "$windows" | awk '{print $2}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' || true); do
+    out=$(CMUX_QUIET=1 "$c" workspace list --json --window "$w" 2>/dev/null) || {
+      [[ ${1:-} != checked ]] || return 1
+      continue   # a window closed mid-loop
+    }
+    [[ ${1:-} != checked || -n "${out//[[:space:]]/}" ]] || return 1
     docs="$docs$out"
   done
-  # An older cmux without the list-windows subcommand, or output that this code cannot parse, gives no
-  # window list at all. Then fall back to the old single-window call, so such a cmux behaves exactly as it
-  # did and does not stop working.
-  [[ -n "$docs" ]] || docs=$(CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null) || true
+  # For display lookups, an older cmux or unrecognized output can give no window list.
+  # Then fall back to the single-window call. Checked removal requires a successful, readable window list.
+  [[ -n "$docs" ]] || docs=$(CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null) || {
+    [[ ${1:-} != checked ]] || return 1
+  }
+  if [[ ${1:-} == checked ]]; then
+    printf '%s' "$docs" | jq -e -s -c '
+      map(if type == "array" then . elif type == "object" then .workspaces else null end) as $rows
+      | if ($rows | length > 0) and all($rows[]; type == "array"
+          and all(.[]; (.id | type == "string" and length > 0) and (.title | type == "string")
+            and (.remote == null or (.remote | type == "object"))
+            and (.remote.enabled == null or (.remote.enabled | type == "boolean"))
+            and (.remote.destination == null or (.remote.destination | type == "string"))
+            and (.description == null or (.description | type == "string"))))
+        then {workspaces: ($rows | add)} else error("invalid cmux row list") end' 2>/dev/null
+    return
+  fi
   printf '%s' "$docs" | jq -s -c '{workspaces: (map(.workspaces? // .) | add // [])}' 2>/dev/null || true
 }
 
-cmux_row_field() { # cmux_row_field <title> <field> [host] -> that field of the row; no host: the local row
-  cmux_bin >/dev/null || return 0        # a local and a VM row share a title, so the host is what tells them apart
-  rows_json \
+cmux_row_field() { # cmux_row_field <title> <field> [host] [checked] -> that field; no host: the local row
+  # A local and a VM row share a title, so the host tells them apart.
+  cmux_bin >/dev/null || { [[ ${4:-} != checked ]] || return 1; return 0; }
+  local rows
+  rows=$(rows_json "${4:-}") || return 1
+  printf '%s' "$rows" \
     | jq -r --arg t "$1" --arg k "$2" --arg h "${3:-}" '
         first((.workspaces? // .)[]
           | select(.title == $t)
           | select(if $h == "" then ((.remote.enabled // false) | not)
                    else ((.remote.enabled // false)
                          and (((.remote.destination // "") == $h) or ((.description // "") == "@" + $h))) end)
-          | .[$k] // "") // empty' 2>/dev/null || true
+          | .[$k] // "") // empty' 2>/dev/null || [[ ${4:-} != checked ]]
 }
 
 check_identity() { # refuse a name whose row title is already taken by another repo
@@ -433,13 +459,25 @@ close_row() { # close_row <row id> — silent when the row is already gone
 }
 
 RM_ROW=""; RM_SELF=""
-check_row_removal() { # Permit an agent's own row, but refuse another row with a running agent.
-  RM_ROW="$1"; RM_SELF=""
+check_row_removal() { # check_row_removal <title> [host] — refuse unreadable rows or another running agent.
+  RM_ROW=""; RM_SELF=""
+  local c err state
+  if ! c=$(cmux_bin); then
+    [[ -z ${CMUX_WORKSPACE_ID:-} ]] || die "cmux CLI not found; kept the worktree"
+    return 0
+  fi
+  if ! err=$(CMUX_QUIET=1 "$c" ping 2>&1); then
+    # Without a caller row, a missing socket means cmux is absent. Other failures cannot prove that.
+    case "$err" in 'Error: Socket not found at '*) [[ -n ${CMUX_WORKSPACE_ID:-} ]] || return 0 ;; esac
+    die "cannot reach cmux${err:+: $err}; kept the worktree"
+  fi
+  RM_ROW=$(cmux_row_field "$1" id "${2:-}" checked) \
+    || die "cannot list cmux rows; kept the worktree"
   [[ -n "$RM_ROW" ]] || return 0
-  local state
-  state=$(CMUX_QUIET=1 "$(cmux_bin)" top --workspace "$RM_ROW" --json 2>/dev/null) \
+  state=$(CMUX_QUIET=1 "$c" top --workspace "$RM_ROW" --json 2>/dev/null) \
     || die "cannot check the agent in cmux row $RM_ROW; kept the worktree"
-  printf '%s' "$state" | jq -e '.coding_agents | type == "array"' >/dev/null 2>&1 \
+  printf '%s' "$state" | jq -e '.coding_agents | type == "array"
+    and all(.[]; .resources.process_count | type == "number" and . >= 0)' >/dev/null 2>&1 \
     || die "cannot check the agent in cmux row $RM_ROW; kept the worktree"
   if printf '%s' "$state" | jq -e --arg id "$RM_ROW" '.caller.workspace_id == $id' >/dev/null; then
     RM_SELF=self
@@ -781,6 +819,27 @@ session_state() { # session_state <name> — what the VM's tmux holds for this t
     if [[ -z "$(tmux list-clients -t "=$s" 2>/dev/null)" ]]; then state="$state, detached"; fi
   fi
   printf '%s (%s)' "$s" "$state"
+}
+
+tmux_agent() { # tmux_agent <session> — 0 for a running agent, 1 for absent or idle, 2 for unreadable status.
+  local err panes t rc=0
+  err=$(LC_ALL=C tmux has-session -t "=$1" 2>&1) || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    case "$err" in
+      "can't find session: =$1"|"can't find session: $1") return 1 ;;
+      'no server running on '*|'error connecting to '*'(No such file or directory)') return 1 ;;
+      *) printf '%s\n' "$err" >&2; return 2 ;;
+    esac
+  fi
+  panes=$(tmux list-panes -s -t "=$1" -F '#{pane_tty}' 2>&1) || { printf '%s\n' "$panes" >&2; return 2; }
+  [[ -n "$panes" ]] || return 2
+  while IFS= read -r t; do
+    [[ "$t" =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 2
+    rc=0
+    pgrep -t "${t#/dev/}" -x 'claude|codex' >/dev/null || rc=$?
+    case $rc in 0) return 0 ;; 1) ;; *) return 2 ;; esac
+  done <<<"$panes"
+  return 1
 }
 
 # ---------------------------------------------------------------- status
@@ -1132,14 +1191,20 @@ cmd_rm() {
   [[ -n "$title" ]] || title=$(row_title "$name" "$REPO")
   if is_remote; then
     [[ -n "$session" ]] || session=$(wt_session "$name" "$REPO")
-    if [[ $self_remote -eq 0 && $(session_state "$name") == *'agent running'* ]]; then
-      die "another agent is running in tmux session $session; kept the worktree"
+    if [[ $self_remote -eq 0 ]]; then
+      local agent_rc=0
+      tmux_agent "$session" || agent_rc=$?
+      case $agent_rc in
+        0) die "another agent is running in tmux session $session; kept the worktree" ;;
+        1) ;;
+        *) die "cannot check the agent in tmux session $session; kept the worktree" ;;
+      esac
     fi
     if [[ $self_remote -eq 1 && $(tmux show-environment -t "=$session" WT_CMUX_CLOSE_ON_EXIT 2>/dev/null) == WT_CMUX_CLOSE_ON_EXIT=1 ]]; then
       native=1
     fi
-  elif cmux_ok; then
-    check_row_removal "$(cmux_row_field "$title" id)"
+  else
+    check_row_removal "$title"
   fi
   if [[ $self_remote -eq 1 && $native -eq 0 ]]; then
     # Check the relay setup only after the reasons above, while the worktree is still intact.
@@ -1495,10 +1560,11 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   fi
 }
 
-agent_on_vm() { # agent_on_vm <host> <session> — 0 when claude or codex holds a pane tty of that tmux session;
-                # it runs the same pgrep as session_state, so an older wt on the VM cannot hide an agent
-  local q; q=$(shell_join "=$2")
-  remote_sh "$1" "for t in \$(tmux list-panes -s -t $q -F '#{pane_tty}' 2>/dev/null); do pgrep -t \"\${t#/dev/}\" -x 'claude|codex' >/dev/null 2>&1 && exit 0; done; exit 1" >/dev/null 2>&1
+agent_on_vm() { # agent_on_vm <host> <session> — use the Mac's checked probe, even with an older wt on the VM.
+  local script
+  # shellcheck disable=SC2016  # $1 belongs to the remote Bash command.
+  script="$(declare -f tmux_agent)"$'\n''tmux_agent "$1"'
+  remote_sh "$1" "bash -c $(shell_join "$script" wt "$2")" >/dev/null
 }
 
 row_remote_field() { # row_remote_field <id> <field>… — this row's current remote fields (state, daemon slot) from one
@@ -1782,9 +1848,13 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     return 0
   fi
   if [[ $restart -eq 1 ]]; then
-    if agent_on_vm "$host" "$session"; then   # a VM running an older wt reports a live agent as 'shell only'
-      die "$name on $host still has an agent running; wt -H $host attach -r $(shell_join "$repo") $name re-attaches it, or wt -H $host update if the VM's wt is older than the Mac's"
-    fi
+    local agent_rc=0
+    agent_on_vm "$host" "$session" || agent_rc=$?
+    case $agent_rc in
+      0) die "$name on $host still has an agent running; wt -H $host attach -r $(shell_join "$repo") $name re-attaches it, or wt -H $host update if the VM's wt is older than the Mac's" ;;
+      1) ;;
+      *) die "cannot check the agent in tmux session $session on $host; kept the session" ;;
+    esac
     remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
     close_row "$(cmux_row_field "$title" id "$host")"
     for _ in 1 2 3; do                     # remote_row creates a row only when no row is left, so wait for that
@@ -1853,7 +1923,7 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   # The row's identity comes from -r. cmd_host has already refused -r unless it is an absolute path or
   # a plain repo name. A relative '.' or '..' would make repo_id '-', and close_row would close nothing.
   local session title; session=$(wt_session "$name" "$repo"); title=$(row_title "$name" "$repo")
-  if cmux_ok; then check_row_removal "$(cmux_row_field "$title" id "$host")"; fi
+  check_row_removal "$title" "$host"
   local agent_rc=0
   agent_on_vm "$host" "$session" || agent_rc=$?
   case $agent_rc in

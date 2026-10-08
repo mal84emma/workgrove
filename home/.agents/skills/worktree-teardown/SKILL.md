@@ -21,6 +21,7 @@ wt -H <vm> show -r <repo> <name>     # VM: also "session: wt-<repo>-<name> (agen
 - If another agent is still running in the worktree, do not remove the worktree. Ask the user to finish or stop that agent first.
 - Your own session may remove its worktree when the user asks.
 - `wt rm` checks the row or tmux session before removal and refuses another running agent, even with `wt rm --force`.
+- If `wt rm` cannot verify the row or session status, it keeps the worktree.
 
 ## Commands
 
