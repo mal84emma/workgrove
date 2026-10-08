@@ -23,7 +23,9 @@ UNAME
 # "other-repo" has a row of another repo's task with the same name. "no-ref" is "other-repo" with a create
 # that prints no workspace ref; the row that the create adds shows up in the next list. "no-ref-blind" is
 # "no-ref" with a row list that fails until the create, so wt has no list of the rows from before it.
-# "tag-fail" makes every description write fail.
+# "no-ref-own" has the user's own row with the task's title and no repo, and a create that prints no ref.
+# "race" lists no row the first time and this task's row after that. "tag-fail" and "race" make every
+# description write fail.
 cat >"$TEST_ROOT/local/bin/cmux" <<'CMUX'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CMUX_LOG"
@@ -42,11 +44,17 @@ case "$1" in
                no-ref-blind) [ -e "$CMUX_LOG.created" ] || exit 1
                              printf '{"workspaces":[%s,%s]}\n' "$(row other-row task '@fakevm · other')" \
                                '{"id":"new-row","title":"task","remote":{"enabled":true,"destination":"fakevm"}}' ;;
+               no-ref-own) if [ -e "$CMUX_LOG.created" ]; then
+                             printf '{"workspaces":[%s,%s]}\n' "$(row user-row task '')" \
+                               '{"id":"new-row","title":"task","remote":{"enabled":true,"destination":"fakevm"}}'
+                           else printf '{"workspaces":[%s]}\n' "$(row user-row task '')"; fi ;;
+               race) if [ -e "$CMUX_LOG.listed" ]; then printf '{"workspaces":[%s]}\n' "$(row race-row task '@fakevm · repo')"
+                     else : >"$CMUX_LOG.listed"; printf '{"workspaces":[]}\n'; fi ;;
                *) printf '{"workspaces":[]}\n' ;;
              esac ;;
   ssh) [ "$CMUX_MODE" != ssh-fail ] || { echo 'row connection failed' >&2; exit 1; }
        case "$CMUX_MODE" in no-ref*) : >"$CMUX_LOG.created"; echo OK ;; *) echo 'workspace:123' ;; esac ;;
-  workspace-action) [ "$CMUX_MODE" != tag-fail ] ;;
+  workspace-action) case "$CMUX_MODE" in tag-fail|race) exit 1 ;; esac ;;
 esac
 CMUX
 cat >"$TEST_ROOT/local/bin/ssh" <<'SSH'
@@ -103,6 +111,7 @@ TMUX
 for tool in claude codex; do
   printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/remote/.local/bin/$tool"
 done
+printf '#!/bin/sh\nexit 1\n' >"$TEST_ROOT/local/bin/fzf"   # wt task needs fzf only for the pickers that --where and -a skip
 chmod +x "$TEST_ROOT/local/bin/"* "$TEST_ROOT/remote/.local/bin/"*
 
 CMUX_MODE=alive SSH_MODE=ok REMOTE_DEFAULT_AGENT=claude
@@ -276,12 +285,18 @@ run_wt wt-demo claude
 check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to a row that the create did not add'
 rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
 
-# With no list from before the create, every row looks new. A row whose description names a repo is still
-# not the new one, so the other repo's row keeps its description.
+# An older row with the task's title and no repo, such as the user's own `cmux ssh` row, is not the new one.
+CMUX_MODE=no-ref-own
+: >"$TEST_ROOT/cmux.log"
+run_wt wt-demo claude
+check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'user-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to an older row with the same title'
+rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
+
+# With no list from before the create, any row could look new. So wt does not guess, and writes no description.
 CMUX_MODE=no-ref-blind
 : >"$TEST_ROOT/cmux.log"
 run_wt wt-demo claude
-check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'with no list from before the create, the description went to another repo'"'"'s row'
+check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'row list from before the create was unreadable'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && ! grep -qF -- 'workspace-action' "$TEST_ROOT/cmux.log" && echo yes)" 'with no list from before the create, wt guessed which row was new'
 rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
 
 # The description holds the repo, so a new row without it would be found by no later lookup. wt closes the
@@ -291,6 +306,20 @@ CMUX_MODE=tag-fail
 run_wt wt-demo claude
 check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'so wt closed that row'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && grep -qxF -- 'workspace close workspace:123' "$TEST_ROOT/cmux.log" && echo yes)" 'a new row without its description was left open'
 rm "$TEST_ROOT/remote-new"
+# A shell row has no repo, and a lookup finds it by its title and host. So a failed write leaves it open.
+: >"$TEST_ROOT/cmux.log"
+invoke_wt task --where fakevm -a vm-shell </dev/null
+check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux workspace-action failed; run:'* ]] && grep -qF -- 'ssh fakevm --name shell ' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'workspace close' "$TEST_ROOT/cmux.log" && echo yes)" 'a new shell row was closed for a failed description'
+
+# A row that a lookup found is never closed, even when its description cannot be rewritten. Here attach's
+# own lookup finds no row, and remote_row's lookup finds the row that appeared since.
+CMUX_MODE=alive
+run_wt wt-demo claude
+CMUX_MODE=race
+: >"$TEST_ROOT/cmux.log"
+invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
+check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux workspace-action failed; run:'* ]] && grep -qF -- 'workspace-action --workspace race-row ' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'workspace close' "$TEST_ROOT/cmux.log" && echo yes)" 'a row that a lookup found was closed for a failed description'
+rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.listed"
 CMUX_MODE=alive
 end_scenario
 
@@ -315,4 +344,4 @@ check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task
 check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex && $(jq -r .model "$SCRATCH_REPO/.git/wt/task.json") == gpt-5.3-codex ]] && echo yes)" 'interrupted setup lost brief, agent or model choice'
 end_scenario
 
-lib_summary 36
+lib_summary 39

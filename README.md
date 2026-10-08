@@ -40,7 +40,7 @@ It also covers per-repo hooks and the logins that you supply.
   An older `wt` gave task rows the title `<repo>:<name>` and the second line `@<host>`.
   `wt rm`, the name check of `wt new`, `wt -H <vm> …` and `bin/cmux-hook` still find such a row.
   The row keeps its old title until you close it. `wt show` prints the label in the new form, from the task's saved data.
-  A new VM row gets its second line just after cmux creates it. If cmux cannot write that line, `wt` and the hook close the new row, because no later lookup could find it.
+  A new VM task row gets its second line just after cmux creates it. If cmux cannot write that line, `wt` and the hook close the new row, because no later lookup could find it.
 
   A task on a VM also has the tmux session `wt-<repo>-<name>`. This session keeps the agent alive across disconnects.
   The row itself is only a plain `cmux ssh` row, so the tmux session, not the row, gives this persistence.

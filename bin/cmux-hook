@@ -260,7 +260,9 @@ attach_row() { # attach_row <host> <session> <title> <repo id> <command> — bri
           2>/dev/null)
       fi
     fi
-    [[ -n $ref ]] || { log "cmux reported no row for $3 ($4) on $1: $out"; return 1; }
+    [[ -n $ref ]] || {
+      log "cmux reported no row for $3 ($4) on $1: $out; if a new row $3 with no repo on its second line is open, close it"
+      return 1; }
   fi
   capped "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1$ROW_SEP$4" >/dev/null 2>&1 &&
     return 0

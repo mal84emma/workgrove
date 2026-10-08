@@ -21,6 +21,7 @@ cat > "$TEST_ROOT/cmux" <<'CMUX'
 printf '%s\n' "$*" >> "$CMUX_LOG"
 [[ -n ${CLOSE_ORDER_LOG:-} && $1 == workspace && ${2:-} == close ]] && printf '%s\n' close >> "$CLOSE_ORDER_LOG"
 [[ ${CMUX_FAIL:-} == "$1" ]] && exit 142
+[[ ${CMUX_SLOW:-} == "$1" ]] && sleep 5   # the hook's capped call must kill it at the deadline
 [[ ${CMUX_FAIL_CLOSE:-} == 1 && $1 == workspace && ${2:-} == close ]] && exit 142
 # CMUX_ROWS replaces the rows that `workspace list` prints. After `ssh` with CMUX_SSH_NOREF set, the list
 # also has the row that the create added, and `ssh` prints no workspace ref.
@@ -205,6 +206,20 @@ out=$(CMUX_FAIL=workspace-action attach_hook '{"host":"test-vm","repo":"/vm/repo
 if [[ $out != *'"desktop":false'* ]]; then pass; else fail 'a new row without its description was reported as reached'; fi
 check_contains "$CMUX_LOG" 'workspace close workspace:77 --force'
 check_contains "$XDG_STATE_HOME/cmux-hook.log" 'failed for the new row workspace:77, so it was closed'
+# A description write that runs into the hook's deadline still leaves the close its own 3 s.
+: > "$CMUX_LOG"; : > "$XDG_STATE_HOME/cmux-hook.log"
+out=$(CMUX_SLOW=workspace-action WT_STATUS_DEADLINE=$(( $(date +%s) + 2 )) \
+  attach_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
+check_contains "$CMUX_LOG" 'workspace close workspace:77 --force'
+check_contains "$XDG_STATE_HOME/cmux-hook.log" 'failed for the new row workspace:77, so it was closed'
+# An older row with the task's title and no repo, such as the user's own `cmux ssh` row, is not the new one.
+: > "$CMUX_LOG"
+# BBBB is the row that the request comes from.
+out=$(CMUX_SSH_NOREF=1 CMUX_ROWS='{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"task","description":"@test-vm · repo","remote":{"enabled":true,"destination":"test-vm"}},{"id":"FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF","title":"task","remote":{"enabled":true,"destination":"test-vm"}}' \
+  attach_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
+check_contains "$CMUX_LOG" 'workspace-action --workspace EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE --action set-description --description @test-vm · other'
+check_missing "$CMUX_LOG" 'workspace-action --workspace FFFFFFFF'
+rm -f "$CMUX_LOG.created"
 end_scenario
 
 begin_scenario 'Mac Running, Idle, clear and event ordering'
@@ -319,4 +334,4 @@ rm -rf "$XDG_STATE_HOME/cmux-agent-status"
 WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
 if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
 end_scenario
-lib_summary 93
+lib_summary 97
