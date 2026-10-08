@@ -4,6 +4,19 @@
 set -u
 mode=${1:-hook}
 if [[ $mode == hook ]]; then cat >/dev/null; fi   # drain the envelope
+
+# The scripts in bin/ need bash 5 or later (README, "Requirements"). On a Mac, /bin/bash 3.2 runs this file when
+# it comes first on PATH, for example when cmux starts it. Then run the file again with Homebrew's bash.
+# WORKGROVE_REEXEC stops a loop if that bash is also older than 5. This block must stay valid bash 3.2.
+# It comes after the drain, so that the envelope is read once. The hook takes its data from the environment.
+if ((BASH_VERSINFO[0] < 5)) && [[ -z ${WORKGROVE_REEXEC:-} ]]; then
+  for bash5 in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x $bash5 ]]; then export WORKGROVE_REEXEC=1; exec "$bash5" "$0" "$@"; fi
+  done
+fi
+unset WORKGROVE_REEXEC
+if ((BASH_VERSINFO[0] < 5)); then exit 0; fi   # print no patch, so cmux keeps the notification as it is
+
 t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; ws=${CMUX_NOTIFICATION_WORKSPACE_ID:-}
 if [[ $mode == hook && ${CMUX_NOTIFICATION_SUBTITLE:-} == wt-agent-status\|* ]]; then
   t=wt-agent-status; b=${CMUX_NOTIFICATION_SUBTITLE}

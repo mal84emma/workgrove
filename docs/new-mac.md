@@ -12,6 +12,8 @@ Run the four blocks on this page in order. Block 3 needs two things before it ru
   opt-in config). `install.sh` requires oh-my-zsh whenever that config's `~/.zshrc` is asked for. Block 2 installs
   oh-my-zsh.
 
+`brew bundle` in block 2 also installs bash 5. The scripts in `bin/` need it, and macOS has only `/bin/bash` 3.2.
+
 The `Brewfile` has one commented-out line: `brew "azure-cli"`. In this repo, only `bin/azml-ssh-host` needs the
 Azure CLI, so `brew bundle` leaves it out of a machine that will never touch Azure. The `az login` in block 4 and
 [azml-compute.md](azml-compute.md) both need the Azure CLI. If you want it, do one of these:

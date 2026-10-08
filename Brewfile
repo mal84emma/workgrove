@@ -5,6 +5,9 @@
 # `brew install azure-cli`.
 # azml-ssh-host also tells you this: it gives a clear error when `az` is not on PATH.
 # brew "azure-cli"
+# bash: the scripts in bin/ need bash 5 or later, and macOS has only /bin/bash 3.2. When /bin/bash starts one of
+# them, the script runs itself again with this bash. install.sh does not need it.
+brew "bash"
 brew "fzf"
 brew "gh"
 brew "jq"
