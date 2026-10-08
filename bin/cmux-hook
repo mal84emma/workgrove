@@ -8,7 +8,7 @@ t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; ws=${CMUX_NOTIFIC
 if [[ $mode == hook && ${CMUX_NOTIFICATION_SUBTITLE:-} == wt-agent-status\|* ]]; then
   t=wt-agent-status; b=${CMUX_NOTIFICATION_SUBTITLE}
 fi
-case $mode:$t in hook:*|--apply:*|--expire:*) ;; *) exit 0 ;; esac
+case $mode:$t in hook:*|--event:*|--apply:*|--expire:*) ;; *) exit 0 ;; esac
 : "${HOME:?cmux-hook: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-hook.log"
 log() { # stdout is the patch, and every call site discards stderr. So the reason that a jump did not
@@ -37,8 +37,16 @@ known_host() { awk -v w="$1" '$1=="Host"{for(i=2;i<=NF;i++){if($i~/^#/)break; if
 # A hook response is a patch: cmux merges the keys that it gets and leaves the rest alone. (The other hook
 # in cmux.json answers `{"effects":{"desktop":false}}` or `{}`.) So this prints a fixed literal. It does not
 # echo the envelope back, because the envelope carries whatever the agent session was working on.
-quiet() { printf '%s\n' '{"effects":{"desktop":false,"sound":false,"markUnread":false,"paneFlash":false}}'; }
-quiet_control() { printf '%s\n' '{"effects":{"record":false,"markUnread":false,"reorderWorkspace":false,"desktop":false,"sound":false,"command":false,"paneFlash":false}}'; }
+event_handled() {
+  [[ $mode == --event ]] || return 0
+  # Closing a row removes its notifications too. Open and attach remove only their own request.
+  if [[ $t != wt-close ]]; then
+    capped "$CMUX" dismiss-notification --id "$nid" >/dev/null 2>&1 || log "could not dismiss $t notification $nid"
+  fi
+  log "handled $t for workspace $ws"
+}
+quiet() { event_handled; printf '%s\n' '{"effects":{"desktop":false,"sound":false,"markUnread":false,"paneFlash":false}}'; }
+quiet_control() { event_handled; printf '%s\n' '{"effects":{"record":false,"markUnread":false,"reorderWorkspace":false,"desktop":false,"sound":false,"command":false,"paneFlash":false}}'; }
 CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
 CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
 valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
@@ -196,7 +204,7 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
   if [[ "${3:-}" == shared ]]; then
     printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux attach -t '=%s'" "$1" "$run" "$1"
   else
-    printf "tmux new-session -d -s '%s' %s 2>/dev/null; [ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; if [ -n \"\$CMUX_TUI_SOCKET\" ]; then %sexec tmux attach -d -t '=%s'; fi; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1" "$1" "$native_mark" "$1" "$1"
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; [ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; if [ -n \"\$CMUX_TUI_SOCKET\" ]; then for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=%s' \"\$v\" \"\$(printenv \"\$v\")\"; done; %sexec tmux attach -d -t '=%s'; fi; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1" "$1" "$1" "$native_mark" "$1" "$1"
   fi
 }
 attach_row() { # attach_row <host> <session> <title> <command> — bring this task's row forward, or create it
@@ -225,6 +233,20 @@ attach_row() { # attach_row <host> <session> <title> <command> — bring this ta
     log "set-description @$1 failed for $ref"   # cosmetic only: the row is there, so the jump did happen
   return 0; }
 case $mode in
+  --event)
+    # Native notifications bypass notifications.hooks in cmux 0.65. Use the recorded event's identity.
+    event=${CMUX_AUTOMATION_EVENT_JSON:-}
+    nid=$(printf '%s' "$event" | jq -er 'select(.name == "notification.created") | .payload.notification_id | strings' 2>/dev/null) || exit 0
+    ws=$(printf '%s' "$event" | jq -er '.workspace_id | strings' 2>/dev/null) || exit 0
+    [[ $nid =~ ^[A-Fa-f0-9-]{36}$ && $ws =~ ^[A-Fa-f0-9-]{36}$ ]] || exit 0
+    ws_load || exit 0
+    printf '%s' "$WS_JSON" | jq -e --arg w "$ws" 'any(.workspaces[]; .id == $w and .remote.enabled and .remote.backend == "cmux-tui")' >/dev/null 2>&1 || exit 0
+    # Public events redact notification text. Read only the record with the event's ID and row.
+    record=$(capped "$CMUX" --json list-notifications 2>/dev/null | jq -ec --arg i "$nid" --arg w "$ws" 'first(.[] | select(.id == $i and .workspace_id == $w))' 2>/dev/null) || exit 0
+    t=$(printf '%s' "$record" | jq -er '.title | strings') || exit 0
+    b=$(printf '%s' "$record" | jq -er '.body | strings') || exit 0
+    case $t in wt-open|wt-attach|wt-close) ;; *) exit 0 ;; esac
+    ;;
   --apply)
     [[ $# -eq 6 && $2 =~ ^[A-Fa-f0-9-]{36}$ && ( $3 == claude || $3 == codex ) &&
        ( $4 == running || $4 == idle || $4 == clear || $4 == renew || $4 == expire ) && $5 =~ ^[0-9]{1,19}$ ]] || exit 1

@@ -493,7 +493,7 @@ WT_EXTRA=""        # machine-wide agent args for model precedence checks
 wt_run() {
   WT_RC=0
   WT_OUT="$(cd "${WT_CWD:-$TEST_ROOT}" \
-    && env -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u CMUX_WORKSPACE_ID -u CMUX_TUI_SOCKET \
+    && env -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u CMUX_WORKSPACE_ID -u CMUX_TUI_SOCKET -u CMUX_TUI_TERMINAL_ID -u CMUX_TUI_SESSION_ID \
            -u WT_AGENT -u WT_AGENT_ARGS -u WT_HOST \
            -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT \
            HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" \
@@ -685,11 +685,14 @@ scenario_task_model() {
   assert_wt_ok "Codex colon model ID" new oss --no-workspace -r "$r" -a codex -m 'gpt-oss:20b'
   assert_meta "$r" oss model 'gpt-oss:20b'
 
+  # Linux attach prints a Mac recovery command and needs a fixture host name.
+  if [[ $OS != Darwin ]]; then WT_RELAY_ENV=(WT_HOST=fakevm); fi
   assert_wt_ok "same-agent attach" attach chosen -r "$r" -a claude
   assert_meta "$r" chosen model 'opus[1m]'
   assert_wt_ok "change agent" attach chosen -r "$r" -a codex
   assert_meta "$r" chosen model ""
   assert_absent "$r/.git/wt" chosen.started
+  WT_RELAY_ENV=()
   rm -f "$AGENT_LOG"
   assert_wt_ok "changed agent starts from brief" run chosen -r "$r"
   assert_eq "Codex receives no stale Claude model" "$(printf '%s\n' -- 'the brief')" "$(cat "$AGENT_LOG")"
@@ -898,6 +901,19 @@ scenario_list_show_path() {
   assert_wt_fails 1 "VS Code request to the Mac failed" open a1 -r "$ra"
   assert_has "…gives the manual command on relay failure" "$WT_OUT" "Run on the Mac: wt -H fakevm open -r $ra a1"
   assert_lacks "…does not report a successful request" "$WT_OUT" "requested VS Code on the Mac:"
+  # Native SSH rows have a Unix socket and terminal ID instead of a TCP relay.
+  ln -s "$CMUX_ALIVE" "$FAKE_BIN/cmux-tui"
+  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=test CMUX_TUI_SOCKET=/tmp/native WT_HOST=fakevm TMUX=
+    CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+  stub_cmux alive
+  : > "$CMUX_LOG"
+  assert_wt_ok "native VM wt open sends a request" open a1 -r "$ra"
+  assert_grep "native request names the socket and terminal" "$CMUX_LOG" "--socket /tmp/native notify --surface term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --title wt-open"
+  assert_lacks "native request does not use a Mac workspace ID" "$(cat "$CMUX_LOG")" "--workspace"
+  rm "$FAKE_BIN/cmux-tui"
+  ln -s "$CMUX_DEAD" "$FAKE_BIN/cmux-tui"
+  assert_wt_fails 1 "cmux-tui notify failed" open a1 -r "$ra"
+  rm "$FAKE_BIN/cmux-tui"
   WT_RELAY_ENV=()
   REPOS_DIR="$saved"
   end_scenario
@@ -2261,14 +2277,15 @@ STUB
   line=$(eval "$a"; tmux_cmd wt-test)
   : >"$TEST_ROOT/tmux-cmd.log"
   env PATH="$fake:$PATH" TMUX_CMD_LOG="$TEST_ROOT/tmux-cmd.log" \
-    CMUX_TUI_SOCKET=/tmp/native CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
+    CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa CMUX_TUI_SESSION_ID=session_test CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
     "$WT_BASH" -c "$line; echo shell-remains >> \"\$TMUX_CMD_LOG\""
   assert_has "native launch records terminal-exit cleanup" "$(cat "$TEST_ROOT/tmux-cmd.log")" "set-environment -t =wt-test WT_CMUX_CLOSE_ON_EXIT 1"
+  assert_has "native launch saves this row's terminal identity" "$(cat "$TEST_ROOT/tmux-cmd.log")" "set-environment -t =wt-test CMUX_TUI_TERMINAL_ID term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   assert_lacks "native launch execs its client and cannot return to a shell" "$(cat "$TEST_ROOT/tmux-cmd.log")" "shell-remains"
   line=$(eval "$a"; tmux_cmd wt-test "" "" reinit)
   : >"$TEST_ROOT/tmux-cmd.log"
   env PATH="$fake:$PATH" TMUX_CMD_LOG="$TEST_ROOT/tmux-cmd.log" \
-    CMUX_TUI_SOCKET=/tmp/native CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
+    CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa CMUX_TUI_SESSION_ID=session_test CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
     "$WT_BASH" -c "$line"
   assert_lacks "client replacement preserves an older row's cleanup contract" "$(cat "$TEST_ROOT/tmux-cmd.log")" "WT_CMUX_CLOSE_ON_EXIT 1"
   line=$(eval "$a"; tmux_cmd wt-test)
@@ -2323,7 +2340,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=678
+FIXED_ASSERTIONS=684
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:

@@ -112,6 +112,7 @@ workgrove/
 │   ├── .agents/skills/        task-driver, worktree-create, worktree-work, worktree-show, worktree-teardown,
 │   │                          azml-compute
 │   ├── .codex/                config.base.toml, hooks.base.json
+│   ├── .cmuxterm/automations.json  native VM notification rule
 │   └── .config/cmux/cmux.json
 ├── vscode/
 │   ├── settings-snippet.jsonc six keys to paste; Settings Sync owns the rest
@@ -123,12 +124,14 @@ workgrove/
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with a fake gh
 │   ├── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
+│   ├── native-relay-smoke.sh  native VM requests and automation backups with fake cmux
 │   ├── agent-status-smoke.sh  VM status relay and Mac row lifecycle with fake cmux
 │   └── agent-status-linux-smoke.sh  Linux owner gate, heartbeat and Esc watcher
 └── docs/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
     ├── azml-compute.md        Azure ML compute instances over ssh
+    ├── vm-open-relay.md        native VM requests after cmux 0.65
     ├── documentation-style.md the writing rules for docs, agent instructions and comments
     └── ssh-config.example     the Host block a VM alias needs
 ```
@@ -227,6 +230,11 @@ core-setup part to your own file:
   `~/.local/bin/cmux-hook`, and creates the file if you have none. It appends the entry last, so any hook of
   yours that suppresses a notification still runs first. The merge is keyed on the entry's `id`, so a rerun
   changes nothing. `schemaVersion` and every other key stay as they are.
+
+- **`~/.cmuxterm/automations.json`:** On the Mac, `install.sh` adds the `wt-native-relay` rule for native VM requests.
+  It preserves existing rules and backs up the file before replacement.
+  Run `cmux automation reload` after installation.
+  See [VM requests after cmux 0.65](docs/vm-open-relay.md) for the transport changes and existing-row recovery.
 
 A running cmux does not read `cmux.json` again. So after the merge, or after you paste the JSON yourself (see
 below), run `cmux reload-config` or relaunch cmux.
@@ -329,7 +337,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 858 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 864 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -395,6 +403,9 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
   - Denied: a body file outside the repository, and `--template`.
   - Denied: a remote whose push URL leaves github.com, including when `wt pr` would push through that remote.
   - `settings.base.json` wires the hook and carries no rule that would override it.
+- **`bash test/native-relay-smoke.sh`** checks native VM requests, tmux identity, notification validation, and automation backups.
+  It uses a scratch home and fake commands.
+  It loads only the automation merge function; it does not run `install.sh`.
 - **`bash test/agent-status-smoke.sh`** checks the VM lifecycle relay and the Mac row status handler with a fake
   cmux. It covers Running, Idle, clear, interruption, delayed events, stale-status expiry, and failed
   self-teardown cleanup. It needs no VM.
