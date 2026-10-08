@@ -146,17 +146,17 @@ wt_host() { # this VM's alias in the Mac's ~/.ssh/config
 
 # How to reach the Mac's cmux: use the identity of this pane, but let the tmux session environment override
 # it. On every attach, cmux rebinds the identity in the session environment, and ~/.tmux.conf's
-# update-environment line is what carries it there. Read all six variables, because cmux authorizes a
+# update-environment line carries the TCP identity there. Read every relay variable, because cmux authorizes a
 # relayed request against the SURFACE and the WORKSPACE in the environment. After cmux reconnects the row,
 # it refuses, with remote_relay_surface_denied, a pane that holds the ids of the connection that started
 # the pane. Only the session's environment is rewritten, never a pane's own. So re-read these at call time
 # and hand them to the cmux child explicitly; do not let it inherit them.
-# bin/agent-notify uses the same precedence over the same list.
-RELAY_VARS="CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID"
+# bin/agent-notify uses the same precedence for the TCP relay variables.
+RELAY_VARS="CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID"
 RELAY_SOCKET=""; RELAY_WS=""; RELAY_IDENT=()
 relay_env() { # sets RELAY_SOCKET, RELAY_WS and RELAY_IDENT; non-zero when this session has no relay socket
   local s="" n v t
-  RELAY_IDENT=(); RELAY_SOCKET=""; RELAY_WS=""
+  RELAY_IDENT=(); RELAY_SOCKET=""; RELAY_WS=""; RELAY_TUI_SOCKET=""; RELAY_TUI_TERMINAL=""
   if [[ -n "${TMUX:-}" ]] && have tmux; then s=$(tmux display-message -p '#S' 2>/dev/null || true); fi
   for n in $RELAY_VARS; do          # unquoted on purpose: RELAY_VARS is a word list, not one value
     v="${!n:-}"
@@ -169,8 +169,12 @@ relay_env() { # sets RELAY_SOCKET, RELAY_WS and RELAY_IDENT; non-zero when this 
     case "$n" in
       CMUX_SOCKET_PATH) RELAY_SOCKET="$v" ;;
       CMUX_WORKSPACE_ID) RELAY_WS="$v" ;;
+      CMUX_TUI_SOCKET) RELAY_TUI_SOCKET="$v" ;;
+      CMUX_TUI_TERMINAL_ID) RELAY_TUI_TERMINAL="$v" ;;
     esac
   done
+  # Native SSH rows send notifications through the VM's cmux-tui daemon.
+  [[ $RELAY_TUI_SOCKET == /* && $RELAY_TUI_TERMINAL =~ ^term_[a-f0-9]{32}$ ]] && return 0
   [[ "$RELAY_SOCKET" == *:[0-9]* ]]
 }
 
@@ -182,10 +186,22 @@ hook_ok_repo() { # both relayed bodies carry $REPO (wt-open sends a path inside 
 }
 
 notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths with spaces survive
-  local title="$1" args=() ws=() c body; shift
+  local title="$1" args=() ws=() c body request_id; shift
   while [[ $# -gt 1 ]]; do args+=(--arg "$1" "$2"); shift 2; done
   body=$(jq -cn "${args[@]+"${args[@]}"}" '$ARGS.named')
   relay_env || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
+  if [[ $RELAY_TUI_SOCKET == /* && $RELAY_TUI_TERMINAL =~ ^term_[a-f0-9]{32}$ ]]; then
+    c=$(command -v cmux-tui || true)
+    [[ -x $c ]] || { warn "cmux-tui CLI not found here; run the line below on the Mac"; return 1; }
+    # cmux suppresses identical terminal/title/body content for five seconds, regardless of notification ID.
+    request_id=$(LC_ALL=C od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    [[ $request_id =~ ^[a-f0-9]{32}$ ]] || { warn "cannot create a native request ID; run the line below on the Mac"; return 1; }
+    body=$(printf '%s' "$body" | jq -c --arg id "$request_id" '. + {request_id:$id}') || return 1
+    # Native terminal IDs differ from the Mac's workspace UUIDs. Do not pass --workspace.
+    env -u CMUX_SOCKET "${RELAY_IDENT[@]}" "$c" --socket "$RELAY_TUI_SOCKET" notify --surface "$RELAY_TUI_TERMINAL" --title "$title" --body "$body" >/dev/null 2>&1 \
+      || { warn "cmux-tui notify failed; run the line below on the Mac"; return 1; }
+    return 0
+  fi
   c=$(cmux_bin) || { warn "cmux CLI not found here; run the line below on the Mac"; return 1; }
   # --workspace is a second safeguard, not the mechanism. On cmux 0.64, --workspace does not authorize the
   # request and does not change the row that cmux records it against (measured). Both come from the
@@ -1428,6 +1444,7 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
   # So an attach from that shell would mark them removed in the session and silence `cmux notify` there.
   # Therefore, when the shell has none, the line takes each variable from the session (the row's old relay
   # port stays bound to the row). It sets each one only when it is non-empty.
+  # A native attachment clears TCP values. A TCP attachment clears native values to override stale panes.
   # A session that you may also be in yourself (the VM shell, a repo shell) gets "shared" instead. Then the
   # row joins your clients and does not evict them, and it leaves their relay socket as it is.
   # bin/cmux-hook mirrors this function; keep the two byte-for-byte.
@@ -1439,7 +1456,12 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
   if [[ "${3:-}" == shared ]]; then
     printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux attach -t '=%s'" "$1" "$run" "$1"
   else
-    printf "tmux new-session -d -s '%s' %s 2>/dev/null; [ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; if [ -n \"\$CMUX_TUI_SOCKET\" ]; then %sexec tmux attach -d -t '=%s'; fi; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1" "$1" "$native_mark" "$1" "$1"
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; " "$1" "$run"
+    # Bind the current transport before reading the old session's identity.
+    printf "if [ -n \"\$CMUX_TUI_SOCKET\" ]; then for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export \"\$v=\"; tmux set-environment -t '=%s' \"\$v\" ''; done; " "$1"
+    printf "for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=%s' \"\$v\" \"\$(printenv \"\$v\")\"; done; %sexec tmux attach -d -t '=%s'; fi; " "$1" "$native_mark" "$1"
+    printf "[ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; " "$1" "$1" "$1" "$1"
+    printf "for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do export \"\$v=\"; tmux set-environment -t '=%s' \"\$v\" ''; done; tmux attach -d -t '=%s'" "$1" "$1"
   fi
 }
 
