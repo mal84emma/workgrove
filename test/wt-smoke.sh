@@ -1447,7 +1447,7 @@ ROWS
   {"id":"workspace:1","title":"$id:oldtaken","description":"@local","current_directory":"$REPOS_DIR"}
 ]}
 ROWS
-  assert_wt_fails 1 "row 'oldtaken @local · $id' already belongs to" new oldtaken --no-workspace -r "$r"
+  assert_wt_fails 1 "row '$id:oldtaken @local' already belongs to" new oldtaken --no-workspace -r "$r"
   assert_gone "…and refuses before it makes anything" "$r/.worktrees/oldtaken"
 
   # Two rows share a title, and only the host tells them apart. With no host asked for, the local row
@@ -1588,6 +1588,44 @@ ROWS
   assert_wt_ok "wt attach oldmeta" attach oldmeta -r "$r"
   assert_has "…opens a row with the new title" "$(cat "$CMUX_LOG")" "workspace create --name oldmeta --description @local · $id --cwd"
   assert_meta "$r" oldmeta title oldmeta
+  # A row with the old title is this repo's, whatever its second line says.
+  assert_wt_ok "wt new oldnote" new oldnote --no-workspace -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"oldnote-row","title":"$id:oldnote","description":"@local · my note","current_directory":"$r/.worktrees/oldnote"}]}
+ROWS
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt rm oldnote" rm oldnote -r "$r"
+  assert_has "…closes the row with the old title and an edited second line" "$(cat "$CMUX_LOG")" "workspace close oldnote-row"
+
+  # The user can edit or clear a row's second line in cmux. Then no lookup names the row. So wt rm checks each
+  # row with the task's title whose second line wt did not write, and refuses while an agent runs in one.
+  # A second line that names another repo is that repo's row, so wt rm does not check it.
+  stub_cmux alive
+  assert_wt_ok "wt new edited" new edited --no-workspace -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[
+  {"id":"other-repo-row","title":"edited","description":"@local · $id2","current_directory":"$r2"},
+  {"id":"edited-row","title":"edited","description":"@local · $id (waiting on review)","current_directory":"$r/.worktrees/edited"}
+]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=1")
+  assert_wt_fails 1 "an agent is running in cmux row edited-row" rm edited --force -r "$r"
+  assert_dir "…and keeps the worktree" "$r/.worktrees/edited"
+  # An agent that removes its own task closes its own row, as it does when the second line is intact.
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=edited-row" "CMUX_STUB_AGENTS=1")
+  : >"$CMUX_LOG"
+  assert_wt_ok "an agent removes its task from a row with an edited second line" rm edited -r "$r"
+  assert_has "…and closes its own row" "$(cat "$CMUX_LOG")" "workspace close edited-row --force"
+  # With no agent in it, a row with a cleared second line stays open, because nothing shows whose row it is.
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0")
+  assert_wt_ok "wt new cleared" new cleared --no-workspace -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"cleared-row","title":"cleared","description":"","current_directory":"$r/.worktrees/cleared"}]}
+ROWS
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt rm cleared" rm cleared -r "$r"
+  assert_lacks "…and leaves the row open" "$(cat "$CMUX_LOG")" "workspace close"
+  WT_RELAY_ENV=()
 
   # A sandbox can block the cmux socket after Git removes the worktree.
   stub_cmux alive
@@ -2444,7 +2482,7 @@ FIXED_ASSERTIONS=686
 #     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
 #   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
 #   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=211
+DARWIN_ASSERTIONS=223
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {

@@ -24,8 +24,10 @@ UNAME
 # that prints no workspace ref; the row that the create adds shows up in the next list. "no-ref-blind" is
 # "no-ref" with a row list that fails until the create, so wt has no list of the rows from before it.
 # "no-ref-own" has the user's own row with the task's title and no repo, and a create that prints no ref.
-# "race" lists no row the first time and this task's row after that. "tag-fail" and "race" make every
-# description write fail.
+# "no-ref-race" has no rows before the create; after it, the list also has another repo's row that appeared
+# meanwhile. "race" lists no row the first time and this task's row after that. "tag-fail" and "race" make
+# every description write fail. As in cmux 0.65, a close without --force fails, because each row here runs
+# the ssh session that wt started in it.
 cat >"$TEST_ROOT/local/bin/cmux" <<'CMUX'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CMUX_LOG"
@@ -33,7 +35,10 @@ row() { printf '{"id":"%s","title":"%s","description":"%s","remote":{"enabled":t
 case "$1" in
   ping) [ "$CMUX_MODE" != down ] ;;
   list-windows) ;;
-  workspace) case "$CMUX_MODE" in
+  workspace) if [ "$2" = close ] && [ "${4:-}" != --force ]; then
+               echo 'Error: confirmation_required: Workspace has a running process; retry with --force' >&2; exit 1
+             fi
+             case "$CMUX_MODE" in
                existing) printf '{"workspaces":[%s]}\n' "$(row workspace:123 task '@fakevm · repo')" ;;
                legacy) printf '{"workspaces":[%s]}\n' "$(row workspace:123 repo:task @fakevm)" ;;
                other-repo) printf '{"workspaces":[%s]}\n' "$(row other-row task '@fakevm · other')" ;;
@@ -48,6 +53,10 @@ case "$1" in
                              printf '{"workspaces":[%s,%s]}\n' "$(row user-row task '')" \
                                '{"id":"new-row","title":"task","remote":{"enabled":true,"destination":"fakevm"}}'
                            else printf '{"workspaces":[%s]}\n' "$(row user-row task '')"; fi ;;
+               no-ref-race) if [ -e "$CMUX_LOG.created" ]; then
+                              printf '{"workspaces":[%s,%s]}\n' "$(row other-row task '@fakevm · other')" \
+                                '{"id":"new-row","title":"task","remote":{"enabled":true,"destination":"fakevm"}}'
+                            else printf '{"workspaces":[]}\n'; fi ;;
                race) if [ -e "$CMUX_LOG.listed" ]; then printf '{"workspaces":[%s]}\n' "$(row race-row task '@fakevm · repo')"
                      else : >"$CMUX_LOG.listed"; printf '{"workspaces":[]}\n'; fi ;;
                *) printf '{"workspaces":[]}\n' ;;
@@ -292,6 +301,14 @@ run_wt wt-demo claude
 check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'user-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to an older row with the same title'
 rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
 
+# A row of another repo that appeared during the create is not in the list from before it. Its description
+# names its repo, so it is still not the new one.
+CMUX_MODE=no-ref-race
+: >"$TEST_ROOT/cmux.log"
+run_wt wt-demo claude
+check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to a row of another repo that appeared during the create'
+rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
+
 # With no list from before the create, any row could look new. So wt does not guess, and writes no description.
 CMUX_MODE=no-ref-blind
 : >"$TEST_ROOT/cmux.log"
@@ -304,7 +321,7 @@ rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
 CMUX_MODE=tag-fail
 : >"$TEST_ROOT/cmux.log"
 run_wt wt-demo claude
-check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'so wt closed that row'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && grep -qxF -- 'workspace close workspace:123' "$TEST_ROOT/cmux.log" && echo yes)" 'a new row without its description was left open'
+check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'so wt closed that row'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && grep -qxF -- 'workspace close workspace:123 --force' "$TEST_ROOT/cmux.log" && echo yes)" 'a new row without its description was left open'
 rm "$TEST_ROOT/remote-new"
 # A shell row has no repo, and a lookup finds it by its title and host. So a failed write leaves it open.
 : >"$TEST_ROOT/cmux.log"
@@ -344,4 +361,4 @@ check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task
 check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex && $(jq -r .model "$SCRATCH_REPO/.git/wt/task.json") == gpt-5.3-codex ]] && echo yes)" 'interrupted setup lost brief, agent or model choice'
 end_scenario
 
-lib_summary 39
+lib_summary 40

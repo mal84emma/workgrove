@@ -125,7 +125,7 @@ status_sweep() { # a detached expiry may lose its cmux ancestry, so later hook c
     (( DEADLINE - $(date +%s) > 2 )) || break
   done
 }
-WS_JSON=""; WS_RC=""
+WS_JSON=""; WS_RC=""; WS_FULL=""
 ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in every window. The snapshot is
             # in $WS_JSON, and its status is in $WS_RC.
             # Both queries below used to make their own capped call and pipe it straight into jq. That
@@ -143,14 +143,19 @@ ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in ever
             # opening a window renumbers the others. The uuid stays the same.
   [[ ${1:-} == fresh ]] && WS_RC=""       # the post-create lookup wants the list as it is now, not as it was
   [[ -n $WS_RC ]] && return "$WS_RC"
-  local wins w out docs="" rc=0
+  # WS_FULL is 1 only when every window's list arrived. The fallback below and a window that printed nothing
+  # can leave rows out, which matters to attach_row's new_row: an older row that the list missed looks new.
+  local wins w out docs="" rc=0 full=1
   wins=$(capped "$CMUX" list-windows 2>/dev/null) || wins=""      # cannot enumerate: the fallback below stands in
   wins=$(printf '%s\n' "$wins" | awk '{print ($1 == "*" ? $3 : $2)}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}') || wins=""
+  [[ -n $wins ]] || full=0
   for w in $wins; do
     out=$(capped "$CMUX" workspace list --json --window "$w" 2>/dev/null); rc=$?
     [[ $rc -eq 0 ]] || break               # a window whose list timed out must not pass for one holding no rows
+    [[ -n ${out//[[:space:]]/} ]] || full=0
     docs="$docs$out"
   done
+  WS_FULL=$full
   # When this enumerates nothing, it falls back to the single-window call that was here before. That
   # happens with an older cmux that has no list-windows, or with output that this could not parse. So
   # such a cmux keeps the reach that it had, and does not lose the hook.
@@ -180,10 +185,11 @@ ROW_JQ='
   def on_host($h; $sep): if $h == "" then ((.remote.enabled // false) | not)
     else ((.remote.enabled // false) and ((.remote.destination // "") == $h or (desc($sep)[0] // "") == "@" + $h)) end;
   def task_row($t; $r; $h; $sep): on_host($h; $sep)
-    and ((desc($sep)[1:] | join($sep)) as $dr
-         | (.title == $t and $dr == $r) or ($r != "" and .title == $r + ":" + $t and ($dr == "" or $dr == $r)));
+    and ((.title == $t and (desc($sep)[1:] | join($sep)) == $r) or ($r != "" and .title == $r + ":" + $t));
   def new_row($t; $h; $ids; $sep): .title == $t and on_host($h; $sep) and (desc($sep) | length < 2)
     and (.id as $i | all($ids[]; . != $i));
+  def unclaimed_row($t; $h; $sep): .title == $t and on_host($h; $sep)
+    and ((.description | if type == "string" then . else "" end) | test("^@[^ ]+(" + $sep + "[A-Za-z0-9-]+)?$") | not);
 '
 row_by_title() { # row_by_title <title> <repo id> <host> — the local row for a VM task; mirrors
                  # cmux_row_field <title> <repo> id <host> in wt
@@ -238,13 +244,13 @@ attach_row() { # attach_row <host> <session> <title> <repo id> <command> — bri
                # returns non-zero and says why in $LOG. That is the same contract as wt, which dies when
                # the select, the create or the new row's description fails. The caller must not quiet a
                # notification that produced nothing.
-  local out ref line before created=0
+  local out ref line before created=0 full
   ws_load || { log "no row list for $3 ($4) on $1: not creating a row on a lookup that failed"; return 1; }
   ref=$(row_by_title "$3" "$4" "$1")
   if [[ -n $ref ]]; then
     capped "$CMUX" workspace select "$ref" >/dev/null 2>&1 || { log "cmux workspace select $ref failed"; return 1; }
   else
-    created=1
+    created=1 full=$WS_FULL
     before=$(printf '%s' "$WS_JSON" | jq -r '(.workspaces? // .)[] | .id // empty' 2>/dev/null)
     line=$(tmux_cmd "$2" "$5")
     out=$(capped "$CMUX" ssh "$1" --name "$3" --no-focus --command "$line" 2>&1) ||
@@ -252,12 +258,17 @@ attach_row() { # attach_row <host> <session> <title> <repo id> <command> — bri
     ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1)
     if [[ -z $ref ]]; then                 # no workspace:N in the output: the row list lags ~1s behind create.
       # The new row has no description yet, so a lookup by repo cannot find it. Take the row that new_row
-      # names. One look back is enough, now that giving up is reported.
-      sleep 1
-      if ws_load fresh; then
-        ref=$(printf '%s' "$WS_JSON" | jq -r --arg t "$3" --arg h "$1" --arg before "$before" --arg sep "$ROW_SEP" "$ROW_JQ"'
-          first((.workspaces? // .)[] | select(new_row($t; $h; $before | split("\n"); $sep)) | .id // empty) // empty' \
-          2>/dev/null)
+      # names. That needs every row from before the create, as in wt's tag_row. One look back is enough, now
+      # that giving up is reported.
+      if [[ $full != 1 ]]; then
+        out="$out (the row list from before the create was not complete)"
+      else
+        sleep 1
+        if ws_load fresh; then
+          ref=$(printf '%s' "$WS_JSON" | jq -r --arg t "$3" --arg h "$1" --arg before "$before" --arg sep "$ROW_SEP" "$ROW_JQ"'
+            first((.workspaces? // .)[] | select(new_row($t; $h; $before | split("\n"); $sep)) | .id // empty) // empty' \
+            2>/dev/null)
+        fi
       fi
     fi
     [[ -n $ref ]] || {
