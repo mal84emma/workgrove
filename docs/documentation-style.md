@@ -181,7 +181,7 @@ When you edit an agent instruction file:
 |---|---|
 | task | One unit of work: one git worktree at `<repo>/.worktrees/<name>` on branch `wt/<name>`, with one cmux row |
 | row | One cmux workspace, shown as one entry in the cmux sidebar. Say "workspace" only in cmux's own names, such as `cmux workspace list` and `--no-workspace`. |
-| second line | The description line of a row in the sidebar. It reads `@local` or `@<host>`. |
+| second line | The description line of a row in the sidebar. It reads `@<host> · <repo>` for a task row and `@<host>` for other rows. `<host>` is `local` or the VM's alias. |
 | main checkout | The primary working tree of a repository, not a worktree |
 | base branch, base ref | What a task branch starts from and is compared with |
 | brief | The task prompt that the agent gets (`-p`, `--prompt-stdin`) |

@@ -159,7 +159,7 @@ The approved forms are:
 - **Branches:** `wt/<name>`.
 - **Base branch:** the default branch of the repository, unless you pass `--head` or `-b <ref>` to `wt new`. To find this base, `wt` uses `origin/HEAD`. It falls back to `origin/main` or `origin/master`, then a local `main`/`master`, then the current branch.
 - **Names:** short kebab-case slugs that describe the task. Do not use `.` in a name.
-- **Rows:** each task has a cmux row titled `<repo>:<name>`. The second line of the row reads `@local` or `@<host>`.
+- **Rows:** each task has a cmux row titled `<name>`. The second line of the row reads `@<host> · <repo>`, for example `@local · workgrove`.
 - **tmux sessions:** on a VM, each task also has a tmux session `wt-<repo>-<name>`.
 - **Lookup:** `wt show <name>` reports the row and the tmux session.
 - **Per-repo hooks:** `.wt-include` lists the ignored files to copy in. `.wt-setup` runs in each new worktree.
@@ -172,7 +172,7 @@ The approved forms are:
 - They run inside a VM session.
 - You send them from the Mac to a VM as `wt -H <vm> <sub> …`. In this form, `show`, `rm`, `path`, `open`, and `attach` need `-r <repo>`.
 
-The second line of every row reads `@local` or `@<host>`, so the sidebar always shows where a session runs.
+The second line of every row starts with `@local` or `@<host>`, so the sidebar always shows where a session runs.
 
 ### Choose a VM by hardware
 

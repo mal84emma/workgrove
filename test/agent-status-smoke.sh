@@ -22,9 +22,14 @@ printf '%s\n' "$*" >> "$CMUX_LOG"
 [[ -n ${CLOSE_ORDER_LOG:-} && $1 == workspace && ${2:-} == close ]] && printf '%s\n' close >> "$CLOSE_ORDER_LOG"
 [[ ${CMUX_FAIL:-} == "$1" ]] && exit 142
 [[ ${CMUX_FAIL_CLOSE:-} == 1 && $1 == workspace && ${2:-} == close ]] && exit 142
+# CMUX_ROWS replaces the rows that `workspace list` prints. After `ssh` with CMUX_SSH_NOREF set, the list
+# also has the row that the create added, and `ssh` prints no workspace ref.
 case $1 in
   list-windows) echo '* 0: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' ;;
-  workspace) echo '{"workspaces":[{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"repo:task","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}]}' ;;
+  workspace) rows=${CMUX_ROWS:-'{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"task","description":"@test-vm · repo","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}'}
+             [[ -e $CMUX_LOG.created ]] && rows+=',{"id":"EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE","title":"task","remote":{"enabled":true,"destination":"test-vm"}}'
+             printf '{"workspaces":[%s]}\n' "$rows" ;;
+  ssh) if [[ -n ${CMUX_SSH_NOREF:-} ]]; then : > "$CMUX_LOG.created"; echo OK; else echo 'OK workspace:77'; fi ;;
   set-status|clear-status|notify) echo OK ;;
 esac
 CMUX
@@ -112,6 +117,19 @@ check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB
 check_contains "$SSH_LOG" 'path task -r /vm/repos/repo'
 check_contains "$SSH_LOG" "test-vm exec tmux kill-session -t '=wt-repo-task'"
 assert_eq 'Mac closes row before stopping tmux' $'close\nkill' "$(cat "$CLOSE_ORDER_LOG")"
+# A row that an older wt titled "<repo>:<name>", with the description "@<host>", is still that task's row.
+: > "$CMUX_LOG"; : > "$SSH_LOG"
+out=$(CMUX_ROWS='{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"repo:task","description":"@test-vm","remote":{"enabled":true,"destination":"test-vm"}}' \
+  close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
+if [[ $out == *'"record":false'* ]]; then pass; else fail 'row-close for a row with the old title was visible'; fi
+check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB --force'
+# The task of another repo with the same name has a row of its own. This row is not that row, so the hook
+# refuses before it asks the VM anything.
+: > "$CMUX_LOG"; : > "$SSH_LOG"
+out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
+if [[ $out != *'"record":false'* ]]; then pass; else fail 'other-repo rejection was hidden'; fi
+check_missing "$CMUX_LOG" 'workspace close'
+check_missing "$SSH_LOG" 'path task -r /vm/repos/other'
 : > "$CMUX_LOG"; : > "$SSH_LOG"
 : > "$REMOTE_TASK_EXISTS"
 out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
@@ -147,6 +165,35 @@ if [[ $out != *'"record":false'* ]]; then pass; else fail 'failed tmux kill was 
 check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB --force'
 check_contains "$OSASCRIPT_LOG" "Run: ssh test-vm tmux kill-session -t '=wt-repo-task'"
 unset SSH_KILL_FAIL
+end_scenario
+
+begin_scenario 'a VM row request finds the row of its own task, or creates one'
+attach_hook() {
+  CMUX_NOTIFICATION_TITLE=wt-attach CMUX_NOTIFICATION_SUBTITLE='' \
+    CMUX_NOTIFICATION_BODY="$1" CMUX_NOTIFICATION_WORKSPACE_ID="$CMUX_WORKSPACE_ID" \
+    bash "$REPO/bin/cmux-hook" </dev/null
+}
+: > "$CMUX_LOG"
+out=$(attach_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
+if [[ $out == *'"desktop":false'* ]]; then pass; else fail 'row request for an open row was not quieted'; fi
+check_contains "$CMUX_LOG" 'workspace select BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
+check_contains "$CMUX_LOG" 'workspace-action --workspace BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB --action set-description --description @test-vm · repo'
+check_missing "$CMUX_LOG" 'ssh test-vm'
+# The same task name in another repo: the open row belongs to "repo", so the hook creates a row for "other".
+: > "$CMUX_LOG"
+out=$(attach_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
+if [[ $out == *'"desktop":false'* ]]; then pass; else fail 'row request for a new row was not quieted'; fi
+check_contains "$CMUX_LOG" 'ssh test-vm --name task --no-focus --command'
+check_contains "$CMUX_LOG" 'workspace-action --workspace workspace:77 --action set-description --description @test-vm · other'
+check_missing "$CMUX_LOG" 'workspace select'
+# When the create prints no workspace ref, the hook describes the row that the create added. The open row of
+# "repo" has the same title on the same host, and it keeps its description.
+: > "$CMUX_LOG"
+out=$(CMUX_SSH_NOREF=1 attach_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
+if [[ $out == *'"desktop":false'* ]]; then pass; else fail 'row request without a ref was not quieted'; fi
+check_contains "$CMUX_LOG" 'workspace-action --workspace EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE --action set-description --description @test-vm · other'
+check_missing "$CMUX_LOG" 'workspace-action --workspace BBBBBBBB'
+rm -f "$CMUX_LOG.created"
 end_scenario
 
 begin_scenario 'Mac Running, Idle, clear and event ordering'
@@ -261,4 +308,4 @@ rm -rf "$XDG_STATE_HOME/cmux-agent-status"
 WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
 if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
 end_scenario
-lib_summary 72
+lib_summary 88

@@ -170,10 +170,25 @@ ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in ever
     *)   log "the cmux row list failed (exit $WS_RC)" ;;
   esac
   return "$WS_RC"; }
-row_by_title() { # the local row for a VM task; mirrors cmux_row_field <title> <field> <host> in wt
+# The row identity, as in wt. A task row's title is <name>, and its description is "@<host> · <repo>".
+# ROW_SEP and ROW_JQ are copies of the ones in bin/wt, which explains them. test/wt-smoke.sh checks that the
+# copies stay identical.
+ROW_SEP=' · '
+# shellcheck disable=SC2016   # a jq program: each $ name is a jq variable
+ROW_JQ='
+  def desc($sep): (.description | if type == "string" then . else "" end) | split($sep);
+  def on_host($h; $sep): if $h == "" then ((.remote.enabled // false) | not)
+    else ((.remote.enabled // false) and ((.remote.destination // "") == $h or (desc($sep)[0] // "") == "@" + $h)) end;
+  def task_row($t; $r; $h; $sep): on_host($h; $sep)
+    and ((desc($sep)[1:] | join($sep)) as $dr
+         | (.title == $t and $dr == $r) or ($r != "" and .title == $r + ":" + $t and ($dr == "" or $dr == $r)));
+'
+row_by_title() { # row_by_title <title> <repo id> <host> — the local row for a VM task; mirrors
+                 # cmux_row_field <title> <repo> id <host> in wt
   ws_load || return                       # callers load first; this is only here so the filter never runs blind
   printf '%s' "$WS_JSON" \
-    | jq -er --arg t "$1" --arg h "$2" 'first((.workspaces? // .)[] | select(.title == $t and .remote.enabled and (((.remote.destination // "") == $h) or ((.description // "") == "@" + $h))) | .id) // empty' 2>/dev/null; }
+    | jq -er --arg t "$1" --arg r "$2" --arg h "$3" --arg sep "$ROW_SEP" "$ROW_JQ"'
+        first((.workspaces? // .)[] | select(task_row($t; $r; $h; $sep)) | .id) // empty' 2>/dev/null; }
 from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifying row is an SSH row to that host.
   # cmux 0.64 reports CMUX_NOTIFICATION_ORIGIN=local for a `cmux ssh` row's own notifications. (Only the old
   # mosh-tmux relay said ssh-relay:<uuid>.) So the row's remote destination is the check that the
@@ -212,30 +227,41 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
     printf "for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do export \"\$v=\"; tmux set-environment -t '=%s' \"\$v\" ''; done; tmux attach -d -t '=%s'" "$1" "$1"
   fi
 }
-attach_row() { # attach_row <host> <session> <title> <command> — bring this task's row forward, or create it
-               # first, then write its description. This mirrors remote_row in wt: one row per title+host.
+attach_row() { # attach_row <host> <session> <title> <repo id> <command> — bring this task's row forward, or
+               # create it first, then write its description. This mirrors remote_row in wt: one row per
+               # title, repo and host.
                # It only selects an existing row and never types into it, because the row's pane may hold
                # an agent that would eat the line.
                # When it reaches no row, it returns non-zero and says why in $LOG. That is the same contract
                # as wt, which dies when the select or the create fails. The caller must not quiet a
                # notification that produced nothing.
-  local out ref line
-  ws_load || { log "no row list for $3 on $1: not creating a row on a lookup that failed"; return 1; }
-  ref=$(row_by_title "$3" "$1")
+  local out ref line before
+  ws_load || { log "no row list for $3 ($4) on $1: not creating a row on a lookup that failed"; return 1; }
+  ref=$(row_by_title "$3" "$4" "$1")
   if [[ -n $ref ]]; then
     capped "$CMUX" workspace select "$ref" >/dev/null 2>&1 || { log "cmux workspace select $ref failed"; return 1; }
   else
-    line=$(tmux_cmd "$2" "$4")
+    before=$(printf '%s' "$WS_JSON" | jq -r '(.workspaces? // .)[] | .id // empty' 2>/dev/null)
+    line=$(tmux_cmd "$2" "$5")
     out=$(capped "$CMUX" ssh "$1" --name "$3" --no-focus --command "$line" 2>&1) ||
       { log "cmux ssh $1 --name $3 failed: $out"; return 1; }
     ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1)
     if [[ -z $ref ]]; then                 # no workspace:N in the output: the row list lags ~1s behind create.
-      sleep 1; ws_load fresh; ref=$(row_by_title "$3" "$1")   # one look back is enough, now that giving up is reported
+      # The new row has no description yet, so a lookup by repo cannot find it. Take the row with this
+      # title on this host that was not in the list before the create. One look back is enough, now that
+      # giving up is reported.
+      sleep 1
+      if ws_load fresh; then
+        ref=$(printf '%s' "$WS_JSON" | jq -r --arg t "$3" --arg h "$1" --arg before "$before" --arg sep "$ROW_SEP" "$ROW_JQ"'
+          ($before | split("\n")) as $ids
+          | first((.workspaces? // .)[] | select(.title == $t and on_host($h; $sep)) | .id // empty
+                  | select(. as $i | all($ids[]; . != $i))) // empty' 2>/dev/null)
+      fi
     fi
-    [[ -n $ref ]] || { log "cmux reported no row for $3 on $1: $out"; return 1; }
+    [[ -n $ref ]] || { log "cmux reported no row for $3 ($4) on $1: $out"; return 1; }
   fi
-  capped "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1" ||
-    log "set-description @$1 failed for $ref"   # cosmetic only: the row is there, so the jump did happen
+  capped "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1$ROW_SEP$4" ||
+    log "set-description @$1$ROW_SEP$4 failed for $ref"   # cosmetic only: the row is there, so the jump did happen
   return 0; }
 case $mode in
   --event)
@@ -295,7 +321,7 @@ case $t in
   wt-attach) # body: {"host":…,"repo":…,"task":…}
     h=$(field host || true); r=$(field repo || true); n=$(field task || true)
     if valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
-      id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'); printf -v q '%q' "$r"   # mirrors valid_name / repo_id / row_title / wt_session in wt
+      id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'); printf -v q '%q' "$r"   # mirrors valid_name / repo_id / row_tag / wt_session in wt
       # Synchronous on purpose: cmux authorizes the socket by process ancestry. The moment this hook
       # exits, a backgrounded child is reparented away from the cmux tree. The app then refuses that
       # child ("Access denied - only processes started inside cmux can connect"). Creating the row costs
@@ -303,7 +329,7 @@ case $t in
       # Quiet only on success: a notification whose jump failed keeps its banner, sound and unread mark.
       # When this prints nothing at all, cmux reads that as "leave the effects alone". $LOG says what
       # went wrong.
-      if attach_row "$h" "wt-$id-$n" "$id:$n" "WT_STATUS_BRIDGE=1 \"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
+      if attach_row "$h" "wt-$id-$n" "$n" "$id" "WT_STATUS_BRIDGE=1 \"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
         quiet
       fi
     fi ;;
@@ -313,11 +339,11 @@ case $t in
     if valid_host "$h" && known_host "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] &&
        from_row_on_host "$ws" "$h"; then
       id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-')
-      if [[ $(row_by_title "$id:$n" "$h") == "$ws" ]]; then
+      if [[ $(row_by_title "$n" "$id" "$h") == "$ws" ]]; then
         printf -v q '%q' "$r"; rc=0
         gone=$(capped ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "exec \"\$HOME/.local/bin/wt\" path $n -r $q" 2>&1) || rc=$?
         if [[ $rc -ne 1 || $gone != *"no worktree named '$n' in $r"* ]]; then
-          log "ignored wt-close for $id:$n on $h: could not confirm its worktree is gone"
+          log "ignored wt-close for task $n of $id on $h: could not confirm its worktree is gone"
         elif capped "$CMUX" workspace close "$ws" --force >/dev/null 2>&1; then
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
@@ -331,8 +357,8 @@ case $t in
                 -e 'end run' "Run: ssh $h tmux kill-session -t '=wt-$id-$n'" >/dev/null 2>&1 || true
             fi
           fi
-        else log "could not close row $ws for $id:$n on $h"; fi
-      else log "ignored wt-close for a row other than $id:$n on $h"; fi
+        else log "could not close row $ws for task $n of $id on $h"; fi
+      else log "ignored wt-close for a row other than that of task $n of $id on $h"; fi
     else log "ignored invalid wt-close for workspace $ws"; fi ;;
 esac
 [[ $mode == hook ]] && status_sweep

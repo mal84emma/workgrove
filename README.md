@@ -19,18 +19,26 @@ VS Code opens only when you ask for it, through `wt open`.
 This section describes how `wt` names and finds rows, where it keeps task data, and which repos it uses.
 It also covers per-repo hooks and the logins that you supply.
 
-- **Identity.** Each row that a task owns has the title `<repo>:<name>`.
+- **Identity.** Each row that a task owns has the task name `<name>` as its title.
   Each kind of row has its own title:
 
   | Row title | What the row holds |
   |---|---|
-  | `<repo>:<name>` | a task |
+  | `<name>` | a task |
   | `<repo> shell` | a shell in a repo |
   | `shell` | a shell on a VM |
   | `driver` | the driver session, that is, the agent session that starts and watches tasks |
 
-  The description line of a task's row shows as the **second line** of its sidebar entry.
-  The second line reads `@local` or `@<host>`, so you always know where a session runs.
+  The description line of a row shows as the **second line** of its sidebar entry.
+  On a task row, the second line reads `@<host> · <repo>`, for example `@local · workgrove` or `@<vm> · workgrove`.
+  The separator is a space, a middle dot (U+00B7), and a space.
+  On the other rows, the second line reads `@local` or `@<host>`.
+  So you always know where a session runs, and which repo a task belongs to.
+
+  Two repos can have tasks with the same name. Their rows have the same title, and the repo on the second line tells them apart.
+  So `wt` and `bin/cmux-hook` find a task's row by its title, its repo, and its host.
+  An older `wt` gave task rows the title `<repo>:<name>` and the second line `@<host>`.
+  `wt` and `bin/cmux-hook` still find such a row, and the row keeps its old title until you close it.
 
   A task on a VM also has the tmux session `wt-<repo>-<name>`. This session keeps the agent alive across disconnects.
   The row itself is only a plain `cmux ssh` row, so the tmux session, not the row, gives this persistence.
@@ -47,7 +55,7 @@ It also covers per-repo hooks and the logins that you supply.
   - *What broke before the fix:*
     - `wt rm` removed the worktree and left the row behind.
     - `wt -H <vm> attach` made a second row next to the row that was already there.
-    - `wt new` did not detect a row title that another repo already used.
+    - `wt new` did not detect a task row that another repo already used.
     - The Mac hook could not prove that a VM's `wt open` came from that VM, so it did nothing.
   - *The evidence:* Measured on cmux 0.64, a row keeps its id, its title and its `workspace:N` ref when it moves.
     Every command that acts on a row (select, send, close, set-description) finds the row by id in any window.
@@ -337,7 +345,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 864 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 892 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -355,6 +363,8 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
   - That a failed tmux session query keeps the worktree, and a failed cmux row close reports its error.
   - That unreadable or malformed cmux lists and failed tmux agent probes cannot permit removal.
   - That a row in a second cmux window is still found and still closed.
+  - That a task row is found by its title, its repo, and its host. Two repos can have tasks with the same name,
+    and each command acts only on the row of its own repo. A row with the old `<repo>:<name>` title is still found.
   - That a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its
     mapped port. The port can be on any local address, and the connection must not be from the Mac's current
     address.
@@ -364,14 +374,14 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     - The VM lists no tmux client on the session.
   - That client replacement requires a fresh status message visible in that row.
   - That `bin/wt` parses under `/bin/bash` (the 3.2 that a fresh Mac ships).
-  - That `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists, and on
-    which field of `cmux list-windows` is a window.
+  - That `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists, on
+    which field of `cmux list-windows` is a window, and on which row a lookup names.
   - The last group is different: it tests the `rm -rf` of `test/lib.sh` itself. No real run reaches that
     `rm -rf`, for two reasons. Both suites build their scratch root with `mktemp -d`. They also refuse a
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 678 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 686 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -933,7 +943,7 @@ and then Idle when the turn ends.
   a first line that sources `~/.zshenv`. For the usual prompt, type `zsh` inside the row's tmux.
 - The VM paths are implemented and documented here as designed. But they are the newest part of this
   setup. The first time you use one, make sure that:
-  - The row appears with its `@<host>` second line.
+  - The row appears with `@<host> · <repo>` on its second line.
   - `wt -H <vm> show -r <repo> <name>` reports the tmux session.
 
 ## Keeping machines in sync

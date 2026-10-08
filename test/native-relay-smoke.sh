@@ -21,7 +21,7 @@ cat > "$TEST_ROOT/bin/cmux" <<'CMUX'
 printf '%s\n' "$*" >> "$CMUX_LOG"
 case "$1 ${2:-}" in
   'list-windows ') echo '* 0: CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC' ;;
-  'workspace list') jq -cn --arg w "$ROW_ID" --arg b "$BACKEND" '{workspaces:[{id:$w,title:"repo:task",remote:{enabled:true,destination:"test-vm",backend:$b}}]}' ;;
+  'workspace list') jq -cn --arg w "$ROW_ID" --arg b "$BACKEND" '{workspaces:[{id:$w,title:"task",description:"@test-vm · repo",remote:{enabled:true,destination:"test-vm",backend:$b}}]}' ;;
   '--json list-notifications') cat "$RECORD_FILE" ;;
   'ssh test-vm') echo workspace:99 ;;
 esac
@@ -185,7 +185,8 @@ end_scenario
 begin_scenario 'native attach and close preserve the existing control checks'
 record wt-attach '{"host":"test-vm","repo":"/vm/repos/child","task":"child"}'
 hook >/dev/null
-has "$CMUX_LOG" 'ssh test-vm --name child:child --no-focus'
+has "$CMUX_LOG" 'ssh test-vm --name child --no-focus'
+has "$CMUX_LOG" 'workspace-action --workspace workspace:99 --action set-description --description @test-vm · child'
 lacks "$CMUX_LOG" 'workspace select'
 has "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
 record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
@@ -253,4 +254,4 @@ rm "$config"
 hook_cmux_automation >/dev/null
 if [[ ! -e $config ]]; then pass; else fail 'Linux installed Mac automation'; fi
 end_scenario
-lib_summary 46
+lib_summary 47
