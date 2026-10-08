@@ -14,7 +14,7 @@ It stops before sending a notification:
 wt: no cmux relay socket in this session; run the line below on the Mac
 ```
 
-The VM at `ci-mal-c4-m14` had an older installed `wt`, from workgrove commit `c58eebfa69ff0fc1073e224100e020fc85ee20f0`.
+The VM at `<test-vm>` had an older installed `wt`, from workgrove commit `c58eebfa69ff0fc1073e224100e020fc85ee20f0`.
 The task branch had the same TCP-only sender check.
 The installed VM script's SHA-256 was `d395fd696834e05c0dd1f3882555214be6cc22c1e7a0286d6e502c368ae98279`.
 
@@ -76,20 +76,23 @@ Native requests enter the notification store before the automation runs.
 A banner or sound can occur before the handler dismisses the request.
 The automation cannot change those effects before delivery.
 
-## Verification on ci-mal-c4-m14
+## Verification on the test VM
+
+Machine names and runtime paths below use privacy placeholders.
+Replace the placeholders before running the commands.
 
 Both commands passed with temporary installed fixes:
 
 ```bash
-wt -H ci-mal-c4-m14 open -r /home/azureuser/wt-demo relay-probe
+wt -H <test-vm> open -r <repo> relay-probe
 # Inside the VM task row:
-wt open relay-probe -r /home/azureuser/wt-demo
+wt open relay-probe -r <repo>
 ```
 
 VS Code's status output reported the remote window:
 
 ```text
-window [4] (relay-probe [SSH: ci-mal-c4-m14] — SSH: ci-mal-c4-m14)
+window [4] (relay-probe [SSH: <test-vm>] — SSH: <test-vm>)
 ```
 
 A VM-side `wt new` created a second task through `wt-attach`.
