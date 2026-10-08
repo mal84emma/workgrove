@@ -137,7 +137,7 @@ ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in ever
   [[ -n $WS_RC ]] && return "$WS_RC"
   local wins w out docs="" rc=0
   wins=$(capped "$CMUX" list-windows 2>/dev/null) || wins=""      # cannot enumerate: the fallback below stands in
-  wins=$(printf '%s\n' "$wins" | awk '{print $2}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}') || wins=""
+  wins=$(printf '%s\n' "$wins" | awk '{print ($1 == "*" ? $3 : $2)}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}') || wins=""
   for w in $wins; do
     out=$(capped "$CMUX" workspace list --json --window "$w" 2>/dev/null); rc=$?
     [[ $rc -eq 0 ]] || break               # a window whose list timed out must not pass for one holding no rows
@@ -182,18 +182,21 @@ from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifyin
   ws_load || return 1
   printf '%s' "$WS_JSON" \
     | jq -e --arg w "$1" --arg h "$2" 'any((.workspaces? // .)[]; .id == $w and .remote.enabled and (.remote.destination // "") == $h)' >/dev/null 2>&1; }
-tmux_cmd() { # tmux_cmd <session> [command] [shared]
+tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
   # The body below mirrors tmux_cmd in bin/wt byte for byte, although the hook only ever needs the task form.
   # This command must print nothing:
   # diff <(sed -n '/^tmux_cmd()/,/^}/p' bin/wt | grep -v '^ *#') <(sed -n '/^tmux_cmd()/,/^}/p' bin/cmux-hook |
   # grep -v '^ *#')
   # Comments may differ between the two. Executable lines may not.
-  local run=""
+  # Native cmux closes a row when its terminal exits. Exec the tmux client so self-removal ends that terminal.
+  local run="" native_mark=""
+  # Replacing an old client does not replace its parent shell. Preserve its original cleanup contract.
+  [[ ${4:-} == reinit ]] || native_mark="tmux set-environment -t '=$1' WT_CMUX_CLOSE_ON_EXIT 1; "
   [[ -n "${2:-}" ]] && printf -v run '%q' "$2; exec bash"
   if [[ "${3:-}" == shared ]]; then
     printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux attach -t '=%s'" "$1" "$run" "$1"
   else
-    printf "tmux new-session -d -s '%s' %s 2>/dev/null; [ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1" "$1" "$1"
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; [ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; if [ -n \"\$CMUX_TUI_SOCKET\" ]; then %sexec tmux attach -d -t '=%s'; fi; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1" "$1" "$native_mark" "$1" "$1"
   fi
 }
 attach_row() { # attach_row <host> <session> <title> <command> — bring this task's row forward, or create it
@@ -288,7 +291,7 @@ case $t in
         gone=$(capped ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "exec \"\$HOME/.local/bin/wt\" path $n -r $q" 2>&1) || rc=$?
         if [[ $rc -ne 1 || $gone != *"no worktree named '$n' in $r"* ]]; then
           log "ignored wt-close for $id:$n on $h: could not confirm its worktree is gone"
-        elif capped "$CMUX" workspace close "$ws" >/dev/null 2>&1; then
+        elif capped "$CMUX" workspace close "$ws" --force >/dev/null 2>&1; then
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
           if capped ssh -o BatchMode=yes -o ConnectTimeout=4 "$h" "exec tmux kill-session -t '=wt-$id-$n'" >/dev/null 2>&1; then

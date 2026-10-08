@@ -80,7 +80,10 @@ case "$1" in
         printf '  repo: %s\n  session: wt-repo-task (none)\n' "$REMOTE_REPO" ;;
 esac
 WT
-printf '#!/bin/sh\n[ "$1" != has-session ]\n' >"$TEST_ROOT/remote/.local/bin/tmux"
+cat >"$TEST_ROOT/remote/.local/bin/tmux" <<'TMUX'
+#!/bin/sh
+if [ "$1" = has-session ]; then echo 'no server running on /tmp/fake' >&2; exit 1; fi
+TMUX
 for tool in claude codex; do
   printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/remote/.local/bin/$tool"
 done
@@ -153,6 +156,17 @@ invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
 check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'row: repo:task @fakevm'* ]] && echo yes)" 'plain attach did not recover a never-started task'
 invoke_wt -H fakevm attach --restart-agent -r "$TEST_ROOT/remote/repo" task
 check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'row: repo:task @fakevm'* ]] && echo yes)" 'restart-agent did not recover after row failure'
+cat >"$TEST_ROOT/remote/.local/bin/tmux" <<'TMUX'
+#!/bin/sh
+echo 'error connecting to tmux socket (Operation not permitted)' >&2
+exit 1
+TMUX
+invoke_wt -H fakevm attach --restart-agent -r "$TEST_ROOT/remote/repo" task
+check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cannot check the agent in tmux session'* && -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'restart-agent did not refuse unreadable session status'
+cat >"$TEST_ROOT/remote/.local/bin/tmux" <<'TMUX'
+#!/bin/sh
+if [ "$1" = has-session ]; then echo 'no server running on /tmp/fake' >&2; exit 1; fi
+TMUX
 rm "$TEST_ROOT/remote-new"
 
 # SSH can drop after remote creation but before its output reaches the Mac.
@@ -239,4 +253,4 @@ check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task
 check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex && $(jq -r .model "$SCRATCH_REPO/.git/wt/task.json") == gpt-5.3-codex ]] && echo yes)" 'interrupted setup lost brief, agent or model choice'
 end_scenario
 
-lib_summary 27
+lib_summary 28

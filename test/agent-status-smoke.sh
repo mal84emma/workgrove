@@ -23,7 +23,7 @@ printf '%s\n' "$*" >> "$CMUX_LOG"
 [[ ${CMUX_FAIL:-} == "$1" ]] && exit 142
 [[ ${CMUX_FAIL_CLOSE:-} == 1 && $1 == workspace && ${2:-} == close ]] && exit 142
 case $1 in
-  list-windows) echo 'window:1 AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' ;;
+  list-windows) echo '* 0: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' ;;
   workspace) echo '{"workspaces":[{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"repo:task","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}]}' ;;
   set-status|clear-status|notify) echo OK ;;
 esac
@@ -108,7 +108,7 @@ close_hook() {
 : > "$CMUX_LOG"
 out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
 if [[ $out == *'"record":false'* ]]; then pass; else fail 'row-close control notification was visible'; fi
-check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
+check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB --force'
 check_contains "$SSH_LOG" 'path task -r /vm/repos/repo'
 check_contains "$SSH_LOG" "test-vm exec tmux kill-session -t '=wt-repo-task'"
 assert_eq 'Mac closes row before stopping tmux' $'close\nkill' "$(cat "$CLOSE_ORDER_LOG")"
@@ -144,7 +144,7 @@ unset CMUX_FAIL_CLOSE
 export SSH_KILL_FAIL=1
 out=$(close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
 if [[ $out != *'"record":false'* ]]; then pass; else fail 'failed tmux kill was hidden'; fi
-check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB'
+check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB --force'
 check_contains "$OSASCRIPT_LOG" "Run: ssh test-vm tmux kill-session -t '=wt-repo-task'"
 unset SSH_KILL_FAIL
 end_scenario
