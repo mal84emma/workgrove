@@ -204,7 +204,12 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
   if [[ "${3:-}" == shared ]]; then
     printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux attach -t '=%s'" "$1" "$run" "$1"
   else
-    printf "tmux new-session -d -s '%s' %s 2>/dev/null; [ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; if [ -n \"\$CMUX_TUI_SOCKET\" ]; then for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=%s' \"\$v\" \"\$(printenv \"\$v\")\"; done; %sexec tmux attach -d -t '=%s'; fi; tmux attach -d -t '=%s'" "$1" "$run" "$1" "$1" "$1" "$1" "$1" "$native_mark" "$1" "$1"
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; " "$1" "$run"
+    # Bind the current transport before reading the old session's identity.
+    printf "if [ -n \"\$CMUX_TUI_SOCKET\" ]; then for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export \"\$v=\"; tmux set-environment -t '=%s' \"\$v\" ''; done; " "$1"
+    printf "for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=%s' \"\$v\" \"\$(printenv \"\$v\")\"; done; %sexec tmux attach -d -t '=%s'; fi; " "$1" "$native_mark" "$1"
+    printf "[ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; " "$1" "$1" "$1" "$1"
+    printf "for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do export \"\$v=\"; tmux set-environment -t '=%s' \"\$v\" ''; done; tmux attach -d -t '=%s'" "$1" "$1"
   fi
 }
 attach_row() { # attach_row <host> <session> <title> <command> — bring this task's row forward, or create it

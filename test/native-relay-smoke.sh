@@ -78,8 +78,76 @@ assert_eq 'the old pane identity does not reach the CLI' 0 "$(printf '%s\n' "${R
 rm "$TEST_ROOT/bin/tmux"
 end_scenario
 
+begin_scenario 'reattachment replaces the previous transport and repeated requests survive content suppression'
+eval "$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt")"
+eval "$(sed -n '/^notify_mac()/,/^}/p' "$REPO/bin/wt")"
+cmux_bin() { printf '%s' "$TEST_ROOT/bin/cmux"; }
+warn() { printf '%s\n' "$*" >&2; }
+export RELAY_STATE="$TEST_ROOT/session-env" RELAY_REQUESTS="$TEST_ROOT/requests.jsonl" RELAY_DELIVERED="$TEST_ROOT/delivered.jsonl"
+mkdir -p "$RELAY_STATE"
+cat > "$TEST_ROOT/bin/tmux" <<'TMUX'
+#!/usr/bin/env bash
+case "$1" in
+  display-message) echo task ;;
+  set-environment) printf '%s' "${5:-}" > "$RELAY_STATE/$4" ;;
+  show-environment)
+    [[ -f $RELAY_STATE/$4 ]] && printf '%s=%s\n' "$4" "$(cat "$RELAY_STATE/$4")" ;;
+  attach)
+    # tmux copies update-environment values from the attaching shell after set-environment calls.
+    for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do
+      printf '%s' "${!v:-}" > "$RELAY_STATE/$v"
+    done ;;
+esac
+exit 0
+TMUX
+cat > "$TEST_ROOT/bin/cmux-tui" <<'TUI'
+#!/usr/bin/env bash
+while [[ $# -gt 0 ]]; do
+  case $1 in --title) title=$2; shift ;; --body) body=$2; shift ;; esac
+  shift
+done
+jq -cn --arg t "$title" --argjson b "$body" '{title:$t,body:$b}' >> "$RELAY_REQUESTS"
+# cmux's earlier five-second content gate also returns success for suppressed requests.
+if [[ -f $RELAY_STATE/last-content && $(cat "$RELAY_STATE/last-content") == "$title|$body" ]]; then exit 0; fi
+printf '%s' "$title|$body" > "$RELAY_STATE/last-content"
+tail -n 1 "$RELAY_REQUESTS" >> "$RELAY_DELIVERED"
+TUI
+chmod +x "$TEST_ROOT/bin/tmux" "$TEST_ROOT/bin/cmux-tui"
+printf '%s' 127.0.0.1:9999 > "$RELAY_STATE/CMUX_SOCKET_PATH"
+printf '%s' AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA > "$RELAY_STATE/CMUX_WORKSPACE_ID"
+line=$(tmux_cmd task)
+env CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= CMUX_TUI_SOCKET=/tmp/current-native \
+  CMUX_TUI_TERMINAL_ID=term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb CMUX_TUI_SESSION_ID=current "$BASH" -c "$line"
+assert_eq 'native reattachment clears the obsolete TCP socket' '' "$(cat "$RELAY_STATE/CMUX_SOCKET_PATH")"
+assert_eq 'native reattachment clears the obsolete Mac row' '' "$(cat "$RELAY_STATE/CMUX_WORKSPACE_ID")"
+assert_eq 'native reattachment saves its current terminal' term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$(cat "$RELAY_STATE/CMUX_TUI_TERMINAL_ID")"
+: > "$RELAY_REQUESTS"; : > "$RELAY_DELIVERED"; : > "$CMUX_LOG"
+for title in wt-open wt-attach wt-close; do
+  for _ in 1 2; do
+    TMUX=/tmp/fake CMUX_SOCKET_PATH=127.0.0.1:9999 CMUX_WORKSPACE_ID=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA \
+      notify_mac "$title" host test-vm path /vm/repos/repo/.worktrees/task
+  done
+done
+assert_eq 'all six identical operations reach native delivery' 6 "$(wc -l < "$RELAY_DELIVERED" | tr -d ' ')"
+assert_eq 'each operation retains its original body fields' true "$(jq -s 'all(.[]; (.body | del(.request_id)) == {host:"test-vm",path:"/vm/repos/repo/.worktrees/task"})' "$RELAY_REQUESTS")"
+assert_eq 'every request gets a distinct ID' 6 "$(jq -s '[.[].body.request_id] | unique | length' "$RELAY_REQUESTS")"
+lacks "$CMUX_LOG" 'notify'
+# Native delivery also wins if an older session still contains both transport identities.
+printf '%s' 127.0.0.1:9999 > "$RELAY_STATE/CMUX_SOCKET_PATH"
+TMUX=/tmp/fake notify_mac wt-open host test-vm path /vm/repos/repo/.worktrees/task
+assert_eq 'a valid native identity overrides stale TCP fields' 7 "$(wc -l < "$RELAY_DELIVERED" | tr -d ' ')"
+env CMUX_TUI_SOCKET= CMUX_SOCKET_PATH=127.0.0.1:1234 CMUX_WORKSPACE_ID=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC "$BASH" -c "$line"
+assert_eq 'TCP reattachment clears the old native terminal' '' "$(cat "$RELAY_STATE/CMUX_TUI_TERMINAL_ID")"
+TMUX=/tmp/fake CMUX_TUI_SOCKET=/tmp/stale CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa relay_env
+assert_eq 'empty session identity overrides stale native pane values' '' "$RELAY_TUI_SOCKET"
+assert_eq 'TCP reattachment preserves the current TCP socket' 127.0.0.1:1234 "$RELAY_SOCKET"
+env CMUX_TUI_SOCKET= CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= "$BASH" -c "$line"
+assert_eq 'TCP reconnect without an identity retains the saved socket' 127.0.0.1:1234 "$(cat "$RELAY_STATE/CMUX_SOCKET_PATH")"
+rm "$TEST_ROOT/bin/tmux" "$TEST_ROOT/bin/cmux-tui"
+end_scenario
+
 begin_scenario 'native open uses the recorded ID and validates the sending row'
-record wt-open '{"host":"test-vm","path":"/vm/repos/repo/.worktrees/task"}'
+record wt-open '{"host":"test-vm","path":"/vm/repos/repo/.worktrees/task","request_id":"unique"}'
 hook >/dev/null
 has "$CODE_LOG" '--folder-uri vscode-remote://ssh-remote+test-vm/vm/repos/repo/.worktrees/task/'
 has "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
@@ -185,4 +253,4 @@ rm "$config"
 hook_cmux_automation >/dev/null
 if [[ ! -e $config ]]; then pass; else fail 'Linux installed Mac automation'; fi
 end_scenario
-lib_summary 34
+lib_summary 46

@@ -35,6 +35,14 @@ The fix records the current row's native identity in its task's tmux session bef
 
 `wt` sends native requests with `cmux-tui`, the explicit socket, and the current session's terminal ID.
 It retains the old sender for TCP relay rows.
+Each attachment clears the inactive transport's session variables before binding the current row.
+Empty session values override an older pane's saved identity.
+Native delivery also takes precedence when an older session still contains both transports.
+
+Each native request adds a random `request_id` to its JSON body.
+cmux suppresses identical terminal, title, and body content for five seconds before automation runs.
+A different notification ID alone does not prevent that suppression.
+The unique body lets repeated open, attach, and close requests reach the Mac hook.
 
 On the Mac, the `wt-native-relay` automation runs `cmux-hook --event` for `notification.created`.
 cmux exposes that event through `CMUX_AUTOMATION_EVENT_JSON`.
@@ -50,6 +58,9 @@ An unrelated notification can consume that default allowance before an open requ
 cmux separately limits all automation rules to 32 concurrent firings.
 It drops requests above that limit with `skipped_backpressure`.
 The [automation engine](https://github.com/manaflow-ai/cmux/blob/v0.65.0/Sources/AutomationEngine.swift) controls both limits.
+The [native notification gate](https://github.com/manaflow-ai/cmux/blob/v0.65.0/Packages/macOS/CmuxCloud/Sources/CmuxCloud/Notifications/CloudMachineNotificationGate.swift) also admits five notifications per machine initially.
+It replenishes that allowance by one notification per second.
+cmux retries requests above that rate on later updates.
 
 `install.sh` merges this rule into `~/.cmuxterm/automations.json` on the Mac.
 It backs up an existing regular file before replacement.
@@ -98,6 +109,21 @@ The original Mac hook symlink, Mac automation configuration, and VM `wt` symlink
 No installed file remains changed.
 Neither `install.sh` nor `wt update` ran on the Mac or VM.
 
+Follow-up tests attached `relay-second-fixed` to a tmux session with an obsolete TCP identity.
+The native attachment cleared that identity and saved its current terminal without manual corrections.
+Mac-side open passed.
+Two identical VM open operations arrived 158 milliseconds apart with different `request_id` values.
+Both reached the hook and exited successfully.
+Native open also passed after the test deliberately restored an obsolete TCP value alongside the valid native identity.
+
+The hook recorded both repeated requests and the mixed-transport request:
+
+```text
+2026-10-08T13:29:15 handled wt-open for workspace 1ADA0A4D-C4F0-4CC6-A05B-F8FE80F40634
+2026-10-08T13:29:15 handled wt-open for workspace 1ADA0A4D-C4F0-4CC6-A05B-F8FE80F40634
+2026-10-08T13:29:56 handled wt-open for workspace 1ADA0A4D-C4F0-4CC6-A05B-F8FE80F40634
+```
+
 ## Smoke tests
 
 Run these tests from the repository root:
@@ -112,3 +138,4 @@ shellcheck bin/wt bin/cmux-hook install.sh test/native-relay-smoke.sh
 
 The native test checks the automation merge function in a scratch home.
 It does not run `install.sh` or change installed files.
+It checks transport changes in both directions and repeated native requests with identical operation fields.
