@@ -182,6 +182,8 @@ ROW_JQ='
   def task_row($t; $r; $h; $sep): on_host($h; $sep)
     and ((desc($sep)[1:] | join($sep)) as $dr
          | (.title == $t and $dr == $r) or ($r != "" and .title == $r + ":" + $t and ($dr == "" or $dr == $r)));
+  def new_row($t; $h; $ids; $sep): .title == $t and on_host($h; $sep) and (desc($sep) | length < 2)
+    and (.id as $i | all($ids[]; . != $i));
 '
 row_by_title() { # row_by_title <title> <repo id> <host> — the local row for a VM task; mirrors
                  # cmux_row_field <title> <repo> id <host> in wt
@@ -232,37 +234,49 @@ attach_row() { # attach_row <host> <session> <title> <repo id> <command> — bri
                # title, repo and host.
                # It only selects an existing row and never types into it, because the row's pane may hold
                # an agent that would eat the line.
-               # When it reaches no row, it returns non-zero and says why in $LOG. That is the same contract
-               # as wt, which dies when the select or the create fails. The caller must not quiet a
+               # When it reaches no row, or closes a new row whose description it could not write, it
+               # returns non-zero and says why in $LOG. That is the same contract as wt, which dies when
+               # the select, the create or the new row's description fails. The caller must not quiet a
                # notification that produced nothing.
-  local out ref line before
+  local out ref line before created=0
   ws_load || { log "no row list for $3 ($4) on $1: not creating a row on a lookup that failed"; return 1; }
   ref=$(row_by_title "$3" "$4" "$1")
   if [[ -n $ref ]]; then
     capped "$CMUX" workspace select "$ref" >/dev/null 2>&1 || { log "cmux workspace select $ref failed"; return 1; }
   else
+    created=1
     before=$(printf '%s' "$WS_JSON" | jq -r '(.workspaces? // .)[] | .id // empty' 2>/dev/null)
     line=$(tmux_cmd "$2" "$5")
     out=$(capped "$CMUX" ssh "$1" --name "$3" --no-focus --command "$line" 2>&1) ||
       { log "cmux ssh $1 --name $3 failed: $out"; return 1; }
     ref=$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1)
     if [[ -z $ref ]]; then                 # no workspace:N in the output: the row list lags ~1s behind create.
-      # The new row has no description yet, so a lookup by repo cannot find it. Take the row with this
-      # title on this host that was not in the list before the create. One look back is enough, now that
-      # giving up is reported.
+      # The new row has no description yet, so a lookup by repo cannot find it. Take the row that new_row
+      # names. One look back is enough, now that giving up is reported.
       sleep 1
       if ws_load fresh; then
         ref=$(printf '%s' "$WS_JSON" | jq -r --arg t "$3" --arg h "$1" --arg before "$before" --arg sep "$ROW_SEP" "$ROW_JQ"'
-          ($before | split("\n")) as $ids
-          | first((.workspaces? // .)[] | select(.title == $t and on_host($h; $sep)) | .id // empty
-                  | select(. as $i | all($ids[]; . != $i))) // empty' 2>/dev/null)
+          first((.workspaces? // .)[] | select(new_row($t; $h; $before | split("\n"); $sep)) | .id // empty) // empty' \
+          2>/dev/null)
       fi
     fi
     [[ -n $ref ]] || { log "cmux reported no row for $3 ($4) on $1: $out"; return 1; }
   fi
-  capped "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1$ROW_SEP$4" ||
-    log "set-description @$1$ROW_SEP$4 failed for $ref"   # cosmetic only: the row is there, so the jump did happen
-  return 0; }
+  capped "$CMUX" workspace-action --workspace "$ref" --action set-description --description "@$1$ROW_SEP$4" >/dev/null 2>&1 &&
+    return 0
+  if [[ $created -eq 0 ]]; then            # the lookup found this row by its repo, so a failed rewrite changes nothing
+    log "set-description @$1$ROW_SEP$4 failed for $ref"
+    return 0
+  fi
+  # The description holds the repo, so it is part of the row's identity, as in wt's tag_row. Without it, no
+  # later lookup finds the new row, and the next wt-attach builds a second one. So close the new row. The
+  # close gets 3 s past the deadline, because a set-description that hit the deadline leaves it no time.
+  if DEADLINE=$(( DEADLINE + 3 )) capped "$CMUX" workspace close "$ref" --force >/dev/null 2>&1; then
+    log "set-description @$1$ROW_SEP$4 failed for the new row $ref, so it was closed"
+  else
+    log "set-description @$1$ROW_SEP$4 failed for the new row $ref, and closing it failed: close it in cmux"
+  fi
+  return 1; }
 case $mode in
   --event)
     # Native notifications bypass notifications.hooks in cmux 0.65. Use the recorded event's identity.

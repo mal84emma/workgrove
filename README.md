@@ -38,14 +38,16 @@ It also covers per-repo hooks and the logins that you supply.
   Two repos can have tasks with the same name. Their rows have the same title, and the repo on the second line tells them apart.
   So `wt` and `bin/cmux-hook` find a task's row by its title, its repo, and its host.
   An older `wt` gave task rows the title `<repo>:<name>` and the second line `@<host>`.
-  `wt` and `bin/cmux-hook` still find such a row, and the row keeps its old title until you close it.
+  `wt rm`, the name check of `wt new`, `wt -H <vm> …` and `bin/cmux-hook` still find such a row.
+  The row keeps its old title until you close it. `wt show` prints the label in the new form, from the task's saved data.
+  A new VM row gets its second line just after cmux creates it. If cmux cannot write that line, `wt` and the hook close the new row, because no later lookup could find it.
 
   A task on a VM also has the tmux session `wt-<repo>-<name>`. This session keeps the agent alive across disconnects.
   The row itself is only a plain `cmux ssh` row, so the tmux session, not the row, gives this persistence.
   The shell that the row opens creates that tmux session, and the session runs the agent.
   If the session already exists, the shell takes it over instead.
 
-- **Rows are found by title, in every window.**
+- **Rows are found by title, repo and host, in every window.**
   The **Mac hook** is `bin/cmux-hook`, the cmux notification hook on the Mac.
   `wt` and the Mac hook look for rows in every cmux window, not only in the caller's window.
   - *Why rows move between windows:* a cmux window shows one row at a time.
@@ -55,7 +57,7 @@ It also covers per-repo hooks and the logins that you supply.
   - *What broke before the fix:*
     - `wt rm` removed the worktree and left the row behind.
     - `wt -H <vm> attach` made a second row next to the row that was already there.
-    - `wt new` did not detect a task row that another repo already used.
+    - `wt new` did not detect a row title that another repo already used.
     - The Mac hook could not prove that a VM's `wt open` came from that VM, so it did nothing.
   - *The evidence:* Measured on cmux 0.64, a row keeps its id, its title and its `workspace:N` ref when it moves.
     Every command that acts on a row (select, send, close, set-description) finds the row by id in any window.
@@ -345,7 +347,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 892 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 897 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -365,6 +367,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
   - That a row in a second cmux window is still found and still closed.
   - That a task row is found by its title, its repo, and its host. Two repos can have tasks with the same name,
     and each command acts only on the row of its own repo. A row with the old `<repo>:<name>` title is still found.
+    The second line names the repo by its `repo_id`, as the Mac hook does, also for a repo name with a dot.
   - That a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its
     mapped port. The port can be on any local address, and the connection must not be from the Mac's current
     address.
@@ -1205,7 +1208,7 @@ notifications report `CMUX_NOTIFICATION_ORIGIN=local` instead of the documented 
 relay's own refusals are what show the origin.
 
 **The proof depends on the row list.** The proof is only as good as the row list that the hook reads. The
-window scoping in "Rows are found by title, in every window" (in [How it works](#how-it-works)) affected
+window scoping in "Rows are found by title, repo and host, in every window" (in [How it works](#how-it-works)) affected
 this check most. Before the fix:
 
 - A hook has no caller surface. So the hook's row list answered only for the window that was current.

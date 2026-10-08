@@ -271,6 +271,9 @@ ROW_SEP=' · '
 # - task_row($t; $r; $h; $sep): the row titled $t, for repo_id $r ("" for a row with no repo), on host $h.
 #   A row titled "<repo>:<name>" also matches. Older wt versions gave that title to task rows.
 #   Such a row keeps that title, so the lookup accepts both forms.
+# - new_row($t; $h; $ids; $sep): the row that `cmux ssh $h --name $t` just created, for a create that printed
+#   no workspace ref. The row has title $t, a description with no repo yet, and an id that is not in $ids,
+#   the row ids from before the create. The repo test keeps it off another repo's row even when $ids is empty.
 # shellcheck disable=SC2016   # a jq program: each $ name is a jq variable
 ROW_JQ='
   def desc($sep): (.description | if type == "string" then . else "" end) | split($sep);
@@ -279,6 +282,8 @@ ROW_JQ='
   def task_row($t; $r; $h; $sep): on_host($h; $sep)
     and ((desc($sep)[1:] | join($sep)) as $dr
          | (.title == $t and $dr == $r) or ($r != "" and .title == $r + ":" + $t and ($dr == "" or $dr == $r)));
+  def new_row($t; $h; $ids; $sep): .title == $t and on_host($h; $sep) and (desc($sep) | length < 2)
+    and (.id as $i | all($ids[]; . != $i));
 '
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 need_name()  { valid_name "$1" || die "invalid name '$1' (lowercase letters, digits, _ and -, max 63, no '.')"; }
@@ -1450,23 +1455,27 @@ remote_run_cmd() {
   printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"
 }
 
-row_ids() { rows_json | jq -r '(.workspaces? // .)[] | .id // empty' 2>/dev/null || true; }   # one row id per line
+row_ids() { rows_json | jq -r '(.workspaces? // .)[] | .id // empty' 2>/dev/null || true; }   # one row id per line; none when the list fails, which new_row allows for
 
-tag_row() { # tag_row <workspace ref or ""> <title> <repo> <host> [row ids before the create] — write the row's description
+tag_row() { # tag_row <workspace ref or ""> <title> <repo> <host> [row ids before the create, for a new row] — write the description
   # A new row has no description yet, so a lookup by repo cannot find it. So when the create printed no ref,
-  # take the row with this title on this host whose id was not in the list before the create.
-  local ref="$1"
+  # take the row that new_row in ROW_JQ names.
+  # The description holds the repo, so it is part of the row's identity. If it cannot be written, no later
+  # lookup finds the new row, and the next attach builds a second row beside it. So close that row and fail.
+  local ref="$1" tag; tag=$(row_tag "$4" "$3")
   for _ in 1 2 3; do                    # no workspace:N in the output: the row list lags ~1s behind a create
     [[ -n "$ref" ]] && break
     sleep 1
     ref=$(rows_json | jq -r --arg t "$2" --arg h "$4" --arg before "${5:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
-      ($before | split("\n")) as $ids
-      | first((.workspaces? // .)[] | select(.title == $t and on_host($h; $sep)) | .id // empty
-              | select(. as $i | all($ids[]; . != $i))) // empty' 2>/dev/null || true)
+      first((.workspaces? // .)[] | select(new_row($t; $h; $before | split("\n"); $sep)) | .id // empty) // empty' \
+      2>/dev/null || true)
   done
-  [[ -n "$ref" ]] || die "cmux reported no row '$2' on $4; find it with: cmux workspace list --json"
-  CMUX_QUIET=1 "$(cmux_bin)" workspace-action --workspace "$ref" --action set-description --description "$(row_tag "$4" "$3")" >/dev/null 2>&1 \
-    || die "cmux workspace-action failed; run: cmux workspace-action --workspace $ref --action set-description --description '$(row_tag "$4" "$3")'"
+  [[ -n "$ref" ]] || die "cmux reported no row '$2' on $4; if cmux shows a new row '$2' with no repo on its second line, close it"
+  CMUX_QUIET=1 "$(cmux_bin)" workspace-action --workspace "$ref" --action set-description --description "$tag" >/dev/null 2>&1 \
+    && return 0
+  [[ $# -ge 5 ]] || die "cmux workspace-action failed; run: cmux workspace-action --workspace $ref --action set-description --description '$tag'"
+  close_row "$ref" || die "cmux could not write '$tag' on the new row $2, and wt could not close that row; close it in cmux"
+  die "cmux could not write '$tag' on the new row $2, so wt closed that row"
 }
 
 tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
@@ -1946,7 +1955,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     if reattach_recovered_row "$host" "$id" "$session"; then what=re-attached; fi
   elif [[ "$state" == *detached ]]; then   # show may be stale; prove the prompt and detached session again
     if reattach_shell_row "$id" "$session" "$host"; then what=re-attached
-    else warn "did not re-attach $title; inspect the row, then use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
+    else warn "did not re-attach $title $(row_tag "$host" "$path"); inspect the row, then use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
     fi
   fi
   if [[ "$what" == selected ]]; then   # a detached report can be stale by the time the row is checked

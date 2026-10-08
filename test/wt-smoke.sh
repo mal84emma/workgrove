@@ -250,9 +250,9 @@ fixture_commit() {
 
 # new_repo [name]: makes a throwaway repository under $REPOS_DIR with one commit on main. It sets the
 # identity and the default branch per repository, instead of inheriting them, so nothing here depends on
-# the machine. The suffix from mktemp is alphanumeric, so repo_id does not change the basename, and the repo
-# that a scenario expects in a row description ("@local · <repo>") is the basename. Scenario 3 tests the
-# substitution rule separately.
+# the machine. The suffix from mktemp is alphanumeric. So when [name] is too, repo_id does not change the
+# basename, and the repo that a scenario expects in a row description ("@local · <repo>") is the basename.
+# Scenario 8 tests a name that repo_id changes.
 new_repo() {
   local r
   r="$(mktemp -d "$REPOS_DIR/${1:-repo}-XXXXXX")"
@@ -1537,7 +1537,7 @@ ROWS
   assert_wt_ok "a task name that another repo uses is free here" new same --no-workspace -r "$r"
   assert_wt_ok "…and in the other repo" new same --no-workspace -r "$r2"
   assert_wt_ok "wt show same" show same -r "$r"
-  assert_has "…names this repo's row" "$WT_OUT" "row:     same @local · $id"
+  assert_has "…prints this repo's row label" "$WT_OUT" "row:     same @local · $id"
   : >"$CMUX_LOG"
   assert_wt_ok "wt rm same" rm same -r "$r"
   assert_has "…closes this repo's row" "$(cat "$CMUX_LOG")" "workspace close row-of-this"
@@ -1549,8 +1549,26 @@ ROWS
              "workspace create --name same --description @local · $id2 --cwd $r2/.worktrees/same --focus false"
   assert_meta "$r2" same title same
 
+  # A repo's basename can hold characters that repo_id replaces. The description uses repo_id, which is also
+  # what a VM sends to the Mac hook, so wt and the hook name the same row.
+  local r3 id3
+  r3="$(new_repo dotted.repo)"
+  id3="$(basename "$r3" | tr . -)"
+  stub_cmux alive
+  assert_wt_ok "wt new in a repo with a dot in its name" new dotted --no-workspace -r "$r3"
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt attach dotted" attach dotted -r "$r3"
+  assert_has "…puts the repo's id in the description" "$(cat "$CMUX_LOG")" \
+             "workspace create --name dotted --description @local · $id3 --cwd"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"dotted-row","title":"dotted","description":"@local · $id3","current_directory":"$r3/.worktrees/dotted"}]}
+ROWS
+  assert_wt_ok "wt rm dotted" rm dotted -r "$r3"
+  assert_has "…finds the row by the repo's id" "$(cat "$CMUX_LOG")" "workspace close dotted-row"
+
   # A task that an older wt made: the sidecar saved the title "<repo>:<name>", and the row still has that
-  # title and the description "@local". wt finds that row and shows the new form of the title.
+  # title and the description "@local". wt rm finds that row. wt show prints the label from the sidecar,
+  # in the new form, so it does not match such a row.
   stub_cmux alive
   assert_wt_ok "wt new legacy" new legacy --no-workspace -r "$r"
   jq --arg t "$id:legacy" '.title = $t' "$r/.git/wt/legacy.json" >"$r/.git/wt/legacy.json.tmp"
@@ -1559,7 +1577,7 @@ ROWS
 {"workspaces":[{"id":"legacy-row","title":"$id:legacy","description":"@local","current_directory":"$r/.worktrees/legacy"}]}
 ROWS
   assert_wt_ok "wt show legacy" show legacy -r "$r"
-  assert_has "…shows the new form of the title" "$WT_OUT" "row:     legacy @local · $id"
+  assert_has "…prints the label in the new form" "$WT_OUT" "row:     legacy @local · $id"
   assert_wt_ok "wt rm legacy" rm legacy -r "$r"
   assert_has "…closes the row with the old title" "$(cat "$CMUX_LOG")" "workspace close legacy-row"
   # When wt opens a row for such a task, it gives the row the new title and moves the sidecar to it.
@@ -2426,7 +2444,7 @@ FIXED_ASSERTIONS=686
 #     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
 #   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
 #   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=206
+DARWIN_ASSERTIONS=211
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {

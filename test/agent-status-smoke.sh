@@ -194,6 +194,17 @@ if [[ $out == *'"desktop":false'* ]]; then pass; else fail 'row request without 
 check_contains "$CMUX_LOG" 'workspace-action --workspace EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE --action set-description --description @test-vm · other'
 check_missing "$CMUX_LOG" 'workspace-action --workspace BBBBBBBB'
 rm -f "$CMUX_LOG.created"
+# The description holds the repo. A failed rewrite on a row that the lookup found by its repo changes nothing.
+# A new row without its description would be found by no later lookup, so the hook closes it and reports.
+: > "$CMUX_LOG"
+out=$(CMUX_FAIL=workspace-action attach_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
+if [[ $out == *'"desktop":false'* ]]; then pass; else fail 'a failed rewrite on an open row was reported as no row'; fi
+check_missing "$CMUX_LOG" 'workspace close'
+: > "$CMUX_LOG"
+out=$(CMUX_FAIL=workspace-action attach_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
+if [[ $out != *'"desktop":false'* ]]; then pass; else fail 'a new row without its description was reported as reached'; fi
+check_contains "$CMUX_LOG" 'workspace close workspace:77 --force'
+check_contains "$XDG_STATE_HOME/cmux-hook.log" 'failed for the new row workspace:77, so it was closed'
 end_scenario
 
 begin_scenario 'Mac Running, Idle, clear and event ordering'
@@ -308,4 +319,4 @@ rm -rf "$XDG_STATE_HOME/cmux-agent-status"
 WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
 if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
 end_scenario
-lib_summary 88
+lib_summary 93
