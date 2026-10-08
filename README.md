@@ -150,8 +150,8 @@ It also describes what a run changes, the repo's test suites, and how to remove 
 - **`bash`:** version 3.2 is the minimum. That is macOS's own `/bin/bash`, and the smoke test (see Tests) passes
   under it, so nothing here needs a newer shell.
 - **tmux:** the VMs have tmux 3.2a, and `home/.tmux.conf` is written for that version.
-- **cmux:** the cmux integration assumes cmux 0.64 or newer, because `bin/cmux-hook` encodes the notification
-  behavior of 0.64. `home/.config/cmux/cmux.json` is `schemaVersion: 1`.
+- **cmux:** workgrove supports cmux 0.65.0 (build 108). See the [cmux compatibility log](#cmux-compatibility-log) for verified behavior.
+  `home/.config/cmux/cmux.json` is `schemaVersion: 1`.
 - **Other tools:** on a Mac, `Brewfile` installs `gh`, `fzf`, cmux itself, Claude Code, and Codex. On a VM,
   [docs/new-vm.md](docs/new-vm.md) installs them.
 - **`az` (optional on the Mac and on a VM):** only `azml-ssh-host` needs it. So on the Mac, its `Brewfile` line
@@ -805,6 +805,22 @@ Agents never do these things on their own:
 
 This section lists cmux behavior that affects this setup: hotkeys, configuration, notifications, and VM rows.
 It also tells how to enable VM status on an existing VM.
+
+### cmux compatibility log
+
+This log records cmux versions verified with workgrove. It does not establish support for untested versions.
+Run `cmux version` to check your installed version.
+
+| Supported cmux version | Verified on | Verified behavior |
+|---|---|---|
+| 0.65.0 (build 108, `dda24fbd2`) | 2026-10-08 | Claude and Codex self-removal, locally and on `ci-mal-c4-m14`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
+
+[PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to this version's row-closing behavior.
+Local self-removal uses cmux's `--force` only for the verified caller's own row.
+Native VM rows exit with their task's tmux session.
+The earlier `0.64 or newer` requirement did not guarantee compatibility with these changes.
+
+Record each supported version here after testing Claude and Codex self-removal on both the Mac and a VM.
 
 ### Hotkeys and configuration
 
