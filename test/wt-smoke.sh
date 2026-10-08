@@ -445,10 +445,11 @@ stub_cmux() {
 # rows_json takes only uuid-shaped fields from that output. That filter is there so that rows_json treats a
 # cmux that prints something else entirely as a cmux that cannot be enumerated.
 stub_windows() {
-  local u i=0
+  local u i=0 marker
   : >"$WT_WINDOWS"
   for u in "$@"; do
-    printf '  %d: %s selected_workspace=%s workspaces=0\n' "$i" "$u" "$u" >>"$WT_WINDOWS"
+    marker=' '; [[ $i -ne 0 ]] || marker='*'
+    printf '%s %d: %s selected_workspace=%s workspaces=0\n' "$marker" "$i" "$u" "$u" >>"$WT_WINDOWS"
     printf '{"workspaces":[]}\n' >"$WT_ROWS_DIR/$u.json"
     i=$((i + 1))
   done
@@ -1476,6 +1477,14 @@ ROWS
   assert_has "…and closed the row it could not have seen before" "$(cat "$CMUX_LOG")" \
              "workspace close row-in-window-two"
 
+  assert_wt_ok "a worktree in the selected window" new selected --no-workspace -r "$r"
+  cat >"$WT_ROWS_DIR/$w1.json" <<ROWS
+{"workspaces":[{"id":"selected-window-row","title":"$id:selected","description":"@local"}]}
+ROWS
+  assert_wt_ok "wt rm finds the selected window after its marker" rm selected -r "$r"
+  assert_has "the selected window's row closed" "$(cat "$CMUX_LOG")" "workspace close selected-window-row"
+  assert_gone "the selected window's worktree was removed" "$r/.worktrees/selected"
+
   # The sidecar holds the row title. Save it before removing that sidecar, or a renamed row stays open.
   stub_cmux alive
   assert_wt_ok "wt new custom" new custom --no-workspace -r "$r"
@@ -2323,7 +2332,7 @@ FIXED_ASSERTIONS=678
 #     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
 #   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
 #   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=176
+DARWIN_ASSERTIONS=180
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {

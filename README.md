@@ -329,7 +329,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 854 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 858 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these

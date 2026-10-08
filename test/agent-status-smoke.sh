@@ -23,7 +23,7 @@ printf '%s\n' "$*" >> "$CMUX_LOG"
 [[ ${CMUX_FAIL:-} == "$1" ]] && exit 142
 [[ ${CMUX_FAIL_CLOSE:-} == 1 && $1 == workspace && ${2:-} == close ]] && exit 142
 case $1 in
-  list-windows) echo 'window:1 AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' ;;
+  list-windows) echo '* 0: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' ;;
   workspace) echo '{"workspaces":[{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"repo:task","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}]}' ;;
   set-status|clear-status|notify) echo OK ;;
 esac

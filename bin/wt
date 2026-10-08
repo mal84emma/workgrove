@@ -368,9 +368,9 @@ rows_json() { # rows_json [checked] — every cmux row, in every window, as one 
     [[ ${1:-} != checked ]] || return 1
   }
   if [[ ${1:-} == checked && -n "$windows" ]]; then
-    if printf '%s\n' "$windows" | awk '{print $2}' | grep -Eqv '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then return 1; fi
+    if printf '%s\n' "$windows" | awk '{print ($1 == "*" ? $3 : $2)}' | grep -Eqv '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then return 1; fi
   fi
-  for w in $(printf '%s\n' "$windows" | awk '{print $2}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' || true); do
+  for w in $(printf '%s\n' "$windows" | awk '{print ($1 == "*" ? $3 : $2)}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' || true); do
     out=$(CMUX_QUIET=1 "$c" workspace list --json --window "$w" 2>/dev/null) || {
       [[ ${1:-} != checked ]] || return 1
       continue   # a window closed mid-loop
