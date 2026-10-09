@@ -293,8 +293,6 @@ ROW_SEP=' · '
 # - unclaimed_row($t; $h; $sep): a row titled $t on host $h whose description has a form that wt never writes.
 #   The user can edit or clear a description in cmux. Such a row may be a task row that task_row can no
 #   longer find, so wt rm checks it for a running agent.
-# - in_dir($d): a row whose current directory is $d or below it. A local task row's shell and agent start in
-#   the worktree, so wt rm also checks such rows, whatever their title and description say.
 # - new_row($t; $h; $ids; $sep): the row that `cmux ssh $h --name $t` just created, for a create that printed
 #   no workspace ref. The row has title $t, a description with no repo yet, and an id that is not in $ids,
 #   the row ids from before the create. The repo test keeps it off another repo's row even when $ids is empty.
@@ -309,8 +307,6 @@ ROW_JQ='
     and (.id as $i | all($ids[]; . != $i));
   def unclaimed_row($t; $h; $sep): .title == $t and on_host($h; $sep)
     and ((.description | if type == "string" then . else "" end) | test("^@[^ ]+(" + $sep + "[A-Za-z0-9-]+)?$") | not);
-  def in_dir($d): (.current_directory | if type == "string" then . else "" end) as $c
-    | $d != "" and ($c == $d or ($c | startswith($d + "/")));
 '
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 need_name()  { valid_name "$1" || die "invalid name '$1' (lowercase letters, digits, _ and -, max 63, no '.')"; }
@@ -471,17 +467,18 @@ rows_json() { # rows_json [checked] — every cmux row, in every window, as one 
   printf '%s' "$docs" | jq -s -c '{workspaces: (map(.workspaces? // .) | add // [])}' 2>/dev/null || true
 }
 
-cmux_row_field() { # cmux_row_field <title> <repo> <field> [host] [checked] -> that field; no host: the local row
+cmux_row_field() { # cmux_row_field <title> <repo> <field> [host] -> that field; no host: the local row
   # <repo> is a path or a name, or "" for a row with no repo. Two repos can each have a task with the same
   # name, and a local and a VM row can share a title. So the repo and the host tell such rows apart.
-  cmux_bin >/dev/null || { [[ ${5:-} != checked ]] || return 1; return 0; }
+  # It prints nothing when cmux or the row is missing.
+  cmux_bin >/dev/null || return 0
   local rows r=""
   if [[ -n "$2" ]]; then r=$(repo_id "$2"); fi
-  rows=$(rows_json "${5:-}") || return 1
+  rows=$(rows_json)
   printf '%s' "$rows" \
     | jq -r --arg t "$1" --arg r "$r" --arg k "$3" --arg h "${4:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
         first((.workspaces? // .)[] | select(task_row($t; $r; $h; $sep)) | .[$k] // "") // empty' \
-        2>/dev/null || [[ ${5:-} != checked ]]
+        2>/dev/null || true
 }
 
 task_title() { # task_title <name> [saved title] — the title of the task's row. No saved title: read the sidecar.
@@ -538,7 +535,7 @@ close_workspace() { # close_workspace <name> [title] — use the saved title aft
 close_row() { # close_row <row id> [self|new] — silent when the row is already gone
   # cmux asks for --force before it closes a row in which a local agent runs, such as the caller's own row
   # ("self"). "new" is a VM row that wt has just created. cmux 0.65 closes such a row without --force, as
-  # measured on a VM; wt passes it anyway, as the hook does, because the row runs only what wt started.
+  # measured on a VM. wt passes --force anyway, as the hook does, because the row runs only what wt started.
   [[ -n "$1" ]] || return 0
   local err args=()
   [[ ${2:-} == self || ${2:-} == new ]] && args=(--force)
@@ -548,6 +545,11 @@ close_row() { # close_row <row id> [self|new] — silent when the row is already
     return 1
   }
 }
+
+physical_dir() { # physical_dir <dir> — the directory with each symlink resolved, or <dir> itself when it cannot be entered
+  (CDPATH='' cd -P -- "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
+}
+path_within() { [[ -n "$2" && ( "$1" == "$2" || "$1" == "$2/"* ) ]]; }   # path_within <path> <dir> — <dir> or below it
 
 RM_ROW=""; RM_SELF=""
 check_row_removal() { # check_row_removal <title> <repo> [host] [worktree path] — refuse unreadable rows or another
@@ -565,38 +567,41 @@ check_row_removal() { # check_row_removal <title> <repo> [host] [worktree path] 
   fi
   # The user can edit or clear a row's description in cmux, and then task_row no longer finds the task's row.
   # So check the agent in every row that may be this task's, not only in the row that task_row finds:
-  # - by title: the row that task_row finds, and each row that unclaimed_row finds;
-  # - by directory: each local row whose current directory is in the worktree.
-  # Refuse when another agent runs in any of them. Close only the row that task_row finds, or the caller's
-  # own row when the title matches it. A row found only by its directory may belong to anything, such as
-  # the driver, so wt never closes it.
-  local rows id self_row="" title_ids=() dir_ids=()
+  # - by title: each row that task_row finds ("found"), and each row that unclaimed_row finds ("unclaimed");
+  # - by directory: each local row whose current directory is in the worktree ("dir").
+  # Refuse when another agent runs in any of them. Close only the first row that task_row finds, or the
+  # caller's own row when the title matches it. A row found only by its directory may belong to anything,
+  # such as the driver, so wt never closes it.
+  local rows checks=() check kind id dir root="" self_row=""
   rows=$(rows_json checked) || die "cannot list cmux rows; kept the worktree"
-  rows=$(printf '%s' "$rows" | jq -c --arg t "$1" --arg r "$(if [[ -n "$2" ]]; then repo_id "$2"; fi)" --arg h "${3:-}" \
-           --arg d "${4:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
-           [.workspaces[] | select(task_row($t; $r; $h; $sep))][0].id as $exact
-           | {exact: ($exact // ""),
-              title: [.workspaces[] | select(task_row($t; $r; $h; $sep) or unclaimed_row($t; $h; $sep)) | .id],
-              dir: [.workspaces[] | select($h == "" and on_host($h; $sep) and in_dir($d)
-                                           and (task_row($t; $r; $h; $sep) or unclaimed_row($t; $h; $sep) | not)) | .id]}') \
-    || die "cannot list cmux rows; kept the worktree"
-  RM_ROW=$(printf '%s' "$rows" | jq -r '.exact')
-  mapfile -t title_ids < <(printf '%s' "$rows" | jq -r '.title[]')
+  # One line for each row to check: "found <id>", "unclaimed <id>" or "dir <id> <current directory>". A
+  # directory with a newline in it would split its line, so such a row is not checked by its directory.
+  mapfile -t checks < <(printf '%s' "$rows" | jq -r --arg t "$1" --arg r "$(if [[ -n "$2" ]]; then repo_id "$2"; fi)" \
+      --arg h "${3:-}" --arg d "${4:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
+      .workspaces[] | (.current_directory | if type == "string" then . else "" end) as $c
+      | if task_row($t; $r; $h; $sep) then "found " + .id
+        elif unclaimed_row($t; $h; $sep) then "unclaimed " + .id
+        elif $h == "" and $d != "" and on_host($h; $sep) and $c != "" and ($c | contains("\n") | not)
+        then "dir " + .id + " " + $c
+        else empty end')
   wait $! || die "cannot list cmux rows; kept the worktree"
-  mapfile -t dir_ids < <(printf '%s' "$rows" | jq -r '.dir[]')
-  wait $! || die "cannot list cmux rows; kept the worktree"
-  for id in "${title_ids[@]}"; do
+  # A row's directory can name the worktree through a symlink or in another letter case. So a directory that
+  # does not match as written is compared again as its physical path.
+  if [[ -n "${4:-}" ]]; then root=$(physical_dir "$4"); fi
+  for check in "${checks[@]}"; do
+    kind=${check%% *}; id=${check#* }
+    if [[ $kind == dir ]]; then
+      dir=${id#* }; id=${id%% *}
+      path_within "$dir" "${4:-}" || path_within "$(physical_dir "$dir")" "$root" || continue
+    fi
+    [[ $kind != found || -n "$RM_ROW" ]] || RM_ROW=$id
     row_agent "$c" "$id"
-    case "$ROW_AGENT" in
-      self) self_row=$id ;;
-      busy) [[ "$id" != "$RM_ROW" ]] || die "another agent is running in cmux row $id; kept the worktree"
-            die "an agent is running in cmux row $id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run" ;;
+    case $kind/$ROW_AGENT in
+      found/self|unclaimed/self) self_row=$id ;;
+      found/busy) die "another agent is running in cmux row $id; kept the worktree" ;;
+      unclaimed/busy) die "an agent is running in cmux row $id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run" ;;
+      dir/busy) die "an agent is running in cmux row $id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run" ;;
     esac
-  done
-  for id in "${dir_ids[@]}"; do
-    row_agent "$c" "$id"
-    [[ "$ROW_AGENT" != busy ]] \
-      || die "an agent is running in cmux row $id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run"
   done
   if [[ -n "$self_row" ]]; then RM_ROW=$self_row; RM_SELF=self; fi
 }

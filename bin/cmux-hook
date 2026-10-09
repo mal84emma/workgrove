@@ -209,8 +209,6 @@ ROW_JQ='
     and (.id as $i | all($ids[]; . != $i));
   def unclaimed_row($t; $h; $sep): .title == $t and on_host($h; $sep)
     and ((.description | if type == "string" then . else "" end) | test("^@[^ ]+(" + $sep + "[A-Za-z0-9-]+)?$") | not);
-  def in_dir($d): (.current_directory | if type == "string" then . else "" end) as $c
-    | $d != "" and ($c == $d or ($c | startswith($d + "/")));
 '
 row_by_title() { # row_by_title <title> <repo id> <host> — the local row for a VM task; mirrors
                  # cmux_row_field <title> <repo> id <host> in wt

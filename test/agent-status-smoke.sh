@@ -28,8 +28,12 @@ printf '%s\n' "$*" >> "$CMUX_LOG"
 # prints no workspace ref.
 case $1 in
   list-windows) printf '%s\n' "${CMUX_WINDOWS:-* 0: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA}" ;;
-  workspace) # CMUX_EMPTY_WINDOW names a window whose list prints nothing.
+  workspace) # CMUX_EMPTY_WINDOW names a window whose list prints nothing. CMUX_WINDOW2_ROWS are the rows of
+             # the window 99999999-…, in place of the usual ones.
              [[ -n ${CMUX_EMPTY_WINDOW:-} && " $* " == *" --window $CMUX_EMPTY_WINDOW "* ]] && exit 0
+             if [[ -n ${CMUX_WINDOW2_ROWS:-} && " $* " == *" --window 99999999-9999-4999-8999-999999999999 "* ]]; then
+               printf '{"workspaces":[%s]}\n' "$CMUX_WINDOW2_ROWS"; exit 0
+             fi
              rows=${CMUX_ROWS:-'{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"task","description":"@test-vm · repo","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}'}
              [[ -e $CMUX_LOG.created ]] && rows+="${CMUX_ROWS_NEW:+,$CMUX_ROWS_NEW}"',{"id":"EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE","title":"task","remote":{"enabled":true,"destination":"test-vm"}}'
              printf '{"workspaces":[%s]}\n' "$rows" ;;
@@ -239,9 +243,18 @@ if [[ $out != *'"desktop":false'* ]]; then pass; else fail 'a create with no ref
 check_missing "$CMUX_LOG" 'workspace-action'
 check_contains "$XDG_STATE_HOME/cmux-hook.log" 'the row list from before the create was not complete'
 rm -f "$CMUX_LOG.created"
-# A second window whose list prints nothing, and a list-windows line that names no window, also leave the list
-# incomplete.
+# With a full list from two windows, the hook still names the new row. An older row in the second window,
+# with the task's title and no repo, was in the list from before the create, so it is not the new one.
 two_windows=$'* 0: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA\n  1: 99999999-9999-4999-8999-999999999999'
+: > "$CMUX_LOG"
+out=$(CMUX_WINDOWS=$two_windows CMUX_SSH_NOREF=1 \
+  CMUX_WINDOW2_ROWS='{"id":"FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF","title":"task","remote":{"enabled":true,"destination":"test-vm"}}' \
+  attach_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
+check_contains "$CMUX_LOG" 'workspace-action --workspace EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE --action set-description --description @test-vm · other'
+check_missing "$CMUX_LOG" 'workspace-action --workspace FFFFFFFF'
+rm -f "$CMUX_LOG.created"
+# A second window whose list prints nothing, and a list-windows line that names no window, leave the list
+# incomplete.
 : > "$CMUX_LOG"; : > "$XDG_STATE_HOME/cmux-hook.log"
 out=$(CMUX_WINDOWS=$two_windows CMUX_EMPTY_WINDOW=99999999-9999-4999-8999-999999999999 CMUX_SSH_NOREF=1 \
   attach_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
@@ -385,4 +398,4 @@ if [[ $(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"') -lt 5 ]]; then
   assert_eq 'neither hook called cmux' '' "$(cat "$CMUX_LOG")"
 fi
 end_scenario
-lib_summary $((106 + OLD_BASH_ASSERTIONS))
+lib_summary $((108 + OLD_BASH_ASSERTIONS))

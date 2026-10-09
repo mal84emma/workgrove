@@ -359,7 +359,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 925 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 931 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -380,8 +380,9 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
   - That a task row is found by its title, its repo, and its host. Two repos can have tasks with the same name,
     and each command acts only on the row of its own repo. A row with the old `<repo>:<name>` title is still found.
     The second line names the repo by its `repo_id`, as the Mac hook does, also for a repo name with a dot.
-    `wt rm` refuses while an agent runs in any row that may be the task's: a row whose second line the user
-    edited or cleared, or a local row in the worktree. It checks all of them, whatever their order.
+  - That `wt rm` refuses while an agent runs in any row that may be the task's, whatever the order of the rows.
+    Such a row can have a second line that the user edited or cleared. It can also be a local row whose
+    directory is in the worktree, as written or through a symlink.
   - That a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its
     mapped port. The port can be on any local address, and the connection must not be from the Mac's current
     address.

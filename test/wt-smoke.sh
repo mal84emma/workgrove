@@ -1641,8 +1641,23 @@ ROWS
     assert_wt_fails 1 "an agent is running in cmux row busy-row, whose current directory is in this worktree" \
       rm guarded --force -r "$r"
   done
-  # wt rm checks every row that may be the task's, whichever comes first in the list: here, the caller's own
-  # row, and an idle row with the old title.
+  # The check covers the worktree's subdirectories, and a directory that names the worktree through a symlink.
+  ln -s "$guarded" "$TEST_ROOT/guarded-link"
+  for line in "$guarded/src" "$TEST_ROOT/guarded-link"; do
+    cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"busy-row","title":"notes","description":"@local","current_directory":"$line"}]}
+ROWS
+    assert_wt_fails 1 "an agent is running in cmux row busy-row, whose current directory is in this worktree" \
+      rm guarded -r "$r"
+  done
+  # Two rows can name the task without an edit, for example after a local wt attach while its row was open.
+  # An agent in the second row is another agent, and the refusal says so.
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"first-row","title":"guarded","description":"@local · $id"},{"id":"busy-row","title":"guarded","description":"@local · $id"}]}
+ROWS
+  assert_wt_fails 1 "another agent is running in cmux row busy-row; kept the worktree" rm guarded -r "$r"
+  # wt rm checks every row that may be the task's, in any order. Here the list has the caller's own row and an
+  # idle row with the old title, each next to a busy row.
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[{"id":"own-row","title":"guarded","description":""},{"id":"busy-row","title":"guarded","description":""}]}
 ROWS
@@ -1654,16 +1669,19 @@ ROWS
   WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
   assert_wt_fails 1 "an agent is running in cmux row busy-row" rm guarded -r "$r"
   assert_dir "…and keeps the worktree" "$guarded"
-  # A row on another host and a row with another title are not checked. A row found only by its current
-  # directory is never closed, not even when it is the caller's, such as the driver's row.
+  # These rows are not checked: a row on another host, a row with another title, and a row in a sibling
+  # worktree whose name starts with this one's. A row found only by its current directory is never closed.
+  # Here, those are the caller's own driver row and an idle shell row.
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[
   {"id":"vm-row","title":"guarded","description":"","remote":{"enabled":true,"destination":"somevm"}},
   {"id":"notes-row","title":"notes","description":""},
+  {"id":"sibling-row","title":"guarded-tests","description":"@local · $id","current_directory":"$r/.worktrees/guarded-tests"},
+  {"id":"shell-row","title":"$id shell","description":"@local","current_directory":"$guarded/src"},
   {"id":"driver-row","title":"driver","description":"@local","current_directory":"$guarded"}
 ]}
 ROWS
-  WT_RELAY_ENV=("CMUX_STUB_CALLER=driver-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=vm-row notes-row")
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=driver-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=vm-row notes-row sibling-row")
   : >"$CMUX_LOG"
   assert_wt_ok "wt rm guarded" rm guarded -r "$r"
   assert_lacks "…and closes no row" "$(cat "$CMUX_LOG")" "workspace close"
@@ -2546,7 +2564,7 @@ FIXED_ASSERTIONS=688
 #     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
 #   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
 #   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=237
+DARWIN_ASSERTIONS=243
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
