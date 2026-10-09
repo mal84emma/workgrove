@@ -3,7 +3,7 @@
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
 # This file needs bash 5. An older bash returns at the next line, before it parses the rest,
 # so its source fails cleanly.
-# This file only defines functions. It sets no shell options and runs no command when it loads,
+# Apart from that version check, this file only defines functions. It sets no shell options,
 # so it works under the "set -euo pipefail" of bin/wt and under the "set -u" of the hooks.
 if ((BASH_VERSINFO[0] < 5)); then return 1; fi
 

@@ -2481,6 +2481,15 @@ scenario_shared_tmux_cmd() {
   b="$(sed -n "/^ROW_SEP=/p; /^ROW_JQ='/,/^'\$/p" "$REPO/bin/cmux-hook")"
   assert_has "bin/wt defines the row match" "$a" "def task_row"
   assert_eq "bin/cmux-hook matches rows the same way" "$a" "$b"
+  # …and on how each script finds lib/workgrove/common.sh. The three loaders differ only in what they do when
+  # the source fails, so the check stops at that line.
+  local c
+  a="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/wt")"
+  b="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/cmux-hook")"
+  c="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/agent-notify")"
+  assert_has "bin/wt has a loader that follows links" "$a" 'wg_hops -lt 32'
+  assert_eq "bin/cmux-hook loads the library the same way" "$a" "$b"
+  assert_eq "bin/agent-notify loads the library the same way" "$a" "$c"
   local fake="$TEST_ROOT/tmux-cmd-bin" line
   mkdir -p "$fake"
   cat >"$fake/tmux" <<'STUB'
@@ -2555,7 +2564,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=688
+FIXED_ASSERTIONS=691
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:

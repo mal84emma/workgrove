@@ -69,6 +69,9 @@ for script in "${SCRIPTS[@]}"; do
 done
 end_scenario
 
+# A wt-agent-status subtitle makes a hook that loaded the library print its quiet_control patch. So an empty
+# stdout shows that cmux-hook stopped at its missing-library branch.
+STATUS_SUBTITLE='wt-agent-status|alpha|claude|running|1000000000000000001|s1'
 begin_scenario 'scripts with no library: wt stops and the hooks exit 0'
 for script in wt cmux-hook agent-notify; do
   rc=0
@@ -76,6 +79,7 @@ for script in wt cmux-hook agent-notify; do
   [[ $script == wt ]] && args=(help)
   exec 3<<<'{}'
   env -i PATH="$PATH" HOME="$TEST_ROOT/home" XDG_STATE_HOME="$TEST_ROOT/home/.local/state" \
+    CMUX_NOTIFICATION_SUBTITLE="$STATUS_SUBTITLE" \
     "$BASH5" "$TEST_ROOT/nolib/bin/$script" "${args[@]}" > "$TEST_ROOT/out" 2> "$TEST_ROOT/err" <&3 || rc=$?
   remaining=$(cat <&3)
   exec 3<&-
@@ -86,8 +90,32 @@ for script in wt cmux-hook agent-notify; do
     assert_eq "$script exit status with no library" 0 "$rc"
     assert_eq "$script gives no hook answer with no library" '' "$(cat "$TEST_ROOT/out")"
     assert_eq "$script drains its payload with no library" '' "$remaining"
+    if [[ $script == agent-notify ]]; then
+      assert_grep 'agent-notify says that it cannot load the library' "$TEST_ROOT/err" 'cannot load'
+    fi
   fi
 done
+end_scenario
+
+# install.sh links each script into ~/.local/bin. Here a relative link points to an absolute link, which
+# points to the script in this checkout. Each run starts in another folder, so only the link leads to lib/.
+mkdir -p "$TEST_ROOT/links/bin" "$TEST_ROOT/links/chain"
+for script in wt cmux-hook agent-notify; do
+  ln -s "$REPO/bin/$script" "$TEST_ROOT/links/chain/$script"
+  ln -s "../chain/$script" "$TEST_ROOT/links/bin/$script"
+done
+begin_scenario 'scripts find the library through a chain of links'
+out=$(cd "$TEST_ROOT/home" && env -i PATH="$PATH" HOME="$TEST_ROOT/home" "$TEST_ROOT/links/bin/wt" help 2>&1) || true
+assert_eq 'wt prints its help through the links' yes "$([[ $out == *'wt new  [name]'* ]] && echo yes || echo "$out")"
+out=$(cd "$TEST_ROOT/links/bin" && env -i PATH="$PATH" HOME="$TEST_ROOT/home" "$BASH5" wt help 2>&1) || true
+assert_eq 'bash wt, in the folder of the link, prints the help' yes "$([[ $out == *'wt new  [name]'* ]] && echo yes || echo "$out")"
+out=$(cd "$TEST_ROOT/home" && printf '{}\n' | env -i PATH="$PATH" HOME="$TEST_ROOT/home" \
+  XDG_STATE_HOME="$TEST_ROOT/home/.local/state" CMUX_NOTIFICATION_SUBTITLE="$STATUS_SUBTITLE" \
+  "$TEST_ROOT/links/bin/cmux-hook" 2>&1) || true
+assert_eq 'cmux-hook answers control traffic through the links' yes "$([[ $out == *'"record":false'* ]] && echo yes || echo "$out")"
+out=$(cd "$TEST_ROOT/home" && printf '{}\n' | env -i PATH="$PATH" HOME="$TEST_ROOT/home" \
+  XDG_STATE_HOME="$TEST_ROOT/home/.local/state" "$TEST_ROOT/links/bin/agent-notify" 2>&1) || true
+assert_eq 'agent-notify loads the library through the links' '' "$out"
 end_scenario
 
 # Linux has no older /bin/bash. The Mac exercises the actual bash 3.2 handoff.
@@ -130,4 +158,4 @@ if ((SYS_MAJOR < 5)); then
     end_scenario
   done
 fi
-lib_summary $((26 + OLD_ASSERTIONS))
+lib_summary $((31 + OLD_ASSERTIONS))

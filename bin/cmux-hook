@@ -39,7 +39,8 @@ unset wg_path wg_hops wg_target
 # shellcheck source=lib/workgrove/common.sh
 if ! source "$wg_lib" 2>/dev/null; then
   # A missing library prints no patch, so cmux keeps the notification as it is. That is the same answer as
-  # the fallback for no bash 5 above, and it applies in every mode.
+  # the fallback for no bash 5 above, and it applies in every mode. So wt-agent-status control traffic then
+  # shows as an ordinary notification, as it does with no bash 5.
   exit 0
 fi
 unset wg_lib

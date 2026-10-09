@@ -395,7 +395,7 @@ prints `FAILED:` and the suite's path.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 931 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 934 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -435,7 +435,7 @@ prints `FAILED:` and the suite's path.
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 688 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 691 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -481,7 +481,8 @@ prints `FAILED:` and the suite's path.
   Script copies use scratch paths to test missing candidates, older candidates, and candidate order.
   With no bash 5, the hooks drain their payloads and exit 0 without an answer.
   With copies that have no `lib/`, the suite checks that `wt` stops and that the hooks drain their payloads and exit 0.
-  The suite makes 134 assertions on the Mac and 26 on a VM.
+  Through a relative link to an absolute link, the suite checks that each script finds `lib/` from another folder.
+  The suite makes 139 assertions on the Mac and 31 on a VM.
 
 ### Uninstall
 

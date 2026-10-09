@@ -103,7 +103,7 @@ Apply the guide to the prose that you write or edit in these files:
 - the `#` comments in `docs/ssh-config.example`
 - `AGENTS.md` and `CLAUDE.md` at the repository root
 - `home/.claude/AGENTS.md` and the skills in `home/.agents/skills/`
-- the code comments in `bin/`, `install.sh`, `test/`, the files in `home/`, `Brewfile`, `.gitignore`,
+- the code comments in `bin/`, `lib/`, `install.sh`, `test/`, the files in `home/`, `Brewfile`, `.gitignore`,
   and `vscode/settings-snippet.jsonc`
 - the help text of `wt` and `azml-ssh-host` (see [Edit comments and help text](#edit-comments-and-help-text))
 
