@@ -4,6 +4,23 @@
 set -u
 mode=${1:-hook}
 if [[ $mode == hook ]]; then cat >/dev/null; fi   # drain the envelope
+
+# The scripts in bin/ need bash 5 or later (README, "Requirements").
+# When /bin/bash 3.2 starts this script, use the first Homebrew candidate with version 5 or later.
+# WORKGROVE_REEXEC prevents a loop if the candidate changes after the version check.
+# This block must use bash 3.2 syntax.
+# It comes after the drain, so that the envelope is read once. The hook takes its data from the environment.
+if ((BASH_VERSINFO[0] < 5)) && [[ -z ${WORKGROVE_REEXEC:-} ]]; then
+  for bash5 in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x $bash5 ]] && "$bash5" -c '((BASH_VERSINFO[0] >= 5))' >/dev/null 2>&1; then
+      export WORKGROVE_REEXEC=1
+      exec "$bash5" "$0" "$@"
+    fi
+  done
+fi
+unset WORKGROVE_REEXEC
+if ((BASH_VERSINFO[0] < 5)); then exit 0; fi   # print no patch, so cmux keeps the notification as it is
+
 t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; ws=${CMUX_NOTIFICATION_WORKSPACE_ID:-}
 if [[ $mode == hook && ${CMUX_NOTIFICATION_SUBTITLE:-} == wt-agent-status\|* ]]; then
   t=wt-agent-status; b=${CMUX_NOTIFICATION_SUBTITLE}

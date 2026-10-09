@@ -49,6 +49,24 @@
 # a failure in the hook must never block them all. Any failure here (no jq, no payload) gives no answer.
 set -u -f                 # -f: no word that this script splits can expand as a glob
 
+# The scripts in bin/ need bash 5 or later (README, "Requirements").
+# When /bin/bash 3.2 starts this script, use the first Homebrew candidate with version 5 or later.
+# WORKGROVE_REEXEC prevents a loop if the candidate changes after the version check.
+# This block must use bash 3.2 syntax.
+if ((BASH_VERSINFO[0] < 5)) && [[ -z ${WORKGROVE_REEXEC:-} ]]; then
+  for bash5 in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x $bash5 ]] && "$bash5" -c '((BASH_VERSINFO[0] >= 5))' >/dev/null 2>&1; then
+      export WORKGROVE_REEXEC=1
+      exec "$bash5" "$0" "$@"
+    fi
+  done
+fi
+unset WORKGROVE_REEXEC
+if ((BASH_VERSINFO[0] < 5)); then
+  cat >/dev/null 2>&1       # read the payload, so that Claude Code's write cannot fail
+  exit 0                    # no answer: the permission lists decide, as for any other failure here
+fi
+
 command -v jq >/dev/null 2>&1 || exit 0
 payload=$(cat)
 # The hook refuses a control character outright and does not tokenize it. Bash drops a NUL from a variable,

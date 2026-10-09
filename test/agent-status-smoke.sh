@@ -261,4 +261,21 @@ rm -rf "$XDG_STATE_HOME/cmux-agent-status"
 WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
 if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
 end_scenario
-lib_summary 72
+
+# Both hooks need bash 5. With no bash 5 to start, each must exit 0 and do nothing, so that it blocks no agent
+# and no notification. Only a Mac has an older /bin/bash, so the scenario runs only there.
+# WORKGROVE_REEXEC=1 makes the prologue act as if no bash 5 existed.
+begin_scenario 'a hook that cannot start bash 5 exits 0 and does nothing'
+OLD_BASH_ASSERTIONS=0
+# shellcheck disable=SC2016   # $BASH_VERSINFO is for /bin/bash to expand, not this one
+if [[ $(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"') -lt 5 ]]; then
+  OLD_BASH_ASSERTIONS=3
+  : > "$CMUX_LOG"
+  rc=0; out=$(printf '{}\n' | WORKGROVE_REEXEC=1 /bin/bash "$REPO/bin/cmux-hook") || rc=$?
+  assert_eq 'cmux-hook exit status and patch' 'exit 0, no patch' "exit $rc, ${out:-no patch}"
+  rc=0; WORKGROVE_REEXEC=1 /bin/bash "$REPO/bin/agent-notify" </dev/null 2>/dev/null || rc=$?
+  assert_eq 'agent-notify exit status' 0 "$rc"
+  assert_eq 'neither hook called cmux' '' "$(cat "$CMUX_LOG")"
+fi
+end_scenario
+lib_summary $((72 + OLD_BASH_ASSERTIONS))
