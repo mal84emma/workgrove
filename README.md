@@ -19,25 +19,41 @@ VS Code opens only when you ask for it, through `wt open`.
 This section describes how `wt` names and finds rows, where it keeps task data, and which repos it uses.
 It also covers per-repo hooks and the logins that you supply.
 
-- **Identity.** Each row that a task owns has the title `<repo>:<name>`.
+- **Identity.** Each row that a task owns has the task name `<name>` as its title.
   Each kind of row has its own title:
 
   | Row title | What the row holds |
   |---|---|
-  | `<repo>:<name>` | a task |
+  | `<name>` | a task |
   | `<repo> shell` | a shell in a repo |
   | `shell` | a shell on a VM |
   | `driver` | the driver session, that is, the agent session that starts and watches tasks |
 
-  The description line of a task's row shows as the **second line** of its sidebar entry.
-  The second line reads `@local` or `@<host>`, so you always know where a session runs.
+  The description line of a row shows as the **second line** of its sidebar entry.
+  On a task row, the second line reads `@<host> · <repo>`, for example `@local · workgrove` or `@<vm> · workgrove`.
+  The separator is a space, a middle dot (U+00B7), and a space.
+  On the other rows, the second line reads `@local` or `@<host>`.
+  So you always know where a session runs, and which repo a task belongs to.
+
+  Two repos can have tasks with the same name. Their rows have the same title, and the repo on the second line tells them apart.
+  So `wt` and `bin/cmux-hook` find a task's row by its title, its repo, and its host.
+
+  Leave a task row's second line as `wt` wrote it. If you edit or clear it in cmux, `wt` no longer finds the row.
+  `wt rm` still checks such a row for a running agent, as [Remove a task](#remove-a-task) describes.
+
+  An older `wt` gave task rows the title `<repo>:<name>` and the second line `@<host>`.
+  `wt rm`, the name check of `wt new`, `wt -H <vm> new`, `attach` and `rm`, and `bin/cmux-hook` still find such a row.
+  The row keeps its old title until you close it. `wt show` prints the label in the new form, from the task's saved data.
+
+  A new VM task row gets its second line just after cmux creates it.
+  If cmux cannot write that line, `wt` and the hook close the new row, because no later lookup could find it.
 
   A task on a VM also has the tmux session `wt-<repo>-<name>`. This session keeps the agent alive across disconnects.
   The row itself is only a plain `cmux ssh` row, so the tmux session, not the row, gives this persistence.
   The shell that the row opens creates that tmux session, and the session runs the agent.
   If the session already exists, the shell takes it over instead.
 
-- **Rows are found by title, in every window.**
+- **Rows are found by title, repo and host, in every window.**
   The **Mac hook** is `bin/cmux-hook`, the cmux notification hook on the Mac.
   `wt` and the Mac hook look for rows in every cmux window, not only in the caller's window.
   - *Why rows move between windows:* a cmux window shows one row at a time.
@@ -343,7 +359,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 866 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 931 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -361,6 +377,12 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
   - That a failed tmux session query keeps the worktree, and a failed cmux row close reports its error.
   - That unreadable or malformed cmux lists and failed tmux agent probes cannot permit removal.
   - That a row in a second cmux window is still found and still closed.
+  - That a task row is found by its title, its repo, and its host. Two repos can have tasks with the same name,
+    and each command acts only on the row of its own repo. A row with the old `<repo>:<name>` title is still found.
+    The second line names the repo by its `repo_id`, as the Mac hook does, also for a repo name with a dot.
+  - That `wt rm` refuses while an agent runs in any row that may be the task's, whatever the order of the rows.
+    Such a row can have a second line that the user edited or cleared. It can also be a local row whose
+    directory is in the worktree, as written or through a symlink.
   - That a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its
     mapped port. The port can be on any local address, and the connection must not be from the Mac's current
     address.
@@ -370,14 +392,14 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     - The VM lists no tmux client on the session.
   - That client replacement requires a fresh status message visible in that row.
   - That `bin/wt`, when `/bin/bash` starts it, runs under bash 5, or stops with a message that names the fix.
-  - That `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists, and on
-    which field of `cmux list-windows` is a window.
+  - That `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists, on
+    which field of `cmux list-windows` is a window, and on which row a lookup names.
   - The last group is different: it tests the `rm -rf` of `test/lib.sh` itself. No real run reaches that
     `rm -rf`, for two reasons. Both suites build their scratch root with `mktemp -d`. They also refuse a
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 686 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 688 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -631,6 +653,13 @@ If cmux cannot report the row's agent status, `wt rm` keeps the worktree.
 For its own row, `wt rm` passes cmux's `--force` to skip the running-process confirmation.
 That cmux flag does not waive Git safety checks.
 If a row close fails after removal, `wt rm` reports the error and the cmux command to close that row.
+
+You can edit or clear a row's second line in cmux, and then the target row is not found by its repo.
+So `wt rm` also checks two other kinds of rows for a running agent:
+- each row with the task's title whose second line has a form that `wt` never writes;
+- each local row whose current directory is in the worktree.
+
+It refuses when another agent runs in any of them. It closes none of them, except the caller's own row with the task's title.
 
 Claude's automatic approval review can reject self-removal before the command reaches cmux.
 In that case, the agent reports the rejection and leaves the task intact.
@@ -945,7 +974,7 @@ and then Idle when the turn ends.
   a first line that sources `~/.zshenv`. For the usual prompt, type `zsh` inside the row's tmux.
 - The VM paths are implemented and documented here as designed. But they are the newest part of this
   setup. The first time you use one, make sure that:
-  - The row appears with its `@<host>` second line.
+  - The row appears with `@<host> · <repo>` on its second line.
   - `wt -H <vm> show -r <repo> <name>` reports the tmux session.
 
 ## Keeping machines in sync
@@ -1207,7 +1236,7 @@ notifications report `CMUX_NOTIFICATION_ORIGIN=local` instead of the documented 
 relay's own refusals are what show the origin.
 
 **The proof depends on the row list.** The proof is only as good as the row list that the hook reads. The
-window scoping in "Rows are found by title, in every window" (in [How it works](#how-it-works)) affected
+window scoping in "Rows are found by title, repo and host, in every window" (in [How it works](#how-it-works)) affected
 this check most. Before the fix:
 
 - A hook has no caller surface. So the hook's row list answered only for the window that was current.

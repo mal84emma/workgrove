@@ -156,4 +156,4 @@ next to the portable ones. It is a Mac-only step. Run it again after every `inst
 4. Write `~/.ssh/config` from [ssh-config.example](ssh-config.example), one block for each VM. This file is yours
    and is never versioned.
 5. Clone a repo into `~/Documents/Repositories` and start a task: type a brief into the cmux TextBox and
-   press ⏎. You get a row titled `<repo>:<name>` with `@local` on its second line.
+   press ⏎. You get a row titled `<name>` with `@local · <repo>` on its second line.

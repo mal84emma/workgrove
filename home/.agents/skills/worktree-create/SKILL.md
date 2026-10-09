@@ -10,7 +10,7 @@ Use this skill to create a task: a worktree, and optionally a row with an agent 
 Tool: `wt new` (see `wt help`). One task is:
 
 - one worktree at `<repo>/.worktrees/<name>` on branch `wt/<name>`
-- one cmux row titled `<repo>:<name>`, whose second line reads `@local` or `@<host>`
+- one cmux row titled `<name>`, whose second line reads `@local · <repo>` or `@<host> · <repo>`
 
 ## Command
 
@@ -85,7 +85,7 @@ Report the row only after attach succeeds.
 
 On a VM, `wt new` prepares the worktree and asks the Mac to open its row. Report these items:
 
-- the row `<repo>:<name>`, whose second line reads `@<host>`
+- the row `<name>`, whose second line reads `@<host> · <repo>`
 - the printed recovery command
 
 For several tasks, or for a task on a VM from the Mac, see `task-driver`.

@@ -249,8 +249,9 @@ fixture_commit() {
 
 # new_repo [name]: makes a throwaway repository under $REPOS_DIR with one commit on main. It sets the
 # identity and the default branch per repository, instead of inheriting them, so nothing here depends on
-# the machine. The suffix from mktemp is alphanumeric, so repo_id does not change the basename, and the row
-# title that a scenario expects is "<basename>:<name>". Scenario 3 tests the substitution rule separately.
+# the machine. The suffix from mktemp is alphanumeric. So when [name] is too, repo_id does not change the
+# basename, and the repo that a scenario expects in a row description ("@local · <repo>") is the basename.
+# Scenario 8 tests a name that repo_id changes.
 new_repo() {
   local r
   r="$(mktemp -d "$REPOS_DIR/${1:-repo}-XXXXXX")"
@@ -354,7 +355,9 @@ fi
 if [ "$1" = top ]; then
   if [ "${CMUX_STUB_FAIL_TOP:-}" = 1 ]; then exit 1; fi
   if [ "${CMUX_STUB_BAD_TOP:-}" = 1 ]; then echo '{"coding_agents":[{}]}'; exit 0; fi
-  printf '{"caller":{"workspace_id":"%s"},"coding_agents":[{"resources":{"process_count":%s}}]}\n' "${CMUX_STUB_CALLER:-other-row}" "${CMUX_STUB_AGENTS:-0}"
+  n="${CMUX_STUB_AGENTS:-0}"   # each row in CMUX_STUB_BUSY_ROWS runs an agent of its own
+  case " ${CMUX_STUB_BUSY_ROWS:-} " in *" $3 "*) n=1 ;; esac
+  printf '{"caller":{"workspace_id":"%s"},"coding_agents":[{"resources":{"process_count":%s}}]}\n' "${CMUX_STUB_CALLER:-other-row}" "$n"
   exit 0
 fi
 if [ "$1" = list-windows ]; then
@@ -614,7 +617,7 @@ scenario_new_and_sidecar() {
   assert_meta "$r" demo base main
   assert_meta "$r" demo agent claude
   assert_meta "$r" demo model ""
-  assert_meta "$r" demo title "$id:demo"
+  assert_meta "$r" demo title demo
   assert_meta "$r" demo session "wt-$id-demo"
   assert_meta "$r" demo includes ""
   assert_meta_matches "$r" demo created '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
@@ -1429,23 +1432,32 @@ scenario_cmux() {
   assert_dir "…and the worktree is there anyway" "$r/.worktrees/ws"
   assert_cmux_calls "…and cmux was only ever asked whether it is there" "$(printf 'ping\nping')"
 
-  # running, and the row title that this name would take belongs to another repo
+  # running, and the row that this name would take, with this repo's basename, belongs to another repo
   stub_cmux alive
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[
-  {"id":"workspace:1","title":"$id:taken","description":"@local","current_directory":"$REPOS_DIR"}
+  {"id":"workspace:1","title":"taken","description":"@local · $id","current_directory":"$REPOS_DIR"}
 ]}
 ROWS
-  assert_wt_fails 1 "row '$id:taken' already belongs to" new taken --no-workspace -r "$r"
+  assert_wt_fails 1 "row 'taken @local · $id' already belongs to" new taken --no-workspace -r "$r"
   assert_gone "…and refuses before it makes anything" "$r/.worktrees/taken"
+
+  # …and the same for a row that an older wt titled "<repo>:<name>", which still counts as that task's row
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[
+  {"id":"workspace:1","title":"$id:oldtaken","description":"@local","current_directory":"$REPOS_DIR"}
+]}
+ROWS
+  assert_wt_fails 1 "row '$id:oldtaken @local' already belongs to" new oldtaken --no-workspace -r "$r"
+  assert_gone "…and refuses before it makes anything" "$r/.worktrees/oldtaken"
 
   # Two rows share a title, and only the host tells them apart. With no host asked for, the local row
   # answers. Here the local row is this repo's own, so the name is free.
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[
-  {"id":"workspace:1","title":"$id:dup","description":"@vm1",
+  {"id":"workspace:1","title":"dup","description":"@vm1 · $id",
    "remote":{"enabled":true,"destination":"vm1"},"current_directory":"$REPOS_DIR"},
-  {"id":"workspace:2","title":"$id:dup","description":"@local","current_directory":"$r"}
+  {"id":"workspace:2","title":"dup","description":"@local · $id","current_directory":"$r"}
 ]}
 ROWS
   assert_wt_ok "the local row is the one consulted" new dup --no-workspace -r "$r"
@@ -1453,12 +1465,12 @@ ROWS
   # …and the other way round, to show the @host row is not what answered above
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[
-  {"id":"workspace:1","title":"$id:swap","description":"@vm1",
+  {"id":"workspace:1","title":"swap","description":"@vm1 · $id",
    "remote":{"enabled":true,"destination":"vm1"},"current_directory":"$r"},
-  {"id":"workspace:2","title":"$id:swap","description":"@local","current_directory":"$REPOS_DIR"}
+  {"id":"workspace:2","title":"swap","description":"@local · $id","current_directory":"$REPOS_DIR"}
 ]}
 ROWS
-  assert_wt_fails 1 "row '$id:swap' already belongs to" new swap --no-workspace -r "$r"
+  assert_wt_fails 1 "row 'swap @local · $id' already belongs to" new swap --no-workspace -r "$r"
   assert_gone "…and again refuses before it makes anything" "$r/.worktrees/swap"
 
   # The same two lookups, with the row in a SECOND cmux window. That is how two tasks are put side by side,
@@ -1471,10 +1483,10 @@ ROWS
   printf '{"workspaces":[]}\n' >"$WT_ROWS"     # empty: a one-window list is what this scenario must NOT rely on
   cat >"$WT_ROWS_DIR/$w2.json" <<ROWS
 {"workspaces":[
-  {"id":"row-in-window-two","title":"$id:moved","description":"@local","current_directory":"$REPOS_DIR"}
+  {"id":"row-in-window-two","title":"moved","description":"@local · $id","current_directory":"$REPOS_DIR"}
 ]}
 ROWS
-  assert_wt_fails 1 "row '$id:moved' already belongs to" new moved --no-workspace -r "$r"
+  assert_wt_fails 1 "row 'moved @local · $id' already belongs to" new moved --no-workspace -r "$r"
   assert_gone "…and makes nothing, though the row is in the other window" "$r/.worktrees/moved"
   assert_has "…having enumerated the windows to find it" "$(cat "$CMUX_LOG")" "list-windows"
 
@@ -1485,7 +1497,7 @@ ROWS
   assert_wt_ok "a worktree whose row is in the other window" new elsewhere --no-workspace -r "$r"
   cat >"$WT_ROWS_DIR/$w2.json" <<ROWS
 {"workspaces":[
-  {"id":"row-in-window-two","title":"$id:elsewhere","description":"@local","current_directory":"$r"}
+  {"id":"row-in-window-two","title":"elsewhere","description":"@local · $id","current_directory":"$r"}
 ]}
 ROWS
   assert_wt_ok "wt rm removes it" rm elsewhere -r "$r"
@@ -1494,7 +1506,7 @@ ROWS
 
   assert_wt_ok "a worktree in the selected window" new selected --no-workspace -r "$r"
   cat >"$WT_ROWS_DIR/$w1.json" <<ROWS
-{"workspaces":[{"id":"selected-window-row","title":"$id:selected","description":"@local"}]}
+{"workspaces":[{"id":"selected-window-row","title":"selected","description":"@local · $id"}]}
 ROWS
   assert_wt_ok "wt rm finds the selected window after its marker" rm selected -r "$r"
   assert_has "the selected window's row closed" "$(cat "$CMUX_LOG")" "workspace close selected-window-row"
@@ -1503,13 +1515,177 @@ ROWS
   # The sidecar holds the row title. Save it before removing that sidecar, or a renamed row stays open.
   stub_cmux alive
   assert_wt_ok "wt new custom" new custom --no-workspace -r "$r"
-  jq --arg t "$id:renamed" '.title = $t' "$r/.git/wt/custom.json" >"$r/.git/wt/custom.json.tmp"
+  jq '.title = "renamed"' "$r/.git/wt/custom.json" >"$r/.git/wt/custom.json.tmp"
   mv "$r/.git/wt/custom.json.tmp" "$r/.git/wt/custom.json"
   cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"custom-row","title":"$id:renamed","description":"@local","current_directory":"$r"}]}
+{"workspaces":[{"id":"custom-row","title":"renamed","description":"@local · $id","current_directory":"$r"}]}
 ROWS
   assert_wt_ok "wt rm uses the saved title" rm custom -r "$r"
   assert_has "…and closes the renamed row" "$(cat "$CMUX_LOG")" "workspace close custom-row"
+
+  # Two repos can each have a task with the same name. Both rows have that name as their title, and the repo
+  # in the description tells them apart.
+  local r2 id2
+  r2="$(new_repo other)"
+  id2="$(basename "$r2")"
+  stub_cmux alive
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[
+  {"id":"row-of-other","title":"same","description":"@local · $id2","current_directory":"$r2/.worktrees/same"},
+  {"id":"row-of-this","title":"same","description":"@local · $id","current_directory":"$r/.worktrees/same"}
+]}
+ROWS
+  assert_wt_ok "a task name that another repo uses is free here" new same --no-workspace -r "$r"
+  assert_wt_ok "…and in the other repo" new same --no-workspace -r "$r2"
+  assert_wt_ok "wt show same" show same -r "$r"
+  assert_has "…prints this repo's row label" "$WT_OUT" "row:     same @local · $id"
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt rm same" rm same -r "$r"
+  assert_has "…closes this repo's row" "$(cat "$CMUX_LOG")" "workspace close row-of-this"
+  assert_lacks "…without cmux's --force" "$(cat "$CMUX_LOG")" "workspace close row-of-this --force"
+  assert_lacks "…and not the other repo's row" "$(cat "$CMUX_LOG")" "workspace close row-of-other"
+  assert_dir "…and keeps the other repo's worktree" "$r2/.worktrees/same"
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt attach same in the other repo" attach same -r "$r2"
+  assert_has "…opens a row titled with the name, with the repo in its description" "$(cat "$CMUX_LOG")" \
+             "workspace create --name same --description @local · $id2 --cwd $r2/.worktrees/same --focus false"
+  assert_meta "$r2" same title same
+
+  # A repo's basename can hold characters that repo_id replaces. The description uses repo_id, which is also
+  # what a VM sends to the Mac hook, so wt and the hook name the same row.
+  local r3 id3
+  r3="$(new_repo dotted.repo)"
+  id3="$(basename "$r3" | tr . -)"
+  stub_cmux alive
+  assert_wt_ok "wt new in a repo with a dot in its name" new dotted --no-workspace -r "$r3"
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt attach dotted" attach dotted -r "$r3"
+  assert_has "…puts the repo's id in the description" "$(cat "$CMUX_LOG")" \
+             "workspace create --name dotted --description @local · $id3 --cwd"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"dotted-row","title":"dotted","description":"@local · $id3","current_directory":"$r3/.worktrees/dotted"}]}
+ROWS
+  assert_wt_ok "wt rm dotted" rm dotted -r "$r3"
+  assert_has "…finds the row by the repo's id" "$(cat "$CMUX_LOG")" "workspace close dotted-row"
+
+  # A task that an older wt made: the sidecar saved the title "<repo>:<name>", and the row still has that
+  # title and the description "@local". wt rm finds that row. wt show prints the label from the sidecar,
+  # in the new form, so it does not match such a row.
+  stub_cmux alive
+  assert_wt_ok "wt new legacy" new legacy --no-workspace -r "$r"
+  jq --arg t "$id:legacy" '.title = $t' "$r/.git/wt/legacy.json" >"$r/.git/wt/legacy.json.tmp"
+  mv "$r/.git/wt/legacy.json.tmp" "$r/.git/wt/legacy.json"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"legacy-row","title":"$id:legacy","description":"@local","current_directory":"$r/.worktrees/legacy"}]}
+ROWS
+  assert_wt_ok "wt show legacy" show legacy -r "$r"
+  assert_has "…prints the label in the new form" "$WT_OUT" "row:     legacy @local · $id"
+  assert_wt_ok "wt rm legacy" rm legacy -r "$r"
+  assert_has "…closes the row with the old title" "$(cat "$CMUX_LOG")" "workspace close legacy-row"
+  # When wt opens a row for such a task, it gives the row the new title and moves the sidecar to it.
+  assert_wt_ok "wt new oldmeta" new oldmeta --no-workspace -r "$r"
+  jq --arg t "$id:oldmeta" '.title = $t' "$r/.git/wt/oldmeta.json" >"$r/.git/wt/oldmeta.json.tmp"
+  mv "$r/.git/wt/oldmeta.json.tmp" "$r/.git/wt/oldmeta.json"
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt attach oldmeta" attach oldmeta -r "$r"
+  assert_has "…opens a row with the new title" "$(cat "$CMUX_LOG")" "workspace create --name oldmeta --description @local · $id --cwd"
+  assert_meta "$r" oldmeta title oldmeta
+  # A row with the old title is this repo's, whatever its second line says.
+  assert_wt_ok "wt new oldnote" new oldnote --no-workspace -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"oldnote-row","title":"$id:oldnote","description":"@local · my note","current_directory":"$r/.worktrees/oldnote"}]}
+ROWS
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt rm oldnote" rm oldnote -r "$r"
+  assert_has "…closes the row with the old title and an edited second line" "$(cat "$CMUX_LOG")" "workspace close oldnote-row"
+
+  # The user can edit or clear a row's second line in cmux. Then no lookup names the row. So wt rm checks each
+  # row with the task's title whose second line wt did not write, and refuses while an agent runs in one.
+  # A second line that names another repo is that repo's row, so wt rm does not check it.
+  stub_cmux alive
+  assert_wt_ok "wt new edited" new edited --no-workspace -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[
+  {"id":"other-repo-row","title":"edited","description":"@local · $id2","current_directory":"$r2"},
+  {"id":"edited-row","title":"edited","description":"@local · $id (waiting on review)","current_directory":"$r/.worktrees/edited"}
+]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=1")
+  assert_wt_fails 1 "an agent is running in cmux row edited-row" rm edited --force -r "$r"
+  assert_dir "…and keeps the worktree" "$r/.worktrees/edited"
+  # An agent that removes its own task closes its own row, as it does when the second line is intact.
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=edited-row" "CMUX_STUB_AGENTS=1")
+  : >"$CMUX_LOG"
+  assert_wt_ok "an agent removes its task from a row with an edited second line" rm edited -r "$r"
+  assert_has "…and closes its own row" "$(cat "$CMUX_LOG")" "workspace close edited-row --force"
+  # With no agent in it, a row with a cleared second line stays open, because nothing shows whose row it is.
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0")
+  assert_wt_ok "wt new cleared" new cleared --no-workspace -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"cleared-row","title":"cleared","description":"","current_directory":"$r/.worktrees/cleared"}]}
+ROWS
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt rm cleared" rm cleared -r "$r"
+  assert_lacks "…and leaves the row open" "$(cat "$CMUX_LOG")" "workspace close"
+
+  # From here, each row has an agent state of its own.
+  local guarded="$r/.worktrees/guarded" line
+  assert_wt_ok "wt new guarded" new guarded --no-workspace -r "$r"
+  # An edit can keep the form that wt writes. A local row whose current directory is in the worktree is still
+  # checked, whatever its title and second line say.
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
+  for line in "@local" "@local · wip"; do
+    cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"busy-row","title":"guarded","description":"$line","current_directory":"$guarded"}]}
+ROWS
+    assert_wt_fails 1 "an agent is running in cmux row busy-row, whose current directory is in this worktree" \
+      rm guarded --force -r "$r"
+  done
+  # The check covers the worktree's subdirectories, and a directory that names the worktree through a symlink.
+  ln -s "$guarded" "$TEST_ROOT/guarded-link"
+  for line in "$guarded/src" "$TEST_ROOT/guarded-link"; do
+    cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"busy-row","title":"notes","description":"@local","current_directory":"$line"}]}
+ROWS
+    assert_wt_fails 1 "an agent is running in cmux row busy-row, whose current directory is in this worktree" \
+      rm guarded -r "$r"
+  done
+  # Two rows can name the task without an edit, for example after a local wt attach while its row was open.
+  # An agent in the second row is another agent, and the refusal says so.
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"first-row","title":"guarded","description":"@local · $id"},{"id":"busy-row","title":"guarded","description":"@local · $id"}]}
+ROWS
+  assert_wt_fails 1 "another agent is running in cmux row busy-row; kept the worktree" rm guarded -r "$r"
+  # wt rm checks every row that may be the task's, in any order. Here the list has the caller's own row and an
+  # idle row with the old title, each next to a busy row.
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"own-row","title":"guarded","description":""},{"id":"busy-row","title":"guarded","description":""}]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=own-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
+  assert_wt_fails 1 "an agent is running in cmux row busy-row" rm guarded -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"old-row","title":"$id:guarded","description":"@local"},{"id":"busy-row","title":"guarded","description":""}]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
+  assert_wt_fails 1 "an agent is running in cmux row busy-row" rm guarded -r "$r"
+  assert_dir "…and keeps the worktree" "$guarded"
+  # These rows are not checked: a row on another host, a row with another title, and a row in a sibling
+  # worktree whose name starts with this one's. A row found only by its current directory is never closed.
+  # Here, those are the caller's own driver row and an idle shell row.
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[
+  {"id":"vm-row","title":"guarded","description":"","remote":{"enabled":true,"destination":"somevm"}},
+  {"id":"notes-row","title":"notes","description":""},
+  {"id":"sibling-row","title":"guarded-tests","description":"@local · $id","current_directory":"$r/.worktrees/guarded-tests"},
+  {"id":"shell-row","title":"$id shell","description":"@local","current_directory":"$guarded/src"},
+  {"id":"driver-row","title":"driver","description":"@local","current_directory":"$guarded"}
+]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=driver-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=vm-row notes-row sibling-row")
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt rm guarded" rm guarded -r "$r"
+  assert_lacks "…and closes no row" "$(cat "$CMUX_LOG")" "workspace close"
+  WT_RELAY_ENV=()
 
   # A sandbox can block the cmux socket after Git removes the worktree.
   stub_cmux alive
@@ -1525,7 +1701,7 @@ ROWS
   stub_cmux alive
   assert_wt_ok "wt new unsandboxed" new unsandboxed --no-workspace -r "$r"
   cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"sandbox-row","title":"$id:unsandboxed","description":"@local","current_directory":"$r"}]}
+{"workspaces":[{"id":"sandbox-row","title":"unsandboxed","description":"@local · $id","current_directory":"$r"}]}
 ROWS
   assert_wt_ok "local teardown from the main checkout outside the sandbox" rm unsandboxed -r "$r"
   assert_has "local teardown closed the row" "$(cat "$CMUX_LOG")" "workspace close sandbox-row"
@@ -1534,7 +1710,7 @@ ROWS
   for agent in claude codex; do
     assert_wt_ok "$agent test worktree" new "self-$agent" --no-workspace -r "$r"
     cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"own-$agent","title":"$id:self-$agent","description":"@local","current_directory":"$r"}]}
+{"workspaces":[{"id":"own-$agent","title":"self-$agent","description":"@local · $id","current_directory":"$r"}]}
 ROWS
     WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=1")
     assert_wt_fails 1 "another agent is running" rm "self-$agent" --force -r "$r"
@@ -1566,8 +1742,8 @@ ROWS
       invalid) printf 'not json\n' >"$WT_ROWS" ;;
       missing) printf '{"unexpected":[]}\n' >"$WT_ROWS" ;;
       null) printf '{"workspaces":null}\n' >"$WT_ROWS" ;;
-      no-id) printf '{"workspaces":[{"title":"%s:list-no-id"}]}\n' "$id" >"$WT_ROWS" ;;
-      remote) printf '{"workspaces":[{"id":"bad-row","title":"%s:list-remote","remote":{"enabled":"unknown"}}]}\n' "$id" >"$WT_ROWS" ;;
+      no-id) printf '{"workspaces":[{"title":"list-no-id","description":"@local · %s"}]}\n' "$id" >"$WT_ROWS" ;;
+      remote) printf '{"workspaces":[{"id":"bad-row","title":"list-remote","remote":{"enabled":"unknown"}}]}\n' >"$WT_ROWS" ;;
       windows) WT_RELAY_ENV=("CMUX_STUB_FAIL_WINDOWS=1") ;;
       bad-windows) WT_RELAY_ENV=("CMUX_STUB_BAD_WINDOWS=1") ;;
       partial|empty|scalar)
@@ -1618,6 +1794,7 @@ echo 'error connecting to tmux socket (Operation not permitted)' >&2
 exit 1
 STUB
   chmod +x "$fake/ssh" "$fake/tmux"
+  # This row has the "<repo>:<name>" title of an older wt, so these checks also show that host_rm finds it.
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[{"id":"active-vm-row","title":"$id:active-vm","remote":{"enabled":true,"destination":"smoke.invalid"}}]}
 ROWS
@@ -1635,11 +1812,22 @@ ROWS
   assert_wt_fails 1 "cannot check the agent in tmux session" -H smoke.invalid rm active-vm -r "$r"
   assert_has "the remote probe reports its socket error" "$WT_OUT" "Operation not permitted"
   assert_lacks "a failed remote probe cannot request removal" "$(cat "$CMUX_LOG")" "rm active-vm"
+  # A VM row of another repo's task with the same name is not this task's row, so host_rm does not check its
+  # agent. The refusal below comes from the VM's tmux session, not from that row.
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"other-vm-row","title":"active-vm","description":"@smoke.invalid · other-repo",
+  "remote":{"enabled":true,"destination":"smoke.invalid"}},{"id":"local-row","title":"active-vm","description":""}]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_AGENTS=1" "VM_AGENT_ACTIVE=1")
+  : >"$CMUX_LOG"
+  assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
+  assert_lacks "…and the other repo's row was not checked" "$(cat "$CMUX_LOG")" "top --workspace other-vm-row"
+  assert_lacks "…nor a local row with the same title" "$(cat "$CMUX_LOG")" "top --workspace local-row"
   WT_PATH_PREFIX="" WT_RELAY_ENV=()
 
   assert_wt_ok "wt new close-failed" new close-failed --no-workspace -r "$r"
   cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"failed-row","title":"$id:close-failed","description":"@local","current_directory":"$r"}]}
+{"workspaces":[{"id":"failed-row","title":"close-failed","description":"@local · $id","current_directory":"$r"}]}
 ROWS
   WT_RELAY_ENV=("CMUX_STUB_FAIL_CLOSE=1")
   wt_run rm close-failed -r "$r"
@@ -1655,10 +1843,10 @@ ROWS
   stub_cmux alive
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[
-  {"id":"workspace:1","title":"$id:onewin","description":"@local","current_directory":"$REPOS_DIR"}
+  {"id":"workspace:1","title":"onewin","description":"@local · $id","current_directory":"$REPOS_DIR"}
 ]}
 ROWS
-  assert_wt_fails 1 "row '$id:onewin' already belongs to" new onewin --no-workspace -r "$r"
+  assert_wt_fails 1 "row 'onewin @local · $id' already belongs to" new onewin --no-workspace -r "$r"
   stub_cmux dead
   end_scenario
 }
@@ -1682,7 +1870,7 @@ scenario_host_args() {
   assert_wt_fails 1 "show: -r must be an absolute path on $h" -H "$h" show -r .. x
   assert_wt_fails 1 "show: -r must be an absolute path on $h" -H "$h" show -r rel/path x
   # A trailing slash is normalized away, not refused. Otherwise it would change repo_id, and with it the row
-  # title that host_rm closes.
+  # that host_rm closes.
   assert_wt_fails 1 "does not run remotely" -H "$h" badsub -r /abs/path/
 
   assert_wt_fails 1 "wt -H: 'badsub' does not run remotely" -H "$h" badsub
@@ -1810,7 +1998,7 @@ STUB
   : >"$TEST_ROOT/remote-log"
   stub_cmux alive
   cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"remote-row","title":"project:task","description":"@fakevm",
+{"workspaces":[{"id":"remote-row","title":"task","description":"@fakevm · project",
   "remote":{"enabled":true,"destination":"fakevm","state":"suspended","persistent_daemon_slot":"$slot"}}]}
 ROWS
   assert_wt_ok "a suspended row reconnects" -H fakevm attach task -r /vm/repos/project
@@ -2236,10 +2424,11 @@ ROWS
 
 # 11. The invariants that two files promise each other in comments, and that nothing enforced. The copy of
 # tmux_cmd in bin/cmux-hook must match bin/wt's line for line (the command is the one that bin/cmux-hook's
-# own comment gives). The two files must also merge the per-window row lists identically. But first, the
-# promise that bin/wt's prologue makes: when /bin/bash starts bin/wt, bin/wt runs under bash 5 or later, or
-# it stops with a message that names the fix. On a Mac, /bin/bash is 3.2.57, and the prologue starts
-# Homebrew's bash. The suite makes this check on every run, whatever bash runs it.
+# own comment gives). The two files must also merge the per-window row lists identically, and match a row
+# to a task identically. But first, the promise that bin/wt's prologue makes: when /bin/bash starts bin/wt,
+# bin/wt runs under bash 5 or later, or it stops with a message that names the fix. On a Mac, /bin/bash is
+# 3.2.57, and the prologue starts Homebrew's bash. The suite makes this check on every run, whatever bash
+# runs it.
 scenario_shared_tmux_cmd() {
   begin_scenario "11. bin/wt reaches bash 5 from /bin/bash, and agrees with bin/cmux-hook on tmux_cmd and the row list"
   local a b sys=/bin/bash out rc sys_major env_file="$TEST_ROOT/bash-env" log="$TEST_ROOT/bash-versions"
@@ -2286,6 +2475,12 @@ scenario_shared_tmux_cmd() {
   a="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/wt")"
   b="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/cmux-hook")"
   assert_eq "the two take the same window uuids" "$a" "$b"
+  # …and on which row a lookup names: the description separator and the jq definitions that match a row.
+  # If the two disagreed, the hook could select or close a row that wt does not count as that task's row.
+  a="$(sed -n "/^ROW_SEP=/p; /^ROW_JQ='/,/^'\$/p" "$REPO/bin/wt")"
+  b="$(sed -n "/^ROW_SEP=/p; /^ROW_JQ='/,/^'\$/p" "$REPO/bin/cmux-hook")"
+  assert_has "bin/wt defines the row match" "$a" "def task_row"
+  assert_eq "bin/cmux-hook matches rows the same way" "$a" "$b"
   local fake="$TEST_ROOT/tmux-cmd-bin" line
   mkdir -p "$fake"
   cat >"$fake/tmux" <<'STUB'
@@ -2360,7 +2555,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=686
+FIXED_ASSERTIONS=688
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
@@ -2369,7 +2564,7 @@ FIXED_ASSERTIONS=686
 #     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
 #   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
 #   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=180
+DARWIN_ASSERTIONS=243
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
