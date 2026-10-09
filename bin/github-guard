@@ -92,6 +92,7 @@ deny() { decide deny "$1"; }
 # lower_ascii <name> <text>: set the variable <name> to <text> with only A-Z changed to a-z.
 # In a UTF-8 locale, ${v,,} also changes U+0130 to i and U+212A to k. gh keeps them in a host name.
 # So GH_HOST=gİthub.com would equal github.com here, and gh would send the token to another server.
+# Keep LC_ALL=C local. It ends when the function returns, so [[:space:]] in the caller still matches U+3000.
 lower_ascii() { local LC_ALL=C; printf -v "$1" '%s' "${2,,}"; }
 gh_here() { (cd "$cwd" 2>/dev/null && gh "$@") 2>/dev/null; }   # where the agent is, so {owner} means the same
 
