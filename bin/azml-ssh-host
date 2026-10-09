@@ -46,12 +46,16 @@
 #   - The helper writes UseKeychain on macOS only, because Linux OpenSSH rejects it.
 set -euo pipefail
 
-# The scripts in bin/ need bash 5 or later (README, "Requirements"). On a Mac, /bin/bash 3.2 runs this file when
-# it comes first on PATH, for example when cmux starts it. Then run the file again with Homebrew's bash.
-# WORKGROVE_REEXEC stops a loop if that bash is also older than 5. This block must stay valid bash 3.2.
+# The scripts in bin/ need bash 5 or later (README, "Requirements").
+# When /bin/bash 3.2 starts this script, use the first Homebrew candidate with version 5 or later.
+# WORKGROVE_REEXEC prevents a loop if the candidate changes after the version check.
+# This block must use bash 3.2 syntax.
 if ((BASH_VERSINFO[0] < 5)) && [[ -z ${WORKGROVE_REEXEC:-} ]]; then
   for bash5 in /opt/homebrew/bin/bash /usr/local/bin/bash; do
-    if [[ -x $bash5 ]]; then export WORKGROVE_REEXEC=1; exec "$bash5" "$0" "$@"; fi
+    if [[ -x $bash5 ]] && "$bash5" -c '((BASH_VERSINFO[0] >= 5))' >/dev/null 2>&1; then
+      export WORKGROVE_REEXEC=1
+      exec "$bash5" "$0" "$@"
+    fi
   done
 fi
 unset WORKGROVE_REEXEC

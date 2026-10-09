@@ -152,8 +152,8 @@ It also describes what a run changes, the repo's test suites, and how to remove 
   stops with a message.
 - **`bash`:** the scripts in `bin/` need version 5 or later. Ubuntu 22.04 and 24.04 ship bash 5.1 and 5.2.
   macOS ships only `/bin/bash` 3.2, so `Brewfile` installs Homebrew's bash.
-  - When `/bin/bash` starts a script in `bin/`, for example a hook that cmux starts, the script runs itself again
-    with `/opt/homebrew/bin/bash` or `/usr/local/bin/bash`.
+  - When `/bin/bash` starts a script in `bin/`, the script checks two Homebrew candidates in order.
+    It uses the first bash 5 or later: `/opt/homebrew/bin/bash`, then `/usr/local/bin/bash`.
   - Without a bash 5, `wt` and `azml-ssh-host` stop with a message that names `brew install bash`. The hooks
     exit 0 and do nothing, so they block no agent and no notification.
   - `install.sh` still runs under bash 3.2. To check that, run its smoke test with `INSTALL_BASH=/bin/bash`
@@ -343,7 +343,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 864 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 866 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -377,7 +377,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 678 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 686 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -393,7 +393,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
   - a row failure after worktree creation
   - an SSH disconnect after creation but before the Mac receives the result
   - that a brief, agent, and model survive an interrupted `.wt-setup`
-- **`bash test/github-guard-smoke.sh`** runs 430 assertions of hook payloads through `bin/github-guard`. The
+- **`bash test/github-guard-smoke.sh`** runs 431 assertions on the Mac and 430 on a VM through `bin/github-guard`. The
   suite stubs `gh`. The stub answers `gh api` from fixtures by running the guard's own `--jq` filter over them.
   Set `GUARD_BASH=/bin/bash` to start the guard with bash 3.2, which hands it to bash 5. The suite checks these
   results:
@@ -418,6 +418,11 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
   self-teardown cleanup. It needs no VM.
 - **`bash test/agent-status-linux-smoke.sh`** runs on a Linux VM. It checks the real process owner gate,
   transcript interruption, heartbeat state, and relay timeout against scratch files and a fake cmux.
+- **`bash test/bash5-smoke.sh`** checks all five scripts under bash 5.
+  On the Mac, it also starts each script with `/bin/bash` 3.2 and checks the final interpreter.
+  Script copies use scratch paths to test missing candidates, older candidates, and candidate order.
+  With no bash 5, the hooks drain their payloads and exit 0 without an answer.
+  The suite makes 126 assertions on the Mac and 18 on a VM.
 
 ### Uninstall
 

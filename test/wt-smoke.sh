@@ -2248,9 +2248,15 @@ scenario_shared_tmux_cmd() {
   # shellcheck disable=SC2016   # ${BASH_VERSINFO[0]} is for each of THOSE bashes to expand, not this one
   printf 'echo "${BASH_VERSINFO[0]}" >>"%s"\n' "$log" >"$env_file"
   rc=0; out=$(BASH_ENV="$env_file" "$sys" "$REPO/bin/wt" help 2>&1) || rc=$?
-  assert_has "bin/wt, started by $sys, prints its help" "$out" "wt new  [name]"
-  assert_eq "bin/wt, started by $sys, runs under bash 5 or later" "exit 0, bash 5+" \
-    "exit $rc, bash $(tail -1 "$log" | awk '{ print ($1 >= 5 ? "5+" : $1) }')"
+  if [[ $rc == 1 && $out == *'install it: brew install bash'* ]]; then
+    assert_has "bin/wt names the fix when no bash 5 exists" "$out" "brew install bash"
+    assert_eq "bin/wt reports an older bash" 'older' \
+      "$(tail -1 "$log" | awk '{ print ($1 < 5 ? "older" : "5+") }')"
+  else
+    assert_has "bin/wt, started by $sys, prints its help" "$out" "wt new  [name]"
+    assert_eq "bin/wt, started by $sys, runs under bash 5 or later" "exit 0, bash 5+" \
+      "exit $rc, bash $(tail -1 "$log" | awk '{ print ($1 >= 5 ? "5+" : $1) }')"
+  fi
   # WORKGROVE_REEXEC=1 makes the prologue act as if no bash 5 existed. Where /bin/bash is already bash 5 or
   # later (Linux), the prologue has nothing to do, and the help prints as usual.
   # shellcheck disable=SC2016   # $BASH_VERSINFO is for THAT bash to expand, not this one
