@@ -163,11 +163,12 @@ ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in ever
   # WS_FULL is 1 only when list-windows named every window and every window's list arrived. The fallback
   # below, a line of list-windows that names no window, and a window that printed nothing can each leave rows
   # out. That matters to attach_row's new_row: an older row that the list missed looks new.
-  local raw wins w out docs="" rc=0 full=1
+  local raw lines=() wins=() w out docs="" rc=0 full=1
   raw=$(capped "$CMUX" list-windows 2>/dev/null) || raw=""        # cannot enumerate: the fallback below stands in
-  wins=$(printf '%s\n' "$raw" | awk '{print ($1 == "*" ? $3 : $2)}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}') || wins=""
-  [[ -n $wins && $(printf '%s\n' "$raw" | grep -c .) -eq $(printf '%s\n' "$wins" | grep -c .) ]] || full=0
-  for w in $wins; do
+  mapfile -t lines <<<"$raw"
+  mapfile -t wins < <(printf '%s\n' "$raw" | awk '{print ($1 == "*" ? $3 : $2)}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}')
+  (( ${#wins[@]} > 0 && ${#wins[@]} == ${#lines[@]} )) || full=0   # each line of list-windows names a window
+  for w in "${wins[@]}"; do
     out=$(capped "$CMUX" workspace list --json --window "$w" 2>/dev/null); rc=$?
     [[ $rc -eq 0 ]] || break               # a window whose list timed out must not pass for one holding no rows
     [[ -n ${out//[[:space:]]/} ]] || full=0
