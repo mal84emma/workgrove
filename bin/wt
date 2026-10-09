@@ -518,8 +518,9 @@ close_workspace() { # close_workspace <name> [title] — use the saved title aft
   close_row "$(cmux_row_field "$title" "$REPO" id)"
 }
 close_row() { # close_row <row id> [self|new] — silent when the row is already gone
-  # cmux refuses to close a row with a running process unless it gets --force. "self" is the caller's own
-  # row, and "new" is a row that wt has just created and that runs only what wt started in it.
+  # cmux asks for --force before it closes a row in which a local agent runs, such as the caller's own row
+  # ("self"). "new" is a VM row that wt has just created. cmux 0.65 closes such a row without --force, as
+  # measured on a VM; wt passes it anyway, as the hook does, because the row runs only what wt started.
   [[ -n "$1" ]] || return 0
   local err args=()
   [[ ${2:-} == self || ${2:-} == new ]] && args=(--force)

@@ -26,8 +26,7 @@ UNAME
 # "no-ref-own" has the user's own row with the task's title and no repo, and a create that prints no ref.
 # "no-ref-race" has no rows before the create; after it, the list also has another repo's row that appeared
 # meanwhile. "race" lists no row the first time and this task's row after that. "tag-fail" and "race" make
-# every description write fail. As in cmux 0.65, a close without --force fails, because each row here runs
-# the ssh session that wt started in it. CMUX_CLOSE_OK=1 lets such a close pass, and the row stays listed.
+# every description write fail. A close leaves the rows of the mode listed.
 cat >"$TEST_ROOT/local/bin/cmux" <<'CMUX'
 #!/bin/sh
 printf '%s\n' "$*" >>"$CMUX_LOG"
@@ -35,10 +34,7 @@ row() { printf '{"id":"%s","title":"%s","description":"%s","remote":{"enabled":t
 case "$1" in
   ping) [ "$CMUX_MODE" != down ] ;;
   list-windows) ;;
-  workspace) if [ "$2" = close ] && [ "${4:-}" != --force ] && [ "${CMUX_CLOSE_OK:-}" != 1 ]; then
-               echo 'Error: confirmation_required: Workspace has a running process; retry with --force' >&2; exit 1
-             fi
-             case "$CMUX_MODE" in
+  workspace) case "$CMUX_MODE" in
                existing) printf '{"workspaces":[%s]}\n' "$(row workspace:123 task '@fakevm · repo')" ;;
                legacy) printf '{"workspaces":[%s]}\n' "$(row workspace:123 repo:task @fakevm)" ;;
                other-repo) printf '{"workspaces":[%s]}\n' "$(row other-row task '@fakevm · other')" ;;
@@ -130,7 +126,7 @@ invoke_wt() {
   WT_OUT=$(env -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u WT_HOST -u WT_AGENT \
     HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
     CMUX_BUNDLED_CLI_PATH="$TEST_ROOT/local/bin/cmux" CMUX_LOG="$TEST_ROOT/cmux.log" \
-    SSH_LOG="$TEST_ROOT/ssh.log" CMUX_MODE="$CMUX_MODE" SSH_MODE="$SSH_MODE" CMUX_CLOSE_OK="${CMUX_CLOSE_OK:-}" \
+    SSH_LOG="$TEST_ROOT/ssh.log" CMUX_MODE="$CMUX_MODE" SSH_MODE="$SSH_MODE" \
     REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" \
     REMOTE_HOME="$TEST_ROOT/remote" REMOTE_REPO="$TEST_ROOT/remote/repo" \
     REMOTE_NEW_MARKER="$TEST_ROOT/remote-new" REMOTE_DEFAULT_AGENT="$REMOTE_DEFAULT_AGENT" \
@@ -274,10 +270,8 @@ CMUX_MODE=legacy
 run_wt wt-demo claude
 check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'row for this task is already open'* ]] && echo yes)" 'leftover row with the old title was not found'
 # When such a row does not close, the message names it as the sidebar shows it.
-CMUX_CLOSE_OK=1
 invoke_wt -H fakevm attach --restart-agent -r "$TEST_ROOT/remote/repo" task
 check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'row repo:task @fakevm is still open'* ]] && echo yes)" 'the message did not name the row with the old title'
-CMUX_CLOSE_OK=""
 rm "$TEST_ROOT/remote-new"
 
 # A task of another repo can have the same name. Its row does not block this task, which gets a row of its own.
