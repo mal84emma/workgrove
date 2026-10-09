@@ -449,7 +449,7 @@ prints `FAILED:` and the suite's path.
   - a row failure after worktree creation
   - an SSH disconnect after creation but before the Mac receives the result
   - that a brief, agent, and model survive an interrupted `.wt-setup`
-- **`bash test/github-guard-smoke.sh`** runs 431 assertions on the Mac and 430 on a VM through `bin/github-guard`. The
+- **`bash test/github-guard-smoke.sh`** runs 441 assertions on the Mac and 440 on a VM through `bin/github-guard`. The
   suite stubs `gh`. The stub answers `gh api` from fixtures by running the guard's own `--jq` filter over them.
   Set `GUARD_BASH=/bin/bash` to start the guard with bash 3.2, which hands it to bash 5. The suite checks these
   results:
