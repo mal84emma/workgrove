@@ -272,9 +272,11 @@ ROW_SEP=' · '
 # - task_row($t; $r; $h; $sep): the row titled $t, for repo_id $r ("" for a row with no repo), on host $h.
 #   A row titled "<repo>:<name>" also matches, whatever its description. Older wt versions gave that title to
 #   task rows. Such a row keeps that title, so the lookup accepts both forms.
-# - unclaimed_row($t; $h; $sep): a row titled $t on host $h whose description is not one that wt writes.
+# - unclaimed_row($t; $h; $sep): a row titled $t on host $h whose description has a form that wt never writes.
 #   The user can edit or clear a description in cmux. Such a row may be a task row that task_row can no
 #   longer find, so wt rm checks it for a running agent.
+# - in_dir($d): a row whose current directory is $d or below it. A local task row's shell and agent start in
+#   the worktree, so wt rm also checks such rows, whatever their title and description say.
 # - new_row($t; $h; $ids; $sep): the row that `cmux ssh $h --name $t` just created, for a create that printed
 #   no workspace ref. The row has title $t, a description with no repo yet, and an id that is not in $ids,
 #   the row ids from before the create. The repo test keeps it off another repo's row even when $ids is empty.
@@ -289,6 +291,8 @@ ROW_JQ='
     and (.id as $i | all($ids[]; . != $i));
   def unclaimed_row($t; $h; $sep): .title == $t and on_host($h; $sep)
     and ((.description | if type == "string" then . else "" end) | test("^@[^ ]+(" + $sep + "[A-Za-z0-9-]+)?$") | not);
+  def in_dir($d): (.current_directory | if type == "string" then . else "" end) as $c
+    | $d != "" and ($c == $d or ($c | startswith($d + "/")));
 '
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 need_name()  { valid_name "$1" || die "invalid name '$1' (lowercase letters, digits, _ and -, max 63, no '.')"; }
@@ -471,10 +475,13 @@ task_title() { # task_title <name> [saved title] — the title of the task's row
 }
 
 row_label() { # row_label <title> <repo> [host] — the matching row as the sidebar shows it. An older wt's row
-  # keeps its old title, so this reads the row's own title and description.
+  # keeps its old title, so this reads the row's own title and description. A row that is gone by then
+  # reads as the label that wt would give it.
   local t d
-  t=$(cmux_row_field "$1" "$2" title "${3:-}"); d=$(cmux_row_field "$1" "$2" description "${3:-}")
-  printf '%s %s' "${t:-$1}" "${d:-$(row_tag "${3:-}" "$2")}"
+  t=$(cmux_row_field "$1" "$2" title "${3:-}")
+  if [[ -z "$t" ]]; then printf '%s %s' "$1" "$(row_tag "${3:-}" "$2")"; return 0; fi
+  d=$(cmux_row_field "$1" "$2" description "${3:-}")
+  printf '%s%s' "$t" "${d:+ $d}"
 }
 
 check_identity() { # refuse a name whose row belongs to another repo with the same basename (same repo_id)
@@ -524,7 +531,8 @@ close_row() { # close_row <row id> [self|new] — silent when the row is already
 }
 
 RM_ROW=""; RM_SELF=""
-check_row_removal() { # check_row_removal <title> <repo> [host] — refuse unreadable rows or another running agent.
+check_row_removal() { # check_row_removal <title> <repo> [host] [worktree path] — refuse unreadable rows or another
+  # running agent. Without a host, the worktree path names the local worktree that wt rm removes.
   RM_ROW=""; RM_SELF=""
   local c err
   if ! c=$(cmux_bin); then
@@ -536,29 +544,40 @@ check_row_removal() { # check_row_removal <title> <repo> [host] — refuse unrea
     case "$err" in 'Error: Socket not found at '*) [[ -n ${CMUX_WORKSPACE_ID:-} ]] || return 0 ;; esac
     die "cannot reach cmux${err:+: $err}; kept the worktree"
   fi
-  RM_ROW=$(cmux_row_field "$1" "$2" id "${3:-}" checked) \
-    || die "cannot list cmux rows; kept the worktree"
-  if [[ -n "$RM_ROW" ]]; then
-    row_agent "$c" "$RM_ROW"
-    case "$ROW_AGENT" in
-      self) RM_SELF=self ;;
-      busy) die "another agent is running in cmux row $RM_ROW; kept the worktree" ;;
-    esac
-    return 0
-  fi
-  # No row names this task's repo. The user may have edited or cleared the description of this task's row,
-  # so check every row with this title whose description wt did not write. Close none of them, because
-  # nothing shows which task such a row belongs to. Only the caller's own row is closed, as above.
-  local rows id
+  # The user can edit or clear a row's description in cmux, and then task_row no longer finds the task's row.
+  # So check the agent in every row that may be this task's, not only in the row that task_row finds:
+  # - by title: the row that task_row finds, and each row that unclaimed_row finds;
+  # - by directory: each local row whose current directory is in the worktree.
+  # Refuse when another agent runs in any of them. Close only the row that task_row finds, or the caller's
+  # own row when the title matches it. A row found only by its directory may belong to anything, such as
+  # the driver, so wt never closes it.
+  local rows by_title by_dir id self_row=""
   rows=$(rows_json checked) || die "cannot list cmux rows; kept the worktree"
-  for id in $(printf '%s' "$rows" | jq -r --arg t "$1" --arg h "${3:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
-                .workspaces[] | select(unclaimed_row($t; $h; $sep)) | .id'); do
+  rows=$(printf '%s' "$rows" | jq -c --arg t "$1" --arg r "$(if [[ -n "$2" ]]; then repo_id "$2"; fi)" --arg h "${3:-}" \
+           --arg d "${4:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
+           [.workspaces[] | select(task_row($t; $r; $h; $sep))][0].id as $exact
+           | {exact: ($exact // ""),
+              title: [.workspaces[] | select(task_row($t; $r; $h; $sep) or unclaimed_row($t; $h; $sep)) | .id],
+              dir: [.workspaces[] | select($h == "" and on_host($h; $sep) and in_dir($d)
+                                           and (task_row($t; $r; $h; $sep) or unclaimed_row($t; $h; $sep) | not)) | .id]}') \
+    || die "cannot list cmux rows; kept the worktree"
+  RM_ROW=$(printf '%s' "$rows" | jq -r '.exact')
+  by_title=$(printf '%s' "$rows" | jq -r '.title[]')
+  by_dir=$(printf '%s' "$rows" | jq -r '.dir[]')
+  for id in $by_title; do
     row_agent "$c" "$id"
     case "$ROW_AGENT" in
-      self) RM_ROW=$id; RM_SELF=self; return 0 ;;
-      busy) die "an agent is running in cmux row $id, titled '$1', whose second line does not name a repo; kept the worktree. If that row is this task's, close it first; otherwise set its second line to its own '@<host> · <repo>'" ;;
+      self) self_row=$id ;;
+      busy) [[ "$id" != "$RM_ROW" ]] || die "another agent is running in cmux row $id; kept the worktree"
+            die "an agent is running in cmux row $id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run" ;;
     esac
   done
+  for id in $by_dir; do
+    row_agent "$c" "$id"
+    [[ "$ROW_AGENT" != busy ]] \
+      || die "an agent is running in cmux row $id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run"
+  done
+  if [[ -n "$self_row" ]]; then RM_ROW=$self_row; RM_SELF=self; fi
 }
 
 ROW_AGENT=""
@@ -1296,7 +1315,7 @@ cmd_rm() {
       native=1
     fi
   else
-    check_row_removal "$title" "$REPO"
+    check_row_removal "$title" "$REPO" "" "$(wt_path "$name")"
   fi
   if [[ $self_remote -eq 1 && $native -eq 0 ]]; then
     # Check the relay setup only after the reasons above, while the worktree is still intact.

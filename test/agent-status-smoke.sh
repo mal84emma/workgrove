@@ -27,8 +27,10 @@ printf '%s\n' "$*" >> "$CMUX_LOG"
 # also has CMUX_ROWS_NEW (rows that appeared during the create) and the row that the create added, and `ssh`
 # prints no workspace ref.
 case $1 in
-  list-windows) echo '* 0: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA' ;;
-  workspace) rows=${CMUX_ROWS:-'{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"task","description":"@test-vm · repo","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}'}
+  list-windows) printf '%s\n' "${CMUX_WINDOWS:-* 0: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA}" ;;
+  workspace) # CMUX_EMPTY_WINDOW names a window whose list prints nothing.
+             [[ -n ${CMUX_EMPTY_WINDOW:-} && " $* " == *" --window $CMUX_EMPTY_WINDOW "* ]] && exit 0
+             rows=${CMUX_ROWS:-'{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"task","description":"@test-vm · repo","remote":{"enabled":true,"destination":"test-vm"}},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","remote":{"enabled":true,"destination":"other-vm"}},{"id":"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD","remote":{"enabled":true,"destination":"test-vm"}}'}
              [[ -e $CMUX_LOG.created ]] && rows+="${CMUX_ROWS_NEW:+,$CMUX_ROWS_NEW}"',{"id":"EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE","title":"task","remote":{"enabled":true,"destination":"test-vm"}}'
              printf '{"workspaces":[%s]}\n' "$rows" ;;
   ssh) if [[ -n ${CMUX_SSH_NOREF:-} ]]; then : > "$CMUX_LOG.created"; echo OK; else echo 'OK workspace:77'; fi ;;
@@ -237,6 +239,21 @@ if [[ $out != *'"desktop":false'* ]]; then pass; else fail 'a create with no ref
 check_missing "$CMUX_LOG" 'workspace-action'
 check_contains "$XDG_STATE_HOME/cmux-hook.log" 'the row list from before the create was not complete'
 rm -f "$CMUX_LOG.created"
+# A second window whose list prints nothing, and a list-windows line that names no window, also leave the list
+# incomplete.
+two_windows=$'* 0: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA\n  1: 99999999-9999-4999-8999-999999999999'
+: > "$CMUX_LOG"; : > "$XDG_STATE_HOME/cmux-hook.log"
+out=$(CMUX_WINDOWS=$two_windows CMUX_EMPTY_WINDOW=99999999-9999-4999-8999-999999999999 CMUX_SSH_NOREF=1 \
+  attach_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
+check_missing "$CMUX_LOG" 'workspace-action'
+check_contains "$XDG_STATE_HOME/cmux-hook.log" 'the row list from before the create was not complete'
+rm -f "$CMUX_LOG.created"
+: > "$CMUX_LOG"; : > "$XDG_STATE_HOME/cmux-hook.log"
+out=$(CMUX_WINDOWS=$'* 0: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA\n  1: a window line in a new format' CMUX_SSH_NOREF=1 \
+  attach_hook '{"host":"test-vm","repo":"/vm/repos/other","task":"task"}')
+check_missing "$CMUX_LOG" 'workspace-action'
+check_contains "$XDG_STATE_HOME/cmux-hook.log" 'the row list from before the create was not complete'
+rm -f "$CMUX_LOG.created"
 end_scenario
 
 begin_scenario 'Mac Running, Idle, clear and event ordering'
@@ -351,4 +368,4 @@ rm -rf "$XDG_STATE_HOME/cmux-agent-status"
 WT_STATUS_LEASE_SECONDS=0 bash "$REPO/bin/cmux-hook" --expire "$CMUX_WORKSPACE_ID" codex "$lease"
 if [[ ! -d $XDG_STATE_HOME/cmux-agent-status ]]; then pass; else fail 'orphan timer recreated status directory'; fi
 end_scenario
-lib_summary 102
+lib_summary 106

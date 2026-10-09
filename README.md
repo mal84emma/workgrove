@@ -37,8 +37,9 @@ It also covers per-repo hooks and the logins that you supply.
 
   Two repos can have tasks with the same name. Their rows have the same title, and the repo on the second line tells them apart.
   So `wt` and `bin/cmux-hook` find a task's row by its title, its repo, and its host.
+
   Leave a task row's second line as `wt` wrote it. If you edit or clear it in cmux, `wt` no longer finds the row.
-  `wt rm` then still checks each row with the task's title and an edited or empty second line. It refuses while an agent runs in one of them.
+  `wt rm` still checks such a row for a running agent, as [Remove a task](#remove-a-task) describes.
 
   An older `wt` gave task rows the title `<repo>:<name>` and the second line `@<host>`.
   `wt rm`, the name check of `wt new`, `wt -H <vm> new`, `attach` and `rm`, and `bin/cmux-hook` still find such a row.
@@ -352,7 +353,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 909 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 923 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -373,7 +374,8 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
   - That a task row is found by its title, its repo, and its host. Two repos can have tasks with the same name,
     and each command acts only on the row of its own repo. A row with the old `<repo>:<name>` title is still found.
     The second line names the repo by its `repo_id`, as the Mac hook does, also for a repo name with a dot.
-    `wt rm` refuses while an agent runs in a row whose second line the user edited or cleared.
+    `wt rm` refuses while an agent runs in any row that may be the task's: a row whose second line the user
+    edited or cleared, or a local row in the worktree. It checks all of them, whatever their order.
   - That a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its
     mapped port. The port can be on any local address, and the connection must not be from the Mac's current
     address.
@@ -634,12 +636,17 @@ Changing directories does not give the command access to the cmux or tmux socket
 
 Before removal, `wt rm` checks the target row for a running agent.
 It permits the caller's own row and refuses another agent's row, even with `wt rm --force`.
-When no row names the task's repo, `wt rm` checks each row with the task's title and an edited or empty second line.
-It closes none of those rows, except the caller's own.
 If cmux cannot report the row's agent status, `wt rm` keeps the worktree.
 For its own row, `wt rm` passes cmux's `--force` to skip the running-process confirmation.
 That cmux flag does not waive Git safety checks.
 If a row close fails after removal, `wt rm` reports the error and the cmux command to close that row.
+
+You can edit or clear a row's second line in cmux, and then the target row is not found by its repo.
+So `wt rm` also checks two other kinds of rows for a running agent:
+- each row with the task's title whose second line has a form that `wt` never writes;
+- each local row whose current directory is in the worktree.
+
+It refuses when another agent runs in any of them. It closes none of them, except the caller's own row with the task's title.
 
 Claude's automatic approval review can reject self-removal before the command reaches cmux.
 In that case, the agent reports the rejection and leaves the task intact.

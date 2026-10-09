@@ -356,7 +356,9 @@ fi
 if [ "$1" = top ]; then
   if [ "${CMUX_STUB_FAIL_TOP:-}" = 1 ]; then exit 1; fi
   if [ "${CMUX_STUB_BAD_TOP:-}" = 1 ]; then echo '{"coding_agents":[{}]}'; exit 0; fi
-  printf '{"caller":{"workspace_id":"%s"},"coding_agents":[{"resources":{"process_count":%s}}]}\n' "${CMUX_STUB_CALLER:-other-row}" "${CMUX_STUB_AGENTS:-0}"
+  n="${CMUX_STUB_AGENTS:-0}"   # each row in CMUX_STUB_BUSY_ROWS runs an agent of its own
+  case " ${CMUX_STUB_BUSY_ROWS:-} " in *" $3 "*) n=1 ;; esac
+  printf '{"caller":{"workspace_id":"%s"},"coding_agents":[{"resources":{"process_count":%s}}]}\n' "${CMUX_STUB_CALLER:-other-row}" "$n"
   exit 0
 fi
 if [ "$1" = list-windows ]; then
@@ -1541,6 +1543,7 @@ ROWS
   : >"$CMUX_LOG"
   assert_wt_ok "wt rm same" rm same -r "$r"
   assert_has "…closes this repo's row" "$(cat "$CMUX_LOG")" "workspace close row-of-this"
+  assert_lacks "…without cmux's --force" "$(cat "$CMUX_LOG")" "workspace close row-of-this --force"
   assert_lacks "…and not the other repo's row" "$(cat "$CMUX_LOG")" "workspace close row-of-other"
   assert_dir "…and keeps the other repo's worktree" "$r2/.worktrees/same"
   : >"$CMUX_LOG"
@@ -1625,6 +1628,46 @@ ROWS
   : >"$CMUX_LOG"
   assert_wt_ok "wt rm cleared" rm cleared -r "$r"
   assert_lacks "…and leaves the row open" "$(cat "$CMUX_LOG")" "workspace close"
+
+  # From here, each row has an agent state of its own.
+  local guarded="$r/.worktrees/guarded" line
+  assert_wt_ok "wt new guarded" new guarded --no-workspace -r "$r"
+  # An edit can keep the form that wt writes. A local row whose current directory is in the worktree is still
+  # checked, whatever its title and second line say.
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
+  for line in "@local" "@local · wip"; do
+    cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"busy-row","title":"guarded","description":"$line","current_directory":"$guarded"}]}
+ROWS
+    assert_wt_fails 1 "an agent is running in cmux row busy-row, whose current directory is in this worktree" \
+      rm guarded --force -r "$r"
+  done
+  # wt rm checks every row that may be the task's, whichever comes first in the list: here, the caller's own
+  # row, and an idle row with the old title.
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"own-row","title":"guarded","description":""},{"id":"busy-row","title":"guarded","description":""}]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=own-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
+  assert_wt_fails 1 "an agent is running in cmux row busy-row" rm guarded -r "$r"
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[{"id":"old-row","title":"$id:guarded","description":"@local"},{"id":"busy-row","title":"guarded","description":""}]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
+  assert_wt_fails 1 "an agent is running in cmux row busy-row" rm guarded -r "$r"
+  assert_dir "…and keeps the worktree" "$guarded"
+  # A row on another host and a row with another title are not checked. A row found only by its current
+  # directory is never closed, not even when it is the caller's, such as the driver's row.
+  cat >"$WT_ROWS" <<ROWS
+{"workspaces":[
+  {"id":"vm-row","title":"guarded","description":"","remote":{"enabled":true,"destination":"somevm"}},
+  {"id":"notes-row","title":"notes","description":""},
+  {"id":"driver-row","title":"driver","description":"@local","current_directory":"$guarded"}
+]}
+ROWS
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=driver-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=vm-row notes-row")
+  : >"$CMUX_LOG"
+  assert_wt_ok "wt rm guarded" rm guarded -r "$r"
+  assert_lacks "…and closes no row" "$(cat "$CMUX_LOG")" "workspace close"
   WT_RELAY_ENV=()
 
   # A sandbox can block the cmux socket after Git removes the worktree.
@@ -1756,12 +1799,13 @@ ROWS
   # agent. The refusal below comes from the VM's tmux session, not from that row.
   cat >"$WT_ROWS" <<ROWS
 {"workspaces":[{"id":"other-vm-row","title":"active-vm","description":"@smoke.invalid · other-repo",
-  "remote":{"enabled":true,"destination":"smoke.invalid"}}]}
+  "remote":{"enabled":true,"destination":"smoke.invalid"}},{"id":"local-row","title":"active-vm","description":""}]}
 ROWS
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=1" "VM_AGENT_ACTIVE=1")
   : >"$CMUX_LOG"
   assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
   assert_lacks "…and the other repo's row was not checked" "$(cat "$CMUX_LOG")" "top --workspace other-vm-row"
+  assert_lacks "…nor a local row with the same title" "$(cat "$CMUX_LOG")" "top --workspace local-row"
   WT_PATH_PREFIX="" WT_RELAY_ENV=()
 
   assert_wt_ok "wt new close-failed" new close-failed --no-workspace -r "$r"
@@ -2482,7 +2526,7 @@ FIXED_ASSERTIONS=686
 #     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
 #   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
 #   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=223
+DARWIN_ASSERTIONS=237
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
