@@ -62,7 +62,7 @@ The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥
 
 4. **Report each task** after its row opens. Give these items:
    - the name
-   - the row title (`<repo>:<slug>`, second line `@local` or `@<vm>`)
+   - the row title (`<slug>`, second line `@local · <repo>` or `@<vm> · <repo>`)
    - the branch
    - the path
    - on a VM, the tmux session

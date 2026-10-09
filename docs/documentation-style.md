@@ -128,7 +128,7 @@ If you must change one, update every file that cites it in the same change.
 | The file names `docs/new-mac.md` and `docs/new-vm.md` | `install.sh`, which builds the path `docs/new-$page.md` |
 | `## Install` and the sync table in `## Keeping machines in sync` in `README.md` | `docs/new-mac.md` and `docs/new-vm.md` |
 | `## Notes` in `docs/new-vm.md`, with its rsync line | `README.md` ("the notes of docs/new-vm.md") |
-| `## Agents` and the "Rows are found by title, in every window" bullet in `README.md` | The README's Security section |
+| `## Agents` and the "Rows are found by title, repo and host, in every window" bullet in `README.md` | The README's Security section |
 | `### Recover a VM row` in `README.md` | The README's Daily use table, and `docs/azml-compute.md` (`../README.md#recover-a-vm-row`) |
 | `## Opening apps` in `home/.claude/AGENTS.md` | The worktree-show skill ("`AGENTS.md`, Opening apps") |
 | The `name:` of each skill | `home/.claude/AGENTS.md`, the other skills, and the README's skills table |
@@ -181,7 +181,7 @@ When you edit an agent instruction file:
 |---|---|
 | task | One unit of work: one git worktree at `<repo>/.worktrees/<name>` on branch `wt/<name>`, with one cmux row |
 | row | One cmux workspace, shown as one entry in the cmux sidebar. Say "workspace" only in cmux's own names, such as `cmux workspace list` and `--no-workspace`. |
-| second line | The description line of a row in the sidebar. It reads `@local` or `@<host>`. |
+| second line | The description line of a row in the sidebar. It reads `@<host> · <repo>` for a task row and `@<host>` for other rows. `<host>` is `local` or the VM's alias. |
 | main checkout | The primary working tree of a repository, not a worktree |
 | base branch, base ref | What a task branch starts from and is compared with |
 | brief | The task prompt that the agent gets (`-p`, `--prompt-stdin`) |
@@ -207,7 +207,7 @@ When you edit an agent instruction file:
    grep -n '^## Install$' README.md
    grep -n '^## Keeping machines in sync$' README.md
    grep -n '^## Agents$' README.md
-   grep -n 'Rows are found by title, in every window' README.md
+   grep -n 'Rows are found by title, repo and host, in every window' README.md
    grep -n '^### Recover a VM row$' README.md
    grep -n '^## Notes$' docs/new-vm.md
    grep -n 'sshd_config.d' docs/new-vm.md
