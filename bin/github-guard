@@ -89,6 +89,10 @@ decide() {
 }
 allow() { decide allow "$1"; }
 deny() { decide deny "$1"; }
+# lower_ascii <name> <text>: set the variable <name> to <text> with only A-Z changed to a-z.
+# In a UTF-8 locale, ${v,,} also changes U+0130 to i and U+212A to k. gh keeps them in a host name.
+# So GH_HOST=gİthub.com would equal github.com here, and gh would send the token to another server.
+lower_ascii() { local LC_ALL=C; printf -v "$1" '%s' "${2,,}"; }
 gh_here() { (cd "$cwd" 2>/dev/null && gh "$@") 2>/dev/null; }   # where the agent is, so {owner} means the same
 
 # tokenize <command>: split it into WORDS exactly as sh, bash or zsh would, or fail. The function knows only
@@ -151,9 +155,10 @@ this_repos() {    # owner/repo, one per line, of every github.com remote of the 
 }
 is_this_repo() {  # is_this_repo <owner/repo>: one of this_repos, compared case-insensitively, as GitHub does
   local want mine
-  want=${1,,}
+  lower_ascii want "$1"
   while IFS= read -r mine; do
-    [[ ${mine,,} == "$want" ]] && return 0
+    lower_ascii mine "$mine"
+    [[ $mine == "$want" ]] && return 0
   done < <(this_repos)
   return 1
 }
@@ -170,18 +175,19 @@ same_repo() {     # same_repo <owner> <repo>: gh's {owner}/{repo} (gh_aims_here 
 gh_aims_here() {
   local v r host
   v=${GH_HOST:-github.com}
-  [[ ${v,,} == github.com ]] || deny "GH_HOST=$v points gh at another server; agents write only to github.com"
+  lower_ascii host "$v"
+  [[ $host == github.com ]] || deny "GH_HOST=$v points gh at another server; agents write only to github.com"
   if [[ -n ${GH_REPO:-} ]]; then
     r=$GH_REPO
-    host=${r%%/*}
-    [[ ${host,,} == github.com ]] && r=${r#*/}   # [HOST/]OWNER/REPO, as gh takes it
+    lower_ascii host "${r%%/*}"
+    [[ $host == github.com ]] && r=${r#*/}   # [HOST/]OWNER/REPO, as gh takes it
     is_this_repo "$r" || deny "GH_REPO=$GH_REPO points gh at a repository that is not a github.com remote of \
 this one; agents write only to this repository"
   fi
   while read -r _ v; do
     r=$v
-    host=${r%%/*}
-    [[ ${host,,} == github.com ]] && r=${r#*/}
+    lower_ascii host "${r%%/*}"
+    [[ $host == github.com ]] && r=${r#*/}
     [[ $v == base ]] || is_this_repo "$r" \
       || deny "gh repo set-default points gh at $v, which is not a github.com remote of this repository"
   done < <(git -C "$cwd" config --get-regexp '^remote\..*\.gh-resolved$' 2>/dev/null)
@@ -283,17 +289,18 @@ branch protection, so it stays the user's to give; post event=COMMENT or REQUEST
 # because only GitHub knows. A maintainer's login may edit anyone's comment, and an agent that edits a
 # reviewer's words is not making a fix.
 own() {
-  local me author
+  local me author me_lower author_lower
   me=$(gh_here api user --jq .login) && [[ -n $me ]] \
     || deny "could not ask GitHub who this gh login is (is gh logged in?)"
   author=$(gh_here api "$1" --jq .user.login) && [[ -n $author ]] \
     || deny "could not ask GitHub who wrote $1"
-  [[ ${author,,} == "${me,,}" ]] \
+  lower_ascii me_lower "$me"; lower_ascii author_lower "$author"
+  [[ $author_lower == "$me_lower" ]] \
     || deny "$1 was written by $author, not by this login ($me); agents edit only their own"
 }
 
 check_gh_api() {
-  local a v endpoint='' method='' nfields=0 fields=() values=() path
+  local a v endpoint='' method='' nfields=0 fields=() values=() path lowered
   while [[ $# -gt 0 ]]; do
     a=$1; shift
     case $a in
@@ -316,7 +323,8 @@ check_gh_api() {
         [[ $v == *=* ]] || deny "gh api $a takes key=value"
         nfields=$((nfields + 1)); fields+=("${v%%=*}"); values+=("${v#*=}") ;;
       -H|--header)
-        case ${v,,} in accept:*|x-github-api-version:*) ;;
+        lower_ascii lowered "$v"
+        case $lowered in accept:*|x-github-api-version:*) ;;
           *) deny "gh api may set only the Accept and X-GitHub-Api-Version headers" ;;
         esac ;;
       -q|--jq|-t|--template|--cache|-p|--preview) ;;
@@ -329,7 +337,8 @@ check_gh_api() {
   [[ $endpoint =~ [[:space:]] ]] && deny "gh api endpoint has a blank in it"
 
   path=${endpoint#/}; path=${path%%\?*}
-  if [[ ${path,,} == graphql ]]; then
+  lower_ascii lowered "$path"
+  if [[ $lowered == graphql ]]; then
     [[ -z $method || $method == POST ]] || deny "gh api graphql is always a POST; drop -X $method"
     local i nq=0 query='' class
     for ((i = 0; i < nfields; i++)); do
