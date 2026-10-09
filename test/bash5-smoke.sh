@@ -21,8 +21,9 @@ for script in "${SCRIPTS[@]}"; do
     "$REPO/bin/$script" > "$TEST_ROOT/copies/$script"
 done
 cat > "$TEST_ROOT/bash-env" <<'BASH_ENV_FILE'
-# Bash 3.2 reads BASH_ENV before it sets $0 to the script path.
-if [[ $0 == "$SCRIPT_UNDER_TEST" || $0 == /bin/bash ]]; then
+# Bash before 5.2 reads BASH_ENV before it sets $0 to the script path. Until then, $0 is the
+# interpreter as run_script spells it: /bin/bash 3.2 on the Mac, or /usr/bin/bash 5.1 on Ubuntu 22.04.
+if [[ $0 == "$SCRIPT_UNDER_TEST" || $0 == "$BASH_UNDER_TEST" ]]; then
   printf '%s:%s\n' "${BASH_VERSINFO[0]}" "$BASH" >> "$BASH_TRACE"
 fi
 BASH_ENV_FILE
@@ -36,7 +37,8 @@ run_script() {
   exec 3<<<'{}'
   env -i PATH="$PATH" \
     HOME="$TEST_ROOT/home" XDG_STATE_HOME="$TEST_ROOT/home/.local/state" \
-    BASH_ENV="$TEST_ROOT/bash-env" SCRIPT_UNDER_TEST="$file" BASH_TRACE="$TEST_ROOT/trace" \
+    BASH_ENV="$TEST_ROOT/bash-env" SCRIPT_UNDER_TEST="$file" BASH_UNDER_TEST="$interpreter" \
+    BASH_TRACE="$TEST_ROOT/trace" \
     "$interpreter" "$file" "${args[@]}" > "$TEST_ROOT/out" 2> "$TEST_ROOT/err" <&3 || rc=$?
   remaining=$(cat <&3)
   exec 3<&-

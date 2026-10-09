@@ -112,6 +112,8 @@ workgrove/
 ├── install.sh                 links this repo into $HOME (Mac and Ubuntu)
 ├── Brewfile                   bash fzf gh jq shellcheck (azure-cli commented out); casks cmux, VS Code, GCM
 ├── .gitignore
+├── .github/
+│   └── workflows/tests.yml    GitHub Actions: shellcheck and every suite in test/, on macOS and Ubuntu
 ├── bin/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
 │   ├── agent-notify           agent lifecycle hook, relays to cmux or posts a banner
@@ -137,6 +139,7 @@ workgrove/
 │   ├── lib.sh                 the assertion vocabulary both suites speak
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
+│   ├── bash5-smoke.sh         all five bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with a fake gh
 │   ├── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
@@ -341,6 +344,37 @@ The line must be at the top because Ubuntu's `~/.bashrc` returns early in a non-
 the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
 
 ### Tests
+
+GitHub Actions runs [`.github/workflows/tests.yml`](.github/workflows/tests.yml) on every push and every
+pull request. The workflow makes these checks:
+
+- `shellcheck -x` checks `bin/*`, `install.sh` and `test/*.sh` on `macos-latest`. It uses Homebrew's
+  shellcheck, as `Brewfile` does on the Mac.
+- Every suite in `test/` runs on `macos-latest`, `ubuntu-22.04` and `ubuntu-24.04`. Each suite checks the
+  assertion total for its platform.
+  - On macOS, Homebrew's bash is first on `PATH`. `install-smoke.sh` runs `install.sh` with
+    `INSTALL_BASH=/bin/bash`, and `bash5-smoke.sh` tests the `/bin/bash` 3.2 handoffs.
+  - On Ubuntu, the job stops when `tmux` is missing, because every VM has tmux. Without tmux, `wt rm` on a
+    VM cannot check for a running agent, so it keeps the worktree, and `wt-smoke.sh` fails. The Ubuntu
+    runner images include tmux.
+  - `agent-status-linux-smoke.sh` makes its checks only on Linux.
+- The workflow uses no secrets, and its token can only read the repository. The suites contact no host.
+  `GIT_ALLOW_PROTOCOL=file` limits git in the suites to local repositories.
+
+To make the same checks on the Mac, install bash, jq and shellcheck first. `Brewfile` installs all three.
+Then run these commands from the repository root:
+
+```bash
+export PATH="$(brew --prefix)/bin:$PATH"
+shellcheck -x bin/* install.sh test/*.sh
+for suite in test/*-smoke.sh; do
+  GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash "$suite" || echo "FAILED: $suite"
+done
+```
+
+Each suite ends with a count line of the form `<n> assertions: <n> passed, 0 failed`. On the Mac,
+`agent-status-linux-smoke.sh` prints only `Linux only`. A failed suite exits non-zero, and the loop then
+prints `FAILED:` and the suite's path.
 
 - **`bash test/install-smoke.sh`** is the repo's smoke test. It makes 648 assertions across seventeen scenario
   groups. The groups make fifty runs, because most groups have several cases and one group loops over five

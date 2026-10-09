@@ -11,7 +11,8 @@ brew "bash"
 brew "fzf"
 brew "gh"
 brew "jq"
-# shellcheck: lints bin/* and the shell in install.sh. Nothing here runs it for you yet.
+# shellcheck: lints bin/*, install.sh and test/*.sh. The GitHub Actions workflow .github/workflows/tests.yml runs it
+# on every push and every pull request.
 brew "shellcheck"
 
 cask "cmux"
