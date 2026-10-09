@@ -5,11 +5,10 @@
 #   WT_BASH=/bin/bash bash test/wt-smoke.sh    (WT_BASH selects the bash that runs bin/wt. See below.)
 #
 # Two interpreters are in use, and they answer different questions. The bash that started this file runs it.
-# $WT_BASH runs bin/wt, and the header line prints it. Both default to the same `bash` from PATH. On the
-# author's Mac, that is Homebrew's 5.x. But bin/wt starts with `#!/usr/bin/env bash`, and a fresh Mac has no
-# bash but /bin/bash 3.2.57. So on a fresh Mac, bin/wt gets 3.2 until Homebrew is installed. Run this file
-# both ways. Otherwise bin/wt stays untested under the interpreter that matters. Scenario 11 at least parses
-# bin/wt with /bin/bash -n on every run, so a green 5.x run cannot hide a 3.2 syntax error.
+# $WT_BASH starts bin/wt, and the header line prints it. Both default to the same `bash` from PATH. bin/wt
+# needs bash 5 or later. A Mac also has /bin/bash 3.2.57, which starts bin/wt when it comes first on PATH.
+# bin/wt then runs itself again with Homebrew's bash. Run this file both ways, so that every scenario also
+# goes through that handoff. Scenario 11 checks the handoff on every run.
 #
 # Why this file exists: bin/wt creates and DESTROYS work. `wt rm` deletes a worktree, its branch and its
 # uncommitted files. `wt prune` does the same in a loop, and it does not ask twice. Only rm_reasons stands
@@ -2408,17 +2407,38 @@ ROWS
 # 11. The invariants that two files promise each other in comments, and that nothing enforced. The copy of
 # tmux_cmd in bin/cmux-hook must match bin/wt's line for line (the command is the one that bin/cmux-hook's
 # own comment gives). The two files must also merge the per-window row lists identically, and match a row
-# to a task identically. But first, the promise that bin/wt's own shebang makes: bin/wt must PARSE under
-# /bin/bash. On a Mac, that is 3.2.57.
-# That bash once choked on a case pattern inside a heredoc inside $(…) that every newer bash accepted. A
-# whole-suite run under WT_BASH=/bin/bash catches that too, but only when someone remembers to make one.
-# The suite makes this check on every run, whatever bash runs it.
+# to a task identically. But first, the promise that bin/wt's prologue makes: when /bin/bash starts bin/wt,
+# bin/wt runs under bash 5 or later, or it stops with a message that names the fix. On a Mac, /bin/bash is
+# 3.2.57, and the prologue starts Homebrew's bash. The suite makes this check on every run, whatever bash
+# runs it.
 scenario_shared_tmux_cmd() {
-  begin_scenario "11. bin/wt parses under /bin/bash, and agrees with bin/cmux-hook on tmux_cmd and the row list"
-  local a b sys=/bin/bash out=""
-  out=$("$sys" -n "$REPO/bin/wt" 2>&1) || out="${out:-syntax error} (exit $?)"
-  # shellcheck disable=SC2016   # $BASH_VERSION is for THAT bash to expand, not this one
-  assert_eq "bin/wt parses under $sys $("$sys" -c 'echo "$BASH_VERSION"')" "" "$out"
+  begin_scenario "11. bin/wt reaches bash 5 from /bin/bash, and agrees with bin/cmux-hook on tmux_cmd and the row list"
+  local a b sys=/bin/bash out rc sys_major env_file="$TEST_ROOT/bash-env" log="$TEST_ROOT/bash-versions"
+  # Each non-interactive bash sources $BASH_ENV when it starts. So each bash that runs bin/wt adds one line
+  # to the log, and the last line is the bash that printed the help.
+  # shellcheck disable=SC2016   # ${BASH_VERSINFO[0]} is for each of THOSE bashes to expand, not this one
+  printf 'echo "${BASH_VERSINFO[0]}" >>"%s"\n' "$log" >"$env_file"
+  rc=0; out=$(BASH_ENV="$env_file" "$sys" "$REPO/bin/wt" help 2>&1) || rc=$?
+  if [[ $rc == 1 && $out == *'install it: brew install bash'* ]]; then
+    assert_has "bin/wt names the fix when no bash 5 exists" "$out" "brew install bash"
+    assert_eq "bin/wt reports an older bash" 'older' \
+      "$(tail -1 "$log" | awk '{ print ($1 < 5 ? "older" : "5+") }')"
+  else
+    assert_has "bin/wt, started by $sys, prints its help" "$out" "wt new  [name]"
+    assert_eq "bin/wt, started by $sys, runs under bash 5 or later" "exit 0, bash 5+" \
+      "exit $rc, bash $(tail -1 "$log" | awk '{ print ($1 >= 5 ? "5+" : $1) }')"
+  fi
+  # WORKGROVE_REEXEC=1 makes the prologue act as if no bash 5 existed. Where /bin/bash is already bash 5 or
+  # later (Linux), the prologue has nothing to do, and the help prints as usual.
+  # shellcheck disable=SC2016   # $BASH_VERSINFO is for THAT bash to expand, not this one
+  sys_major=$("$sys" -c 'echo "${BASH_VERSINFO[0]}"')
+  rc=0; out=$(WORKGROVE_REEXEC=1 "$sys" "$REPO/bin/wt" help 2>&1) || rc=$?
+  if [[ $sys_major -lt 5 ]]; then
+    assert_eq "bin/wt under bash $sys_major with no bash 5 stops and names the fix" "exit 1, brew install bash" \
+      "exit $rc, $([[ $out == *'install it: brew install bash'* ]] && echo 'brew install bash' || echo "$out")"
+  else
+    assert_eq "bin/wt under bash $sys_major prints its help" "exit 0" "exit $rc"
+  fi
   a="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt" | grep -v '^ *#')"
   b="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/cmux-hook" | grep -v '^ *#')"
   assert_has "bin/wt has a tmux_cmd" "$a" "tmux new-session"
@@ -2517,7 +2537,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=686
+FIXED_ASSERTIONS=688
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:

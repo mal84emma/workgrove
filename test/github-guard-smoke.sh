@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test/github-guard-smoke.sh: feed hook payloads to bin/github-guard and assert what it answers.
 #   bash test/github-guard-smoke.sh                       (KEEP=1 leaves the scratch repo behind)
-#   GUARD_BASH=/bin/bash bash test/github-guard-smoke.sh  (run the guard under macOS's bash 3.2)
+#   GUARD_BASH=/bin/bash bash test/github-guard-smoke.sh  (/bin/bash 3.2 starts the guard, which moves to bash 5)
 #
 # The guard runs before every Bash command that an agent sends. Bash(gh api *), Bash(git push *),
 # Bash(gh pr create *) and Bash(wt pr *) left the deny list. Since then, the guard is the only thing that
@@ -496,6 +496,21 @@ assert_eq 'not JSON' none "$(guard_payload 'gh api user')"
 assert_eq 'no command' none "$(guard_payload '{"tool_input": {}}')"
 end_scenario
 
+# The guard needs bash 5. With no bash 5 to start, it must still exit 0 with no answer, so that it blocks
+# nothing. Only a Mac has an older /bin/bash, and only bin/github-guard has the prologue, so the scenario runs
+# only there. WORKGROVE_REEXEC=1 makes the prologue act as if no bash 5 existed.
+begin_scenario 'a guard that cannot start bash 5 gives no answer, never a block'
+OLD_BASH_ASSERTIONS=0
+# shellcheck disable=SC2016   # $BASH_VERSINFO is for /bin/bash to expand, not this one
+if [[ $GUARD == "$REPO/bin/github-guard" && $(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"') -lt 5 ]]; then
+  OLD_BASH_ASSERTIONS=1
+  rc=0
+  out=$(jq -cn --arg d "$CWD" '{tool_input: {command: "git push origin HEAD"}, cwd: $d}' \
+          | env WORKGROVE_REEXEC=1 HOME="$TEST_ROOT/home" PATH="$TEST_ROOT/bin:$PATH" /bin/bash "$GUARD" 2>&1) || rc=$?
+  assert_eq 'exit status and output without bash 5' 'exit 0, no output' "exit $rc, ${out:-no output}"
+fi
+end_scenario
+
 begin_scenario 'settings.base.json wires the guard and leaves nothing that would override it'
 S="$REPO/home/.claude/settings.base.json"
 # shellcheck disable=SC2088   # the literal string settings.json holds; sh -c expands it, this file must not
@@ -510,4 +525,4 @@ assert_eq 'install.sh links the guard' 'yes' \
   "$(grep -Eq '^  for b in .*github-guard' "$REPO/install.sh" && echo yes || echo no)"
 end_scenario
 
-lib_summary 430
+lib_summary $((430 + OLD_BASH_ASSERTIONS))

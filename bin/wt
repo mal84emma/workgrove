@@ -94,6 +94,24 @@
 #   .wt-setup           an executable that runs inside each new worktree after creation (for example, to install deps)
 set -euo pipefail
 
+# The scripts in bin/ need bash 5 or later (README, "Requirements").
+# When /bin/bash 3.2 starts this script, use the first Homebrew candidate with version 5 or later.
+# WORKGROVE_REEXEC prevents a loop if the candidate changes after the version check.
+# This block must use bash 3.2 syntax.
+if ((BASH_VERSINFO[0] < 5)) && [[ -z ${WORKGROVE_REEXEC:-} ]]; then
+  for bash5 in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x $bash5 ]] && "$bash5" -c '((BASH_VERSINFO[0] >= 5))' >/dev/null 2>&1; then
+      export WORKGROVE_REEXEC=1
+      exec "$bash5" "$0" "$@"
+    fi
+  done
+fi
+unset WORKGROVE_REEXEC
+if ((BASH_VERSINFO[0] < 5)); then
+  printf 'wt: needs bash 5 or later, but this is bash %s; install it: brew install bash\n' "$BASH_VERSION" >&2
+  exit 1
+fi
+
 REPOS_PATH="${WT_REPOS_DIR:-$HOME/Documents/Repositories}"   # ':'-separated, searched in order (see repos_entries)
 DEFAULT_AGENT="${WT_AGENT:-claude}"
 

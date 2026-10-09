@@ -45,6 +45,26 @@
 #   - A new file gets mode 600, in a ~/.ssh with mode 700.
 #   - The helper writes UseKeychain on macOS only, because Linux OpenSSH rejects it.
 set -euo pipefail
+
+# The scripts in bin/ need bash 5 or later (README, "Requirements").
+# When /bin/bash 3.2 starts this script, use the first Homebrew candidate with version 5 or later.
+# WORKGROVE_REEXEC prevents a loop if the candidate changes after the version check.
+# This block must use bash 3.2 syntax.
+if ((BASH_VERSINFO[0] < 5)) && [[ -z ${WORKGROVE_REEXEC:-} ]]; then
+  for bash5 in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x $bash5 ]] && "$bash5" -c '((BASH_VERSINFO[0] >= 5))' >/dev/null 2>&1; then
+      export WORKGROVE_REEXEC=1
+      exec "$bash5" "$0" "$@"
+    fi
+  done
+fi
+unset WORKGROVE_REEXEC
+if ((BASH_VERSINFO[0] < 5)); then
+  printf 'azml-ssh-host: needs bash 5 or later, but this is bash %s; install it: brew install bash\n' \
+    "$BASH_VERSION" >&2
+  exit 1
+fi
+
 : "${HOME:?azml-ssh-host: HOME is not set}"  # name the script; bash alone says only "HOME: unbound variable"
 
 API=2024-10-01-preview                       # ARM api-version for MachineLearningServices computes
