@@ -13,12 +13,18 @@ trap lib_cleanup EXIT
 
 BASH5=$BASH
 SCRIPTS=(wt azml-ssh-host github-guard cmux-hook agent-notify)
-mkdir -p "$TEST_ROOT/home" "$TEST_ROOT/copies"
+mkdir -p "$TEST_ROOT/home" "$TEST_ROOT/copies" "$TEST_ROOT/lib/workgrove" "$TEST_ROOT/nolib/bin"
 FIRST="$TEST_ROOT/first-bash"
 SECOND="$TEST_ROOT/second-bash"
 for script in "${SCRIPTS[@]}"; do
   sed -e "s|/opt/homebrew/bin/bash|$FIRST|g" -e "s|/usr/local/bin/bash|$SECOND|g" \
     "$REPO/bin/$script" > "$TEST_ROOT/copies/$script"
+done
+# A copy loads the library from ../lib, as the scripts in bin/ do. So copies/ needs lib/ beside it.
+cp "$REPO/lib/workgrove/common.sh" "$TEST_ROOT/lib/workgrove/common.sh"
+# These copies have no ../lib, so they test what each script does when it cannot load the library.
+for script in wt cmux-hook agent-notify; do
+  cp "$REPO/bin/$script" "$TEST_ROOT/nolib/bin/$script"
 done
 cat > "$TEST_ROOT/bash-env" <<'BASH_ENV_FILE'
 # Bash before 5.2 reads BASH_ENV before it sets $0 to the script path. Until then, $0 is the
@@ -63,6 +69,27 @@ for script in "${SCRIPTS[@]}"; do
 done
 end_scenario
 
+begin_scenario 'scripts with no library: wt stops and the hooks exit 0'
+for script in wt cmux-hook agent-notify; do
+  rc=0
+  args=()
+  [[ $script == wt ]] && args=(help)
+  exec 3<<<'{}'
+  env -i PATH="$PATH" HOME="$TEST_ROOT/home" XDG_STATE_HOME="$TEST_ROOT/home/.local/state" \
+    "$BASH5" "$TEST_ROOT/nolib/bin/$script" "${args[@]}" > "$TEST_ROOT/out" 2> "$TEST_ROOT/err" <&3 || rc=$?
+  remaining=$(cat <&3)
+  exec 3<&-
+  if [[ $script == wt ]]; then
+    assert_eq 'wt exit status with no library' 1 "$rc"
+    assert_grep 'wt says that it cannot load the library' "$TEST_ROOT/err" 'cannot load'
+  else
+    assert_eq "$script exit status with no library" 0 "$rc"
+    assert_eq "$script gives no hook answer with no library" '' "$(cat "$TEST_ROOT/out")"
+    assert_eq "$script drains its payload with no library" '' "$remaining"
+  fi
+done
+end_scenario
+
 # Linux has no older /bin/bash. The Mac exercises the actual bash 3.2 handoff.
 SYS_MAJOR=$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"')
 OLD_ASSERTIONS=0
@@ -103,4 +130,4 @@ if ((SYS_MAJOR < 5)); then
     end_scenario
   done
 fi
-lib_summary $((18 + OLD_ASSERTIONS))
+lib_summary $((26 + OLD_ASSERTIONS))

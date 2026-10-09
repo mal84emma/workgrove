@@ -543,6 +543,9 @@ scenario_default_empty() {
   log="$h.log"
   if assert_install_ok "$h" "$log"; then
     assert_machinery "$h"
+    # The linked wt must find lib/ through its link. So run it from another folder, not from the repo.
+    (cd "$TEST_ROOT" && env -i PATH="$PATH" HOME="$h" "$h/.local/bin/wt" help) >"$h.wt-help" 2>&1 || true
+    assert_grep "the linked ~/.local/bin/wt prints its help" "$h.wt-help" 'wt new  [name]'
     # None of the five taste files, and not the theme, which only the linked .zshrc names.
     assert_absent "$h" .zshrc
     assert_absent "$h" .claude/keybindings.json
@@ -1613,7 +1616,7 @@ expected_assertions() {
 }
 
 # Everything that is not assert_machinery. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=384
+FIXED_ASSERTIONS=385
 # Scenario 17's own assertions, counted apart because that whole group is Darwin-only. ~/.config/cmux/cmux.json
 # is a Mac file, and install.sh does nothing with it on any other platform. A fixed total would be correct on
 # one platform and wrong on the other. It would fail the suite on a VM, for a reason unrelated to the code.

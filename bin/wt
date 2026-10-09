@@ -112,6 +112,29 @@ if ((BASH_VERSINFO[0] < 5)); then
   exit 1
 fi
 
+# Load lib/workgrove/common.sh from the repository that holds this script. install.sh links the script into
+# ~/.local/bin, so follow the link chain to the real file. macOS readlink has no -f, so take one link at a time,
+# as resolve_config_path in bin/azml-ssh-host does. A relative target is read from the link's folder.
+wg_path=$0 wg_hops=0
+# Given a name with no '/', bash runs the file in the current folder or else the first one on PATH. Do the same.
+[[ $wg_path == */* || -e $wg_path ]] || wg_path=$(type -P -- "$wg_path") || true
+while [[ -L $wg_path && $wg_hops -lt 32 ]]; do
+  wg_hops=$((wg_hops + 1))
+  wg_target=$(readlink "$wg_path") || break
+  case $wg_target in
+    /*) wg_path=$wg_target ;;
+    *) case $wg_path in */*) wg_path=${wg_path%/*}/$wg_target ;; *) wg_path=$wg_target ;; esac ;;
+  esac
+done
+case $wg_path in */*) wg_lib=${wg_path%/*}/../lib/workgrove/common.sh ;; *) wg_lib=../lib/workgrove/common.sh ;; esac
+unset wg_path wg_hops wg_target
+# shellcheck source=lib/workgrove/common.sh
+if ! source "$wg_lib" 2>/dev/null; then
+  printf 'wt: cannot load %s; reinstall workgrove or check the link to bin/wt\n' "$wg_lib" >&2
+  exit 1
+fi
+unset wg_lib
+
 REPOS_PATH="${WT_REPOS_DIR:-$HOME/Documents/Repositories}"   # ':'-separated, searched in order (see repos_entries)
 DEFAULT_AGENT="${WT_AGENT:-claude}"
 
@@ -159,7 +182,6 @@ cmux_ok() { local c; c=$(cmux_bin) || return 1; CMUX_QUIET=1 "$c" ping >/dev/nul
 is_remote() { [[ -n ${CMUX_SSH_ATTEMPT_ID:-} ]] || [[ ${CMUX_SOCKET_PATH:-} == *:[0-9]* ]] || [[ $(uname -s) != Darwin ]]; }
 mac_only()  { if is_remote; then die "wt $1: run this on the Mac"; fi; }
 
-valid_host() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 wt_host() { # this VM's alias in the Mac's ~/.ssh/config
   [[ -n "${WT_HOST:-}" ]] || die "WT_HOST is not set; on this VM: echo 'export WT_HOST=<alias>' >> ~/.zshenv.local"
   valid_host "$WT_HOST" || die "invalid WT_HOST '$WT_HOST'; fix it in ~/.zshenv.local"
@@ -200,8 +222,6 @@ relay_env() { # sets RELAY_SOCKET, RELAY_WS and RELAY_IDENT; non-zero when this 
   [[ "$RELAY_SOCKET" == *:[0-9]* ]]
 }
 
-# Mirrors safe_path in bin/cmux-hook. The Mac hook drops any other path, so never relay a path that fails this.
-hook_safe_path() { [[ "$1" == /* && "$1" != *$'\n'* && "$1" != *//* && "$1" != */ && "$1" != *'/../'* && "$1" != */.. && "$1" != *[\'\"\`\$\\\;]* ]]; }
 hook_ok_repo() { # both relayed bodies carry $REPO (wt-open sends a path inside it)
   hook_safe_path "$REPO" && return 0
   warn "the Mac hook rejects this repo path ($REPO); run the printed command by hand"; return 1
@@ -270,17 +290,13 @@ wt_prompt() { printf '%s/.git/wt/%s.prompt' "$REPO" "$1"; }
 wt_started(){ printf '%s/.git/wt/%s.started' "$REPO" "$1"; }
 wt_branch() { printf 'wt/%s' "$1"; }
 
-# Identity. bin/cmux-hook mirrors these formats and tags the rows that it relays in the same way, so keep
-# them byte-compatible. A row's title tells which task it is. Its description (row_tag) tells which machine
-# and which repo. Two repos can have tasks with the same name, so the title alone does not identify a row.
-repo_id()    { printf '%s' "${1##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'; }
+# Identity. repo_id, row_title, wt_session and valid_name are in lib/workgrove/common.sh. attach_row in
+# bin/cmux-hook tags the rows that it relays in the same format as row_tag, so keep the two byte-compatible.
 where_am_i() { if is_remote; then printf '%s' "${WT_HOST:-remote}"; else printf 'local'; fi; }
-row_title()  { printf '%s' "$1"; }                                          # row_title <name> — a task row's title
 row_tag() { # row_tag [host] [repo] — the row description: "@<host> · <repo>", or "@<host>" for a row with no repo
   printf '@%s' "${1:-$(where_am_i)}"
   if [[ -n "${2:-}" ]]; then printf '%s%s' "$ROW_SEP" "$(repo_id "$2")"; fi
 }
-wt_session() { printf 'wt-%s-%s' "$(repo_id "$2")" "$1"; }                  # wt_session <name> <repo>
 # The separator in a row description: a space, U+00B7 MIDDLE DOT, and a space. A host alias and a repo_id
 # never contain it, so a description splits on it into exactly "@<host>" and "<repo>".
 ROW_SEP=' · '
@@ -308,7 +324,6 @@ ROW_JQ='
   def unclaimed_row($t; $h; $sep): .title == $t and on_host($h; $sep)
     and ((.description | if type == "string" then . else "" end) | test("^@[^ ]+(" + $sep + "[A-Za-z0-9-]+)?$") | not);
 '
-valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 need_name()  { valid_name "$1" || die "invalid name '$1' (lowercase letters, digits, _ and -, max 63, no '.')"; }
 tidy_name()  { printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/-/g'; }  # "Fix Auth" -> fix-auth; anything else must already be valid
 valid_agent() { case "$1" in claude|codex|none) ;; *) die "unknown agent '$1' (use claude, codex or none)" ;; esac; }
@@ -2255,10 +2270,6 @@ task_exit() { # the launcher row closes on exit, so give the user time to read a
   local rc=$?
   if [[ $rc -ne 0 && -t 0 ]]; then read -r -p 'press return' _ || true; fi
 }
-ssh_hosts() { # non-wildcard Host aliases, read as bin/cmux-hook reads them
-  { awk '$1=="Host"{for(i=2;i<=NF;i++){if($i ~ /^#/)break; if($i !~ /^[!]/ && $i !~ /[*?]/) print $i}}' "$HOME/.ssh/config" 2>/dev/null || true; } | sort -u
-}
-
 probe_host() { # one SSH login proves remote-command access and gathers Linux hardware
   local out_file err_file ssh_pid rc=0 tick
   out_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stdout.XXXXXX") || return 1
@@ -2461,7 +2472,7 @@ cmd_task() {
   [[ -n "$where" ]] || die "task: no host picked"
   if [[ "$where" != local ]]; then
     valid_host "$where" || die "task: invalid host '$where' (an ssh alias: letters, digits, '.', '_' and '-')"
-    if ! ssh_hosts | grep -qxF "$where"; then
+    if ! known_host "$where"; then
       warn "cmux will try '$where'; make sure 'ssh $where' works first. Requests from inside that VM (VS Code, new rows) need a Host entry."
     fi
   fi

@@ -25,6 +25,30 @@ if ((BASH_VERSINFO[0] < 5)); then
   exit 0                              # a hook must never block the agent
 fi
 
+# Load lib/workgrove/common.sh from the repository that holds this script. install.sh links the script into
+# ~/.local/bin, so follow the link chain to the real file. macOS readlink has no -f, so take one link at a time,
+# as resolve_config_path in bin/azml-ssh-host does. A relative target is read from the link's folder.
+wg_path=$0 wg_hops=0
+# Given a name with no '/', bash runs the file in the current folder or else the first one on PATH. Do the same.
+[[ $wg_path == */* || -e $wg_path ]] || wg_path=$(type -P -- "$wg_path") || true
+while [[ -L $wg_path && $wg_hops -lt 32 ]]; do
+  wg_hops=$((wg_hops + 1))
+  wg_target=$(readlink "$wg_path") || break
+  case $wg_target in
+    /*) wg_path=$wg_target ;;
+    *) case $wg_path in */*) wg_path=${wg_path%/*}/$wg_target ;; *) wg_path=$wg_target ;; esac ;;
+  esac
+done
+case $wg_path in */*) wg_lib=${wg_path%/*}/../lib/workgrove/common.sh ;; *) wg_lib=../lib/workgrove/common.sh ;; esac
+unset wg_path wg_hops wg_target
+# shellcheck source=lib/workgrove/common.sh
+if ! source "$wg_lib" 2>/dev/null; then
+  [[ -t 0 ]] || cat >/dev/null 2>&1   # read the payload, so that the agent's write cannot fail
+  echo "agent-notify: cannot load $wg_lib; reinstall workgrove or check the link to bin/agent-notify" >&2
+  exit 0                              # a hook must never block the agent
+fi
+unset wg_lib
+
 : "${HOME:?agent-notify: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 [[ -t 0 ]] && payload= || payload=$(cat)
 event_seq=''
@@ -192,7 +216,7 @@ if [[ $socket == *:[0-9]* ]]; then
   # It verifies that cmux assigned the notification to a row on WT_HOST before it changes that row.
   case $title in 'Claude Code') agent=claude ;; Codex) agent=codex ;; *) agent= ;; esac
   send_status=0
-  if [[ $status == running || $status == idle || $status == clear || $status == renew ]] && [[ -n $agent && ${WT_HOST:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] &&
+  if [[ $status == running || $status == idle || $status == clear || $status == renew ]] && [[ -n $agent ]] && valid_host "${WT_HOST:-}" &&
      { { [[ ${WT_STATUS_HEARTBEAT:-} == 1 && -n ${WT_STATUS_OWNER_PID:-} &&
            ${TMUX_PANE:-} == "${WT_STATUS_OWNER_PANE:-}" ]] && kill -0 "$WT_STATUS_OWNER_PID" 2>/dev/null; } || status_owner; }; then
     send_status=1
