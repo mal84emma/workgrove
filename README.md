@@ -354,18 +354,22 @@ pull request. The workflow makes these checks:
   assertion total for its platform.
   - On macOS, Homebrew's bash is first on `PATH`. `install-smoke.sh` runs `install.sh` with
     `INSTALL_BASH=/bin/bash`, and `bash5-smoke.sh` tests the `/bin/bash` 3.2 handoffs.
-  - On Ubuntu, the job installs `tmux` when the runner image does not have it, because every VM has tmux.
-    Without tmux, `wt rm` on a VM cannot check for a running agent. `agent-status-linux-smoke.sh` makes its
-    checks only on Ubuntu.
+  - On Ubuntu, the job stops when `tmux` is missing, because every VM has tmux. Without tmux, `wt rm` on a
+    VM cannot check for a running agent, so it keeps the worktree, and `wt-smoke.sh` fails. The Ubuntu
+    runner images include tmux.
+  - `agent-status-linux-smoke.sh` makes its checks only on Linux.
 - The workflow uses no secrets, and its token can only read the repository. The suites contact no host.
   `GIT_ALLOW_PROTOCOL=file` limits git in the suites to local repositories.
 
-To make the same checks on the Mac, run these commands from the repository root:
+To make the same checks on the Mac, install bash, jq and shellcheck first. `Brewfile` installs all three.
+Then run these commands from the repository root:
 
 ```bash
-export PATH="/opt/homebrew/bin:$PATH"
+export PATH="$(brew --prefix)/bin:$PATH"
 shellcheck -x bin/* install.sh test/*.sh
-for suite in test/*-smoke.sh; do INSTALL_BASH=/bin/bash bash "$suite" || echo "FAILED: $suite"; done
+for suite in test/*-smoke.sh; do
+  GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash "$suite" || echo "FAILED: $suite"
+done
 ```
 
 Each suite ends with a count line of the form `<n> assertions: <n> passed, 0 failed`. On the Mac,

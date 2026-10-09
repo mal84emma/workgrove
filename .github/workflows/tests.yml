@@ -34,7 +34,6 @@ jobs:
           shellcheck -x bin/* install.sh test/*.sh
 
   suites:
-    name: suites (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -57,30 +56,30 @@ jobs:
           brew install bash jq
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
-      # A VM has tmux, but a runner image can lack it. Without tmux, `wt rm` on a VM cannot check
-      # for a running agent, so it keeps the worktree, and wt-smoke.sh fails.
-      - name: Install jq and tmux (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          missing=()
-          for tool in jq tmux; do
-            command -v "$tool" >/dev/null || missing+=("$tool")
-          done
-          if ((${#missing[@]})); then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends "${missing[@]}"
-          fi
-
-      # This step prints the tool versions. It stops the job when the bash on PATH is older than bash 5.
-      # On macOS, it also stops the job when /bin/bash is bash 5 or later.
-      # In that case, no suite can test bash 3.2.
+      # This step prints the tool versions. It stops the job in these cases:
+      # - The bash on PATH is older than bash 5.
+      # - jq is missing. The Ubuntu runner images include it.
+      # - On Linux, tmux is missing. The Ubuntu runner images include it, and every VM has it.
+      #   Without tmux, `wt rm` on a VM cannot check for a running agent, so it keeps the worktree,
+      #   and wt-smoke.sh fails.
+      # - On macOS, /bin/bash is bash 5 or later. In that case, no suite can test bash 3.2.
       - name: Check the tools
         run: |
           echo "bash on PATH: $(command -v bash), $(bash -c 'echo "$BASH_VERSION"')"
           echo "/bin/bash: $(/bin/bash -c 'echo "$BASH_VERSION"')"
-          jq --version
           git --version
-          if command -v tmux >/dev/null; then tmux -V; else echo 'tmux: not installed'; fi
+          if ! jq --version; then
+            echo '::error::jq is missing'
+            exit 1
+          fi
+          if command -v tmux >/dev/null; then
+            tmux -V
+          elif [[ $RUNNER_OS == Linux ]]; then
+            echo '::error::tmux is missing; install it in this workflow, as docs/new-vm.md does on a VM'
+            exit 1
+          else
+            echo 'tmux: not installed'
+          fi
           if ! bash -c '((BASH_VERSINFO[0] >= 5))'; then
             echo '::error::the bash on PATH is older than bash 5'
             exit 1
