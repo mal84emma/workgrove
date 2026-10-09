@@ -76,6 +76,22 @@ Native requests enter the notification store before the automation runs.
 A banner or sound can occur before the handler dismisses the request.
 The automation cannot change those effects before delivery.
 
+## An accepted request without a window
+
+An updated `wt` script does not install or load the Mac automation rule.
+VM-side exit status 0 means that cmux accepted the request.
+It does not confirm that the Mac hook ran or that VS Code opened.
+
+On the Mac, run `cmux automation list`.
+If it reports `No automation rules`, check `~/.cmuxterm/automations.json` for the `wt-native-relay` rule.
+Install a missing rule as described in [Fix](#fix), then run `cmux automation reload`.
+If the rule is intentionally disabled, keep that setting.
+Use the printed Mac-side `wt -H <host> open -r <repo> <name>` command instead.
+
+Check `~/.local/state/cmux-hook.log` for a new `handled wt-open` entry for the task's row.
+If the request remains in the notification list without that entry, the hook has not confirmed the open operation.
+The Mac-side open command starts VS Code directly and does not need this automation.
+
 ## Verification on the test VM
 
 Machine names and runtime paths below use privacy placeholders.
@@ -142,3 +158,4 @@ shellcheck bin/wt bin/cmux-hook install.sh test/native-relay-smoke.sh
 The native test checks the automation merge function in a scratch home.
 It does not run `install.sh` or change installed files.
 It checks transport changes in both directions and repeated native requests with identical operation fields.
+It also executes the installed rule's command and checks its VS Code request and notification dismissal.
