@@ -416,6 +416,27 @@ GH_REPO=acme/widgets/extra expect deny 'gh pr comment 5 --body x' 'GH_REPO'
 GH_HOST=ghe.example expect deny 'gh api -X POST repos/acme/widgets/issues/5/comments -f body=x' 'GH_HOST=ghe.example'
 GH_HOST=ghe.example expect deny 'gh issue comment 12 --body x' 'GH_HOST'
 GH_HOST=GitHub.com expect allow 'gh pr comment 5 --body x'
+# The guard compares the whole value. A trailing newline or an invalid UTF-8 byte gives a different host or name.
+GH_HOST=$'github.com\n' expect deny 'gh pr comment 5 --body x' 'GH_HOST'
+GH_REPO=$'acme/widgets\n' expect deny 'gh pr comment 5 --body x' 'GH_REPO'
+GH_REPO=$'GitHub.com\n/acme/widgets' expect deny 'gh pr comment 5 --body x' 'GH_REPO'
+GH_REPO=$'acme/widgets\xff' expect deny 'gh pr comment 5 --body x' 'GH_REPO'
+GH_HOST=$'github.com\xff' expect deny 'gh pr comment 5 --body x' 'GH_HOST'
+# The guard changes only A-Z to a-z. In a UTF-8 locale, ${v,,} also changes U+0130 (İ, bytes c4 b0) to i.
+# gh keeps it, so GH_HOST=gİthub.com sends the token to another server. The first assertion checks that this
+# bash changes İ to i in this locale. So the denials below test the guard, not the locale.
+UTF8=C.UTF-8
+assert_eq "bash in $UTF8 changes U+0130 to i" github.com \
+  "$(LC_ALL=$UTF8 bash -c 'v=$1; printf %s "${v,,}"' _ $'G\xc4\xb0THUB.COM')"
+LC_ALL=$UTF8 GH_HOST=GitHub.com expect allow 'gh pr comment 5 --body x'
+LC_ALL=$UTF8 GH_HOST=$'g\xc4\xb0thub.com' expect deny 'gh pr comment 5 --body x' 'GH_HOST'
+LC_ALL=$UTF8 GH_REPO=$'g\xc4\xb0thub.com/acme/widgets' expect deny 'gh pr comment 5 --body x' 'GH_REPO'
+LC_ALL=$UTF8 GH_REPO=$'acme/w\xc4\xb0dgets' expect deny 'gh pr comment 5 --body x' 'GH_REPO'
+LC_ALL=$UTF8 expect deny $'gh api -X POST \'repos/acme/w\xc4\xb0dgets/issues/5/comments\' -f body=x' \
+  'is not this repository'   # quoted, because a bare word with İ fails tokenize before the repository check
+# The -H check calls lower_ascii first. The endpoint check after it must still see U+3000 (e3 80 80) as a blank.
+LC_ALL=$UTF8 expect deny $'gh api -H \'Accept: x\' -X POST \'repos/acme/widgets/issues/5/comments\xe3\x80\x80\' -f body=x' \
+  'blank in it'
 : >"$TEST_ROOT/gh.log"
 GH_HOST=ghe.example expect allow 'git push origin HEAD'
 assert_grep "the default branch is asked of github.com, not GH_HOST's server" "$TEST_ROOT/gh.log" \
@@ -426,6 +447,8 @@ expect deny 'gh api -X POST repos/{owner}/{repo}/issues/5/comments -f body=x' 's
 expect allow 'gh pr view 5'
 git -C "$W" config remote.origin.gh-resolved someone/widgets   # a fork remote's repository: still this one
 expect allow 'gh pr comment 5 --body x'
+git -C "$W" config remote.origin.gh-resolved $'acme/widgets\xff'   # an invalid UTF-8 byte: another name
+expect deny 'gh pr comment 5 --body x' 'set-default'
 git -C "$W" config remote.origin.gh-resolved base
 expect allow 'gh pr comment 5 --body x'
 git -C "$W" config --unset remote.origin.gh-resolved
@@ -525,4 +548,4 @@ assert_eq 'install.sh links the guard' 'yes' \
   "$(grep -Eq '^  for b in .*github-guard' "$REPO/install.sh" && echo yes || echo no)"
 end_scenario
 
-lib_summary $((430 + OLD_BASH_ASSERTIONS))
+lib_summary $((454 + OLD_BASH_ASSERTIONS))

@@ -148,9 +148,9 @@ status_owner() {
 relay_notify() {
   local cli="${CMUX_BUNDLED_CLI_PATH:-$HOME/.cmux/bin/cmux}"
   if command -v timeout >/dev/null; then
-    timeout 1 env -u CMUX_SOCKET "${ident[@]+"${ident[@]}"}" "$cli" notify ${ws:+--workspace "$ws"} "$@" >/dev/null 2>&1
+    timeout 1 env -u CMUX_SOCKET "${ident[@]}" "$cli" notify ${ws:+--workspace "$ws"} "$@" >/dev/null 2>&1
   else
-    env -u CMUX_SOCKET "${ident[@]+"${ident[@]}"}" "$cli" notify ${ws:+--workspace "$ws"} "$@" >/dev/null 2>&1
+    env -u CMUX_SOCKET "${ident[@]}" "$cli" notify ${ws:+--workspace "$ws"} "$@" >/dev/null 2>&1
   fi
 }
 

@@ -210,7 +210,7 @@ hook_ok_repo() { # both relayed bodies carry $REPO (wt-open sends a path inside 
 notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths with spaces survive
   local title="$1" args=() ws=() c body request_id; shift
   while [[ $# -gt 1 ]]; do args+=(--arg "$1" "$2"); shift 2; done
-  body=$(jq -cn "${args[@]+"${args[@]}"}" '$ARGS.named')
+  body=$(jq -cn "${args[@]}" '$ARGS.named')
   relay_env || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
   if [[ $RELAY_TUI_SOCKET == /* && $RELAY_TUI_TERMINAL =~ ^term_[a-f0-9]{32}$ ]]; then
     c=$(command -v cmux-tui || true)
@@ -231,7 +231,7 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
   # hook's from_row_on_host wants anyway. So the flag agrees with that environment, and it stays correct if
   # a later cmux does read it.
   if [[ -n "$RELAY_WS" ]]; then ws=(--workspace "$RELAY_WS"); fi
-  env -u CMUX_SOCKET "${RELAY_IDENT[@]+"${RELAY_IDENT[@]}"}" "$c" notify "${ws[@]+"${ws[@]}"}" --title "$title" --body "$body" >/dev/null 2>&1 \
+  env -u CMUX_SOCKET "${RELAY_IDENT[@]}" "$c" notify "${ws[@]}" --title "$title" --body "$body" >/dev/null 2>&1 \
     || { warn "cmux notify failed; run the line below on the Mac"; return 1; }
 }
 
@@ -1158,7 +1158,7 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
       esac
       filtered+=("${extra[$i]}"); i=$((i + 1))
     done
-    extra=("${filtered[@]+"${filtered[@]}"}")
+    extra=("${filtered[@]}")
     if [[ "$agent" == claude ]]; then model_arg=(--model "$model"); else model_arg=(-m "$model"); fi
   fi
   if [[ "$agent" == claude && -e "$(wt_started "$name")" ]]; then
@@ -1181,7 +1181,7 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
       done ) >/dev/null 2>&1 &
     WT_STATUS_HEARTBEAT_PID=$!
   fi
-  "$agent" "${model_arg[@]+"${model_arg[@]}"}" "${extra[@]+"${extra[@]}"}" "${args[@]+"${args[@]}"}" || rc=$?
+  "$agent" "${model_arg[@]}" "${extra[@]}" "${args[@]}" || rc=$?
   [[ -n ${WT_STATUS_FILE:-} ]] && wt_cleanup
   [[ $rc -eq 0 ]] || warn "$agent exited with status $rc"
   return 0
@@ -1201,11 +1201,11 @@ cmd_list() {
   local repos=()
   if [[ $all -eq 1 ]]; then
     need_repos_dir
-    while IFS= read -r d; do repos+=("$d"); done < <(repo_dirs)
+    mapfile -t repos < <(repo_dirs)
   else
     resolve_repo "$repo"; repos=("$REPO")
   fi
-  for r in "${repos[@]+"${repos[@]}"}"; do
+  for r in "${repos[@]}"; do
     set_repo "$r" || continue
     local names; names=$(list_names); [[ -n "$names" ]] || continue
     printf '\n%s  (%s)\n' "$(basename "$REPO")" "$REPO"
@@ -1349,7 +1349,7 @@ cmd_pr() {
   [[ -z "$(git -C "$P" status --porcelain)" ]] || die "worktree has uncommitted changes; commit first"
   git -C "$P" push -u origin "$B"
   local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
-  ( cd "$P" && gh pr create --fill --base "${base#origin/}" "${draft[@]+"${draft[@]}"}" )
+  ( cd "$P" && gh pr create --fill --base "${base#origin/}" "${draft[@]}" )
 }
 
 cmd_rm() {
@@ -1607,7 +1607,7 @@ cmd_update() { # pull this repo and re-run its installer
     [[ "$ans" == [yY] || "$ans" == [yY][eE][sS] ]] || die "update: cancelled"
     git -C "$dir" merge --ff-only '@{u}'
   fi
-  bash "$dir/install.sh" "${pass[@]+"${pass[@]}"}"
+  bash "$dir/install.sh" "${pass[@]}"
 }
 
 # ---------------------------------------------------------------- wt -H <host> …
@@ -1628,7 +1628,7 @@ remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the 
                   # Without a local terminal there is nothing to lend, and the VM's own refusal is correct.
   local host="$1" cmd="$2" rc=0 tty=()
   [[ -t 0 ]] && tty=(-t)                                   # -t works with BatchMode=yes, which only blocks prompts
-  ssh -o BatchMode=yes -o ConnectTimeout=5 "${tty[@]+"${tty[@]}"}" "$host" "$cmd" || rc=$?
+  ssh -o BatchMode=yes -o ConnectTimeout=5 "${tty[@]}" "$host" "$cmd" || rc=$?
   if [[ $rc -eq 255 ]]; then die "host unreachable: is the VM running? (ssh $host)"; fi
   return $rc
 }
@@ -1791,7 +1791,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   inspect="wt -H $host list"
   [[ -z "$repo_request" ]] || inspect+=" -r $(shell_join "$repo_request")"
   local out name repo session rc
-  if out=$(printf '%s' "$prompt" | remote_wt_raw "$host" new "${args[@]+"${args[@]}"}" --no-workspace --prompt-stdin 2>&1); then
+  if out=$(printf '%s' "$prompt" | remote_wt_raw "$host" new "${args[@]}" --no-workspace --prompt-stdin 2>&1); then
     :
   else
     rc=$?
@@ -1838,7 +1838,6 @@ agent_on_vm() { # agent_on_vm <host> <session> — use the Mac's checked probe, 
 
 row_remote_field() { # row_remote_field <id> <field>… — this row's current remote fields (state, daemon slot) from one
                      # rows_json read, joined by $WT_FS. Never a tab: read would collapse it when a field is empty.
-                     # Capture it before you split it: bash 3.2 applies `IFS=… read` to a here-string's $(…) too
   local id="$1"; shift
   rows_json | jq -r --arg id "$id" --arg fs "$WT_FS" \
     'first((.workspaces? // .)[] | select(.id == $id) | .remote as $r
@@ -1848,7 +1847,6 @@ row_remote_field() { # row_remote_field <id> <field>… — this row's current r
 clear_stale_relay() { # clear_stale_relay <host> <slot> — signal only this user's sshd, and only when its session is
                       # not from the Mac's current address; the last line on stdout is `stopped <port> <pid>` or `free <port>`
   local script
-  # Bash 3.2 misparses case patterns in a heredoc nested inside command substitution.
   IFS= read -r -d '' script <<'WT_RELAY' || :
 slot=$1
 case "$slot" in ssh-[A-Za-z0-9-]*) ;; *) echo 'invalid relay slot' >&2; exit 1 ;; esac
@@ -2232,7 +2230,7 @@ cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac c
       *) args+=("$1"); shift ;;
     esac
   done
-  set -- "${args[@]+"${args[@]}"}"
+  set -- "${args[@]}"
   case "$sub" in
     new)       host_new "$host" "$@" ;;
     attach)    need_r "$host" "$sub" "$@"; host_attach "$host" "$@" ;;
@@ -2378,14 +2376,14 @@ cmd_hosts() {
     (host_record "$host" >"$f") &
     pids+=("$!")
   done < <(ssh_hosts)
-  for pid in "${pids[@]+"${pids[@]}"}"; do wait "$pid" || failed=1; done
+  for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
   if [[ $failed -ne 0 ]]; then
-    rm -f "${files[@]+"${files[@]}"}"
+    rm -f "${files[@]}"
     die "hosts: one or more probes could not be recorded"
   fi
   records=""
   if [[ ${#files[@]} -gt 0 ]]; then records=$(cat "${files[@]}"); fi
-  rm -f "${files[@]+"${files[@]}"}"
+  rm -f "${files[@]}"
   if [[ $format == json ]]; then
     printf '%s\n' "$records" | jq -s '.'
   else
