@@ -20,6 +20,30 @@ if ((BASH_VERSINFO[0] < 5)) && [[ -z ${WORKGROVE_REEXEC:-} ]]; then
 fi
 unset WORKGROVE_REEXEC
 if ((BASH_VERSINFO[0] < 5)); then exit 0; fi   # print no patch, so cmux keeps the notification as it is
+# Load lib/workgrove/common.sh from the repository that holds this script. install.sh links the script into
+# ~/.local/bin, so follow the link chain to the real file. macOS readlink has no -f, so take one link at a time,
+# as resolve_config_path in bin/azml-ssh-host does. A relative target is read from the link's folder.
+wg_path=$0 wg_hops=0
+# Given a name with no '/', bash runs the file in the current folder or else the first one on PATH. Do the same.
+[[ $wg_path == */* || -e $wg_path ]] || wg_path=$(type -P -- "$wg_path") || true
+while [[ -L $wg_path && $wg_hops -lt 32 ]]; do
+  wg_hops=$((wg_hops + 1))
+  wg_target=$(readlink "$wg_path") || break
+  case $wg_target in
+    /*) wg_path=$wg_target ;;
+    *) case $wg_path in */*) wg_path=${wg_path%/*}/$wg_target ;; *) wg_path=$wg_target ;; esac ;;
+  esac
+done
+case $wg_path in */*) wg_lib=${wg_path%/*}/../lib/workgrove/common.sh ;; *) wg_lib=../lib/workgrove/common.sh ;; esac
+unset wg_path wg_hops wg_target
+# shellcheck source=lib/workgrove/common.sh
+if ! source "$wg_lib" 2>/dev/null; then
+  # A missing library prints no patch, so cmux keeps the notification as it is. That is the same answer as
+  # the fallback for no bash 5 above, and it applies in every mode. Until the library is back, each
+  # wt-agent-status update shows as an ordinary notification and does not change the row's status pill.
+  exit 0
+fi
+unset wg_lib
 
 t=${CMUX_NOTIFICATION_TITLE:-}; b=${CMUX_NOTIFICATION_BODY:-}; ws=${CMUX_NOTIFICATION_WORKSPACE_ID:-}
 if [[ $mode == hook && ${CMUX_NOTIFICATION_SUBTITLE:-} == wt-agent-status\|* ]]; then
@@ -50,7 +74,6 @@ capped() { # capped <cmd…>: one cmux call, inside what is left of that budget.
               $SIG{ALRM} = sub { kill 9, -$p; waitpid $p, 0; exit 142 };   # survives to hold the pipe open
               alarm $t; waitpid $p, 0; exit($? >> 8)' "$left" "$@"
 }
-known_host() { awk -v w="$1" '$1=="Host"{for(i=2;i<=NF;i++){if($i~/^#/)break; if($i==w && $i!~/[*?]/)f=1}} END{exit(f?0:1)}' "$HOME/.ssh/config" 2>/dev/null; }
 # A hook response is a patch: cmux merges the keys that it gets and leaves the rest alone. (The other hook
 # in cmux.json answers `{"effects":{"desktop":false}}` or `{}`.) So this prints a fixed literal. It does not
 # echo the envelope back, because the envelope carries whatever the agent session was working on.
@@ -66,8 +89,6 @@ quiet() { event_handled; printf '%s\n' '{"effects":{"desktop":false,"sound":fals
 quiet_control() { event_handled; printf '%s\n' '{"effects":{"record":false,"markUnread":false,"reorderWorkspace":false,"desktop":false,"sound":false,"command":false,"paneFlash":false}}'; }
 CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
 CMUX="${CMUX_BUNDLED_CLI_PATH:-/Applications/cmux.app/Contents/Resources/bin/cmux}"
-valid_host() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
-safe_path() { [[ $1 == /* && $1 != *$'\n'* && $1 != *//* && $1 != */ && $1 != *'/../'* && $1 != */.. && $1 != *[\'\"\`\$\\\;]* ]]; }
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
 status_dir="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-agent-status"
 status_file() { printf '%s/%s-%s' "$status_dir" "$1" "$2"; }
@@ -353,7 +374,7 @@ case $t in
     # -x $CODE first: the fallback above is a hard-coded path. A machine can have no VS Code, or have it
     # installed elsewhere. On such a machine, quieting the row for a window that can never open is the
     # worst of both.
-    if [[ -x $CODE ]] && valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && safe_path "$p"; then
+    if [[ -x $CODE ]] && valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && hook_safe_path "$p"; then
       "$CODE" --folder-uri "vscode-remote://ssh-remote+$h$p/" >/dev/null 2>&1 &
       pid=$!; sleep 1                      # the code CLI hands the folder to the app and exits 0 well inside
       if kill -0 "$pid" 2>/dev/null; then  # a second, so both "still running" and "exited 0" mean it launched;
@@ -366,8 +387,10 @@ case $t in
     fi ;;
   wt-attach) # body: {"host":…,"repo":…,"task":…}
     h=$(field host || true); r=$(field repo || true); n=$(field task || true)
-    if valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; then
-      id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-'); printf -v q '%q' "$r"   # mirrors valid_name / repo_id / row_tag / wt_session in wt
+    if valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && hook_safe_path "$r" && valid_name "$n"; then
+      # valid_name, repo_id, row_title and wt_session come from lib/workgrove/common.sh, which wt loads too.
+      # attach_row writes the description in the format of row_tag in wt.
+      id=$(repo_id "$r"); printf -v q '%q' "$r"
       # Synchronous on purpose: cmux authorizes the socket by process ancestry. The moment this hook
       # exits, a backgrounded child is reparented away from the cmux tree. The app then refuses that
       # child ("Access denied - only processes started inside cmux can connect"). Creating the row costs
@@ -375,17 +398,17 @@ case $t in
       # Quiet only on success: a notification whose jump failed keeps its banner, sound and unread mark.
       # When this prints nothing at all, cmux reads that as "leave the effects alone". $LOG says what
       # went wrong.
-      if attach_row "$h" "wt-$id-$n" "$n" "$id" "WT_STATUS_BRIDGE=1 \"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
+      if attach_row "$h" "$(wt_session "$n" "$r")" "$(row_title "$n")" "$id" "WT_STATUS_BRIDGE=1 \"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
         quiet
       fi
     fi ;;
   wt-close) # a VM task removed itself; only its own row may ask to close
     DEADLINE=$(( $(date +%s) + 12 ))   # leave time under cmux's 20 s hook limit to stop tmux after closing
     h=$(field host || true); r=$(field repo || true); n=$(field task || true)
-    if valid_host "$h" && known_host "$h" && safe_path "$r" && [[ $n =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] &&
+    if valid_host "$h" && known_host "$h" && hook_safe_path "$r" && valid_name "$n" &&
        from_row_on_host "$ws" "$h"; then
-      id=$(printf '%s' "${r##*/}" | LC_ALL=C tr -c 'A-Za-z0-9-' '-')
-      if [[ $(row_by_title "$n" "$id" "$h") == "$ws" ]]; then
+      id=$(repo_id "$r"); sess=$(wt_session "$n" "$r")
+      if [[ $(row_by_title "$(row_title "$n")" "$id" "$h") == "$ws" ]]; then
         printf -v q '%q' "$r"; rc=0
         gone=$(capped ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "exec \"\$HOME/.local/bin/wt\" path $n -r $q" 2>&1) || rc=$?
         if [[ $rc -ne 1 || $gone != *"no worktree named '$n' in $r"* ]]; then
@@ -393,14 +416,14 @@ case $t in
         elif capped "$CMUX" workspace close "$ws" --force >/dev/null 2>&1; then
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
-          if capped ssh -o BatchMode=yes -o ConnectTimeout=4 "$h" "exec tmux kill-session -t '=wt-$id-$n'" >/dev/null 2>&1; then
+          if capped ssh -o BatchMode=yes -o ConnectTimeout=4 "$h" "exec tmux kill-session -t '=$sess'" >/dev/null 2>&1; then
             quiet_control
           else
-            log "could not stop tmux session wt-$id-$n on $h after closing $ws"
+            log "could not stop tmux session $sess on $h after closing $ws"
             if command -v osascript >/dev/null 2>&1; then
               osascript -e 'on run argv' \
                 -e 'display notification (item 1 of argv) with title "workgrove teardown incomplete"' \
-                -e 'end run' "Run: ssh $h tmux kill-session -t '=wt-$id-$n'" >/dev/null 2>&1 || true
+                -e 'end run' "Run: ssh $h tmux kill-session -t '=$sess'" >/dev/null 2>&1 || true
             fi
           fi
         else log "could not close row $ws for task $n of $id on $h"; fi

@@ -120,6 +120,8 @@ workgrove/
 │   ├── cmux-hook              Mac-side cmux notification hook: remote row requests and agent status
 │   ├── github-guard           Claude PreToolUse hook: GitHub reads, pushes, PRs, issues, comments, reviews
 │   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
+├── lib/
+│   └── workgrove/common.sh    shared helpers that bin/wt, cmux-hook and agent-notify load
 ├── home/
 │   ├── .zshenv .gitignore_global   always installed; .zshrc .gitconfig .tmux.conf are opt-in
 │   ├── .oh-my-zsh/custom/themes/workgrove.zsh-theme   with the .zshrc opt-in
@@ -376,7 +378,7 @@ Each suite ends with a count line of the form `<n> assertions: <n> passed, 0 fai
 `agent-status-linux-smoke.sh` prints only `Linux only`. A failed suite exits non-zero, and the loop then
 prints `FAILED:` and the suite's path.
 
-- **`bash test/install-smoke.sh`** is the repo's smoke test. It makes 648 assertions across seventeen scenario
+- **`bash test/install-smoke.sh`** is the repo's smoke test. It makes 649 assertions across seventeen scenario
   groups. The groups make fifty runs, because most groups have several cases and one group loops over five
   flags. Each run uses its own throwaway `$HOME` with no network.
   - It covers:
@@ -387,13 +389,13 @@ prints `FAILED:` and the suite's path.
     - the don't-clobber branches of `configure_git`, retirement of renamed links, and `ZSH_CUSTOM`
   - Set `INSTALL_BASH=/bin/bash` to run `install.sh` itself under bash 3.2, which is what a fresh Mac gives it.
   - Set `FORCE_OS=Linux` to drive the Linux-only steps from a Mac.
-  - On a VM it makes 500 assertions, because scenario 17 is about a Mac file and does not run there.
+  - On a VM it makes 501 assertions, because scenario 17 is about a Mac file and does not run there.
   - A run on a VM is useful, because `FORCE_OS` cannot fake everything that a real Linux box differs in.
     For example, a VM run found that the suite built its fixtures with whatever umask the machine had.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 931 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 934 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -433,7 +435,7 @@ prints `FAILED:` and the suite's path.
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 688 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 691 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -478,7 +480,9 @@ prints `FAILED:` and the suite's path.
   On the Mac, it also starts each script with `/bin/bash` 3.2 and checks the final interpreter.
   Script copies use scratch paths to test missing candidates, older candidates, and candidate order.
   With no bash 5, the hooks drain their payloads and exit 0 without an answer.
-  The suite makes 126 assertions on the Mac and 18 on a VM.
+  With copies that have no `lib/`, the suite checks that `wt` stops and that the hooks drain their payloads and exit 0.
+  Through a relative link to an absolute link, the suite checks that each script finds `lib/` from another folder.
+  The suite makes 139 assertions on the Mac and 31 on a VM.
 
 ### Uninstall
 
@@ -1237,8 +1241,8 @@ the work on the Mac.
 | `valid_host` | The host looks like a hostname. |
 | `known_host` | The host is a literal `Host` entry, with no wildcard, in `~/.ssh/config`. |
 | `from_row_on_host` | The notifying row is itself a `cmux ssh` row pointed at that same host. |
-| `safe_path` | A path is absolute, with no `..`, no `//`, no trailing slash and no shell metacharacters. |
-| Name pattern | A task name matches `^[a-z0-9][a-z0-9_-]{0,62}$`. |
+| `hook_safe_path` | A path is absolute, with no `..`, no `//`, no trailing slash and no shell metacharacters. |
+| `valid_name` | A task name matches `^[a-z0-9][a-z0-9_-]{0,62}$`. |
 
 **What the checks limit.** The limits are real, but narrower than they first seem:
 
@@ -1301,7 +1305,7 @@ that host. So the rows that can send these requests include at least every `cmux
 open to any aliased host. That can be a task VM, but equally a shared bastion, a customer's jump host or a
 build box.
 
-The path has no limit beyond the `safe_path` shape check. It can be `/etc` or a home `.ssh` directory.
+The path has no limit beyond the `hook_safe_path` shape check. It can be `/etc` or a home `.ssh` directory.
 
 The relay socket is loopback TCP on the remote host. So anyone with an account on such a machine can make
 both requests: open a path, or create a row.
