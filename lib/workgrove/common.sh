@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
-# This file needs bash 5. An older bash returns at the next line, before it parses the rest,
-# so its source fails cleanly.
+# This file needs bash 5. Bash reads a sourced file one command at a time, so an older bash returns at
+# the next line before it parses the rest, and its source fails cleanly.
 # Apart from that version check, this file only defines functions. It sets no shell options,
 # so it works under the "set -euo pipefail" of bin/wt and under the "set -u" of the hooks.
 if ((BASH_VERSINFO[0] < 5)); then return 1; fi
