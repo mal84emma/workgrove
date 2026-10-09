@@ -1,0 +1,111 @@
+# Runs shellcheck and every suite in test/ on each push and each pull request.
+# The workflow uses no secrets. Its token can only read the repository, and checkout does not
+# store the token in .git/config. So the suites have no token for the GitHub API.
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  shellcheck:
+    # The job uses Homebrew's shellcheck, as Brewfile does on the Mac.
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install shellcheck
+        run: brew install shellcheck
+      - name: Run shellcheck
+        run: |
+          shellcheck --version
+          shellcheck -x bin/* install.sh test/*.sh
+
+  suites:
+    name: suites (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # macOS has only /bin/bash 3.2. Homebrew's bash goes first on PATH, so the suites and every
+      # script that they start get bash 5.
+      - name: Install bash 5 and jq (macOS)
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: |
+          brew install bash jq
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      # A VM has tmux, but a runner image can lack it. Without tmux, `wt rm` on a VM cannot check
+      # for a running agent, so it keeps the worktree, and wt-smoke.sh fails.
+      - name: Install jq and tmux (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          missing=()
+          for tool in jq tmux; do
+            command -v "$tool" >/dev/null || missing+=("$tool")
+          done
+          if ((${#missing[@]})); then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+
+      # This step prints the tool versions. It stops the job when the bash on PATH is older than bash 5.
+      # On macOS, it also stops the job when /bin/bash is bash 5 or later.
+      # In that case, no suite can test bash 3.2.
+      - name: Check the tools
+        run: |
+          echo "bash on PATH: $(command -v bash), $(bash -c 'echo "$BASH_VERSION"')"
+          echo "/bin/bash: $(/bin/bash -c 'echo "$BASH_VERSION"')"
+          jq --version
+          git --version
+          if command -v tmux >/dev/null; then tmux -V; else echo 'tmux: not installed'; fi
+          if ! bash -c '((BASH_VERSINFO[0] >= 5))'; then
+            echo '::error::the bash on PATH is older than bash 5'
+            exit 1
+          fi
+          if [[ $RUNNER_OS == macOS ]] && /bin/bash -c '((BASH_VERSINFO[0] >= 5))'; then
+            echo '::error::/bin/bash is bash 5 or later, so no suite can test bash 3.2'
+            exit 1
+          fi
+
+      # Each suite checks its own assertion total, which differs between macOS and Linux.
+      # The loop runs every suite, also after a failure, and then names each suite that failed.
+      - name: Run the suites
+        env:
+          # install-smoke.sh runs install.sh with this bash. An empty value selects the bash on PATH.
+          INSTALL_BASH: ${{ runner.os == 'macOS' && '/bin/bash' || '' }}
+          # git in the suites can reach only local repositories.
+          GIT_ALLOW_PROTOCOL: file
+        run: |
+          failed=()
+          for suite in test/*-smoke.sh; do
+            echo "::group::$suite"
+            bash "$suite" || failed+=("$suite")
+            echo "::endgroup::"
+          done
+          for suite in "${failed[@]}"; do
+            echo "::error::$suite failed"
+          done
+          ((${#failed[@]} == 0))
