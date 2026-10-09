@@ -254,4 +254,19 @@ rm "$config"
 hook_cmux_automation >/dev/null
 if [[ ! -e $config ]]; then pass; else fail 'Linux installed Mac automation'; fi
 end_scenario
-lib_summary 47
+
+begin_scenario 'the installed native rule dispatches an open request through its configured command'
+OS=Darwin hook_cmux_automation >/dev/null
+mkdir -p "$HOME/.local/bin"
+ln -s "$REPO/bin/cmux-hook" "$HOME/.local/bin/cmux-hook"
+assert_eq 'the installed rule listens for notification creation' notification.created \
+  "$(jq -r '.rules[] | select(.id == "wt-native-relay") | .when.event' "$config")"
+assert_eq 'the installed rule is enabled' true \
+  "$(jq -r '.rules[] | select(.id == "wt-native-relay") | if has("enabled") then .enabled else true end' "$config")"
+record wt-open '{"host":"test-vm","path":"/vm/repos/repo/.worktrees/task","request_id":"installed-rule"}'
+command=$(jq -r '.rules[] | select(.id == "wt-native-relay") | .then[] | select(.action == "run") | .command' "$config")
+"$BASH" -c "$command" </dev/null >/dev/null
+has "$CODE_LOG" '--folder-uri vscode-remote://ssh-remote+test-vm/vm/repos/repo/.worktrees/task/'
+has "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
+end_scenario
+lib_summary 51
