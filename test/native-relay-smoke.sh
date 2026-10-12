@@ -269,4 +269,68 @@ command=$(jq -r '.rules[] | select(.id == "wt-native-relay") | .then[] | select(
 has "$CODE_LOG" '--folder-uri vscode-remote://ssh-remote+test-vm/vm/repos/repo/.worktrees/task/'
 has "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
 end_scenario
-lib_summary 51
+
+begin_scenario 'cmux-tui agent hooks report to the terminal that the tmux session names'
+# The fake tmux has one session. TMUX_ENV holds its environment, one NAME=value or -NAME per line.
+cat > "$TEST_ROOT/bin/tmux" <<'TMUX'
+#!/usr/bin/env bash
+case $1 in
+  display-message) echo task-session ;;
+  show-environment) grep -E "^-?$4(=|\$)" "$TMUX_ENV" || { echo "unknown variable: $4" >&2; exit 1; } ;;
+  *) exit 1 ;;   # no other session exists, so wt new on Linux may create one
+esac
+TMUX
+cat > "$TEST_ROOT/tui-helper" <<'HELPER'
+#!/usr/bin/env bash
+{ printf 'args=%s\n' "$*"; printf 'stdin=%s\n' "$(cat)"; env | grep '^CMUX_TUI_' | sort; } > "$HELPER_LOG"
+HELPER
+chmod +x "$TEST_ROOT/bin/tmux" "$TEST_ROOT/tui-helper"
+export TMUX_ENV="$TEST_ROOT/tmux.env" HELPER_LOG="$TEST_ROOT/helper.log"
+tui_hook() {
+  printf '%s' '{"hook_event_name":"Stop"}' | TMUX=/tmp/fake,1,0 TMUX_PANE=%1 WT_CMUX_TUI_HOOK="$TEST_ROOT/tui-helper" \
+    CMUX_TUI_SOCKET=/run/old.sock CMUX_TUI_TERMINAL_ID=term_old CMUX_TUI_SESSION_ID=session_old \
+    "$REPO/lib/workgrove/cmux-tui-hook.sh" claude Stop
+}
+printf '%s\n' CMUX_TUI_SOCKET=/run/new.sock CMUX_TUI_TERMINAL_ID=term_new CMUX_TUI_SESSION_ID= > "$TMUX_ENV"
+tui_hook
+has "$HELPER_LOG" 'args=claude Stop'
+has "$HELPER_LOG" 'stdin={"hook_event_name":"Stop"}'
+has "$HELPER_LOG" 'CMUX_TUI_SOCKET=/run/new.sock'
+has "$HELPER_LOG" 'CMUX_TUI_TERMINAL_ID=term_new'
+lacks "$HELPER_LOG" 'term_old'
+lacks "$HELPER_LOG" 'CMUX_TUI_SESSION_ID'
+# A name that the session does not hold keeps the pane's value. A removed name is unset.
+printf '%s\n' -CMUX_TUI_TERMINAL_ID > "$TMUX_ENV"
+tui_hook
+has "$HELPER_LOG" 'CMUX_TUI_SOCKET=/run/old.sock'
+has "$HELPER_LOG" 'CMUX_TUI_SESSION_ID=session_old'
+lacks "$HELPER_LOG" 'CMUX_TUI_TERMINAL_ID'
+
+# wt run gives its agent the wrapper and keeps the helper that cmux-tui set. Run wt through a link, as
+# install.sh does, so that the wrapper path must be resolved to the repository.
+mkdir -p "$HOME/.local/bin" "$TEST_ROOT/repo"
+ln -s "$REPO/bin/wt" "$HOME/.local/bin/wt"
+git -C "$TEST_ROOT/repo" init -q -b main
+git -C "$TEST_ROOT/repo" -c user.name=Test -c user.email=test@example.invalid commit -q --allow-empty -m initial
+bash "$HOME/.local/bin/wt" new task -a claude --no-workspace -r "$TEST_ROOT/repo" >/dev/null
+cat > "$TEST_ROOT/bin/claude" <<'AGENT'
+#!/bin/sh
+printf 'hook=%s\nhelper=%s\n' "${CMUX_TUI_HOOK:-}" "${WT_CMUX_TUI_HOOK:-}" > "$AGENT_ENV"
+AGENT
+chmod +x "$TEST_ROOT/bin/claude"
+export AGENT_ENV="$TEST_ROOT/agent.env"
+wrapper="$REPO/bin/../lib/workgrove/cmux-tui-hook.sh"
+(cd "$TEST_ROOT" && CMUX_SSH_ATTEMPT_ID=1 TMUX=/tmp/fake,1,0 TMUX_PANE=%1 CMUX_TUI_HOOK=/opt/cmux-tui-hook \
+  "$HOME/.local/bin/wt" run task -r "$TEST_ROOT/repo" >/dev/null)
+assert_eq 'wt run points the hooks at the wrapper' "hook=$wrapper" "$(sed -n 1p "$AGENT_ENV")"
+assert_eq 'wt run keeps the cmux-tui helper' 'helper=/opt/cmux-tui-hook' "$(sed -n 2p "$AGENT_ENV")"
+# A nested wt run must not make the wrapper run itself.
+(cd "$TEST_ROOT" && CMUX_SSH_ATTEMPT_ID=1 TMUX=/tmp/fake,1,0 TMUX_PANE=%1 CMUX_TUI_HOOK="$wrapper" \
+  WT_CMUX_TUI_HOOK=/opt/cmux-tui-hook "$HOME/.local/bin/wt" run task -r "$TEST_ROOT/repo" >/dev/null)
+assert_eq 'a nested wt run keeps the cmux-tui helper' 'helper=/opt/cmux-tui-hook' "$(sed -n 2p "$AGENT_ENV")"
+# Outside tmux, the pane's identity is the row's identity, so the hooks need no wrapper.
+(cd "$TEST_ROOT" && unset TMUX && CMUX_SSH_ATTEMPT_ID=1 CMUX_TUI_HOOK=/opt/cmux-tui-hook \
+  "$HOME/.local/bin/wt" run task -r "$TEST_ROOT/repo" >/dev/null)
+assert_eq 'wt run outside tmux leaves the hooks alone' 'hook=/opt/cmux-tui-hook' "$(sed -n 1p "$AGENT_ENV")"
+end_scenario
+lib_summary 64
