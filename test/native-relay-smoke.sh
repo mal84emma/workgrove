@@ -276,7 +276,7 @@ cat > "$TEST_ROOT/bin/tmux" <<'TMUX'
 #!/usr/bin/env bash
 case $1 in
   display-message) echo task-session ;;
-  show-environment) grep -E "^-?$4(=|\$)" "$TMUX_ENV" || { echo "unknown variable: $4" >&2; exit 1; } ;;
+  show-environment) cat "$TMUX_ENV" ;;
   *) exit 1 ;;   # no other session exists, so wt new on Linux may create one
 esac
 TMUX
@@ -286,8 +286,8 @@ cat > "$TEST_ROOT/tui-helper" <<'HELPER'
 HELPER
 chmod +x "$TEST_ROOT/bin/tmux" "$TEST_ROOT/tui-helper"
 export TMUX_ENV="$TEST_ROOT/tmux.env" HELPER_LOG="$TEST_ROOT/helper.log"
-tui_hook() {
-  printf '%s' '{"hook_event_name":"Stop"}' | TMUX=/tmp/fake,1,0 TMUX_PANE=%1 WT_CMUX_TUI_HOOK="$TEST_ROOT/tui-helper" \
+tui_hook() { # tui_hook [helper]
+  printf '%s' '{"hook_event_name":"Stop"}' | TMUX=/tmp/fake,1,0 TMUX_PANE=%1 WT_CMUX_TUI_HOOK="${1:-$TEST_ROOT/tui-helper}" \
     CMUX_TUI_SOCKET=/run/old.sock CMUX_TUI_TERMINAL_ID=term_old CMUX_TUI_SESSION_ID=session_old \
     "$REPO/lib/workgrove/cmux-tui-hook.sh" claude Stop
 }
@@ -305,6 +305,12 @@ tui_hook
 has "$HELPER_LOG" 'CMUX_TUI_SOCKET=/run/old.sock'
 has "$HELPER_LOG" 'CMUX_TUI_SESSION_ID=session_old'
 lacks "$HELPER_LOG" 'CMUX_TUI_TERMINAL_ID'
+# A saved helper that is another checkout's wrapper falls back to the default helper. It must not loop.
+mkdir -p "$HOME/.local/share/cmux-tui/bin"
+cp "$TEST_ROOT/tui-helper" "$HOME/.local/share/cmux-tui/bin/cmux-tui-hook"
+rm -f "$HELPER_LOG"
+tui_hook "$REPO/./bin/../lib/workgrove/cmux-tui-hook.sh"
+has "$HELPER_LOG" 'args=claude Stop'
 
 # wt run gives its agent the wrapper and keeps the helper that cmux-tui set. Run wt through a link, as
 # install.sh does, so that the wrapper path must be resolved to the repository.
@@ -324,8 +330,8 @@ wrapper="$REPO/bin/../lib/workgrove/cmux-tui-hook.sh"
   "$HOME/.local/bin/wt" run task -r "$TEST_ROOT/repo" >/dev/null)
 assert_eq 'wt run points the hooks at the wrapper' "hook=$wrapper" "$(sed -n 1p "$AGENT_ENV")"
 assert_eq 'wt run keeps the cmux-tui helper' 'helper=/opt/cmux-tui-hook' "$(sed -n 2p "$AGENT_ENV")"
-# A nested wt run must not make the wrapper run itself.
-(cd "$TEST_ROOT" && CMUX_SSH_ATTEMPT_ID=1 TMUX=/tmp/fake,1,0 TMUX_PANE=%1 CMUX_TUI_HOOK="$wrapper" \
+# A nested wt run must not save a wrapper as the helper, even when it spells the wrapper's path differently.
+(cd "$TEST_ROOT" && CMUX_SSH_ATTEMPT_ID=1 TMUX=/tmp/fake,1,0 TMUX_PANE=%1 CMUX_TUI_HOOK="$REPO/./bin/../lib/workgrove/cmux-tui-hook.sh" \
   WT_CMUX_TUI_HOOK=/opt/cmux-tui-hook "$HOME/.local/bin/wt" run task -r "$TEST_ROOT/repo" >/dev/null)
 assert_eq 'a nested wt run keeps the cmux-tui helper' 'helper=/opt/cmux-tui-hook' "$(sed -n 2p "$AGENT_ENV")"
 # Outside tmux, the pane's identity is the row's identity, so the hooks need no wrapper.
@@ -333,4 +339,4 @@ assert_eq 'a nested wt run keeps the cmux-tui helper' 'helper=/opt/cmux-tui-hook
   "$HOME/.local/bin/wt" run task -r "$TEST_ROOT/repo" >/dev/null)
 assert_eq 'wt run outside tmux leaves the hooks alone' 'hook=/opt/cmux-tui-hook' "$(sed -n 1p "$AGENT_ENV")"
 end_scenario
-lib_summary 64
+lib_summary 65

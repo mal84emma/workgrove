@@ -107,7 +107,9 @@ The fix for `wt open` in this document did not change the status path.
 cmux 0.65 has its own status path for native rows.
 cmux-tui installs agent hooks in `~/.claude/settings.json` and `~/.codex/hooks.json` on the VM.
 Each hook runs `"$CMUX_TUI_HOOK" <agent> <event>`.
-That helper reports the state to the terminal in `CMUX_TUI_TERMINAL_ID`.
+Inside tmux, a hook with no `CMUX_TUI_HOOK` runs cmux-tui's default helper.
+The helper reports the state to the terminal in `CMUX_TUI_TERMINAL_ID`.
+Without that variable, it reports nothing.
 The Mac shows the state in the row as `cmux.remote.agent`, with Running, Idle, or Needs input.
 
 In a task's tmux session, the agent gets the wrong terminal ID:
@@ -150,13 +152,17 @@ At each hook, the wrapper reads `CMUX_TUI_SOCKET`, `CMUX_TUI_TERMINAL_ID`, and `
 Then it runs the cmux-tui helper with these values.
 An empty value or a removed name in the session unsets the value, so a TCP relay row gets no native report.
 A name that the session does not hold keeps the pane's value.
+The wrapper never uses another checkout's wrapper as the helper, so a nested `wt run` cannot make it run itself.
 
 The fix applies only to an agent that `wt run` starts after the update.
 For a running agent, exit it and run `wt -H <vm> attach --restart-agent -r <repo> <name>`.
+A new tmux pane gets the session's values, so an agent that you start in it reports to the row.
+After a reattach, that agent reports to the old terminal until you restart it.
+The task's first pane keeps the global values after `wt run` exits, so do not start an agent by hand in it.
 
 The cmux-tui hooks must be installed on the VM.
 `install.sh --refresh-config` replaces `~/.claude/settings.json` and `~/.codex/hooks.json`, which removes them.
-To check them, run `cmux-tui agent hook status` on the VM.
+To check them, run `cmux-tui agent hook status claude codex` on the VM.
 Make sure that the `claude` and `codex` providers show `installed`.
 If a provider shows `absent`, run `cmux-tui agent hook install claude codex`.
 Then restart the agent.
