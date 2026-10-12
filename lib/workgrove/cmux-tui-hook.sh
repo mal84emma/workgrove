@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # lib/workgrove/cmux-tui-hook.sh — the agent hook of cmux-tui, run with the current row's identity.
 #
-# On a VM, cmux 0.65 shows an agent's state in its SSH row only through cmux-tui. cmux-tui installs agent
+# On a VM, cmux 0.65 shows an agent's state in its VM row only through cmux-tui. cmux-tui installs agent
 # hooks in ~/.claude/settings.json and ~/.codex/hooks.json. Each hook runs "$CMUX_TUI_HOOK" <agent> <event>.
 # Inside tmux, a hook with no CMUX_TUI_HOOK runs cmux-tui's default helper.
 # That helper reports the state to the terminal in CMUX_TUI_TERMINAL_ID over CMUX_TUI_SOCKET.

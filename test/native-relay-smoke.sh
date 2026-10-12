@@ -16,6 +16,7 @@ export CMUX_BUNDLED_CLI_PATH="$TEST_ROOT/bin/cmux" RECORD_FILE="$TEST_ROOT/recor
 export ROW_ID=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB NOTIFICATION_ID=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
 export BACKEND=cmux-tui REMOTE_EXISTS=0
 unset CMUX_NOTIFICATION_TITLE CMUX_NOTIFICATION_BODY CMUX_NOTIFICATION_SUBTITLE CMUX_NOTIFICATION_WORKSPACE_ID
+unset XDG_DATA_HOME   # the cmux-tui hook wrapper must find its default helper in the scratch home
 cat > "$TEST_ROOT/bin/cmux" <<'CMUX'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CMUX_LOG"
@@ -272,12 +273,15 @@ end_scenario
 
 begin_scenario 'cmux-tui agent hooks report to the terminal that the tmux session names'
 # The fake tmux has one session. TMUX_ENV holds its environment, one NAME=value or -NAME per line.
+# The two query branches read stdin, so a wrapper that does not redirect it loses the agent's payload.
+# When TMUX_CALLS is set, each call adds a line to it.
 cat > "$TEST_ROOT/bin/tmux" <<'TMUX'
 #!/usr/bin/env bash
+[[ -z ${TMUX_CALLS:-} ]] || printf '%s\n' "$1" >> "$TMUX_CALLS"
 case $1 in
-  display-message) echo task-session ;;
-  show-environment) cat "$TMUX_ENV" ;;
-  *) exit 1 ;;   # no other session exists, so wt new on Linux may create one
+  display-message) cat >/dev/null; echo task-session ;;
+  show-environment) cat >/dev/null; cat "$TMUX_ENV" ;;
+  *) exit 1 ;;   # no other session exists, so the session name is free
 esac
 TMUX
 cat > "$TEST_ROOT/tui-helper" <<'HELPER'
@@ -286,10 +290,24 @@ cat > "$TEST_ROOT/tui-helper" <<'HELPER'
 HELPER
 chmod +x "$TEST_ROOT/bin/tmux" "$TEST_ROOT/tui-helper"
 export TMUX_ENV="$TEST_ROOT/tmux.env" HELPER_LOG="$TEST_ROOT/helper.log"
-tui_hook() { # tui_hook [helper]
-  printf '%s' '{"hook_event_name":"Stop"}' | TMUX=/tmp/fake,1,0 TMUX_PANE=%1 WT_CMUX_TUI_HOOK="${1:-$TEST_ROOT/tui-helper}" \
+tui_hook() { # tui_hook [helper] — run the wrapper once, and stop it after 5 s.
+  # exec keeps the wrapper's PID. So a wrapper that runs itself is still alive at the deadline, and its
+  # checks fail instead of hanging the suite.
+  local pid i
+  : > "$TEST_ROOT/tmux.calls"
+  printf '%s' '{"hook_event_name":"Stop"}' > "$TEST_ROOT/payload"
+  TMUX=/tmp/fake,1,0 TMUX_PANE=%1 WT_CMUX_TUI_HOOK="${1:-$TEST_ROOT/tui-helper}" \
     CMUX_TUI_SOCKET=/run/old.sock CMUX_TUI_TERMINAL_ID=term_old CMUX_TUI_SESSION_ID=session_old \
-    "$REPO/lib/workgrove/cmux-tui-hook.sh" claude Stop
+    TMUX_CALLS="$TEST_ROOT/tmux.calls" "$REPO/lib/workgrove/cmux-tui-hook.sh" claude Stop <"$TEST_ROOT/payload" &
+  pid=$!
+  for ((i = 0; i < 50; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+    fail 'the cmux-tui hook wrapper did not finish within 5 s'
+  else
+    pass
+  fi
+  wait "$pid" 2>/dev/null || true
 }
 printf '%s\n' CMUX_TUI_SOCKET=/run/new.sock CMUX_TUI_TERMINAL_ID=term_new CMUX_TUI_SESSION_ID= > "$TMUX_ENV"
 tui_hook
@@ -311,6 +329,7 @@ cp "$TEST_ROOT/tui-helper" "$HOME/.local/share/cmux-tui/bin/cmux-tui-hook"
 rm -f "$HELPER_LOG"
 tui_hook "$REPO/./bin/../lib/workgrove/cmux-tui-hook.sh"
 has "$HELPER_LOG" 'args=claude Stop'
+assert_eq 'the wrapper runs once and makes two tmux calls' 2 "$(wc -l < "$TEST_ROOT/tmux.calls" | tr -d ' ')"
 
 # wt run gives its agent the wrapper and keeps the helper that cmux-tui set. Run wt through a link, as
 # install.sh does, so that the wrapper path must be resolved to the repository.
@@ -339,4 +358,4 @@ assert_eq 'a nested wt run keeps the cmux-tui helper' 'helper=/opt/cmux-tui-hook
   "$HOME/.local/bin/wt" run task -r "$TEST_ROOT/repo" >/dev/null)
 assert_eq 'wt run outside tmux leaves the hooks alone' 'hook=/opt/cmux-tui-hook' "$(sed -n 1p "$AGENT_ENV")"
 end_scenario
-lib_summary 65
+lib_summary 69
