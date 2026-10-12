@@ -121,7 +121,9 @@ workgrove/
 │   ├── github-guard           Claude PreToolUse hook: GitHub reads, pushes, PRs, issues, comments, reviews
 │   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 ├── lib/
-│   └── workgrove/common.sh    shared helpers that bin/wt, cmux-hook and agent-notify load
+│   └── workgrove/
+│       ├── common.sh          shared helpers that bin/wt, cmux-hook and agent-notify load
+│       └── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
 ├── home/
 │   ├── .zshenv .gitignore_global   always installed; .zshrc .gitconfig .tmux.conf are opt-in
 │   ├── .oh-my-zsh/custom/themes/workgrove.zsh-theme   with the .zshrc opt-in
@@ -145,7 +147,7 @@ workgrove/
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with a fake gh
 │   ├── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
-│   ├── native-relay-smoke.sh  native VM requests and automation backups with fake cmux
+│   ├── native-relay-smoke.sh  native VM requests, the cmux-tui hook wrapper, and automation backups
 │   ├── agent-status-smoke.sh  VM status relay and Mac row lifecycle with fake cmux
 │   └── agent-status-linux-smoke.sh  Linux owner gate, heartbeat and Esc watcher
 └── docs/
@@ -153,6 +155,7 @@ workgrove/
     ├── new-vm.md              set up an Ubuntu VM
     ├── azml-compute.md        Azure ML compute instances over ssh
     ├── vm-open-relay.md        native VM requests after cmux 0.65
+    ├── vm-agent-status.md     agent status in VM rows after cmux 0.65
     ├── documentation-style.md the writing rules for docs, agent instructions and comments
     └── ssh-config.example     the Host block a VM alias needs
 ```
@@ -469,6 +472,7 @@ prints `FAILED:` and the suite's path.
   - Denied: a remote whose push URL leaves github.com, including when `wt pr` would push through that remote.
   - `settings.base.json` wires the hook and carries no rule that would override it.
 - **`bash test/native-relay-smoke.sh`** checks native VM requests, tmux identity, notification validation, and automation backups.
+  It also checks that `wt run` gives the cmux-tui agent hooks the terminal ID from the task's tmux session.
   It uses a scratch home and fake commands.
   It loads only the automation merge function; it does not run `install.sh`.
 - **`bash test/agent-status-smoke.sh`** checks the VM lifecycle relay and the Mac row status handler with a fake
@@ -948,7 +952,17 @@ It also tells when a desktop banner appears instead, and what else the Mac hook 
 - From a VM pane, it relays the event to the Mac over the cmux socket.
 - Otherwise, on a Mac, it posts a desktop banner.
 
-**Status from a VM task:**
+**Status from a VM task on cmux 0.65:**
+
+- cmux-tui installs its own agent hooks on the VM. They report the agent's state to the row's terminal.
+- The Mac shows that state in the row as Running, Idle, or Needs input.
+- `wt run` points these hooks at `lib/workgrove/cmux-tui-hook.sh`.
+  At each hook, that wrapper reads the row's terminal ID from the task's tmux session.
+  Without it, the hooks report to the row that started the tmux server, or to the row from before a reattach.
+- [Agent status in VM rows](docs/vm-agent-status.md) gives the cause, the check for
+  the cmux-tui hooks, and the verification.
+
+**Status from a VM task on cmux 0.64 (TCP relay rows):**
 
 - On the VM, the agent that `wt run` starts sends status updates for prompt, completion, interruption,
   and session end.
@@ -957,7 +971,7 @@ It also tells when a desktop banner appears instead, and what else the Mac hook 
   to Running or Idle, or it clears the status.
 - Each status update carries a sequence number, so a delayed update cannot revive an old status.
 
-**The status lease.** While `wt run` is alive, its heartbeat renews a two-minute status lease.
+**The status lease (cmux 0.64 rows).** While `wt run` is alive, its heartbeat renews a two-minute status lease.
 A dead process or a reboot stops the renewals. When cmux next delivers a notification, the Mac hook
 clears an expired status pill (the status that the row shows in the sidebar). The hook's background timer,
 a detached process, also tries to clear the pill. But after the hook exits, cmux may reject that process.
@@ -966,11 +980,11 @@ a detached process, also tries to clear the pill. But after the hook exits, cmux
 no agent lifecycle relay. Also, cmux clears its reserved `claude`/`codex` status keys when an SSH pane
 has no local agent process. The VM-specific keys, `vm-claude` and `vm-codex`, avoid that cleanup.
 
-**The control notification.** Each status update from a VM reaches the Mac as a control notification.
+**The control notification (cmux 0.64 rows).** Each status update from a VM reaches the Mac as a control notification.
 When the Mac hook is active, this notification does not appear in history or in banners.
 If the hook is missing, the fallback is a readable status notification.
 
-**Claude events on a VM row:**
+**Claude events on a cmux 0.64 VM row:**
 
 - Claude's `StopFailure` and `idle_prompt` events return its row to Idle.
 - After you press Esc, the heartbeat also detects Claude's interruption markers in the transcript,
@@ -978,6 +992,7 @@ If the hook is missing, the fallback is a readable status notification.
 - If you press Esc while Claude is thinking and Claude writes no marker, the row can stay Running
   until the next lifecycle event.
 - `/clear` leaves the agent at Idle.
+- On a cmux 0.65 row, only the cmux-tui hooks report the state. An Esc interruption there was not tested.
 
 **Requests from VM tasks.** The same Mac hook handles the `wt-open` and `wt-attach` requests.
 For `wt-open`, it opens the remote folder in VS Code. For `wt-attach`, it creates the row for the new VM task.

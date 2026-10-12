@@ -133,6 +133,8 @@ if ! source "$wg_lib" 2>/dev/null; then
   printf 'wt: cannot load %s; reinstall workgrove or check the link to bin/wt\n' "$wg_lib" >&2
   exit 1
 fi
+# An absolute path, because cmd_run changes folder before it uses WG_LIB_DIR.
+case $wg_lib in /*) WG_LIB_DIR=${wg_lib%/*} ;; *) WG_LIB_DIR=$PWD/${wg_lib%/*} ;; esac
 unset wg_lib
 
 REPOS_PATH="${WT_REPOS_DIR:-$HOME/Documents/Repositories}"   # ':'-separated, searched in order (see repos_entries)
@@ -1195,6 +1197,16 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
         [[ -r $WT_STATUS_FILE ]] && WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE="$WT_STATUS_SOURCE" agent-notify </dev/null || true
       done ) >/dev/null 2>&1 &
     WT_STATUS_HEARTBEAT_PID=$!
+  fi
+  # cmux 0.65 shows a VM agent's state through the cmux-tui hooks. Give them this row's terminal at each hook.
+  # lib/workgrove/cmux-tui-hook.sh explains why the pane's own environment names the wrong terminal.
+  if is_remote && [[ -n ${TMUX:-} && -x $WG_LIB_DIR/cmux-tui-hook.sh ]]; then
+    # A nested wt run keeps the saved helper. Match any checkout's wrapper: each spelling of wt gives another path.
+    case ${CMUX_TUI_HOOK:-} in
+      */lib/workgrove/cmux-tui-hook.sh) ;;
+      *) export WT_CMUX_TUI_HOOK="${CMUX_TUI_HOOK:-${XDG_DATA_HOME:-$HOME/.local/share}/cmux-tui/bin/cmux-tui-hook}" ;;
+    esac
+    export CMUX_TUI_HOOK="$WG_LIB_DIR/cmux-tui-hook.sh"
   fi
   "$agent" "${model_arg[@]}" "${extra[@]}" "${args[@]}" || rc=$?
   [[ -n ${WT_STATUS_FILE:-} ]] && wt_cleanup

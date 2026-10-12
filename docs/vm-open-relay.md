@@ -2,6 +2,7 @@
 
 This page explains how VM tasks request VS Code windows and task rows on the Mac.
 It records the cmux 0.65 regression and the verified fix.
+[Agent status in VM rows](vm-agent-status.md) covers the status that a VM row shows.
 
 ## Cause
 
