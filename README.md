@@ -123,7 +123,14 @@ workgrove/
 ├── lib/
 │   └── workgrove/
 │       ├── common.sh          shared helpers that bin/wt, cmux-hook and agent-notify load
-│       └── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
+│       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
+│       └── vm/                scripts that bin/wt sends to a VM on SSH standard input
+│           ├── clear-stale-relay.sh
+│           ├── host-new-preflight.sh
+│           ├── probe-host.sh
+│           ├── reinit-client-confirm.sh
+│           ├── reinit-client-detach.sh
+│           └── reinit-client-proof.sh
 ├── home/
 │   ├── .zshenv .gitignore_global   always installed; .zshrc .gitconfig .tmux.conf are opt-in
 │   ├── .oh-my-zsh/custom/themes/workgrove.zsh-theme   with the .zshrc opt-in
@@ -353,8 +360,8 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
 GitHub Actions runs [`.github/workflows/tests.yml`](.github/workflows/tests.yml) on every push and every
 pull request. The workflow makes these checks:
 
-- `shellcheck -x` checks `bin/*`, `install.sh` and `test/*.sh` on `macos-latest`. It uses Homebrew's
-  shellcheck, as `Brewfile` does on the Mac.
+- On `macos-latest`, `shellcheck -x` checks `bin/*`, `lib/workgrove/*.sh`, `lib/workgrove/vm/*.sh`,
+  `install.sh`, and `test/*.sh`. It uses Homebrew's shellcheck, as `Brewfile` does on the Mac.
 - Every suite in `test/` runs on `macos-latest`, `ubuntu-22.04` and `ubuntu-24.04`. Each suite checks the
   assertion total for its platform.
   - On macOS, Homebrew's bash is first on `PATH`. `install-smoke.sh` runs `install.sh` with
@@ -371,7 +378,7 @@ Then run these commands from the repository root:
 
 ```bash
 export PATH="$(brew --prefix)/bin:$PATH"
-shellcheck -x bin/* install.sh test/*.sh
+shellcheck -x bin/* lib/workgrove/*.sh lib/workgrove/vm/*.sh install.sh test/*.sh
 for suite in test/*-smoke.sh; do
   GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash "$suite" || echo "FAILED: $suite"
 done
