@@ -406,7 +406,7 @@ prints `FAILED:` and the suite's path.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 934 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 929 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -439,8 +439,7 @@ prints `FAILED:` and the suite's path.
     - The VM lists no tmux client on the session.
   - That client replacement requires a fresh status message visible in that row.
   - That `bin/wt`, when `/bin/bash` starts it, runs under bash 5, or stops with a message that names the fix.
-  - That `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`, on how they merge the windows' row lists, on
-    which field of `cmux list-windows` is a window, and on which row a lookup names.
+  - That `bin/wt` and `bin/cmux-hook` agree on `tmux_cmd`.
   - The last group is different: it tests the `rm -rf` of `test/lib.sh` itself. No real run reaches that
     `rm -rf`, for two reasons. Both suites build their scratch root with `mktemp -d`. They also refuse a
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
@@ -456,8 +455,9 @@ prints `FAILED:` and the suite's path.
   failure states, with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
-- **`bash test/lib-smoke.sh`** makes 60 assertions about all eight functions in `lib/workgrove/common.sh`.
+- **`bash test/lib-smoke.sh`** makes 213 assertions about all ten functions in `lib/workgrove/common.sh`.
   It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.
+  Fixed cmux responses cover row lists across windows, failure policies, checked validation, command wrappers, and lookup by title, repo, and host.
   It does not contact a host.
 - **`bash test/remote-new-smoke.sh`** uses scratch SSH and cmux stubs. It checks these cases:
   - remote task preflight and model forwarding

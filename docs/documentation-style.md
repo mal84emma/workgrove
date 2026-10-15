@@ -146,8 +146,6 @@ If you must change one, update every file that cites it in the same change.
   `test/wt-smoke.sh` checks for the text `wt new  [name]`, with two spaces.
 - `test/wt-smoke.sh` compares `tmux_cmd` in `bin/wt` and in `bin/cmux-hook` with the full-line
   comments removed. So a trailing comment inside `tmux_cmd` must be the same in both files.
-- `test/wt-smoke.sh` reads the `jq -s -c '…'` program and the `grep -Ex '…'` pattern out of
-  `bin/cmux-hook` with `sed`. Do not put a `'` in a trailing comment on those lines.
 
 ### Edit agent instructions with care
 
