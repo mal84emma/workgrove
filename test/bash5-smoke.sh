@@ -20,8 +20,9 @@ for script in "${SCRIPTS[@]}"; do
   sed -e "s|/opt/homebrew/bin/bash|$FIRST|g" -e "s|/usr/local/bin/bash|$SECOND|g" \
     "$REPO/bin/$script" > "$TEST_ROOT/copies/$script"
 done
-# A copy loads the library from ../lib, as the scripts in bin/ do. So copies/ needs lib/ beside it.
+# A copy loads the libraries from ../lib, as the scripts in bin/ do. So copies/ needs lib/ beside it.
 cp "$REPO/lib/workgrove/common.sh" "$TEST_ROOT/lib/workgrove/common.sh"
+cp "$REPO/lib/workgrove/safety.sh" "$TEST_ROOT/lib/workgrove/safety.sh"
 # These copies have no ../lib, so they test what each script does when it cannot load the library.
 for script in wt cmux-hook agent-notify; do
   cp "$REPO/bin/$script" "$TEST_ROOT/nolib/bin/$script"
