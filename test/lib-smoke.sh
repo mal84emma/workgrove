@@ -240,4 +240,32 @@ test_ssh_hosts() {
 }
 test_ssh_hosts
 
-lib_summary 213
+begin_scenario 'exact tmux command lines'
+expected_task=$(cat <<'COMMAND'
+tmux new-session -d -s 'wt-test' echo\ task\ ready\;\ exec\ bash 2>/dev/null; if [ -n "$CMUX_TUI_SOCKET" ]; then for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=wt-test' "$v" "$(printenv "$v")"; done; tmux set-environment -t '=wt-test' WT_CMUX_CLOSE_ON_EXIT 1; exec tmux attach -d -t '=wt-test'; fi; [ -n "$CMUX_SOCKET_PATH" ] || export CMUX_SOCKET_PATH="$(tmux show-environment -t '=wt-test' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')"; [ -n "$CMUX_WORKSPACE_ID" ] || export CMUX_WORKSPACE_ID="$(tmux show-environment -t '=wt-test' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')"; [ -n "$CMUX_SOCKET_PATH" ] && tmux set-environment -t '=wt-test' CMUX_SOCKET_PATH "$CMUX_SOCKET_PATH"; [ -n "$CMUX_WORKSPACE_ID" ] && tmux set-environment -t '=wt-test' CMUX_WORKSPACE_ID "$CMUX_WORKSPACE_ID"; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; tmux attach -d -t '=wt-test'
+COMMAND
+)
+assert_eq 'task command line with a command' "$expected_task." "$(tmux_cmd wt-test 'echo task ready'; printf '.')"
+expected_shared=$(cat <<'COMMAND'
+tmux new-session -d -s 'wt-test' echo\ task\ ready\;\ exec\ bash 2>/dev/null; tmux attach -t '=wt-test'
+COMMAND
+)
+assert_eq 'shared command line with a command' "$expected_shared." "$(tmux_cmd wt-test 'echo task ready' shared; printf '.')"
+expected_reinit=$(cat <<'COMMAND'
+tmux new-session -d -s 'wt-test'  2>/dev/null; if [ -n "$CMUX_TUI_SOCKET" ]; then for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=wt-test' "$v" "$(printenv "$v")"; done; exec tmux attach -d -t '=wt-test'; fi; [ -n "$CMUX_SOCKET_PATH" ] || export CMUX_SOCKET_PATH="$(tmux show-environment -t '=wt-test' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')"; [ -n "$CMUX_WORKSPACE_ID" ] || export CMUX_WORKSPACE_ID="$(tmux show-environment -t '=wt-test' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')"; [ -n "$CMUX_SOCKET_PATH" ] && tmux set-environment -t '=wt-test' CMUX_SOCKET_PATH "$CMUX_SOCKET_PATH"; [ -n "$CMUX_WORKSPACE_ID" ] && tmux set-environment -t '=wt-test' CMUX_WORKSPACE_ID "$CMUX_WORKSPACE_ID"; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; tmux attach -d -t '=wt-test'
+COMMAND
+)
+assert_eq 'replacement command line' "$expected_reinit." "$(tmux_cmd wt-test '' '' reinit; printf '.')"
+expected_task_shell=$(cat <<'COMMAND'
+tmux new-session -d -s 'wt-test'  2>/dev/null; if [ -n "$CMUX_TUI_SOCKET" ]; then for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=wt-test' "$v" "$(printenv "$v")"; done; tmux set-environment -t '=wt-test' WT_CMUX_CLOSE_ON_EXIT 1; exec tmux attach -d -t '=wt-test'; fi; [ -n "$CMUX_SOCKET_PATH" ] || export CMUX_SOCKET_PATH="$(tmux show-environment -t '=wt-test' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')"; [ -n "$CMUX_WORKSPACE_ID" ] || export CMUX_WORKSPACE_ID="$(tmux show-environment -t '=wt-test' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')"; [ -n "$CMUX_SOCKET_PATH" ] && tmux set-environment -t '=wt-test' CMUX_SOCKET_PATH "$CMUX_SOCKET_PATH"; [ -n "$CMUX_WORKSPACE_ID" ] && tmux set-environment -t '=wt-test' CMUX_WORKSPACE_ID "$CMUX_WORKSPACE_ID"; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; tmux attach -d -t '=wt-test'
+COMMAND
+)
+assert_eq 'task command line without a command' "$expected_task_shell." "$(tmux_cmd wt-test; printf '.')"
+expected_shared_shell=$(cat <<'COMMAND'
+tmux new-session -d -s 'wt-test'  2>/dev/null; tmux attach -t '=wt-test'
+COMMAND
+)
+assert_eq 'shared command line without a command' "$expected_shared_shell." "$(tmux_cmd wt-test '' shared; printf '.')"
+end_scenario
+
+lib_summary 218

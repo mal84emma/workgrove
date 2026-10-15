@@ -62,6 +62,8 @@ WT="$REPO/bin/wt"
 KEEP_LABEL="scratch repos"           # lib_cleanup's name for what KEEP=1 leaves behind
 # shellcheck source=test/lib.sh
 . "$REPO/test/lib.sh"
+# shellcheck source=lib/workgrove/common.sh
+source "$REPO/lib/workgrove/common.sh"
 
 # The interpreter that runs bin/wt itself (see the header). This block resolves it to an absolute path once.
 WT_BASH="${WT_BASH:-bash}"
@@ -2030,7 +2032,6 @@ ROWS
   assert_has "a connected attached client was replaced" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
   assert_lacks "client replacement never typed into the row" "$(cat "$CMUX_LOG")" 'send --workspace'
   local expected_line
-  eval "$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt")"
   expected_line=$(tmux_cmd wt-project-task "" "" reinit)
   assert_has "replacement uses tmux_cmd's exact attach line" "$(cat "$TEST_ROOT/remote-log")" "tmux detach-client -t /dev/pts/3 -E $expected_line"
 
@@ -2422,15 +2423,11 @@ ROWS
   end_scenario
 }
 
-# 11. The invariants that two files promise each other in comments, and that nothing enforced. The copy of
-# tmux_cmd in bin/cmux-hook must match bin/wt's line for line (the command is the one that bin/cmux-hook's
-# own comment gives). The shared library tests cover row lists and row lookup.
-# The prologue also promises that when /bin/bash starts bin/wt,
-# bin/wt runs under bash 5 or later, or it stops with a message that names the fix. On a Mac, /bin/bash is
-# 3.2.57, and the prologue starts Homebrew's bash. The suite makes this check on every run, whatever bash
-# runs it.
-scenario_shared_tmux_cmd() {
-  begin_scenario "11. bin/wt reaches bash 5 from /bin/bash, and agrees with bin/cmux-hook on tmux_cmd"
+# 11. Check bash startup, shared library loading, and tmux launch behavior.
+# The library unit tests cover row lists, row lookup, and exact tmux command output.
+# On the Mac, /bin/bash is 3.2.57, so the prologue starts Homebrew's bash.
+scenario_shared_helpers() {
+  begin_scenario "11. bash startup, shared library loading, and tmux launch behavior"
   local a b sys=/bin/bash out rc sys_major env_file="$TEST_ROOT/bash-env" log="$TEST_ROOT/bash-versions"
   # Each non-interactive bash sources $BASH_ENV when it starts. So each bash that runs bin/wt adds one line
   # to the log, and the last line is the bash that printed the help.
@@ -2457,13 +2454,7 @@ scenario_shared_tmux_cmd() {
   else
     assert_eq "bin/wt under bash $sys_major prints its help" "exit 0" "exit $rc"
   fi
-  a="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt" | grep -v '^ *#')"
-  b="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/cmux-hook" | grep -v '^ *#')"
-  assert_has "bin/wt has a tmux_cmd" "$a" "tmux new-session"
-  assert_has "bin/cmux-hook has one too" "$b" "tmux new-session"
-  assert_eq "the two bodies are identical" "$a" "$b"
-  # …and on how each script finds lib/workgrove/common.sh. The three loaders differ only in what they do when
-  # the source fails, so the check stops at that line.
+  # The three loaders differ only in their handling of a source failure. Stop the comparison at that line.
   local c
   a="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/wt")"
   b="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/cmux-hook")"
@@ -2478,8 +2469,7 @@ scenario_shared_tmux_cmd() {
 printf '%s\n' "$*" >>"$TMUX_CMD_LOG"
 STUB
   chmod +x "$fake/tmux"
-  a="$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt")"
-  line=$(eval "$a"; tmux_cmd wt-test)
+  line=$(tmux_cmd wt-test)
   : >"$TEST_ROOT/tmux-cmd.log"
   env PATH="$fake:$PATH" TMUX_CMD_LOG="$TEST_ROOT/tmux-cmd.log" \
     CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa CMUX_TUI_SESSION_ID=session_test CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
@@ -2487,13 +2477,13 @@ STUB
   assert_has "native launch records terminal-exit cleanup" "$(cat "$TEST_ROOT/tmux-cmd.log")" "set-environment -t =wt-test WT_CMUX_CLOSE_ON_EXIT 1"
   assert_has "native launch saves this row's terminal identity" "$(cat "$TEST_ROOT/tmux-cmd.log")" "set-environment -t =wt-test CMUX_TUI_TERMINAL_ID term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   assert_lacks "native launch execs its client and cannot return to a shell" "$(cat "$TEST_ROOT/tmux-cmd.log")" "shell-remains"
-  line=$(eval "$a"; tmux_cmd wt-test "" "" reinit)
+  line=$(tmux_cmd wt-test "" "" reinit)
   : >"$TEST_ROOT/tmux-cmd.log"
   env PATH="$fake:$PATH" TMUX_CMD_LOG="$TEST_ROOT/tmux-cmd.log" \
     CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa CMUX_TUI_SESSION_ID=session_test CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
     "$WT_BASH" -c "$line"
   assert_lacks "client replacement preserves an older row's cleanup contract" "$(cat "$TEST_ROOT/tmux-cmd.log")" "WT_CMUX_CLOSE_ON_EXIT 1"
-  line=$(eval "$a"; tmux_cmd wt-test)
+  line=$(tmux_cmd wt-test)
   : >"$TEST_ROOT/tmux-cmd.log"
   env PATH="$fake:$PATH" TMUX_CMD_LOG="$TEST_ROOT/tmux-cmd.log" \
     CMUX_TUI_SOCKET= CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
@@ -2545,7 +2535,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=686
+FIXED_ASSERTIONS=683
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
@@ -2575,7 +2565,7 @@ main() {
   scenario_cmux
   scenario_host_args
   scenario_suspended_attach
-  scenario_shared_tmux_cmd
+  scenario_shared_helpers
   scenario_cleanup_guard
   lib_summary "$(expected_assertions)"
 }

@@ -8,6 +8,8 @@ TEST_ROOT=$(cd "$TEST_ROOT" && pwd -P)
 # shellcheck source=test/lib.sh
 # shellcheck disable=SC1091
 source "$REPO/test/lib.sh"
+# shellcheck source=lib/workgrove/common.sh
+source "$REPO/lib/workgrove/common.sh"
 trap 'HOME=$ORIGINAL_HOME lib_cleanup' EXIT
 mkdir -p "$TEST_ROOT/home/.ssh" "$TEST_ROOT/bin"
 export HOME="$TEST_ROOT/home" XDG_STATE_HOME="$TEST_ROOT/home/.local/state"
@@ -80,7 +82,6 @@ rm "$TEST_ROOT/bin/tmux"
 end_scenario
 
 begin_scenario 'reattachment replaces the previous transport and repeated requests survive content suppression'
-eval "$(sed -n '/^tmux_cmd()/,/^}/p' "$REPO/bin/wt")"
 eval "$(sed -n '/^notify_mac()/,/^}/p' "$REPO/bin/wt")"
 cmux_bin() { printf '%s' "$TEST_ROOT/bin/cmux"; }
 warn() { printf '%s\n' "$*" >&2; }

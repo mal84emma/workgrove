@@ -116,3 +116,34 @@ ssh_hosts() { # non-wildcard Host aliases in ~/.ssh/config, one per line. known_
 # known_host <alias> — the alias is one that ssh_hosts prints. grep reads all its input (no -q),
 # so sort never gets SIGPIPE, and the answer stays correct under pipefail.
 known_host() { ssh_hosts | grep -xF -- "$1" >/dev/null; }
+
+tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
+  # The line that a VM row's shell runs. It creates that tmux session (running <command>, then a shell) or
+  # takes over the session that is already there. A task row owns its session, so it attaches with -d. It
+  # hands the session THIS row's relay socket and workspace id. That makes `cmux notify` from inside the
+  # session light up this row.
+  # After "remote session was lost", cmux starts a shell that carries none of the CMUX_* variables.
+  # The file ~/.tmux.conf lists CMUX_SOCKET_PATH and CMUX_WORKSPACE_ID in update-environment (install.sh
+  # links home/.tmux.conf with --with-tmux-conf, or appends that one line to the file you already have).
+  # So an attach from that shell would mark them removed in the session and silence `cmux notify` there.
+  # Therefore, when the shell has none, the line takes each variable from the session (the row's old relay
+  # port stays bound to the row). It sets each one only when it is non-empty.
+  # A native attachment clears TCP values. A TCP attachment clears native values to override stale panes.
+  # A session that you may also be in yourself (the VM shell, a repo shell) gets "shared" instead. Then the
+  # row joins your clients and does not evict them, and it leaves their relay socket as it is.
+  # Native cmux closes a row when its terminal exits. Exec the tmux client so self-removal ends that terminal.
+  local run="" native_mark=""
+  # Replacing an old client does not replace its parent shell. Preserve its original cleanup contract.
+  [[ ${4:-} == reinit ]] || native_mark="tmux set-environment -t '=$1' WT_CMUX_CLOSE_ON_EXIT 1; "
+  [[ -n "${2:-}" ]] && printf -v run '%q' "$2; exec bash"
+  if [[ "${3:-}" == shared ]]; then
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; tmux attach -t '=%s'" "$1" "$run" "$1"
+  else
+    printf "tmux new-session -d -s '%s' %s 2>/dev/null; " "$1" "$run"
+    # Bind the current transport before reading the old session's identity.
+    printf "if [ -n \"\$CMUX_TUI_SOCKET\" ]; then for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export \"\$v=\"; tmux set-environment -t '=%s' \"\$v\" ''; done; " "$1"
+    printf "for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=%s' \"\$v\" \"\$(printenv \"\$v\")\"; done; %sexec tmux attach -d -t '=%s'; fi; " "$1" "$native_mark" "$1"
+    printf "[ -n \"\$CMUX_SOCKET_PATH\" ] || export CMUX_SOCKET_PATH=\"\$(tmux show-environment -t '=%s' CMUX_SOCKET_PATH 2>/dev/null | sed -n 's/^CMUX_SOCKET_PATH=//p')\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] || export CMUX_WORKSPACE_ID=\"\$(tmux show-environment -t '=%s' CMUX_WORKSPACE_ID 2>/dev/null | sed -n 's/^CMUX_WORKSPACE_ID=//p')\"; [ -n \"\$CMUX_SOCKET_PATH\" ] && tmux set-environment -t '=%s' CMUX_SOCKET_PATH \"\$CMUX_SOCKET_PATH\"; [ -n \"\$CMUX_WORKSPACE_ID\" ] && tmux set-environment -t '=%s' CMUX_WORKSPACE_ID \"\$CMUX_WORKSPACE_ID\"; " "$1" "$1" "$1" "$1"
+    printf "for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do export \"\$v=\"; tmux set-environment -t '=%s' \"\$v\" ''; done; tmux attach -d -t '=%s'" "$1" "$1"
+  fi
+}
