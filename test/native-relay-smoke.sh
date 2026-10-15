@@ -58,19 +58,13 @@ lacks() { if grep -qF -- "$2" "$1"; then fail "unexpected '$2' in $1"; else pass
 printf 'Host test-vm\n' > "$HOME/.ssh/config"
 
 begin_scenario 'tmux rebinds native identity instead of retaining the pane identity'
-# Load the identity reader without starting wt or contacting a host.
-eval "$(sed -n '/^RELAY_VARS=/p' "$REPO/bin/wt")"
-eval "$(sed -n '/^relay_env()/,/^}/p' "$REPO/bin/wt")"
-have() { command -v "$1" >/dev/null; }
 cat > "$TEST_ROOT/bin/tmux" <<'TMUX'
 #!/bin/sh
 case "$1" in
   display-message) echo native-task ;;
   show-environment)
-    case "$4" in
-      CMUX_TUI_SOCKET) echo CMUX_TUI_SOCKET=/tmp/current-native ;;
-      CMUX_TUI_TERMINAL_ID) echo CMUX_TUI_TERMINAL_ID=term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
-    esac ;;
+    echo CMUX_TUI_SOCKET=/tmp/current-native
+    echo CMUX_TUI_TERMINAL_ID=term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
 esac
 TMUX
 chmod +x "$TEST_ROOT/bin/tmux"
@@ -93,7 +87,13 @@ case "$1" in
   display-message) echo task ;;
   set-environment) printf '%s' "${5:-}" > "$RELAY_STATE/$4" ;;
   show-environment)
-    [[ -f $RELAY_STATE/$4 ]] && printf '%s=%s\n' "$4" "$(cat "$RELAY_STATE/$4")" ;;
+    if [[ $# -eq 4 ]]; then
+      [[ -f $RELAY_STATE/$4 ]] && printf '%s=%s\n' "$4" "$(cat "$RELAY_STATE/$4")"
+    else
+      for file in "$RELAY_STATE"/CMUX_*; do
+        [[ -f $file ]] && printf '%s=%s\n' "${file##*/}" "$(cat "$file")"
+      done
+    fi ;;
   attach)
     # tmux copies update-environment values from the attaching shell after set-environment calls.
     for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do
