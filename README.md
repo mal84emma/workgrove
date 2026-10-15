@@ -147,7 +147,8 @@ workgrove/
 │   ├── settings-snippet.jsonc six keys to paste; Settings Sync owns the rest
 │   └── extensions.txt
 ├── test/
-│   ├── lib.sh                 the assertion vocabulary both suites speak
+│   ├── lib.sh                 the assertion functions shared by the suites
+│   ├── lib-smoke.sh           unit tests for every shared shell function
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── bash5-smoke.sh         all five bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
@@ -455,6 +456,9 @@ prints `FAILED:` and the suite's path.
   failure states, with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
+- **`bash test/lib-smoke.sh`** makes 60 assertions about all eight functions in `lib/workgrove/common.sh`.
+  It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.
+  It does not contact a host.
 - **`bash test/remote-new-smoke.sh`** uses scratch SSH and cmux stubs. It checks these cases:
   - remote task preflight and model forwarding
   - an older VM's option refusal

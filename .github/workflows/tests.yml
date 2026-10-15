@@ -90,7 +90,7 @@ jobs:
           fi
 
       # Each suite checks its own assertion total, which differs between macOS and Linux.
-      # The loop runs every suite, also after a failure, and then names each suite that failed.
+      # The loop includes lib-smoke.sh, runs every suite after a failure, and names each suite that failed.
       - name: Run the suites
         env:
           # install-smoke.sh runs install.sh with this bash. An empty value selects the bash on PATH.
