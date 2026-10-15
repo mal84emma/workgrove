@@ -2423,11 +2423,11 @@ ROWS
   end_scenario
 }
 
-# 11. bin/wt and bin/cmux-hook must merge the per-window row lists and match tasks to rows identically.
-# When /bin/bash starts bin/wt, bin/wt must reach bash 5 or stop with a message that names the fix.
+# 11. Check bash startup, shared library loading, and tmux launch behavior.
+# The library unit tests cover row lists, row lookup, and exact tmux command output.
 # On the Mac, /bin/bash is 3.2.57, so the prologue starts Homebrew's bash.
-scenario_shared_rows() {
-  begin_scenario "11. bin/wt reaches bash 5 from /bin/bash, and agrees with bin/cmux-hook on the row list"
+scenario_shared_helpers() {
+  begin_scenario "11. bash startup, shared library loading, and tmux launch behavior"
   local a b sys=/bin/bash out rc sys_major env_file="$TEST_ROOT/bash-env" log="$TEST_ROOT/bash-versions"
   # Each non-interactive bash sources $BASH_ENV when it starts. So each bash that runs bin/wt adds one line
   # to the log, and the last line is the bash that printed the help.
@@ -2454,27 +2454,7 @@ scenario_shared_rows() {
   else
     assert_eq "bin/wt under bash $sys_major prints its help" "exit 0" "exit $rc"
   fi
-  # rows_json in wt and ws_load in the hook both merge the per-window row lists. If the
-  # two disagreed about a row, wt could act on it and the hook could not, or the reverse. They cannot share
-  # the body, because the hook wraps every cmux call in its deadline. So the check compares the jq program
-  # that does the merging.
-  a="$(sed -n "s/.*| jq -s -c '\(.*\)'.*/\1/p" "$REPO/bin/wt")"
-  b="$(sed -n "s/.*| jq -s -c '\(.*\)'.*/\1/p" "$REPO/bin/cmux-hook")"
-  assert_has "bin/wt merges the windows' row lists" "$a" "workspaces"
-  assert_eq "bin/cmux-hook merges them the same way" "$a" "$b"
-  # …and they must agree on which fields of `cmux list-windows` count as a window, for the same reason. A
-  # pattern that matched in one file and not in the other would give the two files different sets of windows.
-  a="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/wt")"
-  b="$(sed -n "s/.*grep -Ex '\(.*\)'.*/\1/p" "$REPO/bin/cmux-hook")"
-  assert_eq "the two take the same window uuids" "$a" "$b"
-  # …and on which row a lookup names: the description separator and the jq definitions that match a row.
-  # If the two disagreed, the hook could select or close a row that wt does not count as that task's row.
-  a="$(sed -n "/^ROW_SEP=/p; /^ROW_JQ='/,/^'\$/p" "$REPO/bin/wt")"
-  b="$(sed -n "/^ROW_SEP=/p; /^ROW_JQ='/,/^'\$/p" "$REPO/bin/cmux-hook")"
-  assert_has "bin/wt defines the row match" "$a" "def task_row"
-  assert_eq "bin/cmux-hook matches rows the same way" "$a" "$b"
-  # …and on how each script finds lib/workgrove/common.sh. The three loaders differ only in what they do when
-  # the source fails, so the check stops at that line.
+  # The three loaders differ only in their handling of a source failure. Stop the comparison at that line.
   local c
   a="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/wt")"
   b="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/cmux-hook")"
@@ -2555,7 +2535,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=688
+FIXED_ASSERTIONS=683
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
@@ -2585,7 +2565,7 @@ main() {
   scenario_cmux
   scenario_host_args
   scenario_suspended_attach
-  scenario_shared_rows
+  scenario_shared_helpers
   scenario_cleanup_guard
   lib_summary "$(expected_assertions)"
 }
