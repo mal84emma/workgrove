@@ -406,7 +406,7 @@ prints `FAILED:` and the suite's path.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 931 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 926 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -439,14 +439,12 @@ prints `FAILED:` and the suite's path.
     - The VM lists no tmux client on the session.
   - That client replacement requires a fresh status message visible in that row.
   - That `bin/wt`, when `/bin/bash` starts it, runs under bash 5, or stops with a message that names the fix.
-  - That `bin/wt` and `bin/cmux-hook` merge the windows' row lists the same way.
-    Both scripts also agree on which field of `cmux list-windows` is a window and which row a lookup names.
   - The last group is different: it tests the `rm -rf` of `test/lib.sh` itself. No real run reaches that
     `rm -rf`, for two reasons. Both suites build their scratch root with `mktemp -d`. They also refuse a
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 688 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 683 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -456,8 +454,9 @@ prints `FAILED:` and the suite's path.
   failure states, with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
-- **`bash test/lib-smoke.sh`** makes 108 assertions about all ten functions in `lib/workgrove/common.sh`.
+- **`bash test/lib-smoke.sh`** makes 261 assertions about all twelve functions in `lib/workgrove/common.sh`.
   It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.
+  Fixed cmux responses cover row lists across windows, failure policies, checked validation, command wrappers, and lookup by title, repo, and host.
   It pins the exact `tmux_cmd` output for task, `shared`, and `reinit` forms.
   A stub tmux checks relay identity precedence, explicit empty values, unset names, and native and TCP sessions.
   It does not contact a host.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test the shared shell functions with scratch SSH configuration and a stub tmux.
+# Test the shared shell functions with scratch SSH configuration, fixed cmux responses, and a stub tmux.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -71,6 +71,144 @@ assert_eq 'repo id uses only the last path component' final "$(repo_id '/repos/o
 assert_result 'underscore after the first character' yes valid_name task_2
 assert_result 'underscore first' no valid_name _task
 assert_result 'empty task name' no valid_name ''
+end_scenario
+
+ROW_WINDOW_ONE=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
+ROW_WINDOW_TWO=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
+ROW_WINDOW_THREE=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC
+ROW_ONE='{"id":"row-one","title":"task","description":"@local · repo"}'
+ROW_TWO='{"id":"row-two","title":"task","description":"@test-vm · repo","remote":{"enabled":true,"destination":"test-vm"}}'
+ROW_EXPECTED="{\"workspaces\":[$ROW_ONE,$ROW_TWO]}"
+
+row_cmux_reset() {
+  ROW_WINDOWS="* 0: $ROW_WINDOW_ONE"
+  ROW_WINDOWS_RC=0 ROW_ONE_RC=0 ROW_TWO_RC=0 ROW_FALLBACK_RC=0
+  ROW_ONE_LIST="[$ROW_ONE]"
+  ROW_TWO_LIST="{\"workspaces\":[$ROW_TWO]}"
+  ROW_FALLBACK_LIST="[$ROW_ONE]"
+  : >"$TEST_ROOT/row-calls"
+  : >"$TEST_ROOT/row-caps"
+}
+row_cmux() {
+  printf '%s\n' "$*" >>"$TEST_ROOT/row-calls"
+  case "$*" in
+    list-windows) printf '%s' "$ROW_WINDOWS"; return "$ROW_WINDOWS_RC" ;;
+    "workspace list --json --window $ROW_WINDOW_ONE") printf '%s' "$ROW_ONE_LIST"; return "$ROW_ONE_RC" ;;
+    "workspace list --json --window $ROW_WINDOW_TWO") printf '%s' "$ROW_TWO_LIST"; return "$ROW_TWO_RC" ;;
+    "workspace list --json --window $ROW_WINDOW_THREE") printf '[]' ;;
+    'workspace list --json') printf '%s' "$ROW_FALLBACK_LIST"; return "$ROW_FALLBACK_RC" ;;
+    *) return 64 ;;
+  esac
+}
+row_capped() {
+  printf '%s\n' "${*:2}" >>"$TEST_ROOT/row-caps"
+  "$@"
+}
+check_rows_load() {
+  local policy=$1 expected_rc=$2 expected_json=$3 expected_full=$4 rc=0
+  cmux_rows_load "$policy" row_capped row_cmux || rc=$?
+  assert_eq "$policy returns the expected status" "$expected_rc" "$rc"
+  assert_eq "$policy returns the expected rows" "$expected_json" "$CMUX_ROWS_JSON"
+  assert_eq "$policy records list completeness" "$expected_full" "$CMUX_ROWS_FULL"
+  assert_eq "$policy wraps every cmux call" "$(cat "$TEST_ROOT/row-calls")" "$(cat "$TEST_ROOT/row-caps")"
+}
+
+begin_scenario 'cmux row lists across windows'
+for policy in skip stop checked; do
+  row_cmux_reset
+  check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 1
+  ROW_ONE_LIST="{\"workspaces\":[$ROW_ONE]}"
+  check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 1
+  ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"
+  check_rows_load "$policy" 0 "$ROW_EXPECTED" 1
+  assert_eq "$policy queries windows by UUID" \
+    "$(printf 'list-windows\nworkspace list --json --window %s\nworkspace list --json --window %s' "$ROW_WINDOW_ONE" "$ROW_WINDOW_TWO")" \
+    "$(tail -3 "$TEST_ROOT/row-calls")"
+done
+end_scenario
+
+begin_scenario 'cmux window failures and older versions'
+for policy in skip stop checked; do
+  row_cmux_reset
+  ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"$'\n'"  2: $ROW_WINDOW_THREE"
+  ROW_TWO_RC=142
+  if [[ $policy == skip ]]; then
+    check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
+    assert_grep 'display lookups continue after a failed window' "$TEST_ROOT/row-calls" "$ROW_WINDOW_THREE"
+  else
+    check_rows_load "$policy" 142 '' 0
+    assert_eq "$policy stops at the failing window" "workspace list --json --window $ROW_WINDOW_TWO" "$(tail -1 "$TEST_ROOT/row-calls")"
+  fi
+  row_cmux_reset
+  ROW_WINDOWS='' ROW_WINDOWS_RC=1
+  if [[ $policy == checked ]]; then
+    check_rows_load "$policy" 1 '' 0
+    assert_eq 'checked requires successful enumeration' list-windows "$(cat "$TEST_ROOT/row-calls")"
+  else
+    check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
+    assert_eq "$policy falls back without list-windows" $'list-windows\nworkspace list --json' "$(cat "$TEST_ROOT/row-calls")"
+  fi
+done
+row_cmux_reset
+ROW_WINDOWS='a window line in a new format'
+check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
+check_rows_load checked 1 '' 0
+row_cmux_reset
+ROW_WINDOWS+=$'\n'"  1: unrecognized-window"
+check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
+check_rows_load checked 1 '' 0
+row_cmux_reset
+ROW_WINDOWS=''
+check_rows_load checked 0 "{\"workspaces\":[$ROW_ONE]}" 0
+ROW_FALLBACK_RC=142
+check_rows_load stop 142 '' 0
+check_rows_load checked 142 '' 0
+end_scenario
+
+begin_scenario 'cmux checked row validation'
+row_cmux_reset
+ROW_ONE_LIST='[]'
+check_rows_load checked 0 '{"workspaces":[]}' 1
+for invalid in '' ' ' 'not json' '{}' 'null' '{"workspaces":{}}' \
+  '[{"title":"task"}]' '[{"id":"","title":"task"}]' '[{"id":4,"title":"task"}]' \
+  '[{"id":"row"}]' '[{"id":"row","title":4}]' '[{"id":"row","title":"task","description":4}]' \
+  '[{"id":"row","title":"task","remote":false}]' \
+  '[{"id":"row","title":"task","remote":{"enabled":"true"}}]' \
+  '[{"id":"row","title":"task","remote":{"destination":4}}]'; do
+  ROW_ONE_LIST=$invalid
+  assert_result "checked rejects $invalid" no cmux_rows_load checked row_cmux
+  assert_eq 'a failed validation clears the previous snapshot' '' "$CMUX_ROWS_JSON"
+done
+ROW_ONE_LIST='{"workspaces":['
+assert_result 'the hook rejects invalid JSON' no cmux_rows_load stop row_cmux
+row_cmux_reset
+ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"
+ROW_TWO_LIST=''
+check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
+check_rows_load checked 1 '' 0
+end_scenario
+
+begin_scenario 'cmux row lookup by title, repository and host'
+ROW_LOOKUP="[$ROW_TWO,{\"id\":\"other-repo\",\"title\":\"task\",\"description\":\"@local · other\"},$ROW_ONE,\
+{\"id\":\"legacy\",\"title\":\"repo:old-task\"},\
+{\"id\":\"description-host\",\"title\":\"task\",\"description\":\"@other-vm · repo\",\"remote\":{\"enabled\":true,\"destination\":\"user@other-vm\"}},\
+{\"id\":\"disabled-remote\",\"title\":\"local-task\",\"description\":\"@test-vm · repo\",\"remote\":{\"enabled\":false,\"destination\":\"test-vm\"}},\
+{\"id\":\"no-repo\",\"title\":\"driver\"}]"
+assert_eq 'a local lookup ignores remote and other repository rows' row-one "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id)"
+assert_eq 'an object list finds the remote row' row-two "$(printf '{\"workspaces\":%s}' "$ROW_LOOKUP" | cmux_find_row task repo id test-vm)"
+assert_eq 'a lookup can return another field' '@local · repo' "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo description)"
+assert_eq 'an older title still matches' legacy "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row old-task repo id)"
+assert_eq 'the description can identify the host' description-host "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id other-vm)"
+assert_eq 'a row with remote disabled is local' disabled-remote "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row local-task repo id)"
+assert_eq 'a row can have no repository' no-repo "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row driver '' id)"
+assert_eq 'a missing field prints an empty string' '' "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo current_directory)"
+rc=0
+out=$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id missing-vm) || rc=$?
+assert_eq 'a missing host prints nothing' '' "$out"
+assert_eq 'a missing host returns a failure' 4 "$rc"
+assert_result 'a remote description alone cannot enable a remote row' no cmux_find_row local-task repo id test-vm <<<"$ROW_LOOKUP"
+assert_result 'another repository does not match' no cmux_find_row task absent id <<<"$ROW_LOOKUP"
+assert_eq 'the first matching row wins' row-one "$(printf '[%s,{"id":"later-row","title":"task","description":"@local · repo"}]' "$ROW_ONE" | cmux_find_row task repo id)"
 end_scenario
 
 mkdir -p "$TEST_ROOT/home/.ssh"
@@ -256,4 +394,4 @@ TMUX
 }
 test_relay_env
 
-lib_summary 108
+lib_summary 261

@@ -164,79 +164,26 @@ status_sweep() { # a detached expiry may lose its cmux ancestry, so later hook c
   done
 }
 WS_JSON=""; WS_RC=""; WS_FULL=""
-ws_load() { # ws_load [fresh] — one shared snapshot of every cmux row, in every window. The snapshot is
-            # in $WS_JSON, and its status is in $WS_RC.
-            # Both queries below used to make their own capped call and pipe it straight into jq. That
-            # threw away capped's exit status. So a list that timed out looked exactly like "no such row".
-            # Then attach_row took its create branch, and a task that already had a row got a second one. One
-            # snapshot with a checked status fixes both halves of that. Also, a failure now propagates, so
-            # the caller creates nothing and the notification keeps its ordinary banner.
-            # `workspace list --json` covers ONE window, and a hook has no caller surface. So the call
-            # answered for whichever window was current. A task row was invisible here when the user had
-            # moved it into a second window, to work on two tasks side by side. The result was worse than a
-            # missing row: from_row_on_host could not show that the notification came from that host, so it
-            # failed closed. Then a VM's `wt open` did nothing but write a line to $LOG.
-            # So this enumerates the windows and merges their lists, exactly as rows_json does in wt. It
-            # names each window by its uuid, never by the index that list-windows prints first, because
-            # opening a window renumbers the others. The uuid stays the same.
-  [[ ${1:-} == fresh ]] && WS_RC=""       # the post-create lookup wants the list as it is now, not as it was
+# ws_load [fresh] caches all rows in WS_JSON and the list status in WS_RC. fresh resets the cache.
+# A failed list must not look like an absent row: attach_row could create a duplicate.
+# WS_FULL guards new_row after a create without a ref. An incomplete snapshot could miss an older row with the same title.
+ws_load() {
+  [[ ${1:-} == fresh ]] && WS_RC=""
   [[ -n $WS_RC ]] && return "$WS_RC"
-  # WS_FULL is 1 only when list-windows named every window and every window's list arrived. The fallback
-  # below, a line of list-windows that names no window, and a window that printed nothing can each leave rows
-  # out. That matters to attach_row's new_row: an older row that the list missed looks new.
-  local raw lines=() wins=() w out docs="" rc=0 full=1
-  raw=$(capped "$CMUX" list-windows 2>/dev/null) || raw=""        # cannot enumerate: the fallback below stands in
-  mapfile -t lines <<<"$raw"
-  mapfile -t wins < <(printf '%s\n' "$raw" | awk '{print ($1 == "*" ? $3 : $2)}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}')
-  (( ${#wins[@]} > 0 && ${#wins[@]} == ${#lines[@]} )) || full=0   # each line of list-windows names a window
-  for w in "${wins[@]}"; do
-    out=$(capped "$CMUX" workspace list --json --window "$w" 2>/dev/null); rc=$?
-    [[ $rc -eq 0 ]] || break               # a window whose list timed out must not pass for one holding no rows
-    [[ -n ${out//[[:space:]]/} ]] || full=0
-    docs="$docs$out"
-  done
-  WS_FULL=$full
-  # When this enumerates nothing, it falls back to the single-window call that was here before. That
-  # happens with an older cmux that has no list-windows, or with output that this could not parse. So
-  # such a cmux keeps the reach that it had, and does not lose the hook.
-  if [[ $rc -eq 0 && -z $docs ]]; then
-    docs=$(capped "$CMUX" workspace list --json 2>/dev/null); rc=$?
-  fi
-  WS_RC=$rc
-  # `.workspaces?` and not `.workspaces`: cmux may hand back a bare array. jq's `//` does not catch the
-  # error `Cannot index array with "workspaces"`. Only the `?` turns that error into the empty result that
-  # `//` can fall back from.
-  if [[ $WS_RC -eq 0 ]]; then
-    WS_JSON=$(printf '%s' "$docs" | jq -s -c '{workspaces: (map(.workspaces? // .) | add // [])}' 2>/dev/null) || WS_RC=1
-  fi
+  WS_RC=0
+  cmux_rows_load stop capped "$CMUX" || WS_RC=$?
+  WS_FULL=$CMUX_ROWS_FULL
+  if [[ $WS_RC -eq 0 ]]; then WS_JSON=$CMUX_ROWS_JSON; fi
   case $WS_RC in
     0) ;;
-    142) log "the cmux row list hit the hook deadline (capped exit 142)" ;;   # "did it time out": yes
+    142) log "the cmux row list hit the hook deadline (capped exit 142)" ;;
     *)   log "the cmux row list failed (exit $WS_RC)" ;;
   esac
   return "$WS_RC"; }
-# The row identity, as in wt. A task row's title is <name>, and its description is "@<host> · <repo>".
-# ROW_SEP and ROW_JQ are copies of the ones in bin/wt, which explains them. test/wt-smoke.sh checks that the
-# copies stay identical.
-ROW_SEP=' · '
-# shellcheck disable=SC2016   # a jq program: each $ name is a jq variable
-ROW_JQ='
-  def desc($sep): (.description | if type == "string" then . else "" end) | split($sep);
-  def on_host($h; $sep): if $h == "" then ((.remote.enabled // false) | not)
-    else ((.remote.enabled // false) and ((.remote.destination // "") == $h or (desc($sep)[0] // "") == "@" + $h)) end;
-  def task_row($t; $r; $h; $sep): on_host($h; $sep)
-    and ((.title == $t and (desc($sep)[1:] | join($sep)) == $r) or ($r != "" and .title == $r + ":" + $t));
-  def new_row($t; $h; $ids; $sep): .title == $t and on_host($h; $sep) and (desc($sep) | length < 2)
-    and (.id as $i | all($ids[]; . != $i));
-  def unclaimed_row($t; $h; $sep): .title == $t and on_host($h; $sep)
-    and ((.description | if type == "string" then . else "" end) | test("^@[^ ]+(" + $sep + "[A-Za-z0-9-]+)?$") | not);
-'
-row_by_title() { # row_by_title <title> <repo id> <host> — the local row for a VM task; mirrors
-                 # cmux_row_field <title> <repo> id <host> in wt
-  ws_load || return                       # callers load first; this is only here so the filter never runs blind
-  printf '%s' "$WS_JSON" \
-    | jq -er --arg t "$1" --arg r "$2" --arg h "$3" --arg sep "$ROW_SEP" "$ROW_JQ"'
-        first((.workspaces? // .)[] | select(task_row($t; $r; $h; $sep)) | .id) // empty' 2>/dev/null; }
+# row_by_title <title> <repo id> <host> prints the matching row ID from a successful snapshot.
+row_by_title() {
+  ws_load || return
+  printf '%s' "$WS_JSON" | cmux_find_row "$1" "$2" id "$3"; }
 from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifying row is an SSH row to that host.
   # cmux 0.64 reports CMUX_NOTIFICATION_ORIGIN=local for a `cmux ssh` row's own notifications. (Only the old
   # mosh-tmux relay said ssh-relay:<uuid>.) So the row's remote destination is the check that the

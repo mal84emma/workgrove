@@ -270,33 +270,6 @@ row_tag() { # row_tag [host] [repo] — the row description: "@<host> · <repo>"
   printf '@%s' "${1:-$(where_am_i)}"
   if [[ -n "${2:-}" ]]; then printf '%s%s' "$ROW_SEP" "$(repo_id "$2")"; fi
 }
-# The separator in a row description: a space, U+00B7 MIDDLE DOT, and a space. A host alias and a repo_id
-# never contain it, so a description splits on it into exactly "@<host>" and "<repo>".
-ROW_SEP=' · '
-# The jq definitions that decide which row a lookup names. bin/cmux-hook has the same text, and
-# test/wt-smoke.sh checks that the two copies are identical.
-# - on_host($h; $sep): "" means a local row. Otherwise, an ssh row to $h, by its destination or its description.
-# - task_row($t; $r; $h; $sep): the row titled $t, for repo_id $r ("" for a row with no repo), on host $h.
-#   A row titled "<repo>:<name>" also matches, whatever its description. Older wt versions gave that title to
-#   task rows. Such a row keeps that title, so the lookup accepts both forms.
-# - unclaimed_row($t; $h; $sep): a row titled $t on host $h whose description has a form that wt never writes.
-#   The user can edit or clear a description in cmux. Such a row may be a task row that task_row can no
-#   longer find, so wt rm checks it for a running agent.
-# - new_row($t; $h; $ids; $sep): the row that `cmux ssh $h --name $t` just created, for a create that printed
-#   no workspace ref. The row has title $t, a description with no repo yet, and an id that is not in $ids,
-#   the row ids from before the create. The repo test keeps it off another repo's row even when $ids is empty.
-# shellcheck disable=SC2016   # a jq program: each $ name is a jq variable
-ROW_JQ='
-  def desc($sep): (.description | if type == "string" then . else "" end) | split($sep);
-  def on_host($h; $sep): if $h == "" then ((.remote.enabled // false) | not)
-    else ((.remote.enabled // false) and ((.remote.destination // "") == $h or (desc($sep)[0] // "") == "@" + $h)) end;
-  def task_row($t; $r; $h; $sep): on_host($h; $sep)
-    and ((.title == $t and (desc($sep)[1:] | join($sep)) == $r) or ($r != "" and .title == $r + ":" + $t));
-  def new_row($t; $h; $ids; $sep): .title == $t and on_host($h; $sep) and (desc($sep) | length < 2)
-    and (.id as $i | all($ids[]; . != $i));
-  def unclaimed_row($t; $h; $sep): .title == $t and on_host($h; $sep)
-    and ((.description | if type == "string" then . else "" end) | test("^@[^ ]+(" + $sep + "[A-Za-z0-9-]+)?$") | not);
-'
 need_name()  { valid_name "$1" || die "invalid name '$1' (lowercase letters, digits, _ and -, max 63, no '.')"; }
 tidy_name()  { printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/-/g'; }  # "Fix Auth" -> fix-auth; anything else must already be valid
 valid_agent() { case "$1" in claude|codex|none) ;; *) die "unknown agent '$1' (use claude, codex or none)" ;; esac; }
@@ -399,74 +372,22 @@ require_wt() { # require_wt <name>  -> sets P (path), B (branch)
   die "no worktree named '$n' in $REPO (see: wt list)"
 }
 
-rows_json() { # rows_json [checked] — every cmux row, in every window, as one {"workspaces":[…]} document.
-  # `workspace list --json` answers for ONE window: the caller's window, or the one that --window names.
-  # A window displays one row at a time. So the only way to show two tasks side by side in cmux is to drag a
-  # row into a second window. That row is then absent from the list, and every lookup built on this reads
-  # that as "no such row":
-  # - `wt rm` leaves the row open;
-  # - remote_row builds a second row beside the one already there;
-  # - check_identity misses a row that another repo already uses;
-  # - the hook's from_row_on_host fails closed, so a VM's `wt open` does nothing.
-  # Only the LISTING is window-scoped. That is why merging the lists is the whole fix, and why nothing that
-  # acts on a row changes. Measured on cmux 0.64:
-  # - a row keeps its uuid, its title and even its workspace:N ref when it moves between windows;
-  # - cmux allocates refs globally, so two windows cannot collide;
-  # - read-screen, send, workspace-action and workspace close each reach a row in another window with no
-  #   --window.
-  # Enumerate windows by uuid, never by the index that list-windows prints first. Opening a window renumbers
-  # the others: a new window took index 0 and pushed the existing one to 1. The uuid stays fixed.
-  # Use `.workspaces?`, not `.workspaces`: cmux may hand back a bare array, and jq's `//` does not catch the
-  # error `Cannot index array with "workspaces"`. Only the `?` turns that error into the empty value that `//`
-  # can fall back from.
-  local c w out windows docs=""
-  c=$(cmux_bin) || { [[ ${1:-} != checked ]] || return 1; return 0; }
-  windows=$(CMUX_QUIET=1 "$c" list-windows 2>/dev/null) || {
-    [[ ${1:-} != checked ]] || return 1
-  }
-  if [[ ${1:-} == checked && -n "$windows" ]]; then
-    if printf '%s\n' "$windows" | awk '{print ($1 == "*" ? $3 : $2)}' | grep -Eqv '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then return 1; fi
-  fi
-  for w in $(printf '%s\n' "$windows" | awk '{print ($1 == "*" ? $3 : $2)}' | grep -Ex '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' || true); do
-    out=$(CMUX_QUIET=1 "$c" workspace list --json --window "$w" 2>/dev/null) || {
-      [[ ${1:-} != checked ]] || return 1
-      continue   # a window closed mid-loop
-    }
-    [[ ${1:-} != checked || -n "${out//[[:space:]]/}" ]] || return 1
-    docs="$docs$out"
-  done
-  # For display lookups, an older cmux or unrecognized output can give no window list.
-  # Then fall back to the single-window call. Checked removal requires a successful, readable window list.
-  [[ -n "$docs" ]] || docs=$(CMUX_QUIET=1 "$c" workspace list --json 2>/dev/null) || {
-    [[ ${1:-} != checked ]] || return 1
-  }
-  if [[ ${1:-} == checked ]]; then
-    printf '%s' "$docs" | jq -e -s -c '
-      map(if type == "array" then . elif type == "object" then .workspaces else null end) as $rows
-      | if ($rows | length > 0) and all($rows[]; type == "array"
-          and all(.[]; (.id | type == "string" and length > 0) and (.title | type == "string")
-            and (.remote == null or (.remote | type == "object"))
-            and (.remote.enabled == null or (.remote.enabled | type == "boolean"))
-            and (.remote.destination == null or (.remote.destination | type == "string"))
-            and (.description == null or (.description | type == "string"))))
-        then {workspaces: ($rows | add)} else error("invalid cmux row list") end' 2>/dev/null
-    return
-  fi
-  printf '%s' "$docs" | jq -s -c '{workspaces: (map(.workspaces? // .) | add // [])}' 2>/dev/null || true
+# rows_json [checked] prints all cmux rows as one {"workspaces":[…]} document.
+rows_json() {
+  local cmux
+  cmux=$(cmux_bin) || { [[ ${1:-} != checked ]] || return 1; return 0; }
+  CMUX_QUIET=1 cmux_rows_load "${1:-skip}" "$cmux" || return
+  printf '%s\n' "$CMUX_ROWS_JSON"
 }
 
-cmux_row_field() { # cmux_row_field <title> <repo> <field> [host] -> that field; no host: the local row
-  # <repo> is a path or a name, or "" for a row with no repo. Two repos can each have a task with the same
-  # name, and a local and a VM row can share a title. So the repo and the host tell such rows apart.
-  # It prints nothing when cmux or the row is missing.
+# cmux_row_field <title> <repo> <field> [host] prints a matching field, or nothing when cmux or the row is missing.
+# The repo can be a path, a name, or empty. An omitted host selects a local row.
+cmux_row_field() {
   cmux_bin >/dev/null || return 0
-  local rows r=""
-  if [[ -n "$2" ]]; then r=$(repo_id "$2"); fi
+  local rows repo=''
+  if [[ -n $2 ]]; then repo=$(repo_id "$2"); fi
   rows=$(rows_json)
-  printf '%s' "$rows" \
-    | jq -r --arg t "$1" --arg r "$r" --arg k "$3" --arg h "${4:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
-        first((.workspaces? // .)[] | select(task_row($t; $r; $h; $sep)) | .[$k] // "") // empty' \
-        2>/dev/null || true
+  printf '%s' "$rows" | cmux_find_row "$1" "$repo" "$3" "${4:-}" || true
 }
 
 task_title() { # task_title <name> [saved title] — the title of the task's row. No saved title: read the sidecar.
