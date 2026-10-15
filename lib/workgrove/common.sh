@@ -29,13 +29,14 @@ valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 # Both callers read the three CMUX_TUI_* variables so the native identity follows the same precedence.
 #
 # Empty session values clear the previous transport. Missing names and "-NAME" keep the pane's value.
-# Include empty assignments in RELAY_IDENT so a child cannot inherit a cleared identity from the pane.
+# Include explicit empty session assignments in RELAY_IDENT so a child cannot inherit a cleared identity from the pane.
+# Keep absent pane names unset in the child.
 #
 # relay_env sets RELAY_SOCKET, RELAY_WS, RELAY_TUI_SOCKET, RELAY_TUI_TERMINAL and RELAY_IDENT.
 # It returns nonzero when neither a native relay identity nor a TCP relay socket is available.
 # shellcheck disable=SC2034
 relay_env() {
-  local session_name='' session_env='' variable value line
+  local session_name='' session_env='' variable value line session_match
   local relay_vars=(CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID
                     CMUX_TERMINAL_LIFECYCLE_ID CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID)
   RELAY_IDENT=(); RELAY_SOCKET=''; RELAY_WS=''; RELAY_TUI_SOCKET=''; RELAY_TUI_TERMINAL=''
@@ -47,12 +48,13 @@ relay_env() {
   fi
   for variable in "${relay_vars[@]}"; do
     value=${!variable:-}
+    session_match=0
     while IFS= read -r line; do
       case $line in
-        "$variable="*) value=${line#*=}; break ;;
+        "$variable="*) value=${line#*=}; session_match=1; break ;;
       esac
     done <<< "$session_env"
-    RELAY_IDENT+=("$variable=$value")
+    if [[ -n $value || $session_match == 1 ]]; then RELAY_IDENT+=("$variable=$value"); fi
     case $variable in
       CMUX_SOCKET_PATH) RELAY_SOCKET=$value ;;
       CMUX_WORKSPACE_ID) RELAY_WS=$value ;;

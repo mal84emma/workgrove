@@ -233,7 +233,27 @@ TMUX
   assert_result 'a failed environment query keeps the pane relay' yes relay_env
   assert_eq 'a failed environment query keeps the pane socket' 127.0.0.1:1111 "$RELAY_SOCKET"
   end_scenario
+
+  begin_scenario 'unset pane variables stay unset unless the session assigns them'
+  RELAY_TMUX_FAIL=''
+  unset CMUX_PANEL_ID CMUX_TUI_SESSION_ID
+  printf '%s\n' -CMUX_PANEL_ID > "$RELAY_TMUX_ENV"
+  assert_result 'missing pane names do not prevent relay use' yes relay_env
+  # shellcheck disable=SC2016
+  assert_eq 'absent and removed names stay unset in the child' 'unset|unset' \
+    "$(env -u CMUX_PANEL_ID -u CMUX_TUI_SESSION_ID "${RELAY_IDENT[@]}" "$BASH" -c 'printf "%s|%s" "${CMUX_PANEL_ID-unset}" "${CMUX_TUI_SESSION_ID-unset}"')"
+  printf '%s\n' CMUX_PANEL_ID= CMUX_TUI_SESSION_ID= > "$RELAY_TMUX_ENV"
+  assert_result 'explicit empty session assignments keep the relay usable' yes relay_env
+  # shellcheck disable=SC2016
+  assert_eq 'explicit empty session assignments reach the child' '|' \
+    "$(env -u CMUX_PANEL_ID -u CMUX_TUI_SESSION_ID "${RELAY_IDENT[@]}" "$BASH" -c 'printf "%s|%s" "${CMUX_PANEL_ID-unset}" "${CMUX_TUI_SESSION_ID-unset}"')"
+  TMUX=''
+  assert_result 'missing pane names outside tmux do not prevent relay use' yes relay_env
+  # shellcheck disable=SC2016
+  assert_eq 'names absent outside tmux stay unset in the child' 'unset|unset' \
+    "$(env -u CMUX_PANEL_ID -u CMUX_TUI_SESSION_ID "${RELAY_IDENT[@]}" "$BASH" -c 'printf "%s|%s" "${CMUX_PANEL_ID-unset}" "${CMUX_TUI_SESSION_ID-unset}"')"
+  end_scenario
 }
 test_relay_env
 
-lib_summary 102
+lib_summary 108
