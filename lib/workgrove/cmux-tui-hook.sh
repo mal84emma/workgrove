@@ -9,7 +9,7 @@
 # An agent in a tmux pane keeps the environment that the pane started with, and two cases make it wrong:
 # - tmux gives a new session's first pane its global environment. That environment holds the terminal
 #   of the row that started the tmux server, so the hook reports to another task's row.
-# - A reattach gives the row a new terminal. tmux_cmd in bin/wt saves it in the session environment only.
+# - A reattach gives the row a new terminal. tmux_cmd saves it in the session environment only.
 # `wt run` sets CMUX_TUI_HOOK to this file for its agent. This file reads the identity from the task's tmux
 # session at each hook, then runs the cmux-tui helper that WT_CMUX_TUI_HOOK names.
 # The helper reads the agent's payload from stdin, so the tmux calls here read /dev/null.
