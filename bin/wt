@@ -1779,21 +1779,7 @@ need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer
 }
 
 host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
-  local host="$1" repo="$2" agent="$3" cmd
-  # shellcheck disable=SC2016   # $HOME and $PATH must expand on the VM
-  cmd='PATH="$HOME/.local/bin:$PATH"; export PATH;'
-  # shellcheck disable=SC2016
-  cmd+=' test -x "$HOME/.local/bin/wt" || { echo "remote wt is missing" >&2; exit 1; };'
-  if [[ -n "$repo" ]]; then
-    cmd+=" \"\$HOME/.local/bin/wt\" repos $(shell_join "$repo") >/dev/null || exit 1;"
-  fi
-  cmd+=' command -v tmux >/dev/null 2>&1 || { echo "remote tmux is missing" >&2; exit 1; };'
-  cmd+=" agent=$(shell_join "$agent");"
-  # shellcheck disable=SC2016   # $agent and $WT_AGENT must expand on the VM
-  cmd+=' [ -n "$agent" ] || agent=${WT_AGENT:-claude};'
-  # shellcheck disable=SC2016
-  cmd+=' case "$agent" in none) ;; claude|codex) command -v "$agent" >/dev/null 2>&1 || { echo "remote agent is missing: $agent" >&2; exit 1; } ;; *) echo "invalid remote agent: $agent" >&2; exit 1 ;; esac'
-  remote_sh "$host" "$cmd"
+  remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" <"$WG_LIB_DIR/vm/host-new-preflight.sh"
 }
 
 host_new() { # create the worktree on the VM, then the cmux row here unless --no-workspace
@@ -1873,76 +1859,7 @@ row_remote_field() { # row_remote_field <id> <field>… — this row's current r
 
 clear_stale_relay() { # clear_stale_relay <host> <slot> — signal only this user's sshd, and only when its session is
                       # not from the Mac's current address; the last line on stdout is `stopped <port> <pid>` or `free <port>`
-  local script
-  IFS= read -r -d '' script <<'WT_RELAY' || :
-slot=$1
-case "$slot" in ssh-[A-Za-z0-9-]*) ;; *) echo 'invalid relay slot' >&2; exit 1 ;; esac
-# Without a keepalive a stale session holds its port for hours; the Mac warns. These files are world-readable.
-if [ -r /etc/ssh/sshd_config ] && ! grep -qisE '^[[:space:]]*ClientAliveInterval[[:space:]=]+0*[1-9]' \
-    /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null; then echo 'keepalive missing'; fi
-port=''
-for file in "$HOME"/.cmux/relay/*.slot; do
-  [ -f "$file" ] || continue
-  [ "$(cat "$file")" = "$slot" ] || continue
-  candidate=${file##*/}; candidate=${candidate%.slot}
-  case "$candidate" in *[!0-9]*|'') echo 'invalid relay port' >&2; exit 1 ;; esac
-  [ -z "$port" ] || { echo 'multiple ports for relay slot' >&2; exit 1; }
-  port=$candidate
-done
-[ -n "$port" ] || { echo 'relay slot file not found' >&2; exit 1; }
-on_port() { # every listener on $port at any local address: field 4 after a State column, else field 3
-  awk -v port="$port" '{ o = ($1 ~ /^[0-9]+$/) ? 0 : 1; n = split($(3 + o), a, ":"); if (n > 1 && a[n] == port) print }'
-}
-lines=$(ss -H -ltnp "sport = :$port") || { echo 'ss failed' >&2; exit 1; }
-held=$(printf '%s\n' "$lines" | on_port)
-if [ -z "$held" ]; then printf 'free %s\n' "$port"; exit 0; fi
-if printf '%s\n' "$held" | grep -qv 'pid='; then
-  # Some VMs hide even this user's sshd PID from unprivileged ss. Sudo is only for inspection.
-  lines=$(sudo -n ss -H -ltnp "sport = :$port") || { echo "cannot inspect listener PID on $port" >&2; exit 1; }
-  held=$(printf '%s\n' "$lines" | on_port)
-fi
-if [ -z "$held" ] || printf '%s\n' "$held" | grep -qv 'pid='; then echo "cannot identify one listener on $port" >&2; exit 1; fi
-# One sshd may hold the port on IPv4 and IPv6 at once: one PID across every line, never one line.
-pids=$(printf '%s\n' "$held" | grep -oE 'pid=[0-9]+' | sort -u)
-[ "$(printf '%s\n' "$pids" | grep -c .)" -eq 1 ] || { echo "multiple listeners on $port" >&2; exit 1; }
-pid=${pids#pid=}
-# OpenSSH 9.8 and later run each session as sshd-session.
-if printf '%s\n' "$held" | grep -qvF -e "\"sshd\",pid=$pid," -e "\"sshd-session\",pid=$pid,"; then
-  echo "listener on $port is not sshd" >&2; exit 1
-fi
-case "$(ps -o comm= -p "$pid" | tr -d ' ')" in sshd|sshd-session) ;; *) echo "listener on $port is not a user-owned sshd" >&2; exit 1 ;; esac
-[ "$(ps -o uid= -p "$pid" | tr -d ' ')" = "$(id -u)" ] || { echo "listener on $port is not a user-owned sshd" >&2; exit 1; }
-# Stale means connected from an address the Mac no longer has. This call's own SSH_CONNECTION is the
-# Mac's current address; a session from it may be live (a ControlMaster VS Code shares) and is refused.
-[ -n "${SSH_CONNECTION:-}" ] || { echo "SSH_CONNECTION is empty, so sshd $pid holding relay port $port cannot be shown to be stale" >&2; exit 1; }
-client_ip=${SSH_CONNECTION%% *}; server_port=${SSH_CONNECTION##* }
-case "$server_port" in *[!0-9]*|'') echo "unexpected SSH_CONNECTION: $SSH_CONNECTION" >&2; exit 1 ;; esac
-bare_ip() { a=${1#\[}; a=${a%\]}; printf '%s\n' "${a#::ffff:}"; }   # [addr], ::ffff:v4 and v4 compare equal
-conns=$(ss -H -tnp state established "( sport = :$server_port )") || { echo 'ss failed' >&2; exit 1; }
-conn=$(printf '%s\n' "$conns" | grep -F ",pid=$pid,")
-if [ -z "$conn" ]; then   # hidden PIDs again; sudo only reads
-  conns=$(sudo -n ss -H -tnp state established "( sport = :$server_port )") || conns=''
-  conn=$(printf '%s\n' "$conns" | grep -F ",pid=$pid,")
-fi
-# `state established` drops ss's State column, so the peer is field 4, or 5 when a State column is there.
-peer=$(printf '%s\n' "$conn" | awk '{ o = ($1 ~ /^[0-9]+$/) ? 0 : 1; print $(4 + o) }')
-[ "$(printf '%s\n' "$conn" | grep -c .)" -eq 1 ] && [ -n "$peer" ] \
-  || { echo "cannot find sshd $pid's SSH connection on port $server_port, so it cannot be shown to be stale" >&2; exit 1; }
-peer=$(bare_ip "${peer%:*}"); here=$(bare_ip "$client_ip")
-[ "$peer" != "$here" ] || { echo "sshd $pid holding relay port $port is connected from this Mac's current address ($here); it may still be live" >&2; exit 1; }
-env kill -TERM "$pid" || { echo "could not stop sshd $pid on $port" >&2; exit 1; }
-for attempt in 1 2 3 4 5; do
-  lines=$(ss -H -ltnp "sport = :$port") || { echo 'ss failed after signal' >&2; exit 1; }
-  held=$(printf '%s\n' "$lines" | on_port)
-  [ -z "$held" ] && break
-  sleep 1
-done
-[ -z "$held" ] || { echo "relay port $port is still held after signal" >&2; exit 1; }
-printf 'stopped %s %s\n' "$port" "$pid"
-WT_RELAY
-  remote_sh_raw "$1" "bash -s -- $(shell_join "$2") <<'WT_RELAY'
-$script
-WT_RELAY"
+  remote_sh_raw "$1" "bash -s -- $(shell_join "$2")" <"$WG_LIB_DIR/vm/clear-stale-relay.sh"
 }
 
 recover_suspended_row() { # reconnect one suspended row, after freeing only its own stale SSH forward
@@ -2035,7 +1952,7 @@ reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> — a 
 }
 
 reinit_task_client() { # reinit_task_client <host> <id> <session> — restart this task row's attached tmux client
-  local host="$1" id="$2" session="$3" line script screen_rc=0 nonce proof screen c
+  local host="$1" id="$2" session="$3" line screen_rc=0 nonce proof screen c
   [[ "$(row_remote_field "$id" state)" == connected ]] || return 2
   row_shell_prompt "$id" || screen_rc=$?
   [[ $screen_rc -eq 1 ]] || return 2   # skip a shell or an unreadable screen
@@ -2043,17 +1960,7 @@ reinit_task_client() { # reinit_task_client <host> <id> <session> — restart th
   nonce="WT_REINIT_${RANDOM}_${RANDOM}_$$_$(date +%s)"
   # A restored row may show a cached agent screen while its old client is on an abandoned pty.
   # A fresh tmux status message proves that this row shows that client's output. It sends no pane input.
-  IFS= read -r -d '' script <<'WT_CLIENT' || :
-session=$1 nonce=$2
-clients=$(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}' 2>/dev/null) || exit 1
-[ -n "$clients" ] || exit 2
-[[ "$clients" =~ ^[0-9]+[[:space:]]+/dev/pts/[0-9]+$ ]] || exit 2
-tmux display-message -d 5000 -t "$session" "$nonce" || exit 1
-printf '%s\n' "$clients"
-WT_CLIENT
-  proof=$(remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$nonce") <<'WT_CLIENT'
-$script
-WT_CLIENT" 2>/dev/null) || return $?
+  proof=$(remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$nonce")" <"$WG_LIB_DIR/vm/reinit-client-proof.sh" 2>/dev/null) || return $?
   proof=${proof##*$'\n'}
   [[ "$proof" =~ ^[0-9]+[[:space:]]+/dev/pts/[0-9]+$ ]] || return 2
   c=$(cmux_bin) || return 1
@@ -2061,27 +1968,11 @@ WT_CLIENT" 2>/dev/null) || return $?
   [[ "$screen" == *"$nonce"* && "$(row_remote_field "$id" state)" == connected ]] || return 2
   # -E replaces the client process on its own pty. A fresh attach sends every terminal mode again.
   # If that attach fails, the row's shell gets its prompt back. Recheck the client after the screen proof.
-  IFS= read -r -d '' script <<'WT_CLIENT' || :
-session=$1 expected=$2 line=$3
-clients=$(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}' 2>/dev/null) || exit 1
-[[ "$clients" == "$expected" ]] || exit 2
-tmux detach-client -t "${clients#* }" -E "$line"
-WT_CLIENT
-  remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$proof" "$line") <<'WT_CLIENT'
-$script
-WT_CLIENT" >/dev/null 2>&1 || return 1
+  remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$proof" "$line")" <"$WG_LIB_DIR/vm/reinit-client-detach.sh" >/dev/null 2>&1 || return 1
   # The row can reconnect again between the screen proof and the replacement. Confirm the new client
   # is visible there before reporting that its terminal modes were restored.
   nonce="WT_REINIT_${RANDOM}_${RANDOM}_$$_$(date +%s)"
-  IFS= read -r -d '' script <<'WT_CLIENT' || :
-session=$1 tty=$2 nonce=$3
-clients=$(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}' 2>/dev/null) || exit 1
-[[ "$clients" =~ ^[0-9]+[[:space:]]+/dev/pts/[0-9]+$ && "${clients#* }" == "$tty" ]] || exit 1
-tmux display-message -d 5000 -t "$session" "$nonce"
-WT_CLIENT
-  remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "${proof#* }" "$nonce") <<'WT_CLIENT'
-$script
-WT_CLIENT" >/dev/null 2>&1 || return 1
+  remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "${proof#* }" "$nonce")" <"$WG_LIB_DIR/vm/reinit-client-confirm.sh" >/dev/null 2>&1 || return 1
   screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 1
   [[ "$screen" == *"$nonce"* && "$(row_remote_field "$id" state)" == connected ]] || return 1
 }
@@ -2289,41 +2180,7 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
   # Redirect SSH to files, so that an unkillable child cannot hold this function's output pipes open.
   ssh -T -o BatchMode=yes -o NumberOfPasswordPrompts=0 -o StrictHostKeyChecking=yes \
       -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=5 \
-      -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" <<'PROBE' &
-cpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
-mem_kib=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)
-printf 'cpu\t%s\nmem_kib\t%s\n' "$cpu" "$mem_kib"
-if command -v nvidia-smi >/dev/null 2>&1 &&
-   gpu_rows=$(timeout -k 2 10 nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader,nounits 2>/dev/null); then
-  printf 'gpu_status\tok\n'
-  if [ -n "$gpu_rows" ]; then
-    printf '%s\n' "$gpu_rows" | while IFS=, read -r index model vram; do
-      printf 'gpu\t%s\t%s\t%s\n' "$index" "$model" "$vram"
-    done
-  fi
-else
-  # A failed nvidia-smi is not proof of absent hardware. A complete PCI scan with no
-  # NVIDIA display device is; keep unknown if sysfs is missing or any entry is unreadable.
-  gpu_status=unknown
-  if [ -d /sys/bus/pci/devices ]; then
-    pci_seen=0 pci_readable=1 nvidia_gpu=0
-    for pci in /sys/bus/pci/devices/*; do
-      [ -d "$pci" ] || continue
-      pci_seen=1
-      if [ ! -r "$pci/vendor" ] || [ ! -r "$pci/class" ] ||
-         ! IFS= read -r vendor <"$pci/vendor" || ! IFS= read -r class <"$pci/class"; then
-        pci_readable=0
-        break
-      fi
-      case "$vendor:$class" in 0x10de:0x03*) nvidia_gpu=1 ;; esac
-    done
-    if [ "$pci_seen" -eq 1 ] && [ "$pci_readable" -eq 1 ] && [ "$nvidia_gpu" -eq 0 ]; then
-      gpu_status=none
-    fi
-  fi
-  printf 'gpu_status\t%s\n' "$gpu_status"
-fi
-PROBE
+      -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" <"$WG_LIB_DIR/vm/probe-host.sh" &
   ssh_pid=$!
   for ((tick=0; tick<200; tick++)); do
     kill -0 "$ssh_pid" 2>/dev/null || break
