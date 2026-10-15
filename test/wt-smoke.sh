@@ -1083,8 +1083,8 @@ scenario_squash_merge() {
   fixture_git "$r" add lines.txt
   fixture_git "$r" commit -q -m lines
   e="$(add_origin "$r")"
-  # Whether the real git merges hunk by hunk, as judged by bin/wt's own function, copied out of bin/wt.
-  if "$WT_BASH" -c "$(sed -n '/^git_merges_trees()/,/^}/p' "$WT"); git_merges_trees" 2>/dev/null; then hunks=yes; fi
+  # Use the safety module's function to check whether git merges hunk by hunk.
+  if "$WT_BASH" -c "$(sed -n '/^git_merges_trees()/,/^}/p' "$REPO/lib/workgrove/safety.sh"); git_merges_trees" 2>/dev/null; then hunks=yes; fi
 
   # Every worktree first: `wt new` fetches its base. So all of the landing below must come after the last
   # `wt new`, for origin/main to be stale when wt is asked. That is the shape that this scenario is about.
