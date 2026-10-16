@@ -59,6 +59,24 @@ test_branch_landed() {
 }
 test_branch_landed
 
+test_rm_reasons() {
+  local REPO="$TEST_ROOT/project" path="$TEST_ROOT/project/.worktrees/task"
+  local dirty=(old)
+  meta_get() { return 1; }
+  begin_scenario 'removal reasons fill and clear a caller array'
+  printf 'unsaved\n' >"$path/scratch.txt"
+  rm_reasons task "$path" wt/task missing dirty >"$TEST_ROOT/reasons-stdout"
+  assert_eq 'the caller receives two reasons' 2 "${#dirty[@]}"
+  assert_eq 'the dirty reason comes first' '1 uncommitted change(s)' "${dirty[0]}"
+  assert_eq 'the base reason stays exact' "base 'missing' cannot be compared with wt/task (gone, or the literal HEAD)" "${dirty[1]}"
+  assert_eq 'reasons do not go to stdout' '' "$(cat "$TEST_ROOT/reasons-stdout")"
+  rm "$path/scratch.txt"
+  rm_reasons task "$path" wt/task main dirty
+  assert_eq 'a safe worktree clears earlier reasons' 0 "${#dirty[@]}"
+  end_scenario
+}
+test_rm_reasons
+
 test_check_row_removal() {
   local c=unchanged id=unchanged ROW_AGENT=''
   rows_json() { printf '%s\n' '{"workspaces":[{"id":"row-1","title":"task","description":"@local · project"}]}'; }
@@ -121,4 +139,4 @@ test_relay_env() {
 }
 test_relay_env
 
-lib_summary 30
+lib_summary 35

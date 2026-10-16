@@ -1033,13 +1033,11 @@ cmd_rm() {
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch
   local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
+  # shellcheck disable=SC2034
   local base landed_why; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
-  reset_fetched
   if [[ $force -eq 0 ]]; then
-    local reasons=() r
-    while IFS= read -r r; do
-      if [[ -n "$r" ]]; then reasons+=("$r"); fi
-    done <<<"$(rm_reasons "$name" "$path" "$branch" "$base")"
+    local reasons=()
+    rm_reasons "$name" "$path" "$branch" "$base" reasons
     if [[ ${#reasons[@]} -gt 0 ]]; then
       printf 'wt: refusing to remove %s: %s\n' "$name" "$(IFS=';'; echo "${reasons[*]}")" >&2
       printf 'wt: inspect with: wt show %s — then push/merge, check the branch out again or copy the file back, or re-run with --force to discard.\n' "$name" >&2
@@ -1146,13 +1144,14 @@ cmd_prune() {
   done
   resolve_repo "$repo"
   local names n p base why
-  reset_fetched           # one fetch per base for the whole run, also for cmd_rm's checks; see fetch_base
+  local reasons=()
   names=$(list_names)     # before `git worktree prune`; otherwise a directory deleted by hand loses its
                           # registration here and is never examined, so its branch and metadata stay forever
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
     p=$(wt_path "$n"); base=$(meta_get "$n" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
-    why=$(rm_reasons "$n" "$p" "$(wt_branch "$n")" "$base" | tr '\n' ';'); why="${why%;}"   # the same reasons as rm,
+    rm_reasons "$n" "$p" "$(wt_branch "$n")" "$base" reasons
+    why=$(IFS=';'; echo "${reasons[*]}")
     if [[ -n "$why" ]]; then printf 'keep %s (%s)\n' "$n" "$why"                            # dry run included
     elif [[ $dry -eq 1 ]]; then printf 'would remove %s (nothing to lose vs %s)\n' "$n" "$base"
     elif ! ( cd "$REPO" && cmd_rm "$n" ); then printf 'keep %s (removal refused above)\n' "$n"; fi
