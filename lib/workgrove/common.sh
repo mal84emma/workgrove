@@ -31,17 +31,18 @@ valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 # Both callers read the three CMUX_TUI_* variables so the native identity follows the same precedence.
 #
 # Empty session values clear the previous transport. Missing names and "-NAME" keep the pane's value.
-# Include explicit empty session assignments in RELAY_IDENT so a child cannot inherit a cleared identity from the pane.
+# Include explicit empty session assignments in the identity array.
+# This prevents a child from inheriting a cleared identity from the pane.
 # Keep absent pane names unset in the child.
 #
-# relay_env sets RELAY_SOCKET, RELAY_WS, RELAY_TUI_SOCKET, RELAY_TUI_TERMINAL and RELAY_IDENT.
+# relay_env <socket output> <workspace output> <identity array output> <native socket output> <native terminal output>
 # It returns nonzero when neither a native relay identity nor a TCP relay socket is available.
-# shellcheck disable=SC2034
 relay_env() {
+  local -n __relay_socket=$1 __relay_ws=$2 __relay_ident=$3 __relay_tui_socket=$4 __relay_tui_terminal=$5
   local session_name='' session_env='' variable value line session_match
   local relay_vars=(CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID
                     CMUX_TERMINAL_LIFECYCLE_ID CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID)
-  RELAY_IDENT=(); RELAY_SOCKET=''; RELAY_WS=''; RELAY_TUI_SOCKET=''; RELAY_TUI_TERMINAL=''
+  __relay_ident=(); __relay_socket=''; __relay_ws=''; __relay_tui_socket=''; __relay_tui_terminal=''
   if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null 2>&1; then
     session_name=$(tmux display-message -p '#S' </dev/null 2>/dev/null || true)
   fi
@@ -56,16 +57,16 @@ relay_env() {
         "$variable="*) value=${line#*=}; session_match=1; break ;;
       esac
     done <<< "$session_env"
-    if [[ -n $value || $session_match == 1 ]]; then RELAY_IDENT+=("$variable=$value"); fi
+    if [[ -n $value || $session_match == 1 ]]; then __relay_ident+=("$variable=$value"); fi
     case $variable in
-      CMUX_SOCKET_PATH) RELAY_SOCKET=$value ;;
-      CMUX_WORKSPACE_ID) RELAY_WS=$value ;;
-      CMUX_TUI_SOCKET) RELAY_TUI_SOCKET=$value ;;
-      CMUX_TUI_TERMINAL_ID) RELAY_TUI_TERMINAL=$value ;;
+      CMUX_SOCKET_PATH) __relay_socket=$value ;;
+      CMUX_WORKSPACE_ID) __relay_ws=$value ;;
+      CMUX_TUI_SOCKET) __relay_tui_socket=$value ;;
+      CMUX_TUI_TERMINAL_ID) __relay_tui_terminal=$value ;;
     esac
   done
-  [[ $RELAY_TUI_SOCKET == /* && $RELAY_TUI_TERMINAL =~ ^term_[a-f0-9]{32}$ ]] && return 0
-  [[ $RELAY_SOCKET == *:[0-9]* ]]
+  [[ $__relay_tui_socket == /* && $__relay_tui_terminal =~ ^term_[a-f0-9]{32}$ ]] && return 0
+  [[ $__relay_socket == *:[0-9]* ]]
 }
 
 # cmux_rows_load <skip|stop|checked> <command...> sets CMUX_ROWS_JSON and CMUX_ROWS_FULL.

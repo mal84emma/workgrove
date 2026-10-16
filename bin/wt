@@ -224,8 +224,9 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
   local title="$1" args=() ws=() c body request_id; shift
   while [[ $# -gt 1 ]]; do args+=(--arg "$1" "$2"); shift 2; done
   body=$(jq -cn "${args[@]}" '$ARGS.named')
-  relay_env || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
-  if [[ $RELAY_TUI_SOCKET == /* && $RELAY_TUI_TERMINAL =~ ^term_[a-f0-9]{32}$ ]]; then
+  local _relay_socket relay_ws relay_tui_socket relay_tui_terminal relay_ident=()
+  relay_env _relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
+  if [[ $relay_tui_socket == /* && $relay_tui_terminal =~ ^term_[a-f0-9]{32}$ ]]; then
     c=$(command -v cmux-tui || true)
     [[ -x $c ]] || { warn "cmux-tui CLI not found here; run the line below on the Mac"; return 1; }
     # cmux suppresses identical terminal/title/body content for five seconds, regardless of notification ID.
@@ -233,7 +234,7 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
     [[ $request_id =~ ^[a-f0-9]{32}$ ]] || { warn "cannot create a native request ID; run the line below on the Mac"; return 1; }
     body=$(printf '%s' "$body" | jq -c --arg id "$request_id" '. + {request_id:$id}') || return 1
     # Native terminal IDs differ from the Mac's workspace UUIDs. Do not pass --workspace.
-    env -u CMUX_SOCKET "${RELAY_IDENT[@]}" "$c" --socket "$RELAY_TUI_SOCKET" notify --surface "$RELAY_TUI_TERMINAL" --title "$title" --body "$body" >/dev/null 2>&1 \
+    env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" notify --surface "$relay_tui_terminal" --title "$title" --body "$body" >/dev/null 2>&1 \
       || { warn "cmux-tui notify failed; run the line below on the Mac"; return 1; }
     return 0
   fi
@@ -243,8 +244,8 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
   # environment set below, whatever --workspace names. The flag names this row, which is what the Mac
   # hook's from_row_on_host wants anyway. So the flag agrees with that environment, and it stays correct if
   # a later cmux does read it.
-  if [[ -n "$RELAY_WS" ]]; then ws=(--workspace "$RELAY_WS"); fi
-  env -u CMUX_SOCKET "${RELAY_IDENT[@]}" "$c" notify "${ws[@]}" --title "$title" --body "$body" >/dev/null 2>&1 \
+  if [[ -n "$relay_ws" ]]; then ws=(--workspace "$relay_ws"); fi
+  env -u CMUX_SOCKET "${relay_ident[@]}" "$c" notify "${ws[@]}" --title "$title" --body "$body" >/dev/null 2>&1 \
     || { warn "cmux notify failed; run the line below on the Mac"; return 1; }
 }
 
@@ -1067,7 +1068,8 @@ cmd_rm() {
     # Check the relay setup only after the reasons above, while the worktree is still intact.
     host=$(wt_host)
     hook_ok_repo || die "cannot request Mac row cleanup for $REPO"
-    if ! relay_env; then
+    local _socket _ws _ident=() _tui_socket _tui_terminal
+    if ! relay_env _socket _ws _ident _tui_socket _tui_terminal; then
       [[ -z ${CMUX_TUI_SOCKET:-} ]] \
         || die "this row predates native teardown; close and reopen this row on the Mac: wt -H $host attach -r $(shell_join "$REPO") $name, then retry"
       die "cannot find the Mac cmux relay in this session"

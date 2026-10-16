@@ -274,7 +274,7 @@ test_relay_env() {
   local -x CMUX_PANEL_ID=pane-panel CMUX_TAB_ID=pane-tab CMUX_TERMINAL_LIFECYCLE_ID=pane-lifecycle
   local -x CMUX_TUI_SOCKET=/tmp/pane-native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   local -x CMUX_TUI_SESSION_ID=pane-session
-  local RELAY_SOCKET RELAY_WS RELAY_TUI_SOCKET RELAY_TUI_TERMINAL RELAY_IDENT
+  local relay_socket relay_ws relay_tui_socket relay_tui_terminal relay_ident
   local -x RELAY_TMUX_ENV="$TEST_ROOT/tmux.env" RELAY_TMUX_LOG="$TEST_ROOT/tmux.log" RELAY_TMUX_FAIL=''
   mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/no-tmux"
   cat > "$TEST_ROOT/bin/tmux" <<'TMUX'
@@ -292,41 +292,41 @@ TMUX
   : > "$RELAY_TMUX_ENV"
 
   begin_scenario 'relay identity without tmux'
-  assert_result 'a pane identity is usable outside tmux' yes relay_env
-  assert_eq 'the pane supplies the TCP socket' 127.0.0.1:1111 "$RELAY_SOCKET"
-  assert_eq 'the pane supplies the workspace' pane-workspace "$RELAY_WS"
-  assert_eq 'the pane supplies the native socket' /tmp/pane-native "$RELAY_TUI_SOCKET"
-  assert_eq 'the pane supplies the native terminal' term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$RELAY_TUI_TERMINAL"
+  assert_result 'a pane identity is usable outside tmux' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
+  assert_eq 'the pane supplies the TCP socket' 127.0.0.1:1111 "$relay_socket"
+  assert_eq 'the pane supplies the workspace' pane-workspace "$relay_ws"
+  assert_eq 'the pane supplies the native socket' /tmp/pane-native "$relay_tui_socket"
+  assert_eq 'the pane supplies the native terminal' term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$relay_tui_terminal"
   assert_eq 'all nine pane variables reach the child' \
     $'CMUX_SOCKET_PATH=127.0.0.1:1111\nCMUX_WORKSPACE_ID=pane-workspace\nCMUX_SURFACE_ID=pane-surface\nCMUX_PANEL_ID=pane-panel\nCMUX_TAB_ID=pane-tab\nCMUX_TERMINAL_LIFECYCLE_ID=pane-lifecycle\nCMUX_TUI_SOCKET=/tmp/pane-native\nCMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nCMUX_TUI_SESSION_ID=pane-session' \
-    "$(printf '%s\n' "${RELAY_IDENT[@]}")"
+    "$(printf '%s\n' "${relay_ident[@]}")"
   assert_eq 'tmux is not queried outside tmux' '' "$(cat "$RELAY_TMUX_LOG")"
   TMUX=/tmp/fake
-  PATH="$TEST_ROOT/no-tmux" assert_result 'a missing tmux command keeps the pane identity' yes relay_env
-  assert_eq 'a missing tmux command keeps the socket' 127.0.0.1:1111 "$RELAY_SOCKET"
+  PATH="$TEST_ROOT/no-tmux" assert_result 'a missing tmux command keeps the pane identity' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
+  assert_eq 'a missing tmux command keeps the socket' 127.0.0.1:1111 "$relay_socket"
   end_scenario
 
   begin_scenario 'missing and unset session variables keep pane values'
   printf '%s\n' -CMUX_SOCKET_PATH CMUX_WORKSPACE_ID=current-workspace > "$RELAY_TMUX_ENV"
-  assert_result 'an unset session socket keeps the pane relay' yes relay_env
-  assert_eq 'an unset variable keeps the pane value' 127.0.0.1:1111 "$RELAY_SOCKET"
-  assert_eq 'a session variable overrides the pane' current-workspace "$RELAY_WS"
-  assert_eq 'an absent variable keeps the pane value' /tmp/pane-native "$RELAY_TUI_SOCKET"
+  assert_result 'an unset session socket keeps the pane relay' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
+  assert_eq 'an unset variable keeps the pane value' 127.0.0.1:1111 "$relay_socket"
+  assert_eq 'a session variable overrides the pane' current-workspace "$relay_ws"
+  assert_eq 'an absent variable keeps the pane value' /tmp/pane-native "$relay_tui_socket"
   assert_eq 'one query reads the whole environment with an exact session target' \
     $'display-message -p #S\nshow-environment -t =task:identity' "$(cat "$RELAY_TMUX_LOG")"
   end_scenario
 
   begin_scenario 'empty session values clear stale pane values and child values'
   printf '%s\n' CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= CMUX_TUI_SOCKET= CMUX_TUI_TERMINAL_ID= CMUX_TUI_SESSION_ID= > "$RELAY_TMUX_ENV"
-  assert_result 'cleared transports have no relay' no relay_env
-  assert_eq 'the TCP socket is empty' '' "$RELAY_SOCKET"
-  assert_eq 'the workspace is empty' '' "$RELAY_WS"
-  assert_eq 'the native socket is empty' '' "$RELAY_TUI_SOCKET"
-  assert_eq 'the native terminal is empty' '' "$RELAY_TUI_TERMINAL"
+  assert_result 'cleared transports have no relay' no relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
+  assert_eq 'the TCP socket is empty' '' "$relay_socket"
+  assert_eq 'the workspace is empty' '' "$relay_ws"
+  assert_eq 'the native socket is empty' '' "$relay_tui_socket"
+  assert_eq 'the native terminal is empty' '' "$relay_tui_terminal"
   # shellcheck disable=SC2016
   assert_eq 'a child cannot inherit the stale transport identities' '||||' \
     "$(env CMUX_SOCKET_PATH=stale CMUX_WORKSPACE_ID=stale CMUX_TUI_SOCKET=stale CMUX_TUI_TERMINAL_ID=stale CMUX_TUI_SESSION_ID=stale \
-      "${RELAY_IDENT[@]}" "$BASH" -c 'printf "%s|%s|%s|%s|%s" "$CMUX_SOCKET_PATH" "$CMUX_WORKSPACE_ID" "$CMUX_TUI_SOCKET" "$CMUX_TUI_TERMINAL_ID" "$CMUX_TUI_SESSION_ID"')"
+      "${relay_ident[@]}" "$BASH" -c 'printf "%s|%s|%s|%s|%s" "$CMUX_SOCKET_PATH" "$CMUX_WORKSPACE_ID" "$CMUX_TUI_SOCKET" "$CMUX_TUI_TERMINAL_ID" "$CMUX_TUI_SESSION_ID"')"
   end_scenario
 
   begin_scenario 'a native session replaces a TCP pane identity'
@@ -334,12 +334,12 @@ TMUX
     CMUX_TERMINAL_LIFECYCLE_ID= CMUX_TUI_SOCKET=/tmp/current-native \
     CMUX_TUI_TERMINAL_ID=term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb CMUX_TUI_SESSION_ID=current-session > "$RELAY_TMUX_ENV"
   : > "$RELAY_TMUX_LOG"
-  assert_result 'the native session is usable' yes relay_env
-  assert_eq 'the native session supplies the socket' /tmp/current-native "$RELAY_TUI_SOCKET"
-  assert_eq 'the native session supplies the terminal' term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$RELAY_TUI_TERMINAL"
+  assert_result 'the native session is usable' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
+  assert_eq 'the native session supplies the socket' /tmp/current-native "$relay_tui_socket"
+  assert_eq 'the native session supplies the terminal' term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$relay_tui_terminal"
   assert_eq 'all nine native session values reach the child' \
     $'CMUX_SOCKET_PATH=\nCMUX_WORKSPACE_ID=\nCMUX_SURFACE_ID=\nCMUX_PANEL_ID=\nCMUX_TAB_ID=\nCMUX_TERMINAL_LIFECYCLE_ID=\nCMUX_TUI_SOCKET=/tmp/current-native\nCMUX_TUI_TERMINAL_ID=term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nCMUX_TUI_SESSION_ID=current-session' \
-    "$(printf '%s\n' "${RELAY_IDENT[@]}")"
+    "$(printf '%s\n' "${relay_ident[@]}")"
   assert_eq 'a native read makes only two tmux calls' \
     $'display-message -p #S\nshow-environment -t =task:identity' "$(cat "$RELAY_TMUX_LOG")"
   end_scenario
@@ -349,14 +349,14 @@ TMUX
     'CMUX_PANEL_ID=panel with spaces=and\backslashes' CMUX_TAB_ID=current-tab CMUX_TERMINAL_LIFECYCLE_ID=current-lifecycle \
     CMUX_TUI_SOCKET= CMUX_TUI_TERMINAL_ID= CMUX_TUI_SESSION_ID= > "$RELAY_TMUX_ENV"
   : > "$RELAY_TMUX_LOG"
-  assert_result 'the TCP session is usable' yes relay_env
-  assert_eq 'the TCP session supplies the socket' 127.0.0.1:2222 "$RELAY_SOCKET"
-  assert_eq 'the TCP session supplies the workspace' current-workspace "$RELAY_WS"
-  assert_eq 'the previous native socket is cleared' '' "$RELAY_TUI_SOCKET"
-  assert_eq 'the previous native terminal is cleared' '' "$RELAY_TUI_TERMINAL"
+  assert_result 'the TCP session is usable' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
+  assert_eq 'the TCP session supplies the socket' 127.0.0.1:2222 "$relay_socket"
+  assert_eq 'the TCP session supplies the workspace' current-workspace "$relay_ws"
+  assert_eq 'the previous native socket is cleared' '' "$relay_tui_socket"
+  assert_eq 'the previous native terminal is cleared' '' "$relay_tui_terminal"
   assert_eq 'all nine TCP session values reach the child without interpretation' \
     $'CMUX_SOCKET_PATH=127.0.0.1:2222\nCMUX_WORKSPACE_ID=current-workspace\nCMUX_SURFACE_ID=current-surface\nCMUX_PANEL_ID=panel with spaces=and\\backslashes\nCMUX_TAB_ID=current-tab\nCMUX_TERMINAL_LIFECYCLE_ID=current-lifecycle\nCMUX_TUI_SOCKET=\nCMUX_TUI_TERMINAL_ID=\nCMUX_TUI_SESSION_ID=' \
-    "$(printf '%s\n' "${RELAY_IDENT[@]}")"
+    "$(printf '%s\n' "${relay_ident[@]}")"
   assert_eq 'a TCP read makes only two tmux calls' \
     $'display-message -p #S\nshow-environment -t =task:identity' "$(cat "$RELAY_TMUX_LOG")"
   end_scenario
@@ -364,32 +364,32 @@ TMUX
   begin_scenario 'tmux query failures keep pane values'
   RELAY_TMUX_FAIL=display-message
   : > "$RELAY_TMUX_LOG"
-  assert_result 'a failed session lookup keeps the pane relay' yes relay_env
-  assert_eq 'a failed session lookup keeps the pane socket' 127.0.0.1:1111 "$RELAY_SOCKET"
+  assert_result 'a failed session lookup keeps the pane relay' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
+  assert_eq 'a failed session lookup keeps the pane socket' 127.0.0.1:1111 "$relay_socket"
   assert_eq 'a failed session lookup skips the environment query' 'display-message -p #S' "$(cat "$RELAY_TMUX_LOG")"
   RELAY_TMUX_FAIL=show-environment
-  assert_result 'a failed environment query keeps the pane relay' yes relay_env
-  assert_eq 'a failed environment query keeps the pane socket' 127.0.0.1:1111 "$RELAY_SOCKET"
+  assert_result 'a failed environment query keeps the pane relay' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
+  assert_eq 'a failed environment query keeps the pane socket' 127.0.0.1:1111 "$relay_socket"
   end_scenario
 
   begin_scenario 'unset pane variables stay unset unless the session assigns them'
   RELAY_TMUX_FAIL=''
   unset CMUX_PANEL_ID CMUX_TUI_SESSION_ID
   printf '%s\n' -CMUX_PANEL_ID > "$RELAY_TMUX_ENV"
-  assert_result 'missing pane names do not prevent relay use' yes relay_env
+  assert_result 'missing pane names do not prevent relay use' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
   # shellcheck disable=SC2016
   assert_eq 'absent and removed names stay unset in the child' 'unset|unset' \
-    "$(env -u CMUX_PANEL_ID -u CMUX_TUI_SESSION_ID "${RELAY_IDENT[@]}" "$BASH" -c 'printf "%s|%s" "${CMUX_PANEL_ID-unset}" "${CMUX_TUI_SESSION_ID-unset}"')"
+    "$(env -u CMUX_PANEL_ID -u CMUX_TUI_SESSION_ID "${relay_ident[@]}" "$BASH" -c 'printf "%s|%s" "${CMUX_PANEL_ID-unset}" "${CMUX_TUI_SESSION_ID-unset}"')"
   printf '%s\n' CMUX_PANEL_ID= CMUX_TUI_SESSION_ID= > "$RELAY_TMUX_ENV"
-  assert_result 'explicit empty session assignments keep the relay usable' yes relay_env
+  assert_result 'explicit empty session assignments keep the relay usable' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
   # shellcheck disable=SC2016
   assert_eq 'explicit empty session assignments reach the child' '|' \
-    "$(env -u CMUX_PANEL_ID -u CMUX_TUI_SESSION_ID "${RELAY_IDENT[@]}" "$BASH" -c 'printf "%s|%s" "${CMUX_PANEL_ID-unset}" "${CMUX_TUI_SESSION_ID-unset}"')"
+    "$(env -u CMUX_PANEL_ID -u CMUX_TUI_SESSION_ID "${relay_ident[@]}" "$BASH" -c 'printf "%s|%s" "${CMUX_PANEL_ID-unset}" "${CMUX_TUI_SESSION_ID-unset}"')"
   TMUX=''
-  assert_result 'missing pane names outside tmux do not prevent relay use' yes relay_env
+  assert_result 'missing pane names outside tmux do not prevent relay use' yes relay_env relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal
   # shellcheck disable=SC2016
   assert_eq 'names absent outside tmux stay unset in the child' 'unset|unset' \
-    "$(env -u CMUX_PANEL_ID -u CMUX_TUI_SESSION_ID "${RELAY_IDENT[@]}" "$BASH" -c 'printf "%s|%s" "${CMUX_PANEL_ID-unset}" "${CMUX_TUI_SESSION_ID-unset}"')"
+    "$(env -u CMUX_PANEL_ID -u CMUX_TUI_SESSION_ID "${relay_ident[@]}" "$BASH" -c 'printf "%s|%s" "${CMUX_PANEL_ID-unset}" "${CMUX_TUI_SESSION_ID-unset}"')"
   end_scenario
 }
 test_relay_env
