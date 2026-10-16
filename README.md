@@ -191,10 +191,9 @@ It also describes what a run changes, the repo's test suites, and how to remove 
   - `install.sh` still runs under bash 3.2. To check that, run its smoke test with `INSTALL_BASH=/bin/bash`
     (see Tests).
 - **tmux:** the VMs have tmux 3.2a, and `home/.tmux.conf` is written for that version.
-- **cmux:** workgrove supports only the latest cmux release. cmux releases often, and each release can change the
-  commands, fields, and behavior that `wt` depends on. So workgrove tracks the newest release and removes the
-  paths that older releases needed, instead of keeping both. The verified release is 0.65.0 (build 108). See the
-  [cmux compatibility log](#cmux-compatibility-log) for verified behavior.
+- **cmux:** workgrove supports 0.65.1 (build 110). Version 0.65.2 is unverified.
+  Support moves to a newer release after verification, rather than automatically when that release appears.
+  See the [cmux compatibility log](#cmux-compatibility-log) for verified behavior and remaining checks.
   `home/.config/cmux/cmux.json` is `schemaVersion: 1`.
 - **Other tools:** on a Mac, `Brewfile` installs `gh`, `fzf`, cmux itself, Claude Code, and Codex. On a VM,
   [docs/new-vm.md](docs/new-vm.md) installs them.
@@ -917,20 +916,22 @@ It also tells how to enable VM status on an existing VM.
 This log records cmux versions verified with workgrove. It does not establish support for untested versions.
 Run `cmux version` to check your installed version.
 
-workgrove supports only the latest cmux release. When a new release changes a command, a field, or a behavior that
-`wt` depends on, workgrove moves to the new release and removes the old path. It does not keep a path for each
-release. So the log has one supported row at a time, and an older row is history.
+workgrove supports cmux 0.65.1 until a newer release passes verification. Version 0.65.2 is unverified.
+The log has one supported version at a time. Older rows record historical verification.
+Support does not include the removed cmux 0.64 TCP relay paths.
 
-| Supported cmux version | Verified on | Verified behavior |
-|---|---|---|
-| 0.65.0 (build 108, `dda24fbd2`) | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
+| cmux version | Status | Verified on | Verified behavior |
+|---|---|---|---|
+| 0.65.1 (build 110, `8a853dcc9`) | Supported; recovery and cross-window checks remain open | 2026-10-16 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. |
+| 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
 
-[PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to this version's row-closing behavior.
+[PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to cmux 0.65.0's row-closing behavior.
 Local self-removal uses cmux's `--force` only for the verified caller's own row.
 Native VM rows exit with their task's tmux session.
 The earlier `0.64 or newer` requirement did not guarantee compatibility with these changes.
 
-Record each supported version here after testing Claude and Codex self-removal on both the Mac and a VM.
+For each supported version, record the exact build, verified behavior, and remaining checks.
+[VM verification on cmux 0.65.1](docs/vm-open-relay.md#verification-on-cmux-0651) records the current live checks.
 
 ### Hotkeys and configuration
 

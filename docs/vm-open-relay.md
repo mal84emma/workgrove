@@ -146,6 +146,27 @@ The hook recorded both repeated requests and the mixed-transport request:
 2026-10-08T13:29:56 handled wt-open for workspace 1ADA0A4D-C4F0-4CC6-A05B-F8FE80F40634
 ```
 
+## Verification on cmux 0.65.1
+
+On 2026-10-16, the live checks used cmux 0.65.1, build 110, commit `8a853dcc9`.
+The VM ran a temporary copy of workgrove commit `1c9cad7` in a disposable repository.
+The Mac used its existing `wt-native-relay` automation rule.
+No installed workgrove scripts or automation configuration were replaced.
+
+These checks passed:
+
+- A Claude turn in the native VM task showed Running, then Idle after completion.
+- `wt open` from that task opened its remote folder in VS Code on the Mac.
+  VS Code's status output listed the task's remote window.
+- `wt rm` from a second native task removed its worktree, closed its row, and ended its tmux session.
+  The task's tmux session held `WT_CMUX_CLOSE_ON_EXIT=1`.
+- The two existing VM task rows and their tmux sessions remained present after self-removal.
+
+The native row reported `backend: cmux-tui` and `state: connected`.
+Its status payload omitted `persistent_daemon_slot`.
+This connected-row snapshot does not settle whether native rows can suspend after a connection failure.
+Connection-failure and cross-window checks remain open.
+
 ## Smoke tests
 
 Run these tests from the repository root:
