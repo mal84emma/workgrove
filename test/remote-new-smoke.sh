@@ -387,4 +387,21 @@ check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task
 check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex && $(jq -r .model "$SCRATCH_REPO/.git/wt/task.json") == gpt-5.3-codex ]] && echo yes)" 'interrupted setup lost brief, agent or model choice'
 end_scenario
 
-lib_summary 46
+begin_scenario 'machine requests do not reach setup hooks or nested commands'
+cat >"$SCRATCH_REPO/.wt-setup" <<'SETUP'
+#!/bin/sh
+[ -z "${WT_MACHINE+x}" ] && [ -z "${WG_MACHINE_RESULT+x}" ] || exit 1
+path=$("$TEST_WT" path task -r "$WT_REPO") || exit 1
+[ "$path" = "$WT_REPO/.worktrees/task" ] || exit 1
+printf '%s\n' "$path" >"$WT_REPO/nested-path"
+SETUP
+WT_RC=0
+WT_OUT=$(env HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
+  WT_MACHINE=1 WG_MACHINE_RESULT=1 TEST_WT="$REPO/bin/wt" \
+  "${WT_BASH:-bash}" "$REPO/bin/wt" new nested -r "$SCRATCH_REPO" -a none --no-workspace 2>&1) || WT_RC=$?
+check "$([[ $WT_RC -eq 0 && "$WT_OUT" != *'.wt-setup exited non-zero'* ]] && echo yes)" 'machine request broke the setup hook'
+check "$([[ -f "$SCRATCH_REPO/nested-path" && $(cat "$SCRATCH_REPO/nested-path") == "$SCRATCH_REPO/.worktrees/task" ]] && echo yes)" 'nested wt path did not return one path'
+check "$([[ $(printf '%s\n' "$WT_OUT" | grep -c $'^WT_RESULT\t') -eq 1 ]] && echo yes)" 'the parent lost its requested result'
+end_scenario
+
+lib_summary 49

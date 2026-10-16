@@ -112,6 +112,10 @@ if ((BASH_VERSINFO[0] < 5)); then
   exit 1
 fi
 
+WG_MACHINE_RESULT=${WT_MACHINE:-}
+export -n WG_MACHINE_RESULT
+unset WT_MACHINE
+
 # Load lib/workgrove/common.sh from the repository that holds this script. install.sh links the script into
 # ~/.local/bin, so follow the link chain to the real file. macOS readlink has no -f, so take one link at a time,
 # as resolve_config_path in bin/azml-ssh-host does. A relative target is read from the link's folder.

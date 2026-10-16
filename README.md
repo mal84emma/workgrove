@@ -454,7 +454,7 @@ prints `FAILED:` and the suite's path.
   failure states, with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
-- **`bash test/lib-smoke.sh`** makes 272 assertions about all fourteen functions in `lib/workgrove/common.sh`.
+- **`bash test/lib-smoke.sh`** makes 279 assertions about all fourteen functions in `lib/workgrove/common.sh`.
   It checks versioned task results, malformed records, duplicate records, and the text fallback.
   It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.
   Fixed cmux responses cover row lists across windows, failure policies, checked validation, command wrappers, and lookup by title, repo, and host.
@@ -680,6 +680,7 @@ The Mac requests machine-readable results with `WT_MACHINE=1` for VM task creati
 task recovery, and the Mac hook's worktree absence check.
 The VM keeps its human-readable output and adds one line beginning with `WT_RESULT`
 and a tab, followed by a compact JSON object.
+The VM consumes the request at startup so setup hooks and nested commands keep their ordinary output.
 The object has these fields:
 
 | Field | Meaning |
@@ -694,6 +695,7 @@ The object has these fields:
 The record goes to standard output, except that a missing `path` record goes to
 standard error with exit status `1`.
 Readers require exactly one record with the expected version, command, and string fields.
+The object must have unique keys and scalar values, with no nested objects or arrays.
 String fields must not contain control characters.
 Readers use the text format only when no record is present.
 An invalid record causes creation or recovery to stop and keeps the row during a close check.
