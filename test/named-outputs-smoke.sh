@@ -11,6 +11,8 @@ SCRATCH_BASE=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 source "$REPO/test/lib.sh"
 # shellcheck source=lib/workgrove/common.sh
 source "$REPO/lib/workgrove/common.sh"
+# shellcheck source=lib/workgrove/safety.sh
+source "$REPO/lib/workgrove/safety.sh"
 trap lib_cleanup EXIT
 
 eval "$(sed -n '/^require_wt()/,/^}/p' "$REPO/bin/wt")"
@@ -34,4 +36,14 @@ test_require_wt() {
 }
 test_require_wt
 
-lib_summary 3
+test_branch_landed() {
+  local REPO="$TEST_ROOT/project" b=unchanged status=0
+  begin_scenario 'branch reasons can use an internal local name'
+  branch_landed missing main b || status=$?
+  assert_eq 'a missing branch fails the check' 1 "$status"
+  assert_eq 'the caller receives the branch reason' 'missing has no common history with main' "$b"
+  end_scenario
+}
+test_branch_landed
+
+lib_summary 5

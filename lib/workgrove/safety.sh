@@ -168,36 +168,36 @@ branch_landed() { # branch_landed <branch> <base> <reason output>
   # `write-tree` refuses the unmerged index, which reads here as not landed. That path is stricter, and safe
   # in the same direction: either path calls a branch landed only when the merge would change nothing.
   local -n __landed_why=$3
-  local b="$1" base="$2" m tree_b tree_t="" out rc=0 n idx
+  local __b="$1" __base="$2" __m __tree_b __tree_t="" __out __rc=0 __n __idx
   __landed_why=""
-  m=$(git -C "$REPO" merge-base "$b" "$base" 2>/dev/null) || { __landed_why="$b has no common history with $base"; return 1; }
-  if git -C "$REPO" diff-tree --quiet "$m" "$b" 2>/dev/null; then
-    __landed_why="the net change of $b since $(git -C "$REPO" rev-parse --short "$m") is empty, which proves nothing"; return 1
+  __m=$(git -C "$REPO" merge-base "$__b" "$__base" 2>/dev/null) || { __landed_why="$__b has no common history with $__base"; return 1; }
+  if git -C "$REPO" diff-tree --quiet "$__m" "$__b" 2>/dev/null; then
+    __landed_why="the net change of $__b since $(git -C "$REPO" rev-parse --short "$__m") is empty, which proves nothing"; return 1
   fi
-  tree_b=$(git -C "$REPO" rev-parse "$base^{tree}" 2>/dev/null) || { __landed_why="$base has no tree"; return 1; }
+  __tree_b=$(git -C "$REPO" rev-parse "$__base^{tree}" 2>/dev/null) || { __landed_why="$__base has no tree"; return 1; }
   if git_merges_trees; then
-    out=$(git -C "$REPO" merge-tree --write-tree "$base" "$b" 2>/dev/null) || rc=$?
-    case $rc in
-      0) tree_t="${out%%$'\n'*}" ;;
-      1) __landed_why="merging $b into $base would conflict: $base changed the same lines again"; return 1 ;;
-      *) __landed_why="git merge-tree could not compare $b with $base"; return 1 ;;
+    __out=$(git -C "$REPO" merge-tree --write-tree "$__base" "$__b" 2>/dev/null) || __rc=$?
+    case $__rc in
+      0) __tree_t="${__out%%$'\n'*}" ;;
+      1) __landed_why="merging $__b into $__base would conflict: $__base changed the same lines again"; return 1 ;;
+      *) __landed_why="git merge-tree could not compare $__b with $__base"; return 1 ;;
     esac
   else
     # read-tree refuses an index file that is empty, so hand it a name that does not exist yet
-    idx=$(mktemp "${TMPDIR:-/tmp}/wt-index.XXXXXX") || { __landed_why="no temp file for a merge index"; return 1; }
-    WT_TMPFILES+=("$idx"); rm -f "$idx"
-    if GIT_INDEX_FILE="$idx" git -C "$REPO" read-tree -m -i --aggressive "$m" "$base" "$b" >/dev/null 2>&1; then
-      tree_t=$(GIT_INDEX_FILE="$idx" git -C "$REPO" write-tree 2>/dev/null) || tree_t=""
+    __idx=$(mktemp "${TMPDIR:-/tmp}/wt-index.XXXXXX") || { __landed_why="no temp file for a merge index"; return 1; }
+    WT_TMPFILES+=("$__idx"); rm -f "$__idx"
+    if GIT_INDEX_FILE="$__idx" git -C "$REPO" read-tree -m -i --aggressive "$__m" "$__base" "$__b" >/dev/null 2>&1; then
+      __tree_t=$(GIT_INDEX_FILE="$__idx" git -C "$REPO" write-tree 2>/dev/null) || __tree_t=""
     fi
-    rm -f "$idx"
-    if [[ -z "$tree_t" ]]; then
-      __landed_why="merging $b into $base would touch a file $base changed since (git $(git version | awk '{print $3}') compares whole files; 2.38 compares hunks)"
+    rm -f "$__idx"
+    if [[ -z "$__tree_t" ]]; then
+      __landed_why="merging $__b into $__base would touch a file $__base changed since (git $(git version | awk '{print $3}') compares whole files; 2.38 compares hunks)"
       return 1
     fi
   fi
-  [[ "$tree_t" == "$tree_b" ]] && return 0
-  n=$(git -C "$REPO" diff-tree -r --name-only "$tree_b" "$tree_t" 2>/dev/null | wc -l | tr -d ' ')
-  __landed_why="merging $b into $base would still change $n path(s)"
+  [[ "$__tree_t" == "$__tree_b" ]] && return 0
+  __n=$(git -C "$REPO" diff-tree -r --name-only "$__tree_b" "$__tree_t" 2>/dev/null | wc -l | tr -d ' ')
+  __landed_why="merging $__b into $__base would still change $__n path(s)"
   return 1
 }
 
