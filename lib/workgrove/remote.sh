@@ -10,7 +10,8 @@ remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means transport
   return $rc
 }
 remote_wt() { local host="$1"; shift; remote_sh "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_wt_raw() { local host="$1"; shift; remote_sh_raw "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_wt_result() { local host="$1"; shift; remote_sh "$host" "WT_MACHINE=1 exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_wt_result_raw() { local host="$1"; shift; remote_sh_raw "$host" "WT_MACHINE=1 exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
 remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the VM this terminal when there is one,
                   # so a command that asks before it acts (wt update) can read the answer. Never use it for a
                   # caller that captures stdout: a pty folds stderr into stdout and turns every \n into \r\n.
@@ -133,8 +134,8 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   host_new_preflight "$host" "$repo_request" "$requested_agent"
   inspect="wt -H $host list"
   [[ -z "$repo_request" ]] || inspect+=" -r $(shell_join "$repo_request")"
-  local out name repo session rc
-  if out=$(printf '%s' "$prompt" | remote_wt_raw "$host" new "${args[@]}" --no-workspace --prompt-stdin 2>&1); then
+  local out name repo session rc result result_rc=0
+  if out=$(printf '%s' "$prompt" | remote_wt_result_raw "$host" new "${args[@]}" --no-workspace --prompt-stdin 2>&1); then
     :
   else
     rc=$?
@@ -149,9 +150,17 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
     return "$rc"
   fi
   printf '%s\n' "$out"
-  name=$(printf '%s\n' "$out" | sed -n 's/^created //p' | head -1)
-  repo=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
-  session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
+  result=$(wt_read_result "$out" new) || result_rc=$?
+  case $result_rc in
+    0)
+      [[ $(jq -r .status <<<"$result") == created ]] || die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying"
+      name=$(jq -r .name <<<"$result"); repo=$(jq -r .repo <<<"$result"); session=$(jq -r .session <<<"$result") ;;
+    2)
+      name=$(printf '%s\n' "$out" | sed -n 's/^created //p' | head -1)
+      repo=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
+      session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1) ;;
+    *) die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying" ;;
+  esac
   [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session; the worktree may exist; inspect with: $inspect before retrying"
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$repo")" ]] || die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying"
   if [[ $no_workspace -eq 1 ]]; then

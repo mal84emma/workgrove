@@ -27,6 +27,32 @@ wt_session() { printf 'wt-%s-%s' "$(repo_id "$2")" "$1"; }                  # wt
 # valid_name <name> — a task name: lowercase letters, digits, '_' and '-', max 63, no '.'.
 valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 
+wt_result() {
+  [[ ${WG_MACHINE_RESULT:-} == 1 ]] || return 0
+  printf 'WT_RESULT\t'
+  jq -cn --arg command "$1" --arg status "$2" --arg name "$3" --arg repo "$4" \
+    --arg session "${5:-}" --arg state "${6:-}" \
+    '{version:1, command:$command, status:$status, name:$name, repo:$repo, session:$session, state:$state}'
+}
+
+wt_read_result() {
+  local output=$1 command=$2 records=()
+  mapfile -t records < <(printf '%s\n' "$output" | sed -n $'/^WT_RESULT\t/p')
+  [[ ${#records[@]} -gt 0 ]] || return 2
+  [[ ${#records[@]} -eq 1 ]] || return 1
+  printf '%s\n' "${records[0]#*$'\t'}" | jq --stream -esc --arg command "$command" '
+    map(select(length == 2)) as $fields
+    | if (map(select(length == 1)) | length) == 1
+        and all($fields[]; (.[0] | length == 1 and (.[0] | type == "string"))
+          and (.[1] | type != "array" and type != "object"))
+        and ($fields | map(.[0]) | unique | length) == ($fields | length)
+      then $fields | map({key: .[0][0], value: .[1]}) | from_entries
+      else error("invalid wt result") end
+    | if .version == 1 and .command == $command
+        and all(.status, .name, .repo, .session, .state; type == "string" and (explode | all(. >= 32 and . != 127)))
+      then . else error("invalid wt result") end' 2>/dev/null || return 1
+}
+
 # cmux authorizes relay requests against the current row's identity. A reattach changes the tmux session
 # environment, but panes keep their original values. Read the session environment at each call.
 # Both callers read the three CMUX_TUI_* variables so the native identity follows the same precedence.

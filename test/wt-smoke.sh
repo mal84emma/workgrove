@@ -516,6 +516,7 @@ wt_run() {
            REMOTE_SSH_NOISE="$TEST_ROOT/remote-ssh-noise" \
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
            REMOTE_WT_SESSION="${REMOTE_WT_SESSION:-wt-project-task}" \
+           REMOTE_WT_FORMAT="${REMOTE_WT_FORMAT:-text}" WT_MACHINE="${WT_MACHINE:-}" \
            REMOTE_TMUX="$TEST_ROOT/remote-tmux" REMOTE_TMUX_QUEUE="$TEST_ROOT/remote-tmux-queue" \
            REMOTE_TMUX_CLIENT_QUEUE="$TEST_ROOT/remote-tmux-client-queue" \
            REMOTE_TMUX_LATE_RECONNECT="$TEST_ROOT/remote-tmux-late-reconnect" \
@@ -855,6 +856,29 @@ scenario_list_show_path() {
   assert_wt_ok "wt path a1" path a1 -r "$ra"
   assert_eq "wt path prints the worktree path" "$ra/.worktrees/a1" "$WT_OUT"
   assert_wt_fails 1 "no worktree named 'nosuch'" path nosuch -r "$ra"
+  WT_MACHINE=1
+  assert_wt_ok "machine new keeps human output" new machine --no-workspace -r "$ra"
+  assert_has "machine new keeps its text" "$WT_OUT" 'created machine'
+  assert_eq "new result identity" "created|machine|$ra|$(wt_session machine "$ra")" \
+    "$(wt_read_result "$WT_OUT" new | jq -r '[.status,.name,.repo,.session] | join("|" )')"
+  assert_wt_ok "machine show" show machine -r "$ra"
+  assert_eq "show result identity" "found|machine|$ra|$(wt_session machine "$ra")" \
+    "$(wt_read_result "$WT_OUT" show | jq -r '[.status,.name,.repo,.session] | join("|" )')"
+  assert_wt_ok "machine path" path machine -r "$ra"
+  assert_eq "found path status" found "$(wt_read_result "$WT_OUT" path | jq -r .status)"
+  assert_wt_fails 1 "no worktree named 'nosuch'" path nosuch -r "$ra"
+  assert_eq "missing path identity" "missing|nosuch|$ra" \
+    "$(wt_read_result "$WT_OUT" path | jq -r '[.status,.name,.repo] | join("|" )')"
+  local broken_git="$TEST_ROOT/broken-worktree-list"
+  mkdir -p "$broken_git"
+  printf '#!/bin/sh\ncase "$*" in *"worktree list"*) echo "worktree list failed" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' \
+    "$(command -v git)" >"$broken_git/git"
+  chmod +x "$broken_git/git"
+  WT_PATH_PREFIX="$broken_git"
+  assert_wt_fails 1 'cannot list worktrees' path nosuch -r "$ra"
+  assert_lacks "a failed listing cannot prove absence" "$WT_OUT" 'WT_RESULT'
+  WT_PATH_PREFIX=''
+  unset WT_MACHINE
   assert_wt_fails 1 "show: worktree name required" show -r "$ra"
   assert_wt_fails 1 "not inside a git repo" list
 
@@ -1934,6 +1958,10 @@ STUB
   cat >"$SCRATCH_HOME/.local/bin/wt" <<'STUB'
 #!/bin/sh
 printf 'show %s\n' "$*" >>"$REMOTE_LOG"
+if [ "$REMOTE_WT_FORMAT" = machine ]; then
+  printf 'Task details.\nWT_RESULT\t{"version":1,"command":"show","status":"found","name":"task","repo":"/vm/repos/project","session":"%s","state":"%s"}\n' "$REMOTE_WT_SESSION" "$(cat "$REMOTE_WT_STATE")"
+  exit 0
+fi
 printf '  repo: /vm/repos/project\n  session: %s (%s)\n' "$REMOTE_WT_SESSION" "$(cat "$REMOTE_WT_STATE")"
 STUB
   # Each has-session is one probe, answered attached, detached or missing. The answer comes from the queue
@@ -2026,6 +2054,10 @@ ROWS
   assert_has "a recovered attached client was replaced" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
   assert_has "replacement keeps the attach recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
   assert_has "uncertain recovery always names the manual step" "$WT_OUT" 'attach --reattach -r /vm/repos/project task'
+  REMOTE_WT_FORMAT=machine
+  assert_wt_ok "machine show reconnects a suspended row" -H fakevm attach task -r /vm/repos/project
+  assert_has "machine show preserves session state" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
+  REMOTE_WT_FORMAT=text
 
   # The pre-reconnect show can say detached even when the restored client is attached now.
   set_row_state suspended
@@ -2546,7 +2578,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=693
+FIXED_ASSERTIONS=708
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:

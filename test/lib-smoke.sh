@@ -13,6 +13,36 @@ source "$REPO/test/lib.sh"
 source "$REPO/lib/workgrove/common.sh"
 trap lib_cleanup EXIT
 
+begin_scenario 'versioned wt results'
+record=$(WG_MACHINE_RESULT=1 wt_result new created task '/repos/two words' wt-two-words-task)
+assert_eq 'result round trip' 'created|task|/repos/two words|wt-two-words-task' \
+  "$(wt_read_result "$record" new | jq -r '[.status,.name,.repo,.session] | join("|" )')"
+assert_eq 'ordinary commands do not emit records' '' "$(WG_MACHINE_RESULT='' wt_result new created task /repos/project)"
+for sample in text empty malformed duplicate blank-duplicate version command control missing duplicate-status duplicate-name duplicate-repo duplicate-version escaped-key nested multiple-objects; do
+  rc=0
+  case $sample in
+    text) output='created task'; expected=2 ;;
+    empty) output=$'WT_RESULT\t'; expected=1 ;;
+    malformed) output=$'WT_RESULT\t{broken'; expected=1 ;;
+    duplicate) output="$record"$'\n'"$record"; expected=1 ;;
+    blank-duplicate) output=$'WT_RESULT\t\n'"$record"; expected=1 ;;
+    version) output=${record/\"version\":1/\"version\":2}; expected=1 ;;
+    command) output=${record/\"new\"/\"show\"}; expected=1 ;;
+    control) output=${record/task/task\\n}; expected=1 ;;
+    missing) output=$'WT_RESULT\t{"version":1,"command":"new"}'; expected=1 ;;
+    duplicate-status) output=${record/\"status\":/\"status\":\"found\",\"status\":}; expected=1 ;;
+    duplicate-name) output=${record/\"name\":/\"name\":\"other\",\"name\":}; expected=1 ;;
+    duplicate-repo) output=${record/\"repo\":/\"repo\":\"\/other\",\"repo\":}; expected=1 ;;
+    duplicate-version) output=${record/\"version\":/\"version\":2,\"version\":}; expected=1 ;;
+    escaped-key) output=${record/\"status\":/\"st\\u0061tus\":\"found\",\"status\":}; expected=1 ;;
+    nested) output=${record/\"status\":/\"extra\":\{\"value\":1\},\"status\":}; expected=1 ;;
+    multiple-objects) output=$'WT_RESULT\t{"version":1} {"command":"new","status":"created","name":"task","repo":"/repo","session":"session","state":""}'; expected=1 ;;
+  esac
+  wt_read_result "$output" new >/dev/null || rc=$?
+  assert_eq "$sample result status" "$expected" "$rc"
+done
+end_scenario
+
 assert_result() { # <what> <expected: yes|no> <function> <argument>
   local what=$1 expected=$2 actual=no
   shift 2
@@ -394,4 +424,4 @@ TMUX
 }
 test_relay_env
 
-lib_summary 261
+lib_summary 279

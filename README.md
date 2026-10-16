@@ -407,7 +407,7 @@ prints `FAILED:` and the suite's path.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 926 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 941 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -456,7 +456,8 @@ prints `FAILED:` and the suite's path.
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
 - **`bash test/named-outputs-smoke.sh`** checks output variables whose names match internal locals, including arrays and forwarded outputs.
-- **`bash test/lib-smoke.sh`** makes 261 assertions about all twelve functions in `lib/workgrove/common.sh`.
+- **`bash test/lib-smoke.sh`** makes 279 assertions about all fourteen functions in `lib/workgrove/common.sh`.
+  It checks versioned task results, malformed records, duplicate records, and the text fallback.
   It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.
   Fixed cmux responses cover row lists across windows, failure policies, checked validation, command wrappers, and lookup by title, repo, and host.
   It pins the exact `tmux_cmd` output for task, `shared`, and `reinit` forms.
@@ -674,6 +675,40 @@ successfully.
 
 With `--no-workspace`, remote `new` skips the cmux check and row creation. It prints the command that starts
 the saved task later with plain `attach`.
+
+### VM command results
+
+The Mac requests machine-readable results with `WT_MACHINE=1` for VM task creation,
+task recovery, and the Mac hook's worktree absence check.
+The VM keeps its human-readable output and adds one line beginning with `WT_RESULT`
+and a tab, followed by a compact JSON object.
+The VM consumes the request at startup so setup hooks and nested commands keep their ordinary output.
+The object has these fields:
+
+| Field | Meaning |
+|---|---|
+| `version` | The format version, currently `1`. |
+| `command` | The command: `new`, `show`, or `path`. |
+| `status` | `created` for `new`, `found` for an existing task, or `missing` for an absent task. |
+| `name`, `repo` | The task name and absolute main checkout path. |
+| `session` | The tmux session name for `new` and `show`; an empty string for `path`. |
+| `state` | The session state from `show`, without parentheses; an empty string for other commands. |
+
+The record goes to standard output, except that a missing `path` record goes to
+standard error with exit status `1`.
+Readers require exactly one record with the expected version, command, and string fields.
+The object must have unique keys and scalar values, with no nested objects or arrays.
+String fields must not contain control characters.
+Readers use the text format only when no record is present.
+An invalid record causes creation or recovery to stop and keeps the row during a close check.
+
+The close check also requires exit status `1`, status `missing`, and the requested task and repository.
+A failed worktree listing cannot produce a missing record.
+
+The environment request avoids an unsupported flag and requires no creation retry.
+Older VMs ignore the request and supply the text fallback.
+Older Macs do not request records, so newer VMs keep their previous output.
+An ordinary `wt path` therefore still prints only its path.
 
 ### Remove a task
 

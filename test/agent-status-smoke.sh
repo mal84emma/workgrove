@@ -155,6 +155,26 @@ cat > "$TEST_ROOT/ssh" <<'SSH'
 printf '%s\n' "$*" >> "$SSH_LOG"
 case "$*" in *' path task -r /vm/repos/repo')
   [ "${SSH_PROBE_FAIL:-}" = 1 ] && exit 255
+  if [ -n "${SSH_RESULT_MODE:-}" ]; then
+    record='{"version":1,"command":"path","status":"missing","name":"task","repo":"/vm/repos/repo","session":"","state":""}'
+    case "$SSH_RESULT_MODE" in
+      malformed) record='{broken' ;;
+      wrong-name) record=$(printf '%s' "$record" | sed 's/"name":"task"/"name":"other"/') ;;
+      wrong-repo) record=$(printf '%s' "$record" | sed 's@/vm/repos/repo@/vm/repos/other@') ;;
+      found) record=$(printf '%s' "$record" | sed 's/"missing"/"found"/') ;;
+      version) record=$(printf '%s' "$record" | sed 's/"version":1/"version":2/') ;;
+      duplicate-status) record=$(printf '%s' "$record" | sed 's/"status":/"status":"found","status":/') ;;
+      duplicate-name) record=$(printf '%s' "$record" | sed 's/"name":/"name":"other","name":/') ;;
+      duplicate-repo) record=$(printf '%s' "$record" | sed 's@"repo":@"repo":"/vm/repos/other","repo":@') ;;
+      duplicate-version) record=$(printf '%s' "$record" | sed 's/"version":/"version":2,"version":/') ;;
+    esac
+    printf 'WT_RESULT\t%s\n' "$record"
+    [ "$SSH_RESULT_MODE" != duplicate ] || printf 'WT_RESULT\t%s\n' "$record"
+    [ "$SSH_RESULT_MODE" != success ] || exit 0
+    [ "$SSH_RESULT_MODE" != transport ] || exit 255
+    [ "$SSH_RESULT_MODE" = machine ] || echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
+    exit 1
+  fi
   [ -e "$REMOTE_TASK_EXISTS" ] && { echo '/vm/repos/repo/.worktrees/task'; exit 0; }
   echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
   exit 1 ;;
@@ -230,6 +250,17 @@ if [[ $out != *'"record":false'* ]]; then pass; else fail 'failed tmux kill was 
 check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB --force'
 check_contains "$OSASCRIPT_LOG" "Run: ssh test-vm tmux kill-session -t '=wt-repo-task'"
 unset SSH_KILL_FAIL
+for mode in machine malformed wrong-name wrong-repo found version duplicate success transport duplicate-status duplicate-name duplicate-repo duplicate-version; do
+  : >"$CMUX_LOG"; : >"$SSH_LOG"
+  out=$(SSH_RESULT_MODE=$mode close_hook '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}')
+  if [[ $mode == machine ]]; then
+    check_contains "$CMUX_LOG" 'workspace close BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB --force'
+    check_contains "$SSH_LOG" 'kill-session'
+  else
+    check_missing "$CMUX_LOG" 'workspace close'
+    check_missing "$SSH_LOG" 'kill-session'
+  fi
+done
 end_scenario
 
 begin_scenario 'a VM row request finds the row of its own task, or creates one'
@@ -455,4 +486,4 @@ if [[ $(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"') -lt 5 ]]; then
   assert_eq 'neither hook called cmux' '' "$(cat "$CMUX_LOG")"
 fi
 end_scenario
-lib_summary $((113 + OLD_BASH_ASSERTIONS))
+lib_summary $((139 + OLD_BASH_ASSERTIONS))
