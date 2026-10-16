@@ -92,6 +92,63 @@ check_contains "$CMUX_LOG" '--title Codex --body needs approval'
 check_missing "$CMUX_LOG" '--title Codex status'
 end_scenario
 
+test_notify_relay_identity() {
+  local -x PATH="$TEST_ROOT/identity-bin:$PATH" TMUX=/tmp/fake
+  local -x CMUX_BUNDLED_CLI_PATH="$TEST_ROOT/identity-bin/cmux"
+  local -x CMUX_SOCKET_PATH=127.0.0.1:1111 CMUX_WORKSPACE_ID=pane-workspace CMUX_SURFACE_ID=pane-surface
+  local -x CMUX_PANEL_ID CMUX_TAB_ID=pane-tab CMUX_TERMINAL_LIFECYCLE_ID=pane-lifecycle
+  local -x CMUX_TUI_SOCKET=/tmp/pane-native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local -x CMUX_TUI_SESSION_ID=pane-session WT_STATUS_HEARTBEAT='' WT_STATUS_OWNER_PID=''
+  local -x NOTIFY_TMUX_ENV="$TEST_ROOT/notify-tmux.env" NOTIFY_TMUX_CALLS="$TEST_ROOT/notify-tmux.calls"
+  local -x NOTIFY_CLI_ARGS="$TEST_ROOT/notify-cli.args" NOTIFY_IDENTITY_LOG="$TEST_ROOT/notify-identity.log"
+  unset CMUX_PANEL_ID
+  mkdir -p "$TEST_ROOT/identity-bin"
+  cat > "$TEST_ROOT/identity-bin/tmux" <<'TMUX'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$NOTIFY_TMUX_CALLS"
+case $* in
+  'display-message -p #S') echo notify-task ;;
+  'show-environment -t =notify-task') cat "$NOTIFY_TMUX_ENV" ;;
+  *) exit 1 ;;
+esac
+TMUX
+  cat > "$TEST_ROOT/identity-bin/cmux" <<'CMUX'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$NOTIFY_CLI_ARGS"
+for variable in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID \
+                CMUX_TERMINAL_LIFECYCLE_ID CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do
+  if [[ -v $variable ]]; then printf '%s=%s\n' "$variable" "${!variable}"
+  else printf '%s is unset\n' "$variable"; fi
+done > "$NOTIFY_IDENTITY_LOG"
+CMUX
+  chmod +x "$TEST_ROOT/identity-bin/tmux" "$TEST_ROOT/identity-bin/cmux"
+
+  begin_scenario 'agent-notify passes the session identity to its cmux child'
+  printf '%s\n' CMUX_SOCKET_PATH=127.0.0.1:2222 CMUX_WORKSPACE_ID=current-workspace CMUX_SURFACE_ID=current-surface \
+    -CMUX_PANEL_ID CMUX_TAB_ID= CMUX_TERMINAL_LIFECYCLE_ID=current-lifecycle \
+    CMUX_TUI_SOCKET= CMUX_TUI_TERMINAL_ID= CMUX_TUI_SESSION_ID= > "$NOTIFY_TMUX_ENV"
+  : > "$NOTIFY_TMUX_CALLS"
+  printf '%s\n' '{"hook_event_name":"Stop","session_id":"identity-test"}' | env -u CMUX_PANEL_ID bash "$REPO/bin/agent-notify"
+  assert_eq 'the notification names the current workspace' \
+    'notify --workspace current-workspace --title Codex --body finished' "$(cat "$NOTIFY_CLI_ARGS")"
+  assert_eq 'the notification child receives session overrides, clears, and unset names' \
+    $'CMUX_SOCKET_PATH=127.0.0.1:2222\nCMUX_WORKSPACE_ID=current-workspace\nCMUX_SURFACE_ID=current-surface\nCMUX_PANEL_ID is unset\nCMUX_TAB_ID=\nCMUX_TERMINAL_LIFECYCLE_ID=current-lifecycle\nCMUX_TUI_SOCKET=\nCMUX_TUI_TERMINAL_ID=\nCMUX_TUI_SESSION_ID=' \
+    "$(cat "$NOTIFY_IDENTITY_LOG")"
+  assert_eq 'the notification reads the session environment once' \
+    $'display-message -p #S\nshow-environment -t =notify-task' "$(cat "$NOTIFY_TMUX_CALLS")"
+
+  printf '%s\n' CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= CMUX_SURFACE_ID= CMUX_PANEL_ID= CMUX_TAB_ID= \
+    CMUX_TERMINAL_LIFECYCLE_ID= CMUX_TUI_SOCKET=/tmp/current-native \
+    CMUX_TUI_TERMINAL_ID=term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb CMUX_TUI_SESSION_ID=current-session > "$NOTIFY_TMUX_ENV"
+  : > "$NOTIFY_CLI_ARGS"; : > "$NOTIFY_TMUX_CALLS"
+  printf '%s\n' '{"hook_event_name":"Stop","session_id":"identity-test"}' | env -u CMUX_PANEL_ID bash "$REPO/bin/agent-notify"
+  assert_eq 'a native session does not notify through the stale TCP pane socket' '' "$(cat "$NOTIFY_CLI_ARGS")"
+  assert_eq 'a native session change still makes one environment query' \
+    $'display-message -p #S\nshow-environment -t =notify-task' "$(cat "$NOTIFY_TMUX_CALLS")"
+  end_scenario
+}
+test_notify_relay_identity
+
 begin_scenario 'a VM can close only its own task row after self-removal'
 cat > "$TEST_ROOT/ssh" <<'SSH'
 #!/bin/sh
@@ -398,4 +455,4 @@ if [[ $(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"') -lt 5 ]]; then
   assert_eq 'neither hook called cmux' '' "$(cat "$CMUX_LOG")"
 fi
 end_scenario
-lib_summary $((108 + OLD_BASH_ASSERTIONS))
+lib_summary $((113 + OLD_BASH_ASSERTIONS))

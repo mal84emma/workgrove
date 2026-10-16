@@ -454,10 +454,11 @@ prints `FAILED:` and the suite's path.
   failure states, with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
-- **`bash test/lib-smoke.sh`** makes 218 assertions about all eleven functions in `lib/workgrove/common.sh`.
+- **`bash test/lib-smoke.sh`** makes 261 assertions about all twelve functions in `lib/workgrove/common.sh`.
   It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.
   Fixed cmux responses cover row lists across windows, failure policies, checked validation, command wrappers, and lookup by title, repo, and host.
   It pins the exact `tmux_cmd` output for task, `shared`, and `reinit` forms.
+  A stub tmux checks relay identity precedence, explicit empty values, unset names, and native and TCP sessions.
   It does not contact a host.
 - **`bash test/remote-new-smoke.sh`** uses scratch SSH and cmux stubs. It checks these cases:
   - remote task preflight and model forwarding
@@ -488,7 +489,8 @@ prints `FAILED:` and the suite's path.
   It loads only the automation merge function; it does not run `install.sh`.
 - **`bash test/agent-status-smoke.sh`** checks the VM lifecycle relay and the Mac row status handler with a fake
   cmux. It covers Running, Idle, clear, interruption, delayed events, stale-status expiry, and failed
-  self-teardown cleanup. It needs no VM.
+  self-teardown cleanup. Stub tmux and cmux commands check the notification child's relay identity after a session change.
+  It needs no VM.
 - **`bash test/agent-status-linux-smoke.sh`** runs on a Linux VM. It checks the real process owner gate,
   transcript interruption, heartbeat state, and relay timeout against scratch files and a fake cmux.
 - **`bash test/bash5-smoke.sh`** checks all five scripts under bash 5.

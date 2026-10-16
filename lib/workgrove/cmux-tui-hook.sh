@@ -20,7 +20,7 @@ if [[ -n ${TMUX:-} && -n ${TMUX_PANE:-} ]] && command -v tmux >/dev/null 2>&1; t
   env=''
   [[ -n $s ]] && env=$(tmux show-environment -t "=$s" </dev/null 2>/dev/null)
   for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do
-    # A name that the session does not hold keeps the pane's value, as in relay_env in bin/wt.
+    # A name that the session does not hold keeps the pane's value, as in relay_env in lib/workgrove/common.sh.
     # An empty value means that tmux_cmd attached a TCP relay row. "-NAME" means that tmux removed the name.
     # In both cases the row has no cmux-tui terminal, so the helper must not report to the old one.
     while IFS= read -r line; do

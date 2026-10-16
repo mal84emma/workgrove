@@ -131,28 +131,8 @@ case $event in
 esac
 [[ $interrupted == 1 ]] && status=idle
 
-# cmux authorizes a relayed notification against the surface and workspace in the environment. A pane keeps
-# the identity of the cmux connection that started it, and a reattach rebinds only the tmux SESSION
-# environment. So re-read that environment here and give the values to cmux explicitly, instead of letting
-# the child inherit the stale values of this pane. The relay_env function in bin/wt uses the same list and
-# the same precedence, for the same reason.
-relay_vars="CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID"
-socket=${CMUX_SOCKET_PATH:-}; ws=${CMUX_WORKSPACE_ID:-}; ident=()
-s=""
-if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null; then s=$(tmux display-message -p '#S' 2>/dev/null || true); fi
-tmux_env=''
-[[ -n $s ]] && tmux_env=$(tmux show-environment -t "=$s" 2>/dev/null || true)
-for n in $relay_vars; do
-  v=${!n:-}
-  if [[ -n $s ]]; then
-    t=$(printf '%s\n' "$tmux_env" | sed -n "s/^$n=//p" | head -1); [[ -n $t ]] && v=$t
-  fi
-  [[ -n $v ]] && ident+=("$n=$v")
-  case $n in
-    CMUX_SOCKET_PATH) socket=$v ;;
-    CMUX_WORKSPACE_ID) ws=$v ;;
-  esac
-done
+relay_env || true
+socket=$RELAY_SOCKET; ws=$RELAY_WS; ident=("${RELAY_IDENT[@]}")
 
 # Only the agent that `wt run` started owns a VM row. Hooks from other panes, from nested agents, and
 # from a child `wt new -p` before its own row exists must not change the status of the parent.
