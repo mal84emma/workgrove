@@ -149,6 +149,7 @@ workgrove/
 ├── test/
 │   ├── lib.sh                 the assertion functions shared by the suites
 │   ├── lib-smoke.sh           unit tests for every shared shell function
+│   ├── named-outputs-smoke.sh caller-named outputs that match internal local names
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── bash5-smoke.sh         all five bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
@@ -454,6 +455,7 @@ prints `FAILED:` and the suite's path.
   failure states, with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
+- **`bash test/named-outputs-smoke.sh`** checks output variables whose names match internal locals, including arrays and forwarded outputs.
 - **`bash test/lib-smoke.sh`** makes 279 assertions about all fourteen functions in `lib/workgrove/common.sh`.
   It checks versioned task results, malformed records, duplicate records, and the text fallback.
   It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.

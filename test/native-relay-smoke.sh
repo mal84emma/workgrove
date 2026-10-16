@@ -68,10 +68,11 @@ case "$1" in
 esac
 TMUX
 chmod +x "$TEST_ROOT/bin/tmux"
-TMUX=/tmp/fake CMUX_TUI_SOCKET=/tmp/stale CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa relay_env
-assert_eq 'the native socket comes from the current session' /tmp/current-native "$RELAY_TUI_SOCKET"
-assert_eq 'the native terminal comes from the current session' term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$RELAY_TUI_TERMINAL"
-assert_eq 'the old pane identity does not reach the CLI' 0 "$(printf '%s\n' "${RELAY_IDENT[@]}" | grep -cF term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa || true)"
+relay_socket=''; _relay_ws=''; relay_ident=(); relay_tui_socket=''; relay_tui_terminal=''
+TMUX=/tmp/fake CMUX_TUI_SOCKET=/tmp/stale CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa relay_env relay_socket _relay_ws relay_ident relay_tui_socket relay_tui_terminal
+assert_eq 'the native socket comes from the current session' /tmp/current-native "$relay_tui_socket"
+assert_eq 'the native terminal comes from the current session' term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$relay_tui_terminal"
+assert_eq 'the old pane identity does not reach the CLI' 0 "$(printf '%s\n' "${relay_ident[@]}" | grep -cF term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa || true)"
 rm "$TEST_ROOT/bin/tmux"
 end_scenario
 
@@ -140,9 +141,9 @@ TMUX=/tmp/fake notify_mac wt-open host test-vm path /vm/repos/repo/.worktrees/ta
 assert_eq 'a valid native identity overrides stale TCP fields' 7 "$(wc -l < "$RELAY_DELIVERED" | tr -d ' ')"
 env CMUX_TUI_SOCKET= CMUX_SOCKET_PATH=127.0.0.1:1234 CMUX_WORKSPACE_ID=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC "$BASH" -c "$line"
 assert_eq 'TCP reattachment clears the old native terminal' '' "$(cat "$RELAY_STATE/CMUX_TUI_TERMINAL_ID")"
-TMUX=/tmp/fake CMUX_TUI_SOCKET=/tmp/stale CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa relay_env
-assert_eq 'empty session identity overrides stale native pane values' '' "$RELAY_TUI_SOCKET"
-assert_eq 'TCP reattachment preserves the current TCP socket' 127.0.0.1:1234 "$RELAY_SOCKET"
+TMUX=/tmp/fake CMUX_TUI_SOCKET=/tmp/stale CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa relay_env relay_socket _relay_ws relay_ident relay_tui_socket relay_tui_terminal
+assert_eq 'empty session identity overrides stale native pane values' '' "$relay_tui_socket"
+assert_eq 'TCP reattachment preserves the current TCP socket' 127.0.0.1:1234 "$relay_socket"
 env CMUX_TUI_SOCKET= CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= "$BASH" -c "$line"
 assert_eq 'TCP reconnect without an identity retains the saved socket' 127.0.0.1:1234 "$(cat "$RELAY_STATE/CMUX_SOCKET_PATH")"
 rm "$TEST_ROOT/bin/tmux" "$TEST_ROOT/bin/cmux-tui"

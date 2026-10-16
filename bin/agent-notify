@@ -131,8 +131,8 @@ case $event in
 esac
 [[ $interrupted == 1 ]] && status=idle
 
-relay_env || true
-socket=$RELAY_SOCKET; ws=$RELAY_WS; ident=("${RELAY_IDENT[@]}")
+socket=''; ws=''; ident=(); _tui_socket=''; _tui_terminal=''
+relay_env socket ws ident _tui_socket _tui_terminal || true
 
 # Only the agent that `wt run` started owns a VM row. Hooks from other panes, from nested agents, and
 # from a child `wt new -p` before its own row exists must not change the status of the parent.

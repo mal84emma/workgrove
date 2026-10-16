@@ -228,8 +228,9 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
   local title="$1" args=() ws=() c body request_id; shift
   while [[ $# -gt 1 ]]; do args+=(--arg "$1" "$2"); shift 2; done
   body=$(jq -cn "${args[@]}" '$ARGS.named')
-  relay_env || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
-  if [[ $RELAY_TUI_SOCKET == /* && $RELAY_TUI_TERMINAL =~ ^term_[a-f0-9]{32}$ ]]; then
+  local _relay_socket relay_ws relay_tui_socket relay_tui_terminal relay_ident=()
+  relay_env _relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
+  if [[ $relay_tui_socket == /* && $relay_tui_terminal =~ ^term_[a-f0-9]{32}$ ]]; then
     c=$(command -v cmux-tui || true)
     [[ -x $c ]] || { warn "cmux-tui CLI not found here; run the line below on the Mac"; return 1; }
     # cmux suppresses identical terminal/title/body content for five seconds, regardless of notification ID.
@@ -237,7 +238,7 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
     [[ $request_id =~ ^[a-f0-9]{32}$ ]] || { warn "cannot create a native request ID; run the line below on the Mac"; return 1; }
     body=$(printf '%s' "$body" | jq -c --arg id "$request_id" '. + {request_id:$id}') || return 1
     # Native terminal IDs differ from the Mac's workspace UUIDs. Do not pass --workspace.
-    env -u CMUX_SOCKET "${RELAY_IDENT[@]}" "$c" --socket "$RELAY_TUI_SOCKET" notify --surface "$RELAY_TUI_TERMINAL" --title "$title" --body "$body" >/dev/null 2>&1 \
+    env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" notify --surface "$relay_tui_terminal" --title "$title" --body "$body" >/dev/null 2>&1 \
       || { warn "cmux-tui notify failed; run the line below on the Mac"; return 1; }
     return 0
   fi
@@ -247,8 +248,8 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
   # environment set below, whatever --workspace names. The flag names this row, which is what the Mac
   # hook's from_row_on_host wants anyway. So the flag agrees with that environment, and it stays correct if
   # a later cmux does read it.
-  if [[ -n "$RELAY_WS" ]]; then ws=(--workspace "$RELAY_WS"); fi
-  env -u CMUX_SOCKET "${RELAY_IDENT[@]}" "$c" notify "${ws[@]}" --title "$title" --body "$body" >/dev/null 2>&1 \
+  if [[ -n "$relay_ws" ]]; then ws=(--workspace "$relay_ws"); fi
+  env -u CMUX_SOCKET "${relay_ident[@]}" "$c" notify "${ws[@]}" --title "$title" --body "$body" >/dev/null 2>&1 \
     || { warn "cmux notify failed; run the line below on the Mac"; return 1; }
 }
 
@@ -383,20 +384,21 @@ meta_set() { # meta_set <name> key=value ...  — a key with no '=' is stored wi
 }
 prompt_line() { local f; f=$(wt_prompt "$1"); if [[ -f "$f" ]]; then head -1 "$f"; fi; }
 
-require_wt() { # require_wt <name>  -> sets P (path), B (branch)
-  local n="$1"; valid_name "$n" || die "invalid worktree name: $n"
-  P=$(wt_path "$n"); B=$(wt_branch "$n")
-  local registered
-  registered=$(git -C "$REPO" worktree list --porcelain) || die "cannot list worktrees in $REPO"
-  if printf '%s\n' "$registered" | grep -qxF "worktree $P"; then
+require_wt() { # require_wt <name> <path output> <branch output> requires a registered worktree.
+  local -n __wt_path=$2 __wt_branch=$3
+  local __n="$1"; valid_name "$__n" || die "invalid worktree name: $__n"
+  __wt_path=$(wt_path "$__n"); __wt_branch=$(wt_branch "$__n")
+  local __registered
+  __registered=$(git -C "$REPO" worktree list --porcelain) || die "cannot list worktrees in $REPO"
+  if printf '%s\n' "$__registered" | grep -qxF "worktree $__wt_path"; then
     # A registration whose directory was deleted outside wt (rm -rf, a lost VM disk) still has a branch and
     # metadata. Only `wt rm` can clear them, so let it through. The other commands find no files there.
-    [[ -d "$P" ]] || warn "$P is registered but missing (deleted outside wt?); clean it up with: wt rm $n"
+    [[ -d "$__wt_path" ]] || warn "$__wt_path is registered but missing (deleted outside wt?); clean it up with: wt rm $__n"
     return 0
   fi
-  [[ -d "$P" ]] && die "$P exists but is not a registered worktree (try: git -C $REPO worktree prune)"
-  if [[ ${sub:-} == path ]]; then wt_result path missing "$n" "$REPO" >&2; fi
-  die "no worktree named '$n' in $REPO (see: wt list)"
+  [[ -d "$__wt_path" ]] && die "$__wt_path exists but is not a registered worktree (try: git -C $REPO worktree prune)"
+  if [[ ${sub:-} == path ]]; then wt_result path missing "$__n" "$REPO" >&2; fi
+  die "no worktree named '$__n' in $REPO (see: wt list)"
 }
 
 # rows_json [checked] prints all cmux rows as one {"workspaces":[…]} document.
@@ -487,19 +489,19 @@ physical_dir() { # physical_dir <dir> — the directory with each symlink resolv
 }
 path_within() { [[ -n "$2" && ( "$1" == "$2" || "$1" == "$2/"* ) ]]; }   # path_within <path> <dir> — <dir> or below it
 
-RM_ROW=""; RM_SELF=""
-check_row_removal() { # check_row_removal <title> <repo> [host] [worktree path] — refuse unreadable rows or another
-  # running agent. Without a host, the worktree path names the local worktree that wt rm removes.
-  RM_ROW=""; RM_SELF=""
-  local c err
-  if ! c=$(cmux_bin); then
+check_row_removal() { # check_row_removal <title> <repo> <row output> <self output> [host] [worktree path]
+  # Refuse unreadable rows or another running agent. Without a host, the path names the local worktree.
+  local -n __rm_row=$3 __rm_self=$4
+  __rm_row=""; __rm_self=""
+  local __c __err
+  if ! __c=$(cmux_bin); then
     [[ -z ${CMUX_WORKSPACE_ID:-} ]] || die "cmux CLI not found; kept the worktree"
     return 0
   fi
-  if ! err=$(CMUX_QUIET=1 "$c" ping 2>&1); then
+  if ! __err=$(CMUX_QUIET=1 "$__c" ping 2>&1); then
     # Without a caller row, a missing socket means cmux is absent. Other failures cannot prove that.
-    case "$err" in 'Error: Socket not found at '*) [[ -n ${CMUX_WORKSPACE_ID:-} ]] || return 0 ;; esac
-    die "cannot reach cmux${err:+: $err}; kept the worktree"
+    case "$__err" in 'Error: Socket not found at '*) [[ -n ${CMUX_WORKSPACE_ID:-} ]] || return 0 ;; esac
+    die "cannot reach cmux${__err:+: $__err}; kept the worktree"
   fi
   # The user can edit or clear a row's description in cmux, and then task_row no longer finds the task's row.
   # So check the agent in every row that may be this task's, not only in the row that task_row finds:
@@ -508,12 +510,12 @@ check_row_removal() { # check_row_removal <title> <repo> [host] [worktree path] 
   # Refuse when another agent runs in any of them. Close only the first row that task_row finds, or the
   # caller's own row when the title matches it. A row found only by its directory may belong to anything,
   # such as the driver, so wt never closes it.
-  local rows checks=() check kind id dir root="" self_row=""
-  rows=$(rows_json checked) || die "cannot list cmux rows; kept the worktree"
+  local __rows __checks=() __check __kind __id __dir __root="" __self_row=""
+  __rows=$(rows_json checked) || die "cannot list cmux rows; kept the worktree"
   # One line for each row to check: "found <id>", "unclaimed <id>" or "dir <id> <current directory>". A
   # directory with a newline in it would split its line, so such a row is not checked by its directory.
-  mapfile -t checks < <(printf '%s' "$rows" | jq -r --arg t "$1" --arg r "$(if [[ -n "$2" ]]; then repo_id "$2"; fi)" \
-      --arg h "${3:-}" --arg d "${4:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
+  mapfile -t __checks < <(printf '%s' "$__rows" | jq -r --arg t "$1" --arg r "$(if [[ -n "$2" ]]; then repo_id "$2"; fi)" \
+      --arg h "${5:-}" --arg d "${6:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
       .workspaces[] | (.current_directory | if type == "string" then . else "" end) as $c
       | if task_row($t; $r; $h; $sep) then "found " + .id
         elif unclaimed_row($t; $h; $sep) then "unclaimed " + .id
@@ -523,23 +525,23 @@ check_row_removal() { # check_row_removal <title> <repo> [host] [worktree path] 
   wait $! || die "cannot list cmux rows; kept the worktree"
   # A row's directory can name the worktree through a symlink or in another letter case. So a directory that
   # does not match as written is compared again as its physical path.
-  if [[ -n "${4:-}" ]]; then root=$(physical_dir "$4"); fi
-  for check in "${checks[@]}"; do
-    kind=${check%% *}; id=${check#* }
-    if [[ $kind == dir ]]; then
-      dir=${id#* }; id=${id%% *}
-      path_within "$dir" "${4:-}" || path_within "$(physical_dir "$dir")" "$root" || continue
+  if [[ -n "${6:-}" ]]; then __root=$(physical_dir "$6"); fi
+  for __check in "${__checks[@]}"; do
+    __kind=${__check%% *}; __id=${__check#* }
+    if [[ $__kind == dir ]]; then
+      __dir=${__id#* }; __id=${__id%% *}
+      path_within "$__dir" "${6:-}" || path_within "$(physical_dir "$__dir")" "$__root" || continue
     fi
-    [[ $kind != found || -n "$RM_ROW" ]] || RM_ROW=$id
-    row_agent "$c" "$id"
-    case $kind/$ROW_AGENT in
-      found/self|unclaimed/self) self_row=$id ;;
-      found/busy) die "another agent is running in cmux row $id; kept the worktree" ;;
-      unclaimed/busy) die "an agent is running in cmux row $id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run" ;;
-      dir/busy) die "an agent is running in cmux row $id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run" ;;
+    [[ $__kind != found || -n "$__rm_row" ]] || __rm_row=$__id
+    row_agent "$__c" "$__id"
+    case $__kind/$ROW_AGENT in
+      found/self|unclaimed/self) __self_row=$__id ;;
+      found/busy) die "another agent is running in cmux row $__id; kept the worktree" ;;
+      unclaimed/busy) die "an agent is running in cmux row $__id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run" ;;
+      dir/busy) die "an agent is running in cmux row $__id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run" ;;
     esac
   done
-  if [[ -n "$self_row" ]]; then RM_ROW=$self_row; RM_SELF=self; fi
+  if [[ -n "$__self_row" ]]; then __rm_row=$__self_row; __rm_self=self; fi
 }
 
 ROW_AGENT=""
@@ -572,15 +574,16 @@ open_code() { # open_code <folder uri> <label>   (no --new-window: a repeat call
   printf 'opened in VS Code: %s\n' "$2"
 }
 
-open_worktree() { # open_worktree <name> — VS Code here; from a VM ask the Mac to do it
-  if ! is_remote; then open_code "file://$P" "$P"; return 0; fi
+open_worktree() { # open_worktree <name> <path> — VS Code here; from a VM ask the Mac to do it
+  local path="$2"
+  if ! is_remote; then open_code "file://$path" "$path"; return 0; fi
   local h manual; h=$(wt_host)
   manual="wt -H $h open -r $(shell_join "$REPO") $1"
-  if ! hook_ok_repo || ! notify_mac wt-open host "$h" path "$P"; then
+  if ! hook_ok_repo || ! notify_mac wt-open host "$h" path "$path"; then
     printf 'VS Code request to the Mac failed. Run on the Mac: %s\n' "$manual"
     return 1
   fi
-  printf 'requested VS Code on the Mac: %s:%s\n' "$h" "$P"
+  printf 'requested VS Code on the Mac: %s:%s\n' "$h" "$path"
   printf 'if no window appears, run on the Mac: %s\n' "$manual"
 }
 
@@ -652,8 +655,8 @@ wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<
   # shows "?" here, as it is a refusal in rm_reasons.
   if [[ "$base" != HEAD && "$ahead" =~ ^[0-9]+$ ]]; then
     if [[ "$ahead" -eq 0 ]]; then merged=yes
-    elif branch_landed "$b" "$base"; then merged=squash
-    else merged=no; why="$LANDED_WHY"; fi
+    elif branch_landed "$b" "$base" why; then merged=squash
+    else merged=no; fi
   fi
   printf '%s\n' "$n$WT_FS$cur$WT_FS$base$WT_FS$ahead$WT_FS$behind$WT_FS$dirty$WT_FS$last$WT_FS$merged$WT_FS$why"
 }
@@ -769,14 +772,14 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
     shift
   done
   [[ -n "$name" ]] || die "run: worktree name required (wt run <name> -r <repo>)"
-  resolve_repo "$repo"; require_wt "$name"
+  resolve_repo "$repo"; local path branch; require_wt "$name" path branch
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac
-  cd "$P"
+  cd "$path"
   local agent model brief="" f rc=0
   IFS="$WT_FS" read -r agent model <<<"$(meta_get_pair "$name" agent model 2>/dev/null || true)"
   [[ -n "$agent" ]] || agent="$DEFAULT_AGENT"
   case "$agent" in
-    none|shell|"") printf '%s: %s\n  agent:  none — this is your shell\n' "$name" "$P"; return 0 ;;
+    none|shell|"") printf '%s: %s\n  agent:  none — this is your shell\n' "$name" "$path"; return 0 ;;
     claude|codex) ;;
     *) die "unknown agent '$agent' in $(wt_meta "$name")" ;;
   esac
@@ -888,7 +891,7 @@ cmd_show() {
     shift
   done
   [[ -n "$name" ]] || die "show: worktree name required"
-  resolve_repo "$repo"; require_wt "$name"
+  resolve_repo "$repo"; local path branch; require_wt "$name" path branch
   IFS="$WT_FS" read -r nn br base ah be di last mg why <<<"$(wt_status_line "$name")"
   # the counts are numbers: a '?' from a base that no longer resolves must not print as a count
   [[ "$ah" =~ ^[0-9]+$ ]] || ah='?'; [[ "$be" =~ ^[0-9]+$ ]] || be='?'; [[ "$di" =~ ^[0-9]+$ ]] || di=0
@@ -900,7 +903,7 @@ cmd_show() {
     '?')    mg="? (no base to compare with)" ;;
   esac
   printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  merged:  %s\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
-    "$nn" "$P" "$REPO" "$br" "$ah" "$be" "$base" "$mg" "$title $(row_tag "" "$REPO")" "$(prompt_line "$name")" "$di" "$last"
+    "$nn" "$path" "$REPO" "$br" "$ah" "$be" "$base" "$mg" "$title $(row_tag "" "$REPO")" "$(prompt_line "$name")" "$di" "$last"
   [[ -z "$model" ]] || printf '  model:   %s\n' "$model"
   local state=''
   if is_remote; then
@@ -908,12 +911,12 @@ cmd_show() {
     printf '  session: %s (%s)\n' "$(wt_session "$name" "$REPO")" "$state"
   fi
   wt_result show found "$name" "$REPO" "$(wt_session "$name" "$REPO")" "$state"
-  printf '\n--- commits vs %s\n' "$base"; git -C "$P" log --oneline "$base..HEAD" 2>/dev/null | head -20
-  printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$P" diff --stat "$base...HEAD" 2>/dev/null | tail -15
-  printf '\n--- working tree\n'; git -C "$P" status --short 2>/dev/null | head -20
+  printf '\n--- commits vs %s\n' "$base"; git -C "$path" log --oneline "$base..HEAD" 2>/dev/null | head -20
+  printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$path" diff --stat "$base...HEAD" 2>/dev/null | tail -15
+  printf '\n--- working tree\n'; git -C "$path" status --short 2>/dev/null | head -20
   if [[ $diff -eq 1 ]]; then
     cmux_ok || die "cmux is not running"
-    CMUX_QUIET=1 "$(cmux_bin)" diff --branch --repo "$P" --base "$base" --layout split --title "$name vs $base" --focus true >/dev/null && printf 'opened cmux diff pane\n'
+    CMUX_QUIET=1 "$(cmux_bin)" diff --branch --repo "$path" --base "$base" --layout split --title "$name vs $base" --focus true >/dev/null && printf 'opened cmux diff pane\n'
   fi
 }
 
@@ -937,8 +940,8 @@ cmd_open() { # wt open [name] [-r PATH] — no name: the worktree holding $PWD
     [[ "$root" == "$(wt_root)/"* ]] || die "not inside a task worktree; pass a name (wt open <name> -r <repo>)"
     name=${root#"$(wt_root)/"}
   fi
-  require_wt "$name"
-  open_worktree "$name"
+  local path branch; require_wt "$name" path branch
+  open_worktree "$name" "$path"
 }
 
 cmd_attach() {
@@ -955,7 +958,7 @@ cmd_attach() {
     shift
   done
   [[ -n "$name" ]] || die "attach: worktree name required"
-  resolve_repo "$repo"; require_wt "$name"
+  resolve_repo "$repo"; local path branch; require_wt "$name" path branch
   if [[ -n "$agent" ]]; then
     valid_agent "$agent"
     local old_agent; old_agent=$(meta_get "$name" agent 2>/dev/null || true)
@@ -984,11 +987,11 @@ cmd_sync() {
     shift
   done
   [[ -n "$name" ]] || die "sync: worktree name required"
-  resolve_repo "$repo"; require_wt "$name"
+  resolve_repo "$repo"; local path branch; require_wt "$name" path branch
   local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
   [[ "$base" == origin/* ]] && git -C "$REPO" fetch -q origin "${base#origin/}"
-  [[ -z "$(git -C "$P" status --porcelain)" ]] || die "worktree has uncommitted changes; commit or stash first"
-  if [[ $merge -eq 1 ]]; then git -C "$P" merge --no-edit "$base"; else git -C "$P" rebase "$base"; fi
+  [[ -z "$(git -C "$path" status --porcelain)" ]] || die "worktree has uncommitted changes; commit or stash first"
+  if [[ $merge -eq 1 ]]; then git -C "$path" merge --no-edit "$base"; else git -C "$path" rebase "$base"; fi
   printf 'synced %s onto %s\n' "$name" "$base"
 }
 
@@ -1005,11 +1008,11 @@ cmd_pr() {
     shift
   done
   [[ -n "$name" ]] || die "pr: worktree name required"
-  resolve_repo "$repo"; require_wt "$name"; have gh || die "gh not installed"
-  [[ -z "$(git -C "$P" status --porcelain)" ]] || die "worktree has uncommitted changes; commit first"
-  git -C "$P" push -u origin "$B"
+  resolve_repo "$repo"; local path branch; require_wt "$name" path branch; have gh || die "gh not installed"
+  [[ -z "$(git -C "$path" status --porcelain)" ]] || die "worktree has uncommitted changes; commit first"
+  git -C "$path" push -u origin "$branch"
   local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
-  ( cd "$P" && gh pr create --fill --base "${base#origin/}" "${draft[@]}" )
+  ( cd "$path" && gh pr create --fill --base "${base#origin/}" "${draft[@]}" )
 }
 
 cmd_rm() {
@@ -1027,16 +1030,16 @@ cmd_rm() {
     shift
   done
   [[ -n "$name" ]] || die "rm: worktree name required"
-  resolve_repo "$repo"; require_wt "$name"
-  local here there; here=$(pwd -P); there=$(cd "$P" 2>/dev/null && pwd -P) || there="$P"   # a symlinked cwd is still inside
+  resolve_repo "$repo"; local path branch; require_wt "$name" path branch
+  local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
-  local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  local base landed_why; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
   reset_fetched
   if [[ $force -eq 0 ]]; then
     local reasons=() r
     while IFS= read -r r; do
       if [[ -n "$r" ]]; then reasons+=("$r"); fi
-    done <<<"$(rm_reasons "$name" "$P" "$B" "$base")"
+    done <<<"$(rm_reasons "$name" "$path" "$branch" "$base")"
     if [[ ${#reasons[@]} -gt 0 ]]; then
       printf 'wt: refusing to remove %s: %s\n' "$name" "$(IFS=';'; echo "${reasons[*]}")" >&2
       printf 'wt: inspect with: wt show %s — then push/merge, check the branch out again or copy the file back, or re-run with --force to discard.\n' "$name" >&2
@@ -1055,6 +1058,7 @@ cmd_rm() {
     [[ -n "$current" ]] || die "cannot read the current tmux session: tmux returned no session name"
     if [[ "$current" == "$session" ]]; then self_remote=1; fi
   fi
+  local row="" self=""
   title=$(task_title "$name")
   if is_remote; then
     [[ -n "$session" ]] || session=$(wt_session "$name" "$REPO")
@@ -1071,21 +1075,22 @@ cmd_rm() {
       native=1
     fi
   else
-    check_row_removal "$title" "$REPO" "" "$(wt_path "$name")"
+    check_row_removal "$title" "$REPO" row self "" "$(wt_path "$name")"
   fi
   if [[ $self_remote -eq 1 && $native -eq 0 ]]; then
     # Check the relay setup only after the reasons above, while the worktree is still intact.
     host=$(wt_host)
     hook_ok_repo || die "cannot request Mac row cleanup for $REPO"
-    if ! relay_env; then
+    local _socket _ws _ident=() _tui_socket _tui_terminal
+    if ! relay_env _socket _ws _ident _tui_socket _tui_terminal; then
       [[ -z ${CMUX_TUI_SOCKET:-} ]] \
         || die "this row predates native teardown; close and reopen this row on the Mac: wt -H $host attach -r $(shell_join "$REPO") $name, then retry"
       die "cannot find the Mac cmux relay in this session"
     fi
   fi
   # the ignored files that remain are unchanged copies or build output, so --force is normal here
-  if [[ -d "$P" ]]; then
-    git -C "$REPO" worktree remove --force "$P" || die "git worktree remove failed for $P; free it, then: rm -rf $P && git -C $REPO worktree prune"
+  if [[ -d "$path" ]]; then
+    git -C "$REPO" worktree remove --force "$path" || die "git worktree remove failed for $path; free it, then: rm -rf $path && git -C $REPO worktree prune"
   else
     git -C "$REPO" worktree prune          # the directory was removed outside wt; drop its registration
   fi
@@ -1097,15 +1102,15 @@ cmd_rm() {
     # a stale remote-tracking ref still equals the branch: -d takes that as merged upstream. The reasons
     # above already let the worktree go on that same finding, made against this same base, so the branch
     # goes with it.
-    if ! git -C "$REPO" branch -d "$B" >/dev/null 2>&1; then
-      if [[ $force -eq 1 || $RM_DISCARD_COMMITS -eq 1 ]] || { [[ "$base" != HEAD ]] && branch_landed "$B" "$base"; }; then
-        git -C "$REPO" branch -D "$B" >/dev/null 2>&1 || true
-      else keep=1; warn "kept branch $B: git will not delete it as merged (git -C $REPO branch -D $B discards it)"; fi
+    if ! git -C "$REPO" branch -d "$branch" >/dev/null 2>&1; then
+      if [[ $force -eq 1 || $RM_DISCARD_COMMITS -eq 1 ]] || { [[ "$base" != HEAD ]] && branch_landed "$branch" "$base" landed_why; }; then
+        git -C "$REPO" branch -D "$branch" >/dev/null 2>&1 || true
+      else keep=1; warn "kept branch $branch: git will not delete it as merged (git -C $REPO branch -D $branch discards it)"; fi
     fi
   fi
   rm -f "$(wt_meta "$name")" "$(wt_prompt "$name")" "$(wt_started "$name")"
   git -C "$REPO" worktree prune
-  printf 'removed %s%s\n' "$name" "$([[ $keep -eq 1 ]] && echo " (branch $B kept)")"
+  printf 'removed %s%s\n' "$name" "$([[ $keep -eq 1 ]] && echo " (branch $branch kept)")"
   if is_remote; then
     [[ -n "$session" ]] || session=$(wt_session "$name" "$REPO")
     if [[ $native -eq 1 ]]; then
@@ -1124,7 +1129,7 @@ cmd_rm() {
     else
       tmux kill-session -t "=$session" 2>/dev/null || true   # the Mac owns the row
     fi
-  elif [[ -n "$RM_ROW" ]]; then close_row "$RM_ROW" "$RM_SELF"
+  elif [[ -n "$row" ]]; then close_row "$row" "$self"
   else close_workspace "$name" "$title"; fi
 }
 
@@ -1167,7 +1172,7 @@ cmd_path() {
     shift
   done
   [[ -n "$name" ]] || die "path: worktree name required"
-  resolve_repo "$repo"; require_wt "$name"; printf '%s\n' "$P"
+  resolve_repo "$repo"; local path branch; require_wt "$name" path branch; printf '%s\n' "$path"
   wt_result path found "$name" "$REPO"
 }
 cmd_repos()   { # wt repos [<name>] [--porcelain|--table]. No name: list every repo. Print a table (name, number
