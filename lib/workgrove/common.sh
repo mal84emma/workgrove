@@ -7,6 +7,8 @@
 # It sets no shell options, so it works under the "set -euo pipefail" of bin/wt and the "set -u" of the hooks.
 if ((BASH_VERSINFO[0] < 5)); then return 1; fi
 
+# Prefix local -n references with __. Callers must not use that prefix for output variables.
+
 # valid_host <alias> — an ssh alias: letters, digits, '.', '_' and '-', with a letter or digit first.
 valid_host() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 
