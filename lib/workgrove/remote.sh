@@ -209,7 +209,8 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   # The row's identity comes from -r. cmd_host has already refused -r unless it is an absolute path or
   # a plain repo name. A relative '.' or '..' would make repo_id '-', and close_row would close nothing.
   local session title; session=$(wt_session "$name" "$repo"); title=$(row_title "$name")
-  check_row_removal "$title" "$repo" "$host"
+  local _row _self
+  check_row_removal "$title" "$repo" _row _self "$host"
   local agent_rc=0
   agent_on_vm "$host" "$session" || agent_rc=$?
   case $agent_rc in

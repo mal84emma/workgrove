@@ -48,20 +48,21 @@ recover_suspended_row() { # reconnect one suspended row, after freeing only its 
   die "row $id $why (last state: ${state:-missing}; cmux reconnect reply: ${reply:-empty}); manual fallback: $fallback"
 }
 
-ROW_SHELL_LAST=""
-row_shell_prompt() { # row_shell_prompt <id> — 0 when the row's last non-blank line ends in $, # or % and names a
-                     # user@host, or is that character alone under a line that does (a two-line theme such as
-                     # workgrove's). A TUI footer such as `Context 100%` names none. 2: the screen is unavailable.
-                     # ROW_SHELL_LAST holds that last line
-  local id="$1" c screen lines above="" nl=$'\n' who='[[:alnum:]_.-]+@[[:alnum:]_.-]+' end='[$#%]$' bare='^[$#%]$'
-  ROW_SHELL_LAST=""
-  c=$(cmux_bin) || return 2
-  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 2
-  lines=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -2)
-  ROW_SHELL_LAST=${lines##*"$nl"}
-  [[ "$lines" != *"$nl"* ]] || above=${lines%%"$nl"*}
-  [[ "$ROW_SHELL_LAST" =~ $end ]] || return 1
-  [[ "$ROW_SHELL_LAST" =~ $who ]] || { [[ "$ROW_SHELL_LAST" =~ $bare && "$above" =~ $who ]]; }
+row_shell_prompt() { # row_shell_prompt <id> <last line output>
+  # Return 0 when the last nonblank line is a shell prompt that names user@host.
+  # Accept a lone $, #, or % below a line that names user@host for two-line prompts.
+  # A prompt must end in $, #, or %. A TUI footer such as `Context 100%` names no user@host.
+  # Return 2 when the screen is unavailable.
+  local -n __shell_last=$2
+  local __id="$1" __c __screen __lines __above="" __nl=$'\n' __who='[[:alnum:]_.-]+@[[:alnum:]_.-]+' __end='[$#%]$' __bare='^[$#%]$'
+  __shell_last=""
+  __c=$(cmux_bin) || return 2
+  __screen=$(CMUX_QUIET=1 "$__c" read-screen --workspace "$__id" 2>/dev/null) || return 2
+  __lines=$(printf '%s\n' "$__screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -2)
+  __shell_last=${__lines##*"$__nl"}
+  [[ "$__lines" != *"$__nl"* ]] || __above=${__lines%%"$__nl"*}
+  [[ "$__shell_last" =~ $__end ]] || return 1
+  [[ "$__shell_last" =~ $__who ]] || { [[ "$__shell_last" =~ $__bare && "$__above" =~ $__who ]]; }
 }
 
 send_tmux_line() { # send_tmux_line <id> <session> — type the row's tmux attach line into it and press return
@@ -78,33 +79,36 @@ vm_session_detached() { # vm_session_detached <host> <session> — 0 only when t
   remote_sh_raw "$1" "tmux has-session -t $q 2>/dev/null && c=\$(tmux list-clients -t $q 2>/dev/null) && [ -z \"\$c\" ]" >/dev/null 2>&1
 }
 
-reattach_shell_row() { # reattach_shell_row <id> <session> [host] — send the tmux line only to a row at a shell prompt.
-                       # With a host (after a reconnect), the row must also still be connected, and that VM must list
-                       # no client on the session. The checks run in that order, immediately before the send
-  local id="$1" session="$2" host="${3:-}"
-  row_shell_prompt "$id" || return 1
-  if [[ -n "$host" ]]; then   # the connection can drop again, and a restored pty can still hold tmux
-    [[ "$(row_remote_field "$id" state)" == connected ]] || return 1
-    vm_session_detached "$host" "$session" || return 1
+reattach_shell_row() { # reattach_shell_row <id> <session> <last line output> [host]
+  # Send the tmux line only to a row at a shell prompt.
+  # With a host after a reconnect, require a connected row and no client on the VM session.
+  # Check these conditions in that order, immediately before the send.
+  local __id="$1" __session="$2" __host="${4:-}"
+  row_shell_prompt "$__id" "$3" || return 1
+  if [[ -n "$__host" ]]; then   # the connection can drop again, and a restored pty can still hold tmux
+    [[ "$(row_remote_field "$__id" state)" == connected ]] || return 1
+    vm_session_detached "$__host" "$__session" || return 1
   fi
-  send_tmux_line "$id" "$session"
+  send_tmux_line "$__id" "$__session"
 }
 
-reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> — a reconnected row can say connected before its
-                           # new login shell paints a prompt, so try for 5 ticks ~1 s apart. Each tick reads the screen
-                           # first (local) and asks the VM only when that shows a prompt. 1: never proven, nothing sent
-  local tick
-  for ((tick=0; tick<5; tick++)); do
-    reattach_shell_row "$2" "$3" "$1" && return 0
-    [[ $tick -eq 4 ]] || sleep 1
+reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> <last line output>
+  # A reconnected row can report connected before its login shell shows a prompt.
+  # Try for 5 ticks, approximately one second apart.
+  # Each tick reads the screen locally and asks the VM only when the screen shows a prompt.
+  # Return 1 when no tick proves the conditions. Send nothing in that case.
+  local __tick
+  for ((__tick=0; __tick<5; __tick++)); do
+    reattach_shell_row "$2" "$3" "$4" "$1" && return 0
+    [[ $__tick -eq 4 ]] || sleep 1
   done
   return 1
 }
 
 reinit_task_client() { # reinit_task_client <host> <id> <session> — restart this task row's attached tmux client
-  local host="$1" id="$2" session="$3" line screen_rc=0 nonce proof screen c
+  local host="$1" id="$2" session="$3" line screen_rc=0 nonce proof screen c _last
   [[ "$(row_remote_field "$id" state)" == connected ]] || return 2
-  row_shell_prompt "$id" || screen_rc=$?
+  row_shell_prompt "$id" _last || screen_rc=$?
   [[ $screen_rc -eq 1 ]] || return 2   # skip a shell or an unreadable screen
   line=$(tmux_cmd "$session" "" "" reinit)
   nonce="WT_REINIT_${RANDOM}_${RANDOM}_$$_$(date +%s)"
@@ -169,14 +173,15 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
                                   # reattach_recovered_row's proof.
     [[ -n "$id" ]] || die "no row $title $(row_tag "$host" "$path") is open; wt -H $host attach -r $(shell_join "$repo") $name opens one"
     c=$(cmux_bin)
+    local shell_last
     if [[ $recovered -eq 1 ]]; then
-      if ! reattach_recovered_row "$host" "$id" "$session"; then
+      if ! reattach_recovered_row "$host" "$id" "$session" shell_last; then
         CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
-        die "$title $(row_tag "$host" "$path") reconnected, but its shell prompt and a detached VM session were not both confirmed (last line: ${ROW_SHELL_LAST:-empty}); look at the row and, if it shows a bare shell, re-run: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
+        die "$title $(row_tag "$host" "$path") reconnected, but its shell prompt and a detached VM session were not both confirmed (last line: ${shell_last:-empty}); look at the row and, if it shows a bare shell, re-run: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
       fi
     else
-      reattach_shell_row "$id" "$session" \
-        || die "$title $(row_tag "$host" "$path") does not end at a shell prompt naming user@host, on its own line or the one above (last line: ${ROW_SHELL_LAST:-empty}); it is probably still attached to tmux, or its prompt names no user@host. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'"
+      reattach_shell_row "$id" "$session" shell_last \
+        || die "$title $(row_tag "$host" "$path") does not end at a shell prompt naming user@host, on its own line or the one above (last line: ${shell_last:-empty}); it is probably still attached to tmux, or its prompt names no user@host. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'"
     fi
     CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
     printf 'row: %s %s (re-attached)\n' "$title" "$(row_tag "$host" "$path")"
@@ -214,13 +219,14 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     *) die "$name on $host has no agent pane ($state); restart it: wt -H $host attach --restart-agent -r $(shell_join "$repo") $name; if an agent is visibly running there, the VM's wt is older than the Mac's: wt -H $host update" ;;
   esac
   [[ -n "$id" ]] || { remote_row "$host" "$session" "$title" "$path" ""; return 0; }
+  local _last
   c=$(cmux_bin)
   if [[ $recovered -eq 1 ]]; then
     # The show above ran before the reconnect. A prompt-shaped footer alone says nothing about what holds
     # the pty. So wait for a prompt, and ask the VM again immediately before any send.
-    if reattach_recovered_row "$host" "$id" "$session"; then what=re-attached; fi
+    if reattach_recovered_row "$host" "$id" "$session" _last; then what=re-attached; fi
   elif [[ "$state" == *detached ]]; then   # show may be stale; prove the prompt and detached session again
-    if reattach_shell_row "$id" "$session" "$host"; then what=re-attached
+    if reattach_shell_row "$id" "$session" _last "$host"; then what=re-attached
     else warn "did not re-attach $title $(row_tag "$host" "$path"); inspect the row, then use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
     fi
   fi
