@@ -42,8 +42,8 @@ unset wg_lib
 
 : "${HOME:?cmux-hook: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/cmux-hook.log"
-log() { # stdout is the patch, and every call site discards stderr. So the reason that a jump did not
-        # happen must go where the user can find it: tail "$LOG"
+log() { # Keep diagnostics in this log so the native automation response stays unchanged.
+        # Read a failed request's reason with: tail "$LOG"
   (umask 077; mkdir -p "${LOG%/*}" &&
     printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOG") 2>/dev/null
   return 0; }
@@ -202,10 +202,10 @@ case $t in
       # Synchronous on purpose: cmux authorizes the socket by process ancestry. The moment this hook
       # exits, a backgrounded child is reparented away from the cmux tree. The app then refuses that
       # child ("Access denied - only processes started inside cmux can connect"). Creating the row costs
-      # ~4 s against the hook's 20 s budget in cmux.json.
-      # Quiet only on success: a notification whose jump failed keeps its banner, sound and unread mark.
-      # When this prints nothing at all, cmux reads that as "leave the effects alone". $LOG says what
-      # went wrong.
+      # ~4 s against the automation rule's 20 s budget in ~/.cmuxterm/automations.json.
+      #
+      # Dismiss successful requests by ID. Native notifications arrive before the automation runs.
+      # The automation cannot suppress delivery effects. Keep diagnostics in $LOG.
       if attach_row "$h" "$(wt_session "$n" "$r")" "$(row_title "$n")" "$id" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
         quiet
       fi

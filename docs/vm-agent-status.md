@@ -7,11 +7,12 @@ This page records the cause, the fix, and how to check it.
 
 ## Cause of the missing status
 
-The workgrove status relay works only on cmux 0.64 TCP relay rows.
-`wt run` starts the status owner only when `CMUX_SOCKET_PATH` names a TCP socket.
-`bin/agent-notify` relays status only for the same socket.
-On a native row, `tmux_cmd` clears `CMUX_SOCKET_PATH`, so workgrove sends no status.
-The fix for `wt open` in [VM requests after cmux 0.65](vm-open-relay.md) did not change the status path.
+Before native status support, workgrove's status relay supported only cmux 0.64 TCP relay rows.
+`wt run` started the status owner only when `CMUX_SOCKET_PATH` named a TCP socket.
+`bin/agent-notify` relayed status only for the same socket.
+On a native row, `tmux_cmd` cleared `CMUX_SOCKET_PATH`, so workgrove sent no status.
+The fix for `wt open` in [VM requests after cmux 0.65](vm-open-relay.md) did not change that status path.
+The TCP status relay has since been removed.
 
 cmux 0.65 has its own status path for native rows.
 cmux-tui installs agent hooks in `~/.claude/settings.json` and `~/.codex/hooks.json` on the VM.
@@ -59,7 +60,9 @@ $ cmux sidebar-state --workspace <test row> | grep agent
 It saves the previous helper in `WT_CMUX_TUI_HOOK`.
 At each hook, the wrapper reads `CMUX_TUI_SOCKET`, `CMUX_TUI_TERMINAL_ID`, and `CMUX_TUI_SESSION_ID` from the task's tmux session.
 Then it runs the cmux-tui helper with these values.
-An empty value or a removed name in the session unsets the value, so a TCP relay row gets no native report.
+
+An empty value or a removed name in the session unsets the value.
+This prevents the helper from reporting to a stale terminal.
 A name that the session does not hold keeps the pane's value.
 The wrapper never uses a path that ends in `lib/workgrove/cmux-tui-hook.sh` as the helper.
 So a nested `wt run` from any checkout cannot make it run itself.
@@ -72,10 +75,10 @@ The task's first pane keeps the global values after `wt run` exits, so do not st
 
 Agents that the task's agent starts, such as `claude -p`, inherit the wrapper and report to the same row.
 An agent in a native row without tmux behaves the same way.
-On TCP relay rows, `bin/agent-notify` ignores such agents, but the wrapper does not.
+The removed TCP status relay ignored such agents, but the native wrapper does not.
 How the row combines the states of several agents was not tested.
 
-On cmux 0.64 TCP relay rows, the `wt run` heartbeat detects an Esc interruption in Claude's transcript.
+The removed cmux 0.64 heartbeat detected Esc interruptions in Claude's transcript.
 On cmux 0.65 rows, only the cmux-tui hooks report the state.
 An Esc interruption on a cmux 0.65 row was not tested.
 

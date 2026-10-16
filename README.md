@@ -1203,7 +1203,7 @@ Three files connect events to scripts:
   command to `github-guard`.
 - `hooks.base.json` connects Codex's prompt, permission, completion, interruption and session-end events to
   scripts.
-- `cmux.json` gives cmux `~/.local/bin/cmux-hook` as a notification hook.
+- `~/.cmuxterm/automations.json` connects `notification.created` events to `cmux-hook --event` through the `wt-native-relay` rule.
 
 These scripts are symlinks into this repository's `bin/`, and they run as you. So `wt update` is a
 code-execution event, not a data update. A pull changes the scripts, and the changed scripts then run by
@@ -1219,8 +1219,8 @@ Before you approve the update, read that diff as you would read any other pull t
 
 **Warning:** Any host that you keep a `cmux ssh` row to can make two requests to the Mac. It can ask the
 Mac to open any path on that host in a VS Code remote window. It can also ask the Mac to create a row that
-runs `wt run` there. Anyone with an account on that host can make these requests. So trust each such host as
-much as you trust yourself. Prefer single-user machines for task rows.
+runs `wt run` there. Processes with access to the native relay's Unix socket can make these requests.
+Trust each such host as much as you trust yourself. Prefer single-user machines for task rows.
 
 **How a VM asks the Mac for work.** `wt` on a VM cannot open VS Code or make a row itself. It sends a
 `wt-open` or `wt-attach` notification over the row's relay socket. Then the Mac hook, `bin/cmux-hook`, does
@@ -1352,9 +1352,6 @@ If the relay fails, run the manual command on the Mac. Where you run it depends 
 - If it is an `open` command, use any Mac shell.
 - If it is a `new` or `attach` command, use a cmux terminal, because these subcommands need the cmux socket.
 
-Allowing network access in `[sandbox_workspace_write]` does not solve this problem, because it does not lift the
-loopback restriction. It would also open outbound network access for every command that Codex runs on the VM.
-
 ### The notification hooks find `agent-notify` on `PATH`
 
 The portable hooks in `home/.claude/settings.base.json` and `home/.codex/hooks.base.json` call `agent-notify`
@@ -1365,7 +1362,7 @@ If a program that bypasses the login shell launches an agent, the hooks of that 
 The hook then fails silently, without a report of a missing command.
 
 If that ever happens, change the portable hooks to use the absolute path `~/.local/bin/agent-notify`.
-`cmux.json` already calls `cmux-hook` in this way.
+The `wt-native-relay` rule in `~/.cmuxterm/automations.json` already calls `~/.local/bin/cmux-hook --event`.
 
 ## Deliberately left out
 

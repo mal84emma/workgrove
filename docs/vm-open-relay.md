@@ -8,8 +8,8 @@ It records the cmux 0.65 regression and the verified fix.
 
 cmux 0.65.0 (108), commit `dda24fbd2`, uses `cmux-tui` for new SSH rows.
 Those rows supply `CMUX_TUI_SOCKET` and `CMUX_TUI_TERMINAL_ID` instead of the old TCP relay variables.
-The old `wt` sender accepts only TCP sockets.
-It stops before sending a notification:
+Before native request support, the `wt` sender accepted only TCP sockets.
+It stopped before sending a notification:
 
 ```text
 wt: no cmux relay socket in this session; run the line below on the Mac
@@ -23,7 +23,9 @@ Sending through `cmux-tui notify` reaches the Mac's notification list.
 However, that delivery path bypasses `notifications.hooks` in cmux 0.65.
 [CloudNotificationLocalDelivery.swift](https://github.com/manaflow-ai/cmux/blob/v0.65.0/Sources/Cloud/CloudNotificationLocalDelivery.swift) calls `addNotification` without resolved hooks.
 [TerminalNotificationStore.swift](https://github.com/manaflow-ai/cmux/blob/v0.65.0/Sources/TerminalNotificationStore.swift) substitutes an empty hook array for a remote origin.
-A local notification still runs `cmux-hook` with the `CMUX_NOTIFICATION_*` fields and a version-1 JSON envelope.
+
+At that time, local notifications ran `cmux-hook` through the repository's `notifications.hooks` configuration.
+They supplied the `CMUX_NOTIFICATION_*` fields and a version-1 JSON envelope.
 The [0.65 schema](https://raw.githubusercontent.com/manaflow-ai/cmux/v0.65.0/web/data/cmux.schema.json) still accepts the existing notification hook configuration.
 The hook's event names and configuration did not cause this failure.
 
@@ -35,10 +37,10 @@ The fix records the current row's native identity in its task's tmux session bef
 ## Fix
 
 `wt` sends native requests with `cmux-tui`, the explicit socket, and the current session's terminal ID.
-It retains the old sender for TCP relay rows.
-Each attachment clears the inactive transport's session variables before binding the current row.
+TCP relay rows are no longer supported.
+Each native attachment clears obsolete TCP session variables before binding the current row.
 Empty session values override an older pane's saved identity.
-Native delivery also takes precedence when an older session still contains both transports.
+Native requests ignore any obsolete TCP identity in the session.
 
 Each native request adds a random `request_id` to its JSON body.
 cmux suppresses identical terminal, title, and body content for five seconds before automation runs.
