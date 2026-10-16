@@ -201,7 +201,7 @@ branch_landed() { # branch_landed <branch> <base> <reason output>
   return 1
 }
 
-WT_FETCHED="${TMPDIR:-/tmp}/wt-fetched.$$"   # which bases fetch_base has tried this run; see there
+declare -A WT_BASE_FETCHES=()
 fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as origin/main. Returns:
                # 0 when it refreshed the base; 1 when the fetch failed (now, or earlier this run);
                # 2 when the base is not a remote's branch and there was nothing to do;
@@ -212,82 +212,72 @@ fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as or
   # the fetch fails quietly within the same 5-second ceiling that branch_pushed already accepts. The offline
   # verdict then stands, and the refusal says that the base could not be refreshed. A local base (`main`) is
   # never fetched.
-  # Fetch once per run. `wt prune` asks rm_reasons about every worktree, and asks again through cmd_rm for
-  # the ones it removes. Each time, it asks in a command substitution: a subshell, whose variables never
-  # reach back. So the record of what was fetched is a file, named after this process and removed on exit.
-  # cmd_rm and cmd_prune clear it before their first question, so a file that a killed run left behind
-  # cannot answer.
   local base="$1" remote
   [[ "$base" == */* ]] || return 2
   remote="${base%%/*}"
   git -C "$REPO" remote 2>/dev/null | grep -qxF "$remote" || return 2
-  if [[ -f "$WT_FETCHED" ]]; then
-    grep -qxF "ok $base" "$WT_FETCHED" && return 3
-    grep -qxF "failed $base" "$WT_FETCHED" && return 1
-  fi
+  case "${WT_BASE_FETCHES[$base]:-}" in
+    ok) return 3 ;;
+    failed) return 1 ;;
+  esac
   warn "fetching $base from $remote to see whether the branch landed (ctrl-c and use --force if it hangs)"
   if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}" \
        git -C "$REPO" fetch -q "$remote" "${base#*/}" >/dev/null 2>&1; then
-    printf 'ok %s\n' "$base" >>"$WT_FETCHED"; return 0
+    WT_BASE_FETCHES[$base]=ok; return 0
   fi
-  printf 'failed %s\n' "$base" >>"$WT_FETCHED"; return 1
+  WT_BASE_FETCHES[$base]=failed; return 1
 }
-
-reset_fetched() { # start the run's record of fetched bases afresh; the first of cmd_rm and cmd_prune to run does it
-  if [[ $WT_FETCHED_RESET -eq 0 ]]; then rm -f "$WT_FETCHED"; WT_TMPFILES+=("$WT_FETCHED"); WT_FETCHED_RESET=1; fi
-}
-WT_FETCHED_RESET=0
 
 RM_DISCARD_COMMITS=0   # `wt rm --discard-commits`: waive the unmerged-commit reason, and only that one
-rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this worktree would destroy work,
-               # one reason per line; nothing at all when there is nothing to lose. `wt rm` and `wt prune`
-               # (dry run included) both read this, so the two can never disagree.
+rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
   # Every commit check is about the BRANCH, never the worktree's HEAD. Under `git bisect`, `git checkout <sha>`
   # or `--detach`, the HEAD is usually an ancestor of the base. A HEAD-based check then reads "clean, 0 ahead,
-  # merged". But `branch -D` still destroys every commit that the branch holds, and its reflog too. $b
+  # merged". But `branch -D` still destroys every commit that the branch holds, and its reflog too. $__b
   # resolves whether or not it is checked out. The worktree shares its refs with the main checkout, so ask
   # $REPO about it.
-  local n="$1" p="$2" b="$3" base="$4" dirty ahead=0 merged=0 base_ok=0 head_ref f why="" rc landed_why
-  dirty=$(unexplained_dirt "$n" "$p" | wc -l | tr -d ' ')      # what .wt-setup itself wrote is not a reason
-  [[ "$dirty" -gt 0 ]] && printf '%s uncommitted change(s)\n' "$dirty"
+  local -n __reasons=$5
+  local __n="$1" __p="$2" __b="$3" __base="$4" __dirty __ahead=0 __merged=0 __base_ok=0 __head_ref __f __why="" __rc __landed_reason
+  __reasons=()
+  __dirty=$(unexplained_dirt "$__n" "$__p" | wc -l | tr -d ' ')
+  [[ "$__dirty" -gt 0 ]] && __reasons+=("$__dirty uncommitted change(s)")
   # A base that no longer resolves fails both checks below, and each failure reads as "nothing to lose". The
   # literal HEAD (metadata from before wt canonicalized the base) resolves in every worktree to that
   # worktree's own tip, and reads the same way. So settle the base first, and make either case a refusal.
-  if [[ "$base" != HEAD ]] && git -C "$REPO" rev-parse -q --verify "$base^{commit}" >/dev/null 2>&1; then
-    base_ok=1
+  if [[ "$__base" != HEAD ]] && git -C "$REPO" rev-parse -q --verify "$__base^{commit}" >/dev/null 2>&1; then
+    __base_ok=1
     # merged means one of two things:
     # - the branch is an ancestor of the base (a merge commit, a fast-forward);
     # - all its work is in the base's tip without its commits (a squash merge; see branch_landed).
     # Check the second case offline first. Then, in case the merge is newer than the last fetch, refresh a
     # remote base and check once more. With --discard-commits, check neither: the reason is waived whatever
     # the answer, so there is nothing to go online for.
-    if git -C "$REPO" merge-base --is-ancestor "$b" "$base" 2>/dev/null; then merged=1
-    elif [[ $RM_DISCARD_COMMITS -eq 1 ]]; then merged=0
-    elif branch_landed "$b" "$base" landed_why; then merged=1
+    if git -C "$REPO" merge-base --is-ancestor "$__b" "$__base" 2>/dev/null; then __merged=1
+    elif [[ $RM_DISCARD_COMMITS -eq 1 ]]; then __merged=0
+    elif branch_landed "$__b" "$__base" __landed_reason; then __merged=1
     else
-      why=" ($landed_why)"
-      fetch_base "$base" && rc=0 || rc=$?
-      if [[ $rc -eq 0 ]]; then
-        if branch_landed "$b" "$base" landed_why; then merged=1; else why=" ($landed_why)"; fi
-      elif [[ $rc -eq 1 ]]; then why=" ($landed_why; $base could not be refreshed from its remote)"
+      __why=" ($__landed_reason)"
+      fetch_base "$__base" && __rc=0 || __rc=$?
+      if [[ $__rc -eq 0 ]]; then
+        if branch_landed "$__b" "$__base" __landed_reason; then __merged=1; else __why=" ($__landed_reason)"; fi
+      elif [[ $__rc -eq 1 ]]; then __why=" ($__landed_reason; $__base could not be refreshed from its remote)"
       fi
     fi
-    ahead=$(git -C "$REPO" rev-list --count "$base..$b" 2>/dev/null || echo 0)
+    __ahead=$(git -C "$REPO" rev-list --count "$__base..$__b" 2>/dev/null || echo 0)
   fi
-  [[ $base_ok -eq 1 ]] || printf "base '%s' cannot be compared with %s (gone, or the literal HEAD)\n" "$base" "$b"
-  if [[ "$ahead" -gt 0 && $merged -eq 0 && $RM_DISCARD_COMMITS -eq 0 ]] && ! branch_pushed "$b"; then
-    printf '%s commit(s) on %s not merged into %s and not on a remote%s\n' "$ahead" "$b" "$base" "$why"
+  [[ $__base_ok -eq 1 ]] || __reasons+=("base '$__base' cannot be compared with $__b (gone, or the literal HEAD)")
+  if [[ "$__ahead" -gt 0 && $__merged -eq 0 && $RM_DISCARD_COMMITS -eq 0 ]] && ! branch_pushed "$__b"; then
+    __reasons+=("$__ahead commit(s) on $__b not merged into $__base and not on a remote$__why")
   fi
-  # The checks above are about $b, so a HEAD that is not $b is a reason of its own. The worktree then holds a
-  # state (a bisect, a detached checkout) that no branch keeps, and removing the worktree throws it away.
-  if [[ -d "$p" ]]; then
-    head_ref=$(git -C "$p" symbolic-ref -q --short HEAD 2>/dev/null || true)
-    if [[ -z "$head_ref" ]]; then printf 'HEAD is detached at %s (bisect, or a detached checkout), not on %s\n' \
-        "$(git -C "$p" rev-parse --short HEAD 2>/dev/null || echo '?')" "$b"
-    elif [[ "$head_ref" != "$b" ]]; then printf 'HEAD is on %s, not %s\n' "$head_ref" "$b"; fi
+  # The checks above use $__b. A different HEAD adds a reason of its own.
+  # Removing the worktree loses a state that no branch keeps, such as a bisect or detached checkout.
+  if [[ -d "$__p" ]]; then
+    __head_ref=$(git -C "$__p" symbolic-ref -q --short HEAD 2>/dev/null || true)
+    if [[ -z "$__head_ref" ]]; then
+      __reasons+=("HEAD is detached at $(git -C "$__p" rev-parse --short HEAD 2>/dev/null || echo '?') (bisect, or a detached checkout), not on $__b")
+    elif [[ "$__head_ref" != "$__b" ]]; then __reasons+=("HEAD is on $__head_ref, not $__b"); fi
   fi
-  while IFS= read -r f; do
-    if [[ -n "$f" ]]; then printf '%s was edited or created inside the worktree (.wt-include, not in git)\n' "$f"; fi
-  done <<<"$(changed_includes "$n" "$p")"
+  while IFS= read -r __f; do
+    if [[ -n "$__f" ]]; then __reasons+=("$__f was edited or created inside the worktree (.wt-include, not in git)"); fi
+  done <<<"$(changed_includes "$__n" "$__p")"
   return 0
 }

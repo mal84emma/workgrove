@@ -1090,9 +1090,11 @@ scenario_squash_merge() {
 
   # Every worktree first: `wt new` fetches its base. So all of the landing below must come after the last
   # `wt new`, for origin/main to be stale when wt is asked. That is the shape that this scenario is about.
-  for n in sq sq2 past picked stack rev conf hunk zero; do
+  for n in sq sq2 past picked stack rev conf hunk zero pushed; do
     assert_wt_ok "wt new $n" new "$n" --no-workspace -r "$r"
   done
+  fixture_commit "$r/.worktrees/pushed" pushed.txt 'pushed work'
+  fixture_git "$r/.worktrees/pushed" push -q -u origin wt/pushed
   # a) two commits, pushed, squash-merged, head branch deleted: the case this scenario exists for
   fixture_commit "$r/.worktrees/sq" one.txt 'one'
   fixture_commit "$r/.worktrees/sq" two.txt 'two'
@@ -1156,9 +1158,9 @@ scenario_squash_merge() {
   assert_eq "origin/main is the editor's main after the run" "$(fixture_git "$e" rev-parse main)" "$fresh"
   if [[ "$stale" == "$fresh" ]]; then fail "origin/main was already fresh before wt ran, so the fetch was not tested"; else pass; fi
   assert_eq "the base is fetched once, not once per worktree" 1 "$(printf '%s\n' "$dry" | grep -c 'fetching origin/main')"
-  for n in sq sq2 past picked stack rev conf hunk zero; do
+  for n in sq sq2 past picked stack rev conf hunk zero pushed; do
     verdict=keep
-    case "$n" in sq|sq2|picked|stack) verdict=would-remove ;; hunk) [[ $hunks == yes ]] && verdict=would-remove ;; esac
+    case "$n" in sq|sq2|picked|stack|pushed) verdict=would-remove ;; hunk) [[ $hunks == yes ]] && verdict=would-remove ;; esac
     if [[ "$verdict" == keep ]]; then want="keep $n ("; else want="would remove $n ("; fi
     assert_has "prune's verdict on $n" "$dry" "$want"
   done
@@ -1181,9 +1183,10 @@ scenario_squash_merge() {
   assert_wt_ok "wt show past" show past -r "$r"
   assert_has "show: no, and why" "$WT_OUT" "merged:  no (merging wt/past into origin/main would still change 1 path(s))"
 
-  # the real prune removes exactly the landed ones, branches included
+  # The real prune removes landed or pushed branches and their worktrees.
   assert_wt_ok "wt prune" prune -r "$r"
-  for n in sq sq2 picked stack; do
+  assert_eq "prune fetches the base once across all removal checks" 1 "$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main')"
+  for n in sq sq2 picked stack pushed; do
     assert_gone "prune removed $n" "$r/.worktrees/$n"
     assert_branch "$r" "wt/$n" no
   done
@@ -1246,11 +1249,19 @@ scenario_squash_merge() {
   fixture_commit "$r/.worktrees/off" twelve.txt 'twelve'
   fixture_git "$r" remote set-url origin "$TEST_ROOT/no-such-origin.git"
   refuses "$r" off "(merging wt/off into origin/main would still change 1 path(s); origin/main could not be refreshed from its remote)"
+  assert_wt_ok "wt new off2" new off2 --no-workspace -r "$r" -b origin/main
+  fixture_commit "$r/.worktrees/off2" thirteen.txt 'thirteen'
+  assert_wt_ok "wt prune with an unreachable base" prune --dry-run -r "$r"
+  assert_eq "a failed base fetch is tried once for all worktrees" 1 "$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main')"
+  for n in off off2; do
+    assert_has "prune keeps $n after the failed fetch" "$WT_OUT" \
+      "keep $n (1 commit(s) on wt/$n not merged into origin/main and not on a remote (merging wt/$n into origin/main would still change 1 path(s); origin/main could not be refreshed from its remote))"
+  done
   fixture_git "$r" remote set-url origin "$TEST_ROOT/origins/$(basename "$r").git"
   end_scenario
 }
 
-# 7. rm_reasons has two callers, and bin/wt's comment says "the two can never disagree". Nothing checked it.
+# 7. wt rm and wt prune use the same removal reasons.
 scenario_prune_agrees() {
   begin_scenario "7. wt prune --dry-run keeps exactly what wt rm refuses"
   local r n verdict want
@@ -2535,7 +2546,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=683
+FIXED_ASSERTIONS=693
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
