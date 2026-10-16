@@ -16,6 +16,7 @@ source "$REPO/lib/workgrove/safety.sh"
 trap lib_cleanup EXIT
 
 eval "$(sed -n '/^require_wt()/,/^}/p' "$REPO/bin/wt")"
+eval "$(sed -n '/^check_row_removal()/,/^}/p' "$REPO/bin/wt")"
 
 die() { printf '%s\n' "$*" >&2; return 1; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -46,4 +47,18 @@ test_branch_landed() {
 }
 test_branch_landed
 
-lib_summary 5
+test_check_row_removal() {
+  local c=unchanged id=unchanged ROW_AGENT=''
+  cmux_bin() { printf 'true'; }
+  rows_json() { printf '%s\n' '{"workspaces":[{"id":"row-1","title":"task","description":"@local · project"}]}'; }
+  row_agent() { ROW_AGENT=self; }
+  begin_scenario 'row outputs can use internal local names'
+  if check_row_removal task /repo/project c id; then pass; else fail 'check_row_removal failed'; fi
+  assert_eq 'the caller receives its row' row-1 "$c"
+  assert_eq 'the caller receives its ownership marker' self "$id"
+  assert_eq 'the row ownership check ran' self "$ROW_AGENT"
+  end_scenario
+}
+test_check_row_removal
+
+lib_summary 9

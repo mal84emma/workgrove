@@ -486,15 +486,15 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   # Refuse unreadable rows or another running agent. Without a host, the path names the local worktree.
   local -n __rm_row=$3 __rm_self=$4
   __rm_row=""; __rm_self=""
-  local c err
-  if ! c=$(cmux_bin); then
+  local __c __err
+  if ! __c=$(cmux_bin); then
     [[ -z ${CMUX_WORKSPACE_ID:-} ]] || die "cmux CLI not found; kept the worktree"
     return 0
   fi
-  if ! err=$(CMUX_QUIET=1 "$c" ping 2>&1); then
+  if ! __err=$(CMUX_QUIET=1 "$__c" ping 2>&1); then
     # Without a caller row, a missing socket means cmux is absent. Other failures cannot prove that.
-    case "$err" in 'Error: Socket not found at '*) [[ -n ${CMUX_WORKSPACE_ID:-} ]] || return 0 ;; esac
-    die "cannot reach cmux${err:+: $err}; kept the worktree"
+    case "$__err" in 'Error: Socket not found at '*) [[ -n ${CMUX_WORKSPACE_ID:-} ]] || return 0 ;; esac
+    die "cannot reach cmux${__err:+: $__err}; kept the worktree"
   fi
   # The user can edit or clear a row's description in cmux, and then task_row no longer finds the task's row.
   # So check the agent in every row that may be this task's, not only in the row that task_row finds:
@@ -503,11 +503,11 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   # Refuse when another agent runs in any of them. Close only the first row that task_row finds, or the
   # caller's own row when the title matches it. A row found only by its directory may belong to anything,
   # such as the driver, so wt never closes it.
-  local rows checks=() check kind id dir root="" self_row=""
-  rows=$(rows_json checked) || die "cannot list cmux rows; kept the worktree"
+  local __rows __checks=() __check __kind __id __dir __root="" __self_row=""
+  __rows=$(rows_json checked) || die "cannot list cmux rows; kept the worktree"
   # One line for each row to check: "found <id>", "unclaimed <id>" or "dir <id> <current directory>". A
   # directory with a newline in it would split its line, so such a row is not checked by its directory.
-  mapfile -t checks < <(printf '%s' "$rows" | jq -r --arg t "$1" --arg r "$(if [[ -n "$2" ]]; then repo_id "$2"; fi)" \
+  mapfile -t __checks < <(printf '%s' "$__rows" | jq -r --arg t "$1" --arg r "$(if [[ -n "$2" ]]; then repo_id "$2"; fi)" \
       --arg h "${5:-}" --arg d "${6:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
       .workspaces[] | (.current_directory | if type == "string" then . else "" end) as $c
       | if task_row($t; $r; $h; $sep) then "found " + .id
@@ -518,23 +518,23 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   wait $! || die "cannot list cmux rows; kept the worktree"
   # A row's directory can name the worktree through a symlink or in another letter case. So a directory that
   # does not match as written is compared again as its physical path.
-  if [[ -n "${6:-}" ]]; then root=$(physical_dir "$6"); fi
-  for check in "${checks[@]}"; do
-    kind=${check%% *}; id=${check#* }
-    if [[ $kind == dir ]]; then
-      dir=${id#* }; id=${id%% *}
-      path_within "$dir" "${6:-}" || path_within "$(physical_dir "$dir")" "$root" || continue
+  if [[ -n "${6:-}" ]]; then __root=$(physical_dir "$6"); fi
+  for __check in "${__checks[@]}"; do
+    __kind=${__check%% *}; __id=${__check#* }
+    if [[ $__kind == dir ]]; then
+      __dir=${__id#* }; __id=${__id%% *}
+      path_within "$__dir" "${6:-}" || path_within "$(physical_dir "$__dir")" "$__root" || continue
     fi
-    [[ $kind != found || -n "$__rm_row" ]] || __rm_row=$id
-    row_agent "$c" "$id"
-    case $kind/$ROW_AGENT in
-      found/self|unclaimed/self) self_row=$id ;;
-      found/busy) die "another agent is running in cmux row $id; kept the worktree" ;;
-      unclaimed/busy) die "an agent is running in cmux row $id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run" ;;
-      dir/busy) die "an agent is running in cmux row $id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run" ;;
+    [[ $__kind != found || -n "$__rm_row" ]] || __rm_row=$__id
+    row_agent "$__c" "$__id"
+    case $__kind/$ROW_AGENT in
+      found/self|unclaimed/self) __self_row=$__id ;;
+      found/busy) die "another agent is running in cmux row $__id; kept the worktree" ;;
+      unclaimed/busy) die "an agent is running in cmux row $__id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run" ;;
+      dir/busy) die "an agent is running in cmux row $__id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run" ;;
     esac
   done
-  if [[ -n "$self_row" ]]; then __rm_row=$self_row; __rm_self=self; fi
+  if [[ -n "$__self_row" ]]; then __rm_row=$__self_row; __rm_self=self; fi
 }
 
 ROW_AGENT=""
