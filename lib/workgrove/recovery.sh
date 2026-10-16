@@ -54,15 +54,15 @@ row_shell_prompt() { # row_shell_prompt <id> <last line output>
   # A prompt must end in $, #, or %. A TUI footer such as `Context 100%` names no user@host.
   # Return 2 when the screen is unavailable.
   local -n __shell_last=$2
-  local id="$1" c screen lines above="" nl=$'\n' who='[[:alnum:]_.-]+@[[:alnum:]_.-]+' end='[$#%]$' bare='^[$#%]$'
+  local __id="$1" __c __screen __lines __above="" __nl=$'\n' __who='[[:alnum:]_.-]+@[[:alnum:]_.-]+' __end='[$#%]$' __bare='^[$#%]$'
   __shell_last=""
-  c=$(cmux_bin) || return 2
-  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 2
-  lines=$(printf '%s\n' "$screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -2)
-  __shell_last=${lines##*"$nl"}
-  [[ "$lines" != *"$nl"* ]] || above=${lines%%"$nl"*}
-  [[ "$__shell_last" =~ $end ]] || return 1
-  [[ "$__shell_last" =~ $who ]] || { [[ "$__shell_last" =~ $bare && "$above" =~ $who ]]; }
+  __c=$(cmux_bin) || return 2
+  __screen=$(CMUX_QUIET=1 "$__c" read-screen --workspace "$__id" 2>/dev/null) || return 2
+  __lines=$(printf '%s\n' "$__screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -2)
+  __shell_last=${__lines##*"$__nl"}
+  [[ "$__lines" != *"$__nl"* ]] || __above=${__lines%%"$__nl"*}
+  [[ "$__shell_last" =~ $__end ]] || return 1
+  [[ "$__shell_last" =~ $__who ]] || { [[ "$__shell_last" =~ $__bare && "$__above" =~ $__who ]]; }
 }
 
 send_tmux_line() { # send_tmux_line <id> <session> — type the row's tmux attach line into it and press return
@@ -83,13 +83,13 @@ reattach_shell_row() { # reattach_shell_row <id> <session> <last line output> [h
   # Send the tmux line only to a row at a shell prompt.
   # With a host after a reconnect, require a connected row and no client on the VM session.
   # Check these conditions in that order, immediately before the send.
-  local id="$1" session="$2" host="${4:-}"
-  row_shell_prompt "$id" "$3" || return 1
-  if [[ -n "$host" ]]; then   # the connection can drop again, and a restored pty can still hold tmux
-    [[ "$(row_remote_field "$id" state)" == connected ]] || return 1
-    vm_session_detached "$host" "$session" || return 1
+  local __id="$1" __session="$2" __host="${4:-}"
+  row_shell_prompt "$__id" "$3" || return 1
+  if [[ -n "$__host" ]]; then   # the connection can drop again, and a restored pty can still hold tmux
+    [[ "$(row_remote_field "$__id" state)" == connected ]] || return 1
+    vm_session_detached "$__host" "$__session" || return 1
   fi
-  send_tmux_line "$id" "$session"
+  send_tmux_line "$__id" "$__session"
 }
 
 reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> <last line output>
@@ -97,10 +97,10 @@ reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> <last 
   # Try for 5 ticks, approximately one second apart.
   # Each tick reads the screen locally and asks the VM only when the screen shows a prompt.
   # Return 1 when no tick proves the conditions. Send nothing in that case.
-  local tick
-  for ((tick=0; tick<5; tick++)); do
+  local __tick
+  for ((__tick=0; __tick<5; __tick++)); do
     reattach_shell_row "$2" "$3" "$4" "$1" && return 0
-    [[ $tick -eq 4 ]] || sleep 1
+    [[ $__tick -eq 4 ]] || sleep 1
   done
   return 1
 }
