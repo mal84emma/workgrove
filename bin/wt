@@ -647,8 +647,8 @@ wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<
   # shows "?" here, as it is a refusal in rm_reasons.
   if [[ "$base" != HEAD && "$ahead" =~ ^[0-9]+$ ]]; then
     if [[ "$ahead" -eq 0 ]]; then merged=yes
-    elif branch_landed "$b" "$base"; then merged=squash
-    else merged=no; why="$LANDED_WHY"; fi
+    elif branch_landed "$b" "$base" why; then merged=squash
+    else merged=no; fi
   fi
   printf '%s\n' "$n$WT_FS$cur$WT_FS$base$WT_FS$ahead$WT_FS$behind$WT_FS$dirty$WT_FS$last$WT_FS$merged$WT_FS$why"
 }
@@ -1019,7 +1019,7 @@ cmd_rm() {
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch
   local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
-  local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  local base landed_why; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
   reset_fetched
   if [[ $force -eq 0 ]]; then
     local reasons=() r
@@ -1087,7 +1087,7 @@ cmd_rm() {
     # above already let the worktree go on that same finding, made against this same base, so the branch
     # goes with it.
     if ! git -C "$REPO" branch -d "$branch" >/dev/null 2>&1; then
-      if [[ $force -eq 1 || $RM_DISCARD_COMMITS -eq 1 ]] || { [[ "$base" != HEAD ]] && branch_landed "$branch" "$base"; }; then
+      if [[ $force -eq 1 || $RM_DISCARD_COMMITS -eq 1 ]] || { [[ "$base" != HEAD ]] && branch_landed "$branch" "$base" landed_why; }; then
         git -C "$REPO" branch -D "$branch" >/dev/null 2>&1 || true
       else keep=1; warn "kept branch $branch: git will not delete it as merged (git -C $REPO branch -D $branch discards it)"; fi
     fi

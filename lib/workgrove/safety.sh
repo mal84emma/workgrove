@@ -138,9 +138,9 @@ git_merges_trees() { # 0 when this git has `merge-tree --write-tree` (2.38, Sept
   [[ $WT_MERGE_TREE -eq 1 ]]
 }
 
-LANDED_WHY=""      # set by branch_landed when it says no: what it checked, for the refusal to repeat
-branch_landed() { # branch_landed <branch> <base> — 0 when every change the branch made since it left the
-                  # base is already in the base's tip, the shape a squash merge leaves behind.
+branch_landed() { # branch_landed <branch> <base> <reason output>
+  # Return 0 when every change since the branch left the base is in the base's tip.
+  # This is the result of a squash merge. Set the reason output when the check fails.
   # A PR merged with GitHub's "squash and merge" (the default on most repos) lands as ONE new commit on
   # main. That commit's tree is the merge's tree, and the head branch is deleted. Nothing on wt/<name> is
   # then an ancestor of anything, and branch_pushed finds the remote branch gone. So the only way past
@@ -167,36 +167,37 @@ branch_landed() { # branch_landed <branch> <base> — 0 when every change the br
   # merges file by file. There, a file that both sides changed is unmerged, whatever the hunks say. Then
   # `write-tree` refuses the unmerged index, which reads here as not landed. That path is stricter, and safe
   # in the same direction: either path calls a branch landed only when the merge would change nothing.
+  local -n __landed_why=$3
   local b="$1" base="$2" m tree_b tree_t="" out rc=0 n idx
-  LANDED_WHY=""
-  m=$(git -C "$REPO" merge-base "$b" "$base" 2>/dev/null) || { LANDED_WHY="$b has no common history with $base"; return 1; }
+  __landed_why=""
+  m=$(git -C "$REPO" merge-base "$b" "$base" 2>/dev/null) || { __landed_why="$b has no common history with $base"; return 1; }
   if git -C "$REPO" diff-tree --quiet "$m" "$b" 2>/dev/null; then
-    LANDED_WHY="the net change of $b since $(git -C "$REPO" rev-parse --short "$m") is empty, which proves nothing"; return 1
+    __landed_why="the net change of $b since $(git -C "$REPO" rev-parse --short "$m") is empty, which proves nothing"; return 1
   fi
-  tree_b=$(git -C "$REPO" rev-parse "$base^{tree}" 2>/dev/null) || { LANDED_WHY="$base has no tree"; return 1; }
+  tree_b=$(git -C "$REPO" rev-parse "$base^{tree}" 2>/dev/null) || { __landed_why="$base has no tree"; return 1; }
   if git_merges_trees; then
     out=$(git -C "$REPO" merge-tree --write-tree "$base" "$b" 2>/dev/null) || rc=$?
     case $rc in
       0) tree_t="${out%%$'\n'*}" ;;
-      1) LANDED_WHY="merging $b into $base would conflict: $base changed the same lines again"; return 1 ;;
-      *) LANDED_WHY="git merge-tree could not compare $b with $base"; return 1 ;;
+      1) __landed_why="merging $b into $base would conflict: $base changed the same lines again"; return 1 ;;
+      *) __landed_why="git merge-tree could not compare $b with $base"; return 1 ;;
     esac
   else
     # read-tree refuses an index file that is empty, so hand it a name that does not exist yet
-    idx=$(mktemp "${TMPDIR:-/tmp}/wt-index.XXXXXX") || { LANDED_WHY="no temp file for a merge index"; return 1; }
+    idx=$(mktemp "${TMPDIR:-/tmp}/wt-index.XXXXXX") || { __landed_why="no temp file for a merge index"; return 1; }
     WT_TMPFILES+=("$idx"); rm -f "$idx"
     if GIT_INDEX_FILE="$idx" git -C "$REPO" read-tree -m -i --aggressive "$m" "$base" "$b" >/dev/null 2>&1; then
       tree_t=$(GIT_INDEX_FILE="$idx" git -C "$REPO" write-tree 2>/dev/null) || tree_t=""
     fi
     rm -f "$idx"
     if [[ -z "$tree_t" ]]; then
-      LANDED_WHY="merging $b into $base would touch a file $base changed since (git $(git version | awk '{print $3}') compares whole files; 2.38 compares hunks)"
+      __landed_why="merging $b into $base would touch a file $base changed since (git $(git version | awk '{print $3}') compares whole files; 2.38 compares hunks)"
       return 1
     fi
   fi
   [[ "$tree_t" == "$tree_b" ]] && return 0
   n=$(git -C "$REPO" diff-tree -r --name-only "$tree_b" "$tree_t" 2>/dev/null | wc -l | tr -d ' ')
-  LANDED_WHY="merging $b into $base would still change $n path(s)"
+  __landed_why="merging $b into $base would still change $n path(s)"
   return 1
 }
 
@@ -246,7 +247,7 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
   # merged". But `branch -D` still destroys every commit that the branch holds, and its reflog too. $b
   # resolves whether or not it is checked out. The worktree shares its refs with the main checkout, so ask
   # $REPO about it.
-  local n="$1" p="$2" b="$3" base="$4" dirty ahead=0 merged=0 base_ok=0 head_ref f why="" rc
+  local n="$1" p="$2" b="$3" base="$4" dirty ahead=0 merged=0 base_ok=0 head_ref f why="" rc landed_why
   dirty=$(unexplained_dirt "$n" "$p" | wc -l | tr -d ' ')      # what .wt-setup itself wrote is not a reason
   [[ "$dirty" -gt 0 ]] && printf '%s uncommitted change(s)\n' "$dirty"
   # A base that no longer resolves fails both checks below, and each failure reads as "nothing to lose". The
@@ -262,13 +263,13 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> — why removing this 
     # the answer, so there is nothing to go online for.
     if git -C "$REPO" merge-base --is-ancestor "$b" "$base" 2>/dev/null; then merged=1
     elif [[ $RM_DISCARD_COMMITS -eq 1 ]]; then merged=0
-    elif branch_landed "$b" "$base"; then merged=1
+    elif branch_landed "$b" "$base" landed_why; then merged=1
     else
-      why=" ($LANDED_WHY)"
+      why=" ($landed_why)"
       fetch_base "$base" && rc=0 || rc=$?
       if [[ $rc -eq 0 ]]; then
-        if branch_landed "$b" "$base"; then merged=1; else why=" ($LANDED_WHY)"; fi
-      elif [[ $rc -eq 1 ]]; then why=" ($LANDED_WHY; $base could not be refreshed from its remote)"
+        if branch_landed "$b" "$base" landed_why; then merged=1; else why=" ($landed_why)"; fi
+      elif [[ $rc -eq 1 ]]; then why=" ($landed_why; $base could not be refreshed from its remote)"
       fi
     fi
     ahead=$(git -C "$REPO" rev-list --count "$base..$b" 2>/dev/null || echo 0)
