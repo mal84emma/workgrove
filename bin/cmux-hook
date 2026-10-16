@@ -335,8 +335,15 @@ case $t in
       id=$(repo_id "$r"); sess=$(wt_session "$n" "$r")
       if [[ $(row_by_title "$(row_title "$n")" "$id" "$h") == "$ws" ]]; then
         printf -v q '%q' "$r"; rc=0
-        gone=$(capped ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "exec \"\$HOME/.local/bin/wt\" path $n -r $q" 2>&1) || rc=$?
-        if [[ $rc -ne 1 || $gone != *"no worktree named '$n' in $r"* ]]; then
+        gone=$(capped ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "WT_MACHINE=1 exec \"\$HOME/.local/bin/wt\" path $n -r $q" 2>&1) || rc=$?
+        result_rc=0; missing=0
+        result=$(wt_read_result "$gone" path) || result_rc=$?
+        if [[ $rc -eq 1 ]]; then
+          if [[ $result_rc -eq 0 ]]; then
+            if jq -e --arg n "$n" --arg r "$r" '.status == "missing" and .name == $n and .repo == $r' <<<"$result" >/dev/null; then missing=1; fi
+          elif [[ $result_rc -eq 2 && $gone == *"no worktree named '$n' in $r"* ]]; then missing=1; fi
+        fi
+        if [[ $missing -ne 1 ]]; then
           log "ignored wt-close for task $n of $id on $h: could not confirm its worktree is gone"
         elif capped "$CMUX" workspace close "$ws" --force >/dev/null 2>&1; then
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
