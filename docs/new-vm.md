@@ -123,8 +123,7 @@ The linked `~/.gitconfig` already routes github.com through `gh auth git-credent
 Do not copy the github.com helper.
 
 Without `--opinionated-config`, `install.sh` moves neither file. It adds `core.excludesFile` and the
-`~/.gitconfig.local` include to your existing `~/.gitconfig`. It appends cmux's one `update-environment` line
-to your `~/.tmux.conf`.
+`~/.gitconfig.local` include to your existing `~/.gitconfig`. It leaves your `~/.tmux.conf` unchanged.
 
 ```bash
 # 2. shell, identity, repo   (edit GIT_NAME / GIT_EMAIL / <vm> first)

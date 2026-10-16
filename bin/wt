@@ -1084,6 +1084,16 @@ cmd_rm() {
     if [[ $native -eq 1 ]]; then
       # The row execs its tmux client. Stopping this session ends the terminal and its Mac row.
       tmux kill-session -t "=$session"
+    elif [[ $self_remote -eq 1 ]]; then
+      # The Mac hook closes the row and kills this session.
+      # If this process is still alive after the hook's deadline, the cleanup did not finish.
+      if notify_mac wt-close host "$host" repo "$REPO" task "$name"; then
+        local close_wait="${WT_CLOSE_WAIT_SECONDS:-22}" i
+        [[ "$close_wait" =~ ^[0-9]+$ ]] || close_wait=22
+        for ((i=0; i<close_wait; i++)); do sleep 1; done
+      fi
+      warn "worktree removed, but its Mac row or tmux session is still open"
+      warn "on the Mac: close row $(row_title "$name") $(row_tag "$host" "$REPO") (titled $(repo_id "$REPO"):$name if an older wt made it), then run: ssh $host tmux kill-session -t '=$session'"
     else
       tmux kill-session -t "=$session" 2>/dev/null || true   # the Mac owns the row
     fi

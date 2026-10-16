@@ -221,10 +221,7 @@ seed_opinionated_originals() {
   printf '%s\n' '# STRANGER ZSHRC' 'alias notmine=true' >"$h/.zshrc"
   printf '%s\n' '[user]' '	name = Stranger' '	email = stranger@example.invalid' \
                 '[alias]' '	lg = log --oneline' >"$h/.gitconfig"
-  # No final newline, on purpose: a hand-edited ~/.tmux.conf often ends that way, and only this shape
-  # exercises append_line's guard. Without the guard, the appended line is glued onto this one:
-  # `set -g prefix C-aset -ag update-environment …`. That destroys the user's binding AND cannot be parsed.
-  # And `grep -c` still reports exactly one update-environment line, so the obvious assertion cannot see it.
+  # Keep the final line unterminated to check that a default install preserves the user's file exactly.
   printf '%s\n%s' '# STRANGER TMUX' 'set -g prefix C-a' >"$h/.tmux.conf"
   printf '%s\n' '{ "stranger": true }' >"$h/.claude/keybindings.json"
   printf '%s\n' '#!/bin/sh' 'echo STRANGER STATUSLINE' >"$h/.claude/statusline-command.sh"

@@ -1317,14 +1317,15 @@ scenario_prune_agrees() {
   end_scenario
 }
 
-# A VM agent that removes its own task must leave the row and session cleanup to the Mac hook. Its refusal
-# still leaves both alone. All paths here are scratch fixtures, despite the simulated relay environment.
+# Native rows with the cleanup marker end through tmux. Other native rows request cleanup from the Mac hook.
+# Refusals leave both alone. All paths here are scratch fixtures.
 scenario_self_rm_vm() {
   begin_scenario "7b. a VM task can remove itself after changing to its main checkout"
   local r fake session probe
   r="$(new_repo self-rm)"
   stub_cmux dead
   assert_wt_ok "wt new self" new self --no-workspace -r "$r"
+  assert_wt_ok "wt new unmarked native task" new unmarked --no-workspace -r "$r"
   assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
   assert_wt_ok "wt new tmux-denied" new tmux-denied --no-workspace -r "$r"
   for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
@@ -1401,6 +1402,20 @@ STUB
   assert_gone "self-removal removed the worktree" "$r/.worktrees/self"
   assert_branch "$r" wt/self no
   assert_has "VM ends its own tmux session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
+  ln -s "$CMUX_ALIVE" "$fake/cmux-tui"
+  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0"
+                "SELF_TMUX_SESSION=wt-$(basename "$r")-unmarked" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log"
+                "SELF_TMUX_NATIVE=0" "CMUX_TUI_SOCKET=/tmp/native"
+                "CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "WT_CLOSE_WAIT_SECONDS=0")
+  : >"$CMUX_LOG"; : >"$TEST_ROOT/self-tmux.log"
+  assert_wt_ok "an unmarked native row requests Mac cleanup" rm unmarked -r "$r"
+  assert_gone "unmarked self-removal removed its worktree" "$r/.worktrees/unmarked"
+  assert_branch "$r" wt/unmarked no
+  assert_has "unmarked native self-removal sends wt-close" "$(cat "$CMUX_LOG")" "--socket /tmp/native notify --surface term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --title wt-close"
+  assert_lacks "unmarked native self-removal leaves tmux to the Mac hook" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
+  assert_has "an unanswered native close warns about incomplete cleanup" "$WT_OUT" "worktree removed, but its Mac row or tmux session is still open"
+  assert_has "an unanswered native close prints the manual cleanup" "$WT_OUT" "then run: ssh test-vm tmux kill-session -t '=wt-$(basename "$r")-unmarked'"
+  rm "$fake/cmux-tui"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=other-session"
                 "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_OTHER_ACTIVE=1")
   assert_wt_fails 1 "another agent is running" rm sandboxed --force -r "$r"
@@ -2563,7 +2578,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=698
+FIXED_ASSERTIONS=706
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:

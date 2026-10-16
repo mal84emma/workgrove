@@ -117,8 +117,8 @@ workgrove/
 │   └── workflows/tests.yml    GitHub Actions: shellcheck and every suite in test/, on macOS and Ubuntu
 ├── bin/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
-│   ├── agent-notify           agent lifecycle hook, relays to cmux or posts a banner
-│   ├── cmux-hook              Mac-side cmux notification hook: remote row requests and agent status
+│   ├── agent-notify           agent lifecycle hook for Mac banners outside cmux
+│   ├── cmux-hook              Mac event handler for native VM row requests
 │   ├── github-guard           Claude PreToolUse hook: GitHub reads, pushes, PRs, issues, comments, reviews
 │   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 ├── lib/
@@ -235,17 +235,15 @@ and cmux layout. So `install.sh` installs each piece only when you give its flag
 `--opinionated-config` installs all seven at once. `--refresh-config` replaces the machine-local copies (see
 File classes). It is independent of the opt-in flags, and all of these flags combine in any order.
 
-The **relay** in the table below is cmux's channel from a VM row back to cmux on the Mac.
-
 | Flag | Asks for | What arrives instead when you leave it out |
 |---|---|---|
 | `--with-zshrc` | `~/.zshrc`, with the oh-my-zsh theme, the oh-my-zsh prerequisite, and a clone of the two plugins that it enables | Nothing. Your `~/.zshrc` stays untouched. A default install therefore has no oh-my-zsh prerequisite and no network step at all. |
 | `--with-gitconfig` | `~/.gitconfig`: `core.excludesFile`, the github.com credential helper, and the `~/.gitconfig.local` include | Its two core-setup settings only, written into your own `~/.gitconfig`. See the fallbacks below. |
-| `--with-tmux-conf` | `~/.tmux.conf`: the relay line, plus tuning that makes Claude in tmux feel like a bare terminal (listed below the table) | Its one core-setup line, appended to your own `~/.tmux.conf`. See the fallbacks below. |
+| `--with-tmux-conf` | `~/.tmux.conf`: tuning that makes Claude in tmux feel like a bare terminal (listed below the table) | Nothing. Your `~/.tmux.conf` stays untouched. |
 | `--with-keybindings` | `~/.claude/keybindings.json` | Nothing. Claude keeps its own keymap. |
 | `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing. Also, `install.sh` strips `statusLine` from the `~/.claude/settings.json` copy, because that key names a script that would not be there. |
 | `--with-claude-ui` | No file of its own: the `tui`, `voice`, and `theme` keys and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS`, kept in the `~/.claude/settings.json` copy | `install.sh` deletes those keys from the copy, so Claude keeps its own full-screen setting, voice mode, theme, and mouse handling. The hooks and permissions in the same file arrive either way. |
-| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. It also holds the one entry that is core setup. | That one entry only, merged into your own `~/.config/cmux/cmux.json`. See the fallbacks below. |
+| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. | Nothing. Your `~/.config/cmux/cmux.json` stays untouched. |
 
 The full `~/.tmux.conf` from `--with-tmux-conf` tunes tmux with true color, a 10 ms `escape-time`,
 Shift+Enter, and focus events. It also makes the mouse wheel scroll instead of typing arrow keys.
@@ -379,7 +377,7 @@ A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 941 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 949 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -732,6 +730,9 @@ On a VM, these rules apply to a task that runs in its own tmux session:
   After removal, stopping that tmux session ends the terminal and closes its Mac row.
 - If `wt rm` reports that a native row predates this change, it keeps the worktree and prints an attach command.
   Close that row on the Mac, run the attach command, then retry self-removal.
+- A native row with a complete relay identity but no cleanup marker requests `wt-close` from the Mac hook.
+  The hook closes the row before stopping tmux, so the row cannot recreate the session.
+  If cleanup does not finish, `wt rm` prints the manual cleanup commands.
 - A refusal leaves both the row and the tmux session open.
 
 ### How `wt` decides that a branch is merged
