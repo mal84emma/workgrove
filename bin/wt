@@ -382,16 +382,16 @@ prompt_line() { local f; f=$(wt_prompt "$1"); if [[ -f "$f" ]]; then head -1 "$f
 
 require_wt() { # require_wt <name> <path output> <branch output> requires a registered worktree.
   local -n __wt_path=$2 __wt_branch=$3
-  local n="$1"; valid_name "$n" || die "invalid worktree name: $n"
-  __wt_path=$(wt_path "$n"); __wt_branch=$(wt_branch "$n")
+  local __n="$1"; valid_name "$__n" || die "invalid worktree name: $__n"
+  __wt_path=$(wt_path "$__n"); __wt_branch=$(wt_branch "$__n")
   if git -C "$REPO" worktree list --porcelain | grep -qxF "worktree $__wt_path"; then
     # A registration whose directory was deleted outside wt (rm -rf, a lost VM disk) still has a branch and
     # metadata. Only `wt rm` can clear them, so let it through. The other commands find no files there.
-    [[ -d "$__wt_path" ]] || warn "$__wt_path is registered but missing (deleted outside wt?); clean it up with: wt rm $n"
+    [[ -d "$__wt_path" ]] || warn "$__wt_path is registered but missing (deleted outside wt?); clean it up with: wt rm $__n"
     return 0
   fi
   [[ -d "$__wt_path" ]] && die "$__wt_path exists but is not a registered worktree (try: git -C $REPO worktree prune)"
-  die "no worktree named '$n' in $REPO (see: wt list)"
+  die "no worktree named '$__n' in $REPO (see: wt list)"
 }
 
 # rows_json [checked] prints all cmux rows as one {"workspaces":[…]} document.
