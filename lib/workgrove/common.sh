@@ -7,7 +7,8 @@
 # It sets no shell options, so it works under the "set -euo pipefail" of bin/wt and the "set -u" of the hooks.
 if ((BASH_VERSINFO[0] < 5)); then return 1; fi
 
-# Prefix local -n references with __. Callers must not use that prefix for output variables.
+# Prefix all internal locals with __ in functions that accept or forward output variable names.
+# This includes local -n references. Callers must not use __ for output variables.
 
 # valid_host <alias> — an ssh alias: letters, digits, '.', '_' and '-', with a letter or digit first.
 valid_host() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
@@ -39,30 +40,30 @@ valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 # It returns nonzero when neither a native relay identity nor a TCP relay socket is available.
 relay_env() {
   local -n __relay_socket=$1 __relay_ws=$2 __relay_ident=$3 __relay_tui_socket=$4 __relay_tui_terminal=$5
-  local session_name='' session_env='' variable value line session_match
-  local relay_vars=(CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID
+  local __session_name='' __session_env='' __variable __value __line __session_match
+  local __relay_vars=(CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID
                     CMUX_TERMINAL_LIFECYCLE_ID CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID)
   __relay_ident=(); __relay_socket=''; __relay_ws=''; __relay_tui_socket=''; __relay_tui_terminal=''
   if [[ -n ${TMUX:-} ]] && command -v tmux >/dev/null 2>&1; then
-    session_name=$(tmux display-message -p '#S' </dev/null 2>/dev/null || true)
+    __session_name=$(tmux display-message -p '#S' </dev/null 2>/dev/null || true)
   fi
-  if [[ -n $session_name ]]; then
-    session_env=$(tmux show-environment -t "=$session_name" </dev/null 2>/dev/null || true)
+  if [[ -n $__session_name ]]; then
+    __session_env=$(tmux show-environment -t "=$__session_name" </dev/null 2>/dev/null || true)
   fi
-  for variable in "${relay_vars[@]}"; do
-    value=${!variable:-}
-    session_match=0
-    while IFS= read -r line; do
-      case $line in
-        "$variable="*) value=${line#*=}; session_match=1; break ;;
+  for __variable in "${__relay_vars[@]}"; do
+    __value=${!__variable:-}
+    __session_match=0
+    while IFS= read -r __line; do
+      case $__line in
+        "$__variable="*) __value=${__line#*=}; __session_match=1; break ;;
       esac
-    done <<< "$session_env"
-    if [[ -n $value || $session_match == 1 ]]; then __relay_ident+=("$variable=$value"); fi
-    case $variable in
-      CMUX_SOCKET_PATH) __relay_socket=$value ;;
-      CMUX_WORKSPACE_ID) __relay_ws=$value ;;
-      CMUX_TUI_SOCKET) __relay_tui_socket=$value ;;
-      CMUX_TUI_TERMINAL_ID) __relay_tui_terminal=$value ;;
+    done <<< "$__session_env"
+    if [[ -n $__value || $__session_match == 1 ]]; then __relay_ident+=("$__variable=$__value"); fi
+    case $__variable in
+      CMUX_SOCKET_PATH) __relay_socket=$__value ;;
+      CMUX_WORKSPACE_ID) __relay_ws=$__value ;;
+      CMUX_TUI_SOCKET) __relay_tui_socket=$__value ;;
+      CMUX_TUI_TERMINAL_ID) __relay_tui_terminal=$__value ;;
     esac
   done
   [[ $__relay_tui_socket == /* && $__relay_tui_terminal =~ ^term_[a-f0-9]{32}$ ]] && return 0
