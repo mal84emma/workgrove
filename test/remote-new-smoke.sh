@@ -89,6 +89,7 @@ case "$1" in
            case "$arg" in -m|--model) echo "wt: new: unknown option $arg" >&2; exit 1 ;; esac
          done
        fi
+       echo create >>"$REMOTE_NEW_MARKER.calls"
        mkdir -p "$REMOTE_REPO/.worktrees/task" "$REMOTE_REPO/.git/wt"
        cat >"$REMOTE_REPO/.git/wt/task.prompt"
        printf '%s\n' "$@" >"$REMOTE_NEW_MARKER.args"
@@ -103,10 +104,19 @@ case "$1" in
        printf '{"agent":"%s","model":"%s"}\n' "$agent" "$model" >"$REMOTE_REPO/.git/wt/task.json"
        : >"$REMOTE_NEW_MARKER"
        [ "$REMOTE_OUTPUT_MODE" != bad ] || { echo 'created ???'; exit 0; }
-       printf 'created task\n  path:   %s/.worktrees/task\n  branch: wt/task (from main)\n  repo:   %s\n  session: wt-repo-task\n' "$REMOTE_REPO" "$REMOTE_REPO" ;;
+       if [ "$REMOTE_OUTPUT_MODE" = machine ]; then
+         printf 'Task created.\nWT_RESULT\t{"version":1,"command":"new","status":"created","name":"task","repo":"%s","session":"wt-repo-task","state":""}\n' "$REMOTE_REPO"
+       else
+         printf 'created task\n  path:   %s/.worktrees/task\n  branch: wt/task (from main)\n  repo:   %s\n  session: wt-repo-task\n' "$REMOTE_REPO" "$REMOTE_REPO"
+         [ "$REMOTE_OUTPUT_MODE" != malformed ] || printf 'WT_RESULT\t{broken\n'
+       fi ;;
   list) case "$2" in -r|--repo) printf 'scoped: %s\n' "$3" ;; *) echo 'all repos' ;; esac ;;
   show) [ -e "$REMOTE_NEW_MARKER" ] || exit 1
-        printf '  repo: %s\n  session: wt-repo-task (none)\n' "$REMOTE_REPO" ;;
+        if [ "$REMOTE_OUTPUT_MODE" = machine ]; then
+          printf 'Task details.\nWT_RESULT\t{"version":1,"command":"show","status":"found","name":"task","repo":"%s","session":"wt-repo-task","state":"none"}\n' "$REMOTE_REPO"
+        else
+          printf '  repo: %s\n  session: wt-repo-task (none)\n' "$REMOTE_REPO"
+        fi ;;
 esac
 WT
 cat >"$TEST_ROOT/remote/.local/bin/tmux" <<'TMUX'
@@ -225,6 +235,23 @@ check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'wt -H
 run_wt wt-demo claude
 check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'old remote fake rejected a task without -m'
 rm "$TEST_ROOT/remote-new"
+REMOTE_OUTPUT_MODE=normal
+
+for mode in machine malformed; do
+  REMOTE_OUTPUT_MODE=$mode
+  : >"$TEST_ROOT/remote-new.calls"
+  : >"$TEST_ROOT/cmux.log"
+  run_wt wt-demo claude
+  if [[ $mode == machine ]]; then
+    check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'row: task @fakevm · repo'* ]] && echo yes)" 'machine creation depended on human text'
+    invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
+    check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'row: task @fakevm · repo'* ]] && echo yes)" 'machine attach depended on human text'
+  else
+    check "$([[ $WT_RC -ne 0 ]] && ! grep -q '^ssh ' "$TEST_ROOT/cmux.log" && echo yes)" 'malformed record fell back to human text'
+  fi
+  check "$([[ $(wc -l <"$TEST_ROOT/remote-new.calls") -eq 1 ]] && echo yes)" 'remote creation ran more than once'
+  rm "$TEST_ROOT/remote-new"
+done
 REMOTE_OUTPUT_MODE=normal
 
 run_wt wt-demo claude 'two words'
@@ -360,4 +387,21 @@ check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task
 check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex && $(jq -r .model "$SCRATCH_REPO/.git/wt/task.json") == gpt-5.3-codex ]] && echo yes)" 'interrupted setup lost brief, agent or model choice'
 end_scenario
 
-lib_summary 41
+begin_scenario 'machine requests do not reach setup hooks or nested commands'
+cat >"$SCRATCH_REPO/.wt-setup" <<'SETUP'
+#!/bin/sh
+[ -z "${WT_MACHINE+x}" ] && [ -z "${WG_MACHINE_RESULT+x}" ] || exit 1
+path=$("$TEST_WT" path task -r "$WT_REPO") || exit 1
+[ "$path" = "$WT_REPO/.worktrees/task" ] || exit 1
+printf '%s\n' "$path" >"$WT_REPO/nested-path"
+SETUP
+WT_RC=0
+WT_OUT=$(env HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
+  WT_MACHINE=1 WG_MACHINE_RESULT=1 TEST_WT="$REPO/bin/wt" \
+  "${WT_BASH:-bash}" "$REPO/bin/wt" new nested -r "$SCRATCH_REPO" -a none --no-workspace 2>&1) || WT_RC=$?
+check "$([[ $WT_RC -eq 0 && "$WT_OUT" != *'.wt-setup exited non-zero'* ]] && echo yes)" 'machine request broke the setup hook'
+check "$([[ -f "$SCRATCH_REPO/nested-path" && $(cat "$SCRATCH_REPO/nested-path") == "$SCRATCH_REPO/.worktrees/task" ]] && echo yes)" 'nested wt path did not return one path'
+check "$([[ $(printf '%s\n' "$WT_OUT" | grep -c $'^WT_RESULT\t') -eq 1 ]] && echo yes)" 'the parent lost its requested result'
+end_scenario
+
+lib_summary 49

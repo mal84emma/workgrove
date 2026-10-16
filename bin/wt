@@ -112,6 +112,10 @@ if ((BASH_VERSINFO[0] < 5)); then
   exit 1
 fi
 
+WG_MACHINE_RESULT=${WT_MACHINE:-}
+export -n WG_MACHINE_RESULT
+unset WT_MACHINE
+
 # Load lib/workgrove/common.sh from the repository that holds this script. install.sh links the script into
 # ~/.local/bin, so follow the link chain to the real file. macOS readlink has no -f, so take one link at a time,
 # as resolve_config_path in bin/azml-ssh-host does. A relative target is read from the link's folder.
@@ -384,13 +388,16 @@ require_wt() { # require_wt <name> <path output> <branch output> requires a regi
   local -n __wt_path=$2 __wt_branch=$3
   local __n="$1"; valid_name "$__n" || die "invalid worktree name: $__n"
   __wt_path=$(wt_path "$__n"); __wt_branch=$(wt_branch "$__n")
-  if git -C "$REPO" worktree list --porcelain | grep -qxF "worktree $__wt_path"; then
+  local __registered
+  __registered=$(git -C "$REPO" worktree list --porcelain) || die "cannot list worktrees in $REPO"
+  if printf '%s\n' "$__registered" | grep -qxF "worktree $__wt_path"; then
     # A registration whose directory was deleted outside wt (rm -rf, a lost VM disk) still has a branch and
     # metadata. Only `wt rm` can clear them, so let it through. The other commands find no files there.
     [[ -d "$__wt_path" ]] || warn "$__wt_path is registered but missing (deleted outside wt?); clean it up with: wt rm $__n"
     return 0
   fi
   [[ -d "$__wt_path" ]] && die "$__wt_path exists but is not a registered worktree (try: git -C $REPO worktree prune)"
+  if [[ ${sub:-} == path ]]; then wt_result path missing "$__n" "$REPO" >&2; fi
   die "no worktree named '$__n' in $REPO (see: wt list)"
 }
 
@@ -587,7 +594,7 @@ request_row() { # request_row <name> — VM side: ask the Mac for a cmux row, an
 }
 
 session_state() { # session_state <name> — what the VM's tmux holds for this task, and whether a row holds that
-  local s state=none t; s=$(wt_session "$1" "$REPO")   # session: `wt -H <host> attach` reads both from `wt show`
+  local s state=none t; s=$(wt_session "$1" "$REPO")
   if tmux has-session -t "=$s" 2>/dev/null; then
     state='shell only'
     while IFS= read -r t; do                           # the agent is a child of `wt run`, so it is never the pane's
@@ -596,7 +603,7 @@ session_state() { # session_state <name> — what the VM's tmux holds for this t
     done < <(tmux list-panes -s -t "=$s" -F '#{pane_tty}' 2>/dev/null)
     if [[ -z "$(tmux list-clients -t "=$s" 2>/dev/null)" ]]; then state="$state, detached"; fi
   fi
-  printf '%s (%s)' "$s" "$state"
+  printf '%s' "$state"
 }
 
 tmux_agent() { # tmux_agent <session> — 0 for a running agent, 1 for absent or idle, 2 for unreadable status.
@@ -747,6 +754,7 @@ cmd_new() {
 
   printf 'created %s\n  path:   %s\n  branch: %s (from %s)\n  repo:   %s\n  session: %s\n' \
     "$name" "$p" "$b" "$base" "$REPO" "$(wt_session "$name" "$REPO")"
+  wt_result new created "$name" "$REPO" "$(wt_session "$name" "$REPO")"
   [[ $workspace -eq 1 ]] || return 0
   if is_remote; then request_row "$name"; else open_workspace "$name"; fi   # a VM never starts an agent
   return 0
@@ -897,7 +905,12 @@ cmd_show() {
   printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  merged:  %s\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
     "$nn" "$path" "$REPO" "$br" "$ah" "$be" "$base" "$mg" "$title $(row_tag "" "$REPO")" "$(prompt_line "$name")" "$di" "$last"
   [[ -z "$model" ]] || printf '  model:   %s\n' "$model"
-  if is_remote; then printf '  session: %s\n' "$(session_state "$name")"; fi   # `wt -H … attach` reads this line
+  local state=''
+  if is_remote; then
+    state=$(session_state "$name")
+    printf '  session: %s (%s)\n' "$(wt_session "$name" "$REPO")" "$state"
+  fi
+  wt_result show found "$name" "$REPO" "$(wt_session "$name" "$REPO")" "$state"
   printf '\n--- commits vs %s\n' "$base"; git -C "$path" log --oneline "$base..HEAD" 2>/dev/null | head -20
   printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$path" diff --stat "$base...HEAD" 2>/dev/null | tail -15
   printf '\n--- working tree\n'; git -C "$path" status --short 2>/dev/null | head -20
@@ -1160,6 +1173,7 @@ cmd_path() {
   done
   [[ -n "$name" ]] || die "path: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch; printf '%s\n' "$path"
+  wt_result path found "$name" "$REPO"
 }
 cmd_repos()   { # wt repos [<name>] [--porcelain|--table]. No name: list every repo. Print a table (name, number
                 # of task worktrees, location) when stdout is a terminal, or with --table; `wt -H <host> repos`

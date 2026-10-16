@@ -145,12 +145,20 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   done
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
-  local out session state title id path c remote remote_state slot fallback recovered=0 what=selected
-  out=$(remote_wt "$host" show "$name" -r "$repo")
-  session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
-  path=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
+  local out session state title id path c remote remote_state slot fallback recovered=0 what=selected result result_rc=0
+  out=$(remote_wt_result "$host" show "$name" -r "$repo")
+  result=$(wt_read_result "$out" show) || result_rc=$?
+  case $result_rc in
+    0)
+      [[ $(jq -r .status <<<"$result") == found && $(jq -r .name <<<"$result") == "$name" ]] || die "unexpected output from $host"
+      session=$(jq -r .session <<<"$result"); path=$(jq -r .repo <<<"$result"); state=$(jq -r .state <<<"$result") ;;
+    2)
+      session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
+      path=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
+      state="${session#*(}"; state="${state%)}"; session="${session%% *}" ;;
+    *) die "unexpected output from $host" ;;
+  esac
   [[ -n "$session" && -n "$path" ]] || die "$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))"
-  state="${session#*(}"; state="${state%)}"; session="${session%% *}"
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$path")" ]] || die "unexpected output from $host"
   title=$(row_title "$name")
   id=$(cmux_row_field "$title" "$path" id "$host")
