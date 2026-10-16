@@ -25,6 +25,8 @@ cp "$REPO/lib/workgrove/common.sh" "$TEST_ROOT/lib/workgrove/common.sh"
 cp "$REPO/lib/workgrove/safety.sh" "$TEST_ROOT/lib/workgrove/safety.sh"
 cp "$REPO/lib/workgrove/remote.sh" "$TEST_ROOT/lib/workgrove/remote.sh"
 cp "$REPO/lib/workgrove/recovery.sh" "$TEST_ROOT/lib/workgrove/recovery.sh"
+cp "$REPO/lib/workgrove/hosts.sh" "$TEST_ROOT/lib/workgrove/hosts.sh"
+cp "$REPO/lib/workgrove/picker.sh" "$TEST_ROOT/lib/workgrove/picker.sh"
 # These copies have no ../lib, so they test what each script does when it cannot load the library.
 for script in wt cmux-hook agent-notify; do
   cp "$REPO/bin/$script" "$TEST_ROOT/nolib/bin/$script"
