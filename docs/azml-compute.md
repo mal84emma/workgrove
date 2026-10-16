@@ -166,9 +166,9 @@ usually does not have them.
 - **With them**, the client gives up after about three minutes. VS Code then reconnects on its own. cmux usually
   reconnects after sleep or a brief dropout.
 
-After a Wi-Fi network switch, a cmux row can stay suspended, because its old server-side SSH session still holds
-the row's relay port. The relay is cmux's channel from a VM row back to the Mac. To recover a task row, run
-`wt -H <instance> attach -r <repo> <name>` (see [Recover a VM row](../README.md#recover-a-vm-row) in the README).
+After a reconnect, inspect a task row that does not work correctly.
+Run `wt -H <instance> attach -r <repo> <name>` to restore its terminal settings.
+See [Recover a VM row](../README.md#recover-a-vm-row) for the other recovery steps.
 
 ## Gotchas
 

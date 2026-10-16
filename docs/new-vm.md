@@ -316,39 +316,13 @@ command with `--restart-agent`.
 `remote session was lost; starting a new shell`. Inspect the row. If it shows a bare shell, run
 `wt -H <vm> attach -r <repo> <name>` with `--reattach`.
 
-**After a Wi-Fi network switch,** a row can instead be suspended with this message:
-`Error: ssh-pty-attach: The cmux relay on <vm> did not become ready (the host may not allow SSH remote port forwarding). Automatic reconnect paused; use Reconnect to try again.`
-
-The port-forwarding warning in this message is misleading. After the Mac's IP changes, the old SSH connection
-can still hold that row's fixed relay port on the VM. Run `wt -H <vm> attach -r <repo> <name>`. This command
-does these steps:
-
-1. It checks only that suspended row.
-2. It stops the stale listener on the row's relay port, on any local address. The listener is a user-owned
-   `sshd`, or `sshd-session` from OpenSSH 9.8.
-3. It asks cmux to reconnect the row.
-
-The command refuses, and signals nothing, when that `sshd`'s connection comes from the Mac's current address,
-because that session can still be live. When the command does not refuse, it then does one of these:
-
-- If a fresh VM check shows the session detached and the row shows a recognizable task-shell prompt, it
-  reattaches tmux.
-- If the task's client is attached, it restores tmux's terminal settings. It does this only after a fresh
-  tmux status message appears in that connected row.
-- Otherwise, it selects the row and prints the exact `--reattach` command. Inspect the row before you run that
-  command.
-
 If the wheel types arrow keys, or paste or Shift+Enter misbehaves, run the same attach command.
-
-If recovery fails, wait for the VM to drop the old SSH session. With block 1's keepalive, this takes about a
-minute. Then press **Reconnect** on the row, or run `wt -H <vm> attach -r <repo> <name>` again.
 
 **Block 1's keepalive.** A normal SSH reload does not end existing sessions, so block 1's keepalive setting
 only shortens future stale connections to about a minute.
 
 A VM set up before that setting existed does not have it. To add it, paste only
 block 1's keepalive lines, from its `sshd_config.d` comment to the end. These lines are idempotent.
-During recovery, `wt -H <vm> attach` warns when the VM's sshd has no `ClientAliveInterval`.
 
 It is **UNVERIFIED** whether Azure ML keeps `/etc/ssh/sshd_config.d/10-workgrove-keepalive.conf` across a
 stop/start. (Azure ML does reset the login shell.) On an Azure ML compute instance, after a stop/start, run

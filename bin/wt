@@ -54,7 +54,7 @@
 #                                                             show, rm, path, open and attach need -r.
 #                                                             new --no-workspace leaves the VM task unstarted.
 #                                                             A plain attach starts it later with its saved brief.
-#                                                             attach recovers a suspended row. It reattaches when it
+#                                                             attach reattaches when it
 #                                                             confirms the task's detached tmux session and the row's
 #                                                             shell prompt.
 #                                                             For an attached task row, attach restores tmux's mouse,

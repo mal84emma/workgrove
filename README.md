@@ -68,7 +68,8 @@ It also covers per-repo hooks and the logins that you supply.
   - *The earlier evidence:* Measured on cmux 0.64, a row keeps its id, its title and its `workspace:N` ref when it moves.
     Every command that acts on a row (select, send, close, set-description) finds the row by id in any window.
     Only the listing is limited to the caller's window.
-    Reverification on cmux 0.65.1 remains open in [issue #62](https://github.com/mal84emma/workgrove/issues/62).
+    On cmux 0.65.1, a moved native VM row kept its UUID, title, and ref.
+    Combined window lookup, description updates, targeted input, and self-removal also passed.
   - *The decision:* `rows_json` in `bin/wt` and `ws_load` in `bin/cmux-hook` enumerate the windows and merge their lists.
     Because the commands that act on a row already reach it in any window, no other code had to change.
     Both functions enumerate windows by window uuid, never by the index that `cmux list-windows` prints first, because opening a window renumbers the other windows.
@@ -126,7 +127,6 @@ workgrove/
 │       ├── common.sh          shared helpers that bin/wt, cmux-hook and agent-notify load
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
 │       └── vm/                scripts that bin/wt sends to a VM on SSH standard input
-│           ├── clear-stale-relay.sh
 │           ├── host-new-preflight.sh
 │           ├── probe-host.sh
 │           ├── reinit-client-confirm.sh
@@ -376,7 +376,7 @@ A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 949 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 835 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -400,13 +400,8 @@ A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path
   - That `wt rm` refuses while an agent runs in any row that may be the task's, whatever the order of the rows.
     Such a row can have a second line that the user edited or cleared. It can also be a local row whose
     directory is in the worktree, as written or through a symlink.
-  - That a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its
-    mapped port. The port can be on any local address, and the connection must not be from the Mac's current
-    address.
-  - That `wt` types into a recovered row, `--reattach` included, only when all of these are true:
-    - The row is at a shell prompt that names `user@host` (on its own line or the one above).
-    - The row is still connected.
-    - The VM lists no tmux client on the session.
+  - That automatic reattachment requires a connected row, a recognizable task-shell prompt, and a fresh detached-session check.
+  - That explicit `--reattach` requires a shell prompt naming `user@host`, on its own line or the line above.
   - That client replacement requires a fresh status message visible in that row.
   - That `bin/wt`, when `/bin/bash` starts it, runs under bash 5, or stops with a message that names the fix.
   - The last group is different: it tests the `rm -rf` of `test/lib.sh` itself. No real run reaches that
@@ -414,7 +409,7 @@ A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 683 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 592 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -524,7 +519,7 @@ steps to recover a VM row.
 | Shell on a VM | ⌃⌥⌘T → `<vm>` → `vm-shell`. The row title is `shell`, and its second line is `@<vm>`. If you type a host that is not a configured alias, `wt` tries it as typed. Requests from inside that VM need a real `Host` entry |
 | Shell in a repo | ⌃⌥⌘T → where → `repo-shell` → repo. The row title is `<repo> shell` |
 | Re-open a VM task's row | Run `wt -H <vm> attach -r <repo> <name>`. For what it does in each state, see [Recover a VM row](#recover-a-vm-row) |
-| Reconnect after sleep or Wi-Fi loss | cmux usually reconnects the row itself. If the terminal misbehaves or the row stays `[ssh:suspended]`, see [Recover a VM row](#recover-a-vm-row) |
+| Reconnect after sleep or Wi-Fi loss | cmux usually reconnects the row itself. If the terminal misbehaves or the row does not reconnect, see [Recover a VM row](#recover-a-vm-row) |
 | Hand back | The agent reports the branch. It runs `wt pr <name>` only when you ask for it |
 | Clean up | `wt rm <name>`, `wt -H <vm> rm -r <repo> <name>`, `wt prune` |
 | Update a machine | `wt update`, `wt -H <vm> update`. Add `--refresh-config` only after you review a `.base` change |
@@ -543,7 +538,7 @@ and the brief are both blank, the name is `task-<timestamp>`. A blank brief is a
 
 ### Recover a VM row
 
-Use this section when the row of a VM task is closed, suspended, or does not work correctly. The recovery
+Use this section when the row of a VM task is closed or does not work correctly. The recovery
 command is `wt -H <vm> attach -r <repo> <name>`. In this section, `attach` means that command.
 
 What `attach` does depends on the state of the task and its row:
@@ -551,7 +546,6 @@ What `attach` does depends on the state of the task and its row:
 | State | What `attach` does |
 |---|---|
 | The task has never had a tmux session or `.started` marker | It starts the task |
-| The row is suspended | It tries to recover the row. See [Recover a suspended row](#recover-a-suspended-row) |
 | The row is connected, and its agent is attached | It replaces that task's tmux client (a replacement attach), so tmux sends the mouse, focus, bracketed paste and extended-key settings again |
 | A fresh VM check shows the tmux session detached | It reattaches tmux only when the row also shows a recognizable task-shell prompt |
 | The task was started before, but it has lost its agent | It refuses and prints the `--restart-agent` line. That line resumes Claude with `-c` |
@@ -563,41 +557,8 @@ misbehaves after it reconnects, find your symptom in this table:
 |---|---|
 | After a reconnect, the mouse wheel types arrow keys, or paste or Shift+Enter misbehaves | Run `attach`. It restores tmux's terminal settings |
 | A replacement attach failed and left the row at its shell prompt | At that prompt, run `attach` with `--reattach` |
-| After a Wi-Fi network switch, the row shows `[ssh:suspended]` and the relay error | Run `attach`. See [Recover a suspended row](#recover-a-suspended-row) |
 | cmux says `remote session was lost; starting a new shell`, the connected row shows a bare shell, and the VM still lists its old tmux client | Run `attach` with `--reattach` |
 | The VM rebooted | A VM reboot ends the tmux session. Run `attach` with `--restart-agent` |
-
-#### Recover a suspended row
-
-A Wi-Fi network switch can leave the row `[ssh:suspended]` with this error:
-
-`Error: ssh-pty-attach: The cmux relay on <vm> did not become ready (the host may not allow SSH remote port forwarding). Automatic reconnect paused; use Reconnect to try again.`
-
-The port-forwarding warning in this message is misleading. After the Mac's IP address changes, the old SSH
-session may still hold the row's fixed relay port on the VM. So **Reconnect** cannot work until that
-session closes.
-
-To recover the row, run `attach`. For a suspended row, `attach` does these steps:
-
-1. It maps the row's daemon slot to its relay port.
-2. While the row is suspended, it stops only a user-owned `sshd` (or `sshd-session`, OpenSSH 9.8+) that
-   listens on that port on any local address. If that `sshd`'s connection comes from the Mac's current
-   address, that session may still be live. So `attach` refuses at this step and signals no process.
-3. It calls cmux's reconnect RPC (remote procedure call) for that row and waits up to 30 seconds.
-4. It checks the VM session and the row screen.
-5. It reattaches a detached tmux session only at a recognizable task-shell prompt. For an attached task, it
-   re-initializes the client.
-6. Otherwise, it selects the row and prints the exact `--reattach` command.
-
-`attach` also warns when the VM's sshd has no `ClientAliveInterval`. Block 1 of
-[docs/new-vm.md](docs/new-vm.md) sets one.
-
-> **Warning:** Inspect the row before you run the printed `--reattach` command.
-
-If recovery fails, do these steps:
-
-1. Wait for the VM to drop the old SSH session. With the keepalive from block 1, this takes about a minute.
-2. Press **Reconnect** on the row, or run the same `attach` again.
 
 ## `wt` commands
 
@@ -922,7 +883,7 @@ Support does not include the removed cmux 0.64 TCP relay paths.
 
 | cmux version | Status | Verified on | Verified behavior |
 |---|---|---|---|
-| 0.65.1 (build 110, `8a853dcc9`) | Supported; recovery and cross-window checks remain open | 2026-10-16 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. |
+| 0.65.1 (build 110, `8a853dcc9`) | Supported; native VM and cross-window checks passed | 2026-10-16 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. |
 | 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
 
 [PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to cmux 0.65.0's row-closing behavior.

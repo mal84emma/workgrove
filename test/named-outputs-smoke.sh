@@ -92,7 +92,7 @@ test_check_row_removal
 
 test_row_shell_prompt() {
   local -x NAMED_SCREEN="$TEST_ROOT/screen"
-  local screen=unchanged host=unchanged tick=unchanged status=0
+  local screen=unchanged host=unchanged status=0
   row_remote_field() { printf connected; }
   vm_session_detached() { printf '%s' "$1" >"$TEST_ROOT/detached-host"; }
   send_tmux_line() { printf '%s|%s' "$1" "$2" >"$TEST_ROOT/sent-line"; }
@@ -104,8 +104,6 @@ test_row_shell_prompt() {
   assert_eq 'the caller receives the forwarded line' 'tester@machine %' "$host"
   assert_eq 'the VM check keeps its host argument' test-vm "$(cat "$TEST_ROOT/detached-host")"
   assert_eq 'the send keeps its row and session arguments' 'row-1|task-session' "$(cat "$TEST_ROOT/sent-line")"
-  if reattach_recovered_row test-vm row-1 task-session tick; then pass; else fail 'reattach_recovered_row failed'; fi
-  assert_eq 'the caller receives the output through both helpers' 'tester@machine %' "$tick"
   printf 'Context 100%%\n' >"$NAMED_SCREEN"
   row_shell_prompt row-1 screen || status=$?
   assert_eq 'a footer fails the prompt check' 1 "$status"
@@ -137,4 +135,4 @@ test_relay_env() {
 }
 test_relay_env
 
-lib_summary 33
+lib_summary 31

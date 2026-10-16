@@ -164,8 +164,28 @@ These checks passed:
 
 The native row reported `backend: cmux-tui` and `state: connected`.
 Its status payload omitted `persistent_daemon_slot`.
-This connected-row snapshot does not settle whether native rows can suspend after a connection failure.
-Connection-failure and cross-window checks remain open.
+The user moved the row into a second window, disconnected the Mac's network for 90 seconds, and reconnected it.
+The user then put the Mac to sleep for 30 seconds and woke it.
+A command in the row confirmed that the connection worked afterward.
+The recorder polled every two seconds while awake and logged state changes.
+Every recorded state for the live row was connected.
+It observed neither `suspended` nor `persistent_daemon_slot`.
+The user also saw no `[ssh:suspended]` label.
+
+The moved row kept its UUID, title, and `workspace:N` ref.
+The caller-window list omitted it, but workgrove's combined window lookup found it.
+Description updates and targeted input reached it by UUID from the original window.
+Self-removal then closed that row and ended its session across windows.
+
+The [cmux 0.65.1 native setup](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/Workspace%2BSSHTui.swift)
+clears the legacy remote session controller and its active controller ID.
+Its [native status payload](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/Workspace%2BSSHTuiStatus.swift)
+omits `persistent_daemon_slot`.
+The [native coordinator](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/SSHTuiWorkspaceCoordinator.swift)
+reports connecting, connected, or error states through its own lifecycle.
+Together, the source and live checks answer issue #62 Step 1 for supported cmux 0.65.1.
+The legacy suspended-row recovery and its stale TCP listener cleanup were removed.
+These checks do not verify cmux 0.65.2.
 
 ## Smoke tests
 
