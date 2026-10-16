@@ -352,19 +352,12 @@ FIVE_SRC=(home/.zshrc home/.gitconfig home/.tmux.conf home/.claude/keybindings.j
 UI_FLAG=--with-claude-ui             # the seventh flag: keys inside a copied file, so it has no FIVE_DST entry
 # The sixth FILE flag. It cannot join the three arrays above, because they are platform-neutral. Every loop
 # over them runs `for i in 0 1 2 3 4` on both platforms, but ~/.config/cmux/cmux.json exists only on a Mac.
-# Scenario 17 covers it alone, instead of four conditional loops.
+# The opinionated install checks the cmux configuration link on the Mac.
 CMUX_FLAG=--with-cmux-config
 CMUX_DST=.config/cmux/cmux.json
 CMUX_SRC=home/.config/cmux/cmux.json
-CMUX_HOOK_ID=wt                                    # the id install.sh keys its merge on
-# shellcheck disable=SC2088   # the ~ is literal: cmux expands it, and the JSON that this compares with has it too
-CMUX_HOOK_CMD='~/.local/bin/cmux-hook'             # …the command that makes an entry with that id OURS
-CMUX_FRAGMENT='"command": "~/.local/bin/cmux-hook",'   # the paste-me line every refusal has to print
 THEME_DST=.oh-my-zsh/custom/themes/workgrove.zsh-theme
 THEME_SRC=home/.oh-my-zsh/custom/themes/workgrove.zsh-theme
-TMUX_LINE='set -ag update-environment'                                   # enough to count occurrences
-TMUX_FULL_LINE='set -ag update-environment " CMUX_SOCKET_PATH CMUX_WORKSPACE_ID"'   # the whole line, for -x
-
 # assert_machinery <home> [cmux-linked yes|no]: everything that a default install owes every user, opinionated
 # or not. The list comes from the repo and is not hard-coded, so a new bin/ script or skill that install.sh
 # forgot to link fails here. The second argument, default "no", is for ~/.config/cmux/cmux.json. That file
@@ -409,8 +402,6 @@ assert_machinery() {
     if [[ $cmux == yes ]]; then
       assert_link "$h" "$CMUX_DST" "$CMUX_SRC"
     else
-      # Not a link, but not absent either. hook_cmux_config merges the one machinery entry into the user's
-      # own file, or writes a minimal one. So a default install on a Mac always leaves a real file here.
       assert_not_link "$h" "$CMUX_DST"
     fi
   fi
@@ -474,8 +465,7 @@ assert_mouse_key() {
 }
 
 # assert_only_linked <home> <index>: exactly one of the five is a link into the repo, and the other four are
-# not links at all. It uses assert_not_link, not assert_absent, because the gitconfig and tmux.conf
-# fallbacks correctly leave a regular file at two of those paths.
+# not links at all. assert_not_link also accepts a user-owned regular file at these paths.
 assert_only_linked() {
   local h="$1" want="$2" i
   for i in 0 1 2 3 4; do
@@ -570,11 +560,9 @@ scenario_default_empty() {
       "$h/.gitignore_global" "$(scratch_git "$h" config --global --get core.excludesFile)"
     assert_eq "include.path in the scratch ~/.gitconfig" \
       "$h/.gitconfig.local" "$(scratch_git "$h" config --global --get-all --type=path include.path)"
-    # ... and so must tmux's update-environment line, appended, not linked.
-    assert_regular "$h" .tmux.conf
-    assert_eq "update-environment lines in ~/.tmux.conf" 1 "$(count_matches "$h/.tmux.conf" "$TMUX_LINE")"
+    assert_absent "$h" .tmux.conf
     # report_skipped must name each flag that the run did not get, or a user who wanted one never learns that
-    # the flag exists. Scenario 17a checks the Mac-only --with-cmux-config.
+    # the flag exists.
     local f
     for f in "${FIVE_FLAG[@]}"; do
       assert_grep "install.sh output names $f as skipped" "$log" "$f"
@@ -595,7 +583,7 @@ scenario_default_over_existing() {
   seed_opinionated_originals "$h"
   zsum_before="$(cksum <"$h/.zshrc")"
   gsum_before="$(cksum <"$h/.gitconfig")"
-  tmux_before="$(line_count "$h/.tmux.conf")"
+  tmux_before="$(cksum <"$h/.tmux.conf")"
   if assert_install_ok "$h" "$log"; then
     assert_machinery "$h"
     # ~/.zshrc is not touched at all: same bytes, still a real file, and no theme link beside it.
@@ -615,18 +603,7 @@ scenario_default_over_existing() {
     fi
     assert_eq "core.excludesFile added to the stranger's ~/.gitconfig" \
       "$h/.gitignore_global" "$(scratch_git "$h" config --global --get core.excludesFile)"
-    # ~/.tmux.conf gains exactly one line and keeps the lines it had, including the last one, which the
-    # fixture leaves without a newline on purpose. `grep -cF` counts LINES, so the count below reads 1 if
-    # the line was appended and also if it was glued onto the user's last line. The anchored count tells
-    # the two apart, and it is the only assertion here that append_line's guard can fail.
-    assert_regular "$h" .tmux.conf
-    assert_grep "the ~/.tmux.conf keeps its own comment" "$h/.tmux.conf" "# STRANGER TMUX"
-    assert_eq "the user's unterminated last line survived intact" 1 \
-      "$(grep -cFx -- 'set -g prefix C-a' "$h/.tmux.conf" 2>/dev/null || true)"
-    assert_eq "update-environment lines in ~/.tmux.conf" 1 "$(count_matches "$h/.tmux.conf" "$TMUX_LINE")"
-    assert_eq "the appended update-environment line is a line of its own" 1 \
-      "$(grep -cFx -- "$TMUX_FULL_LINE" "$h/.tmux.conf" 2>/dev/null || true)"
-    assert_eq "the ~/.tmux.conf line count" "$((tmux_before + 1))" "$(line_count "$h/.tmux.conf")"
+    assert_eq "the ~/.tmux.conf checksum" "$tmux_before" "$(cksum <"$h/.tmux.conf")"
     # The two files install.sh never links by default and never rewrites either.
     assert_not_link "$h" .claude/keybindings.json
     assert_regular "$h" .claude/keybindings.json
@@ -892,25 +869,6 @@ scenario_refusals() {
   assert_absent "$h" .local/bin
   end_scenario
 
-  begin_scenario "9b. a dangling ~/.tmux.conf is refused, and the append does not escape"
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  ln -s "$TEST_ROOT/escaped-tmux-conf" "$h/.tmux.conf"
-  assert_install_fails "$h" "$log" 1 "broken symlink at ~/.tmux.conf"
-  assert_absent "$TEST_ROOT" escaped-tmux-conf      # append_line's >> would have created it out here
-  assert_absent "$h" .zshenv
-  end_scenario
-
-  begin_scenario "9c. a directory at ~/.tmux.conf is refused"
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.tmux.conf"
-  assert_install_fails "$h" "$log" 1 "not a regular file: ~/.tmux.conf"
-  assert_absent "$h" .zshenv
-  end_scenario
-
   begin_scenario "9d. a directory at git's OTHER global file is refused, in this script's voice"
   # `git config --global` writes ~/.config/git/config whenever that exists and ~/.gitconfig does not. So
   # check_gitconfig must guard that file. When it guarded ~/.gitconfig alone, git took the install down
@@ -1034,7 +992,7 @@ scenario_git_keeps_yours() {
 scenario_manager_owned() {
   local h log sum
 
-  begin_scenario "12a. a ~/.tmux.conf owned by a dotfile manager is left alone and named"
+  begin_scenario "12a. a ~/.tmux.conf owned by a dotfile manager is left alone"
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1044,8 +1002,6 @@ scenario_manager_owned() {
   if assert_install_ok "$h" "$log"; then
     assert_eq "the ~/.tmux.conf link is still the manager's" "$h/dotfiles/tmux.conf" "$(readlink "$h/.tmux.conf")"
     assert_eq "the file it points at is byte-identical" "$sum" "$(cksum <"$h/dotfiles/tmux.conf")"
-    assert_grep "install.sh named the skip" "$log" "skipped ~/.tmux.conf:"
-    assert_grep "…and printed the line to add by hand" "$log" "$TMUX_FULL_LINE"
   fi
   end_scenario
 
@@ -1334,250 +1290,18 @@ scenario_linux_legs() {
 }
 
 
-# cmux_ids <home>: the ids of ~/.config/cmux/cmux.json's hooks, in file order, space-separated. The order is
-# the whole point. cmux composes hooks in the order that it reads them. An entry that is prepended, not
-# appended, runs before a user's hook that suppresses the notification, and the suppression never applies.
-# `jq -j` prints a trailing space and no newline, so bash 3.2's $( ) does not have to strip one.
-cmux_ids() {
-  jq -j '(.notifications.hooks // [])[] | .id, " "' "$1/$CMUX_DST" 2>/dev/null || true
-}
-
-# cmux_cmd <home>: the command of the hook whose id is "wt", which is the entry that install.sh merges in.
-cmux_cmd() {
-  jq -r --arg id "$CMUX_HOOK_ID" \
-    'first((.notifications.hooks // [])[] | select(.id == $id)) | .command // ""' \
-    "$1/$CMUX_DST" 2>/dev/null || true
-}
-
-# 17. The sixth opt-in FILE, and the merge that stands in for it. ~/.config/cmux/cmux.json was once linked on
-#     every Mac, unconditionally. 275 of its 279 lines are a palette, sound overrides, a sidebar layout and
-#     three hotkeys. The other four are the notifications hook that runs ~/.local/bin/cmux-hook. That hook is
-#     how a `wt` row on a VM learns which row fired. So it is the one part of the file that is machinery.
-#     For that reason, the file is now opt-in like the other five. Without the flag, install.sh merges that
-#     ONE entry into whatever the user already has. All the risk is in that merge: jq rewrites the whole of
-#     a file that this repo does not own. The file format is JSONC, which jq cannot always read. Every case
-#     that the merge can meet is below. Each case that install.sh declines also asserts that the file is
-#     byte-identical afterwards. Otherwise, a refusal that still rewrote the file would pass on the message
-#     alone.
-#     All of it is Darwin-only: cmux is a Mac application, and install.sh does nothing with the file on any
-#     other platform. Scenario 16a asserts that from the other side.
-# shellcheck disable=SC2088   # every ~ below is literal: these are the strings inside a cmux.json, not paths
+# The cmux configuration remains an opt-in link after removal of the TCP hook merge.
 scenario_cmux_config() {
-  if [[ $OS != Darwin ]]; then
-    return 0
-  fi
-  local h log sum before after
-
-  begin_scenario "17a. no cmux.json at all: a default install writes a minimal one"
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  if assert_install_ok "$h" "$log"; then
-    assert_machinery "$h"
-    assert_regular "$h" "$CMUX_DST"
-    assert_eq "the hooks of the created ~/$CMUX_DST" "$CMUX_HOOK_ID " "$(cmux_ids "$h")"
-    assert_eq "the merged hook's command" "$CMUX_HOOK_CMD" "$(cmux_cmd "$h")"
-    assert_eq "the schemaVersion of the created file" 1 \
-      "$(jq -r '.schemaVersion' "$h/$CMUX_DST" 2>/dev/null || true)"
-    # A running cmux does not reread the file. If the run says nothing about that, the user believes that
-    # the hook is live when it is not.
-    assert_grep "the run says a running cmux has to be told" "$log" "cmux reload-config"
-    assert_grep "report_skipped names the new flag" "$log" "$CMUX_FLAG"
-  fi
-  end_scenario
-
-  begin_scenario "17b. a stranger's strict-JSON cmux.json keeps everything and gains one entry"
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.config/cmux"
-  printf '%s\n' '{' '  "schemaVersion": 3,' '  "paneBorderColor": "#ff00ff",' \
-                '  "theme": { "accent": "#123456" }' '}' >"$h/$CMUX_DST"
-  if assert_install_ok "$h" "$log"; then
-    assert_not_link "$h" "$CMUX_DST"
-    assert_grep "the stranger's palette survives" "$h/$CMUX_DST" '#ff00ff'
-    assert_grep "…and their theme object with it" "$h/$CMUX_DST" '#123456'
-    # install.sh leaves schemaVersion exactly as it was, whatever its value: it has no opinion about it.
-    assert_eq "the stranger's schemaVersion is untouched" 3 \
-      "$(jq -r '.schemaVersion' "$h/$CMUX_DST" 2>/dev/null || true)"
-    assert_eq "the hooks after the merge" "$CMUX_HOOK_ID " "$(cmux_ids "$h")"
-    assert_eq "the merged hook's command" "$CMUX_HOOK_CMD" "$(cmux_cmd "$h")"
-    assert_grep "install.sh says it merged" "$log" "merged the cmux-hook entry"
-    # Nothing is deleted here either: the file that install.sh rewrote is in the backup dir, unchanged.
-    assert_grep "the original is in the backup dir" "$(backup_dir "$h")/$CMUX_DST" '#ff00ff'
-  fi
-  end_scenario
-
-  begin_scenario "17c. an existing hooks array keeps its order, and ours is appended LAST"
-  # Not a detail: cmux runs the hooks in file order, and this repo's own file puts quiet-when-focused
-  # before wt on purpose. So an entry that arrived first would run before the suppression decision.
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.config/cmux"
-  printf '%s\n' '{' '  "schemaVersion": 1,' '  "notifications": {' '    "sound": "Pop",' \
-                '    "hooks": [' \
-                '      { "command": "~/bin/mine", "id": "quiet-when-focused", "timeoutSeconds": 5 }' \
-                '    ]' '  }' '}' >"$h/$CMUX_DST"
-  if assert_install_ok "$h" "$log"; then
-    assert_eq "the hook order after the merge" "quiet-when-focused $CMUX_HOOK_ID " "$(cmux_ids "$h")"
-    assert_eq "the user's own hook is untouched" "~/bin/mine" \
-      "$(jq -r 'first(.notifications.hooks[] | select(.id == "quiet-when-focused")) | .command' \
-         "$h/$CMUX_DST" 2>/dev/null || true)"
-    assert_eq "the rest of .notifications survives" "Pop" \
-      "$(jq -r '.notifications.sound' "$h/$CMUX_DST" 2>/dev/null || true)"
-  fi
-  end_scenario
-
-  begin_scenario "17d. a cmux.json with // comments is refused, untouched, and the fragment is printed"
-  # cmux documents JSONC, and `cmux config check` accepts it, but jq cannot parse it at all. Because no
-  # rewrite is safe, install.sh leaves the file exactly as it is. It tells the user what to paste and what
-  # stays broken.
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.config/cmux"
-  printf '%s\n' '{' '  // my own cmux settings' '  "schemaVersion": 1,' '  "paneBorderColor": "#ff0000"' '}' \
-    >"$h/$CMUX_DST"
-  sum="$(cksum <"$h/$CMUX_DST")"
-  if assert_install_ok "$h" "$log"; then
-    assert_eq "the JSONC file is byte-identical afterwards" "$sum" "$(cksum <"$h/$CMUX_DST")"
-    assert_grep "install.sh named the skip" "$log" "skipped ~/$CMUX_DST:"
-    assert_grep "…and said it is the comments" "$log" "JSONC"
-    assert_grep "…and printed the entry to paste" "$log" "$CMUX_FRAGMENT"
-    assert_grep "…and said what stays broken" "$log" "never attaches or opens"
-  fi
-  end_scenario
-
-  begin_scenario "17e. a cmux.json that is not valid JSON at all is refused and untouched"
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.config/cmux"
-  printf '%s\n' '{ "schemaVersion": 1, "paneBorderColor":' >"$h/$CMUX_DST"
-  sum="$(cksum <"$h/$CMUX_DST")"
-  if assert_install_ok "$h" "$log"; then
-    assert_eq "the broken file is byte-identical afterwards" "$sum" "$(cksum <"$h/$CMUX_DST")"
-    assert_grep "install.sh named the skip" "$log" "skipped ~/$CMUX_DST:"
-    assert_grep "…and said jq cannot parse it" "$log" "jq cannot parse it"
-    assert_grep "…and printed the entry to paste" "$log" "$CMUX_FRAGMENT"
-  fi
-  end_scenario
-
-  begin_scenario "17f. a notifications key of a shape this merge does not know is refused"
-  # Valid JSON, and jq would happily overwrite it. That is the point: .notifications of the wrong type is
-  # still somebody's configuration, and the merge filter cannot keep what is there.
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.config/cmux"
-  printf '%s\n' '{ "schemaVersion": 1, "notifications": "loud" }' >"$h/$CMUX_DST"
-  sum="$(cksum <"$h/$CMUX_DST")"
-  if assert_install_ok "$h" "$log"; then
-    assert_eq "the file is byte-identical afterwards" "$sum" "$(cksum <"$h/$CMUX_DST")"
-    assert_grep "install.sh named the skip" "$log" "skipped ~/$CMUX_DST:"
-    assert_grep "…and said what it could not merge into" "$log" "not a shape this script can merge into"
-  fi
-  end_scenario
-
-  begin_scenario "17g. a hook of the user's already using the id \"wt\" is named, not overwritten"
-  # The one case with no safe answer. An overwrite loses their hook. A quiet skip leaves the relay dead
-  # while every line of the run says success.
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.config/cmux"
-  printf '%s\n' '{' '  "notifications": { "hooks": [' \
-                '    { "command": "~/bin/my-own-wt-hook", "id": "wt", "timeoutSeconds": 3 }' '  ] }' '}' \
-    >"$h/$CMUX_DST"
-  sum="$(cksum <"$h/$CMUX_DST")"
-  if assert_install_ok "$h" "$log"; then
-    assert_eq "the file is byte-identical afterwards" "$sum" "$(cksum <"$h/$CMUX_DST")"
-    assert_eq "their hook still has the id" "~/bin/my-own-wt-hook" "$(cmux_cmd "$h")"
-    assert_grep "install.sh named the skip" "$log" "skipped ~/$CMUX_DST:"
-    assert_grep "…and named the command it found" "$log" "~/bin/my-own-wt-hook"
-    assert_grep "…and said overwriting would lose it" "$log" "would lose your hook"
-  fi
-  end_scenario
-
-  begin_scenario "17h. a cmux.json a dotfile manager owns is left alone and named"
-  # The one thing this family of functions must never do: write through somebody's dotfiles link.
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  seed_manager "$h"
-  printf '%s\n' '{ "schemaVersion": 1, "paneBorderColor": "#00ff00" }' >"$h/dotfiles/cmux.json"
-  mkdir -p "$h/.config/cmux"
-  ln -s "$h/dotfiles/cmux.json" "$h/$CMUX_DST"
-  sum="$(cksum <"$h/dotfiles/cmux.json")"
-  if assert_install_ok "$h" "$log"; then
-    assert_eq "the link is still the manager's" "$h/dotfiles/cmux.json" "$(readlink "$h/$CMUX_DST")"
-    assert_eq "the file it points at is byte-identical" "$sum" "$(cksum <"$h/dotfiles/cmux.json")"
-    assert_grep "install.sh named the skip" "$log" "skipped ~/$CMUX_DST:"
-    assert_grep "…and printed the entry to paste" "$log" "$CMUX_FRAGMENT"
-  fi
-  end_scenario
-
-  begin_scenario "17i. a dangling cmux.json is refused before anything moves"
-  # check_cmux_config's job: a whole-file rewrite through a dangling link would land wherever the link points.
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.config/cmux"
-  ln -s "$TEST_ROOT/escaped-cmux-json" "$h/$CMUX_DST"
-  assert_install_fails "$h" "$log" 1 "broken symlink at ~/$CMUX_DST"
-  assert_absent "$TEST_ROOT" escaped-cmux-json
-  assert_absent "$h" .zshenv
-  end_scenario
-
-  begin_scenario "17j. $CMUX_FLAG links the whole file and stashes what was there"
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.config/cmux"
-  printf '%s\n' '{ "schemaVersion": 1, "paneBorderColor": "#00ff00" }' >"$h/$CMUX_DST"
-  if assert_install_ok "$h" "$log" "$CMUX_FLAG"; then
-    assert_machinery "$h" yes
-    assert_link "$h" "$CMUX_DST" "$CMUX_SRC"
-    assert_grep "the stranger's own file was stashed" "$(backup_dir "$h")/$CMUX_DST" '#00ff00'
-    assert_eq "$CMUX_FLAG listed as skipped" 0 "$(count_matches "$log" "$CMUX_FLAG")"
-    # It gates one file and nothing else: none of the other five may come in with it.
-    local i
-    for i in 0 1 2 3 4; do
-      assert_not_link "$h" "${FIVE_DST[$i]}"
-    done
-    assert_claude_ui "$h" no
-  fi
-  end_scenario
-
-  begin_scenario "17k. sticky, and idempotent whichever way the file got there"
-  # Two reruns, because there are two records to keep. The LINK is the flag's record, and consenting_link
-  # reads it exactly as it reads the other five. The MERGED file's record is the entry itself, keyed on the
-  # id, so a second run must not append a second copy.
+  [[ $OS == Darwin ]] || return 0
+  local h log
+  begin_scenario "17k. the cmux configuration opt-in persists across a bare rerun"
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
   if assert_install_ok "$h" "$log" "$CMUX_FLAG"; then
-    if assert_install_ok "$h" "$log.2"; then          # bare: `wt update` cannot forward the flag
+    if assert_install_ok "$h" "$log.2"; then
       assert_link "$h" "$CMUX_DST" "$CMUX_SRC"
       assert_eq "$CMUX_FLAG listed as skipped after a bare rerun" 0 "$(count_matches "$log.2" "$CMUX_FLAG")"
-    fi
-  fi
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  mkdir -p "$h/.config/cmux"
-  printf '%s\n' '{ "schemaVersion": 1, "paneBorderColor": "#00ff00" }' >"$h/$CMUX_DST"
-  before="$h.manifest.1"
-  after="$h.manifest.2"
-  if assert_install_ok "$h" "$log"; then
-    manifest "$h" >"$before"
-    if assert_install_ok "$h" "$log.2"; then
-      manifest "$h" >"$after"
-      assert_unchanged "a merged cmux.json, second run" "$before" "$after"
-      assert_eq "the hooks after the second run" "$CMUX_HOOK_ID " "$(cmux_ids "$h")"
-      assert_eq "nothing was merged a second time" 1 "$(count_matches "$h/$CMUX_DST" "$CMUX_HOOK_CMD")"
-      assert_eq "the second run says nothing about cmux.json" 0 "$(count_matches "$log.2" "$CMUX_DST")"
     fi
   fi
   end_scenario
@@ -1603,25 +1327,17 @@ expected_assertions() {
   # hooks.json checksum. On a Mac, add one cmux.json assertion (link or not-link, one either way) and the
   # config.toml checksum.
   per=$((5 + nbin + 2 * nskill + 3 + 3 + 1))
-  # …called by scenarios 1, 2, 3 and 8a everywhere, and by 17a and 17j on a Mac only. When those two were
-  # counted unconditionally, the guard demanded 2 * per assertions that a Linux run had no scenarios to
-  # make. So the suite could not pass on a VM, however correct the code was.
+  # Scenarios 1, 2, 3, and 8a call assert_machinery on both platforms.
   local calls=4
   if [[ $OS == Darwin ]]; then
     per=$((per + 2))
-    fixed=$((fixed + CMUX_ASSERTIONS))
-    calls=6
+    fixed=$((fixed + 4))
   fi
   echo "$((fixed + calls * per))"
 }
 
 # Everything that is not assert_machinery. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=385
-# Scenario 17's own assertions, counted apart because that whole group is Darwin-only. ~/.config/cmux/cmux.json
-# is a Mac file, and install.sh does nothing with it on any other platform. A fixed total would be correct on
-# one platform and wrong on the other. It would fail the suite on a VM, for a reason unrelated to the code.
-CMUX_ASSERTIONS=78
-
+FIXED_ASSERTIONS=370
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
   echo "install.sh smoke test: repo $REPO, scratch root $TEST_ROOT"

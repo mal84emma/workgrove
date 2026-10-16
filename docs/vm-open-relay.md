@@ -152,11 +152,10 @@ Run these tests from the repository root:
 bash test/wt-smoke.sh
 WT_BASH=/bin/bash bash test/wt-smoke.sh
 bash test/native-relay-smoke.sh
-bash test/agent-status-smoke.sh
 shellcheck bin/wt bin/cmux-hook install.sh test/native-relay-smoke.sh
 ```
 
 The native test checks the automation merge function in a scratch home.
 It does not run `install.sh` or change installed files.
-It checks transport changes in both directions and repeated native requests with identical operation fields.
+It checks native identity changes and repeated native requests with identical operation fields.
 It also executes the installed rule's command and checks its VS Code request and notification dismissal.

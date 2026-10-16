@@ -264,15 +264,6 @@ check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'use -m <model>'* && ! -e "$TEST_ROOT/
 invoke_wt -H fakevm new task -r wt-demo -mfable
 check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'use -m <model>'* && ! -e "$TEST_ROOT/ssh.log" && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'combined short model option reached SSH'
 
-# With the Mac hook installed, task creation enables the bridge and does not reload all cmux settings.
-mkdir -p "$TEST_ROOT/local/.local/bin" "$TEST_ROOT/local/.config/cmux"
-printf 'CMUX_NOTIFICATION_SUBTITLE\n' > "$TEST_ROOT/local/.local/bin/cmux-hook"
-printf '{"notifications":{"hooks":[{"id":"wt","command":"~/.local/bin/cmux-hook"}]}}\n' > "$TEST_ROOT/local/.config/cmux/cmux.json"
-: > "$TEST_ROOT/cmux.log"
-run_wt wt-demo claude
-check "$([[ $WT_RC -eq 0 ]] && grep -qF 'WT_STATUS_BRIDGE=1' "$TEST_ROOT/cmux.log" && ! grep -qF 'reload-config' "$TEST_ROOT/cmux.log" && echo yes)" 'installed hook did not enable bridge cleanly'
-rm "$TEST_ROOT/remote-new" "$TEST_ROOT/local/.local/bin/cmux-hook" "$TEST_ROOT/local/.config/cmux/cmux.json"
-
 # A normal remote refusal is definite and should not claim an uncertain SSH outcome.
 SSH_MODE=refuse
 run_wt wt-demo claude
@@ -404,4 +395,4 @@ check "$([[ -f "$SCRATCH_REPO/nested-path" && $(cat "$SCRATCH_REPO/nested-path")
 check "$([[ $(printf '%s\n' "$WT_OUT" | grep -c $'^WT_RESULT\t') -eq 1 ]] && echo yes)" 'the parent lost its requested result'
 end_scenario
 
-lib_summary 49
+lib_summary 48

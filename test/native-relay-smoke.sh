@@ -68,8 +68,8 @@ case "$1" in
 esac
 TMUX
 chmod +x "$TEST_ROOT/bin/tmux"
-relay_socket=''; _relay_ws=''; relay_ident=(); relay_tui_socket=''; relay_tui_terminal=''
-TMUX=/tmp/fake CMUX_TUI_SOCKET=/tmp/stale CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa relay_env relay_socket _relay_ws relay_ident relay_tui_socket relay_tui_terminal
+relay_ident=(); relay_tui_socket=''; relay_tui_terminal=''
+TMUX=/tmp/fake CMUX_TUI_SOCKET=/tmp/stale CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa relay_env relay_ident relay_tui_socket relay_tui_terminal
 assert_eq 'the native socket comes from the current session' /tmp/current-native "$relay_tui_socket"
 assert_eq 'the native terminal comes from the current session' term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$relay_tui_terminal"
 assert_eq 'the old pane identity does not reach the CLI' 0 "$(printf '%s\n' "${relay_ident[@]}" | grep -cF term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa || true)"
@@ -139,13 +139,6 @@ lacks "$CMUX_LOG" 'notify'
 printf '%s' 127.0.0.1:9999 > "$RELAY_STATE/CMUX_SOCKET_PATH"
 TMUX=/tmp/fake notify_mac wt-open host test-vm path /vm/repos/repo/.worktrees/task
 assert_eq 'a valid native identity overrides stale TCP fields' 7 "$(wc -l < "$RELAY_DELIVERED" | tr -d ' ')"
-env CMUX_TUI_SOCKET= CMUX_SOCKET_PATH=127.0.0.1:1234 CMUX_WORKSPACE_ID=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC "$BASH" -c "$line"
-assert_eq 'TCP reattachment clears the old native terminal' '' "$(cat "$RELAY_STATE/CMUX_TUI_TERMINAL_ID")"
-TMUX=/tmp/fake CMUX_TUI_SOCKET=/tmp/stale CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa relay_env relay_socket _relay_ws relay_ident relay_tui_socket relay_tui_terminal
-assert_eq 'empty session identity overrides stale native pane values' '' "$relay_tui_socket"
-assert_eq 'TCP reattachment preserves the current TCP socket' 127.0.0.1:1234 "$relay_socket"
-env CMUX_TUI_SOCKET= CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= "$BASH" -c "$line"
-assert_eq 'TCP reconnect without an identity retains the saved socket' 127.0.0.1:1234 "$(cat "$RELAY_STATE/CMUX_SOCKET_PATH")"
 rm "$TEST_ROOT/bin/tmux" "$TEST_ROOT/bin/cmux-tui"
 end_scenario
 
@@ -360,4 +353,4 @@ assert_eq 'a nested wt run keeps the cmux-tui helper' 'helper=/opt/cmux-tui-hook
   "$HOME/.local/bin/wt" run task -r "$TEST_ROOT/repo" >/dev/null)
 assert_eq 'wt run outside tmux leaves the hooks alone' 'hook=/opt/cmux-tui-hook' "$(sed -n 1p "$AGENT_ENV")"
 end_scenario
-lib_summary 69
+lib_summary 65

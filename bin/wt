@@ -185,12 +185,6 @@ shell_join() { local out="" a; for a in "$@"; do printf -v a '%q' "$a"; out="${o
 # VM's shell, not to this one.
 WT_TMPFILES=()
 wt_cleanup() {
-  if [[ -n ${WT_STATUS_FILE:-} && -n ${WT_STATUS_HEARTBEAT_PID:-} ]]; then
-    kill "$WT_STATUS_HEARTBEAT_PID" 2>/dev/null || true
-    rm -f "$WT_STATUS_FILE"
-    printf '{"hook_event_name":"SessionEnd"}\n' | WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE="$WT_STATUS_SOURCE" agent-notify || true
-    WT_STATUS_FILE=''
-  fi
   if [[ ${#WT_TMPFILES[@]} -gt 0 ]]; then
     rm -f "${WT_TMPFILES[@]}"          # already moved into place: rm -f on a gone path is a no-op
   fi
@@ -207,10 +201,10 @@ cmux_bin() {
 cmux_ok() { local c; c=$(cmux_bin) || return 1; CMUX_QUIET=1 "$c" ping >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------- which side of the ssh we are on
-# In a cmux remote pane, with a cmux relay socket, or on a machine that is not a Mac, is_remote is true.
+# In a cmux remote pane or on a machine that is not a Mac, is_remote is true.
 # Then this machine hosts the worktrees and the Mac drives cmux. CMUX_SURFACE_ID is cleared inside remote
 # tmux panes by design, so never test it.
-is_remote() { [[ -n ${CMUX_SSH_ATTEMPT_ID:-} ]] || [[ ${CMUX_SOCKET_PATH:-} == *:[0-9]* ]] || [[ $(uname -s) != Darwin ]]; }
+is_remote() { [[ -n ${CMUX_SSH_ATTEMPT_ID:-} ]] || [[ $(uname -s) != Darwin ]]; }
 mac_only()  { if is_remote; then die "wt $1: run this on the Mac"; fi; }
 
 wt_host() { # this VM's alias in the Mac's ~/.ssh/config
@@ -225,11 +219,11 @@ hook_ok_repo() { # both relayed bodies carry $REPO (wt-open sends a path inside 
 }
 
 notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths with spaces survive
-  local title="$1" args=() ws=() c body request_id; shift
+  local title="$1" args=() c body request_id; shift
   while [[ $# -gt 1 ]]; do args+=(--arg "$1" "$2"); shift 2; done
   body=$(jq -cn "${args[@]}" '$ARGS.named')
-  local _relay_socket relay_ws relay_tui_socket relay_tui_terminal relay_ident=()
-  relay_env _relay_socket relay_ws relay_ident relay_tui_socket relay_tui_terminal || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
+  local relay_tui_socket relay_tui_terminal relay_ident=()
+  relay_env relay_ident relay_tui_socket relay_tui_terminal || { warn "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
   if [[ $relay_tui_socket == /* && $relay_tui_terminal =~ ^term_[a-f0-9]{32}$ ]]; then
     c=$(command -v cmux-tui || true)
     [[ -x $c ]] || { warn "cmux-tui CLI not found here; run the line below on the Mac"; return 1; }
@@ -242,15 +236,6 @@ notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths w
       || { warn "cmux-tui notify failed; run the line below on the Mac"; return 1; }
     return 0
   fi
-  c=$(cmux_bin) || { warn "cmux CLI not found here; run the line below on the Mac"; return 1; }
-  # --workspace is a second safeguard, not the mechanism. On cmux 0.64, --workspace does not authorize the
-  # request and does not change the row that cmux records it against (measured). Both come from the
-  # environment set below, whatever --workspace names. The flag names this row, which is what the Mac
-  # hook's from_row_on_host wants anyway. So the flag agrees with that environment, and it stays correct if
-  # a later cmux does read it.
-  if [[ -n "$relay_ws" ]]; then ws=(--workspace "$relay_ws"); fi
-  env -u CMUX_SOCKET "${relay_ident[@]}" "$c" notify "${ws[@]}" --title "$title" --body "$body" >/dev/null 2>&1 \
-    || { warn "cmux notify failed; run the line below on the Mac"; return 1; }
 }
 
 # Resolve the MAIN checkout root for a path. A linked worktree resolves back to its main checkout.
@@ -815,20 +800,6 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
     args=(-- "$brief")                           # Codex always restarts from the brief
   fi
   : > "$(wt_started "$name")"
-  if is_remote && [[ ${WT_STATUS_BRIDGE:-} == 1 && -n ${TMUX:-} && ${CMUX_SOCKET_PATH:-} == *:[0-9]* ]]; then
-    WT_STATUS_OWNER_PID=$$ WT_STATUS_OWNER_PANE=${TMUX_PANE:-}
-    WT_STATUS_SOURCE=$([[ $agent == claude ]] && echo 'Claude Code' || echo Codex)
-    WT_STATUS_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/wt-agent-status/$(wt_session "$name" "$REPO")"
-    (umask 077; mkdir -p "${WT_STATUS_FILE%/*}")
-    rm -f "$WT_STATUS_FILE"
-    export WT_STATUS_OWNER_PID WT_STATUS_OWNER_PANE WT_STATUS_FILE
-    ( while kill -0 "$WT_STATUS_OWNER_PID" 2>/dev/null; do
-        sleep 45
-        kill -0 "$WT_STATUS_OWNER_PID" 2>/dev/null || break
-        [[ -r $WT_STATUS_FILE ]] && WT_STATUS_HEARTBEAT=1 AGENT_NOTIFY_SOURCE="$WT_STATUS_SOURCE" agent-notify </dev/null || true
-      done ) >/dev/null 2>&1 &
-    WT_STATUS_HEARTBEAT_PID=$!
-  fi
   # cmux 0.65 shows a VM agent's state through the cmux-tui hooks. Give them this row's terminal at each hook.
   # lib/workgrove/cmux-tui-hook.sh explains why the pane's own environment names the wrong terminal.
   if is_remote && [[ -n ${TMUX:-} && -x $WG_LIB_DIR/cmux-tui-hook.sh ]]; then
@@ -840,7 +811,6 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
     export CMUX_TUI_HOOK="$WG_LIB_DIR/cmux-tui-hook.sh"
   fi
   "$agent" "${model_arg[@]}" "${extra[@]}" "${args[@]}" || rc=$?
-  [[ -n ${WT_STATUS_FILE:-} ]] && wt_cleanup
   [[ $rc -eq 0 ]] || warn "$agent exited with status $rc"
   return 0
 }
@@ -1079,8 +1049,8 @@ cmd_rm() {
     # Check the relay setup only after the reasons above, while the worktree is still intact.
     host=$(wt_host)
     hook_ok_repo || die "cannot request Mac row cleanup for $REPO"
-    local _socket _ws _ident=() _tui_socket _tui_terminal
-    if ! relay_env _socket _ws _ident _tui_socket _tui_terminal; then
+    local _ident=() _tui_socket _tui_terminal
+    if ! relay_env _ident _tui_socket _tui_terminal; then
       [[ -z ${CMUX_TUI_SOCKET:-} ]] \
         || die "this row predates native teardown; close and reopen this row on the Mac: wt -H $host attach -r $(shell_join "$REPO") $name, then retry"
       die "cannot find the Mac cmux relay in this session"
@@ -1114,16 +1084,6 @@ cmd_rm() {
     if [[ $native -eq 1 ]]; then
       # The row execs its tmux client. Stopping this session ends the terminal and its Mac row.
       tmux kill-session -t "=$session"
-    elif [[ $self_remote -eq 1 ]]; then
-      # The Mac hook closes the row and kills this session.
-      # If this process is still alive after the hook's deadline, the cleanup did not finish.
-      if notify_mac wt-close host "$host" repo "$REPO" task "$name"; then
-        local close_wait="${WT_CLOSE_WAIT_SECONDS:-22}" i
-        [[ "$close_wait" =~ ^[0-9]+$ ]] || close_wait=22
-        for ((i=0; i<close_wait; i++)); do sleep 1; done
-      fi
-      warn "worktree removed, but its Mac row or tmux session is still open"
-      warn "on the Mac: close row $(row_title "$name") $(row_tag "$host" "$REPO") (titled $(repo_id "$REPO"):$name if an older wt made it), then run: ssh $host tmux kill-session -t '=$session'"
     else
       tmux kill-session -t "=$session" 2>/dev/null || true   # the Mac owns the row
     fi

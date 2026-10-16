@@ -125,11 +125,6 @@
         "command": "jq -c 'if .context.appFocused then {effects:{desktop:false}} else {} end'",
         "id": "quiet-when-focused",
         "timeoutSeconds": 5
-      },
-      {
-        "command": "~/.local/bin/cmux-hook",
-        "id": "wt",
-        "timeoutSeconds": 20
       }
     ],
     "paneFlash": true,

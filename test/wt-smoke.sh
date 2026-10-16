@@ -918,17 +918,6 @@ scenario_list_show_path() {
     rm -f "$FAKE_BIN/code"
   fi
   # A VM receives only cmux's delivery result, never the Mac hook's launch result.
-  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=test CMUX_SOCKET_PATH=127.0.0.1:12345 WT_HOST=fakevm TMUX=)
-  stub_cmux alive
-  assert_wt_ok "VM wt open sends a request" open a1 -r "$ra"
-  assert_has "…reports a request, not a launched window" "$WT_OUT" "requested VS Code on the Mac: fakevm:$ra/.worktrees/a1"
-  assert_has "…labels the manual command as conditional" "$WT_OUT" "if no window appears, run on the Mac: wt -H fakevm open -r $ra a1"
-  assert_lacks "…does not claim a window opened" "$WT_OUT" "opened in VS Code"
-  assert_grep "…sent the notification" "$CMUX_LOG" "notify --title wt-open"
-  stub_cmux dead
-  assert_wt_fails 1 "VS Code request to the Mac failed" open a1 -r "$ra"
-  assert_has "…gives the manual command on relay failure" "$WT_OUT" "Run on the Mac: wt -H fakevm open -r $ra a1"
-  assert_lacks "…does not report a successful request" "$WT_OUT" "requested VS Code on the Mac:"
   # Native SSH rows have a Unix socket and terminal ID instead of a TCP relay.
   ln -s "$CMUX_ALIVE" "$FAKE_BIN/cmux-tui"
   WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=test CMUX_TUI_SOCKET=/tmp/native WT_HOST=fakevm TMUX=
@@ -936,11 +925,16 @@ scenario_list_show_path() {
   stub_cmux alive
   : > "$CMUX_LOG"
   assert_wt_ok "native VM wt open sends a request" open a1 -r "$ra"
+  assert_has "VM reports a request" "$WT_OUT" "requested VS Code on the Mac: fakevm:$ra/.worktrees/a1"
+  assert_has "VM labels the manual command as conditional" "$WT_OUT" "if no window appears, run on the Mac: wt -H fakevm open -r $ra a1"
+  assert_lacks "VM does not claim a window opened" "$WT_OUT" "opened in VS Code"
   assert_grep "native request names the socket and terminal" "$CMUX_LOG" "--socket /tmp/native notify --surface term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --title wt-open"
   assert_lacks "native request does not use a Mac workspace ID" "$(cat "$CMUX_LOG")" "--workspace"
   rm "$FAKE_BIN/cmux-tui"
   ln -s "$CMUX_DEAD" "$FAKE_BIN/cmux-tui"
   assert_wt_fails 1 "cmux-tui notify failed" open a1 -r "$ra"
+  assert_has "VM gives the manual command on relay failure" "$WT_OUT" "Run on the Mac: wt -H fakevm open -r $ra a1"
+  assert_lacks "VM does not report a successful request" "$WT_OUT" "requested VS Code on the Mac:"
   rm "$FAKE_BIN/cmux-tui"
   WT_RELAY_ENV=()
   REPOS_DIR="$saved"
@@ -1369,9 +1363,10 @@ STUB
   chmod +x "$fake/tmux" "$fake/pgrep"
   stub_cmux alive
   WT_PATH_PREFIX="$fake" WT_CWD="$r"
-  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SOCKET_PATH=127.0.0.1:23456" "CMUX_WORKSPACE_ID=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"
+  : >"$TEST_ROOT/self-tmux.log"
+  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "CMUX_TUI_SOCKET=/tmp/native"
                 "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=$session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log"
-                "WT_CLOSE_WAIT_SECONDS=0")
+                "SELF_TMUX_NATIVE=1")
   printf 'unsaved\n' >"$r/.worktrees/self/scratch.txt"
   assert_wt_fails 3 "1 uncommitted change(s)" rm self -r "$r"
   assert_dir "refusal kept the worktree" "$r/.worktrees/self"
@@ -1382,8 +1377,6 @@ STUB
   assert_wt_fails 3 "1 uncommitted change(s)" rm self -r "$r"
   assert_dir "dirty refusal takes precedence over missing host" "$r/.worktrees/self"
   guard_scratch_root "$r/.worktrees/self"; rm -f "$r/.worktrees/self/scratch.txt"
-  assert_wt_fails 1 "WT_HOST is not set" rm self -r "$r"
-  assert_dir "missing host left the worktree intact" "$r/.worktrees/self"
   WT_RELAY_ENV[0]="WT_HOST=test-vm"
   WT_RELAY_ENV[4]="SELF_TMUX_SESSION=wt-$(basename "$r")-sandboxed"
   WT_SANDBOX=seatbelt
@@ -1407,9 +1400,7 @@ STUB
   assert_wt_ok "VM self-removal" rm self -r "$r"
   assert_gone "self-removal removed the worktree" "$r/.worktrees/self"
   assert_branch "$r" wt/self no
-  assert_has "self-removal asked the Mac to close the row" "$(cat "$CMUX_LOG")" "--title wt-close"
-  assert_has "an unanswered request warns about incomplete cleanup" "$WT_OUT" "Mac row or tmux session is still open"
-  assert_lacks "VM did not kill its own tmux session first" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
+  assert_has "VM ends its own tmux session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=other-session"
                 "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_OTHER_ACTIVE=1")
   assert_wt_fails 1 "another agent is running" rm sandboxed --force -r "$r"
@@ -2526,12 +2517,6 @@ STUB
     CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa CMUX_TUI_SESSION_ID=session_test CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
     "$WT_BASH" -c "$line"
   assert_lacks "client replacement preserves an older row's cleanup contract" "$(cat "$TEST_ROOT/tmux-cmd.log")" "WT_CMUX_CLOSE_ON_EXIT 1"
-  line=$(tmux_cmd wt-test)
-  : >"$TEST_ROOT/tmux-cmd.log"
-  env PATH="$fake:$PATH" TMUX_CMD_LOG="$TEST_ROOT/tmux-cmd.log" \
-    CMUX_TUI_SOCKET= CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= \
-    "$WT_BASH" -c "$line; echo shell-remains >> \"\$TMUX_CMD_LOG\""
-  assert_has "legacy launch retains its relay shell" "$(cat "$TEST_ROOT/tmux-cmd.log")" "shell-remains"
 
   end_scenario
 }
@@ -2578,7 +2563,7 @@ expected_assertions() {
 }
 
 # All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=708
+FIXED_ASSERTIONS=698
 # The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
 # is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
 # fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
