@@ -54,7 +54,7 @@ It also covers per-repo hooks and the logins that you supply.
   If the session already exists, the shell takes it over instead.
 
 - **Rows are found by title, repo and host, in every window.**
-  The **Mac hook** is `bin/cmux-hook`, the cmux notification hook on the Mac.
+  The **Mac hook** is `bin/cmux-hook`, the native notification event handler on the Mac.
   `wt` and the Mac hook look for rows in every cmux window, not only in the caller's window.
   - *Why rows move between windows:* a cmux window shows one row at a time.
     To put two tasks side by side on screen, you need two windows, and you drag one task's row into the second window.
@@ -65,9 +65,11 @@ It also covers per-repo hooks and the logins that you supply.
     - `wt -H <vm> attach` made a second row next to the row that was already there.
     - `wt new` did not detect a row title that another repo already used.
     - The Mac hook could not prove that a VM's `wt open` came from that VM, so it did nothing.
-  - *The evidence:* Measured on cmux 0.64, a row keeps its id, its title and its `workspace:N` ref when it moves.
+  - *The earlier evidence:* Measured on cmux 0.64, a row keeps its id, its title and its `workspace:N` ref when it moves.
     Every command that acts on a row (select, send, close, set-description) finds the row by id in any window.
     Only the listing is limited to the caller's window.
+    On cmux 0.65.1, a moved native VM row kept its UUID, title, and ref.
+    Combined window lookup, description updates, targeted input, and self-removal also passed.
   - *The decision:* `rows_json` in `bin/wt` and `ws_load` in `bin/cmux-hook` enumerate the windows and merge their lists.
     Because the commands that act on a row already reach it in any window, no other code had to change.
     Both functions enumerate windows by window uuid, never by the index that `cmux list-windows` prints first, because opening a window renumbers the other windows.
@@ -116,8 +118,8 @@ workgrove/
 │   └── workflows/tests.yml    GitHub Actions: shellcheck and every suite in test/, on macOS and Ubuntu
 ├── bin/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
-│   ├── agent-notify           agent lifecycle hook, relays to cmux or posts a banner
-│   ├── cmux-hook              Mac-side cmux notification hook: remote row requests and agent status
+│   ├── agent-notify           agent lifecycle hook for Mac banners outside cmux
+│   ├── cmux-hook              Mac event handler for native VM row requests
 │   ├── github-guard           Claude PreToolUse hook: GitHub reads, pushes, PRs, issues, comments, reviews
 │   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 ├── lib/
@@ -125,7 +127,6 @@ workgrove/
 │       ├── common.sh          shared helpers that bin/wt, cmux-hook and agent-notify load
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
 │       └── vm/                scripts that bin/wt sends to a VM on SSH standard input
-│           ├── clear-stale-relay.sh
 │           ├── host-new-preflight.sh
 │           ├── probe-host.sh
 │           ├── reinit-client-confirm.sh
@@ -156,9 +157,7 @@ workgrove/
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with a fake gh
 │   ├── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
-│   ├── native-relay-smoke.sh  native VM requests, the cmux-tui hook wrapper, and automation backups
-│   ├── agent-status-smoke.sh  VM status relay and Mac row lifecycle with fake cmux
-│   └── agent-status-linux-smoke.sh  Linux owner gate, heartbeat and Esc watcher
+│   └── native-relay-smoke.sh  native VM requests, the cmux-tui hook wrapper, and automation backups
 └── docs/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
@@ -192,10 +191,9 @@ It also describes what a run changes, the repo's test suites, and how to remove 
   - `install.sh` still runs under bash 3.2. To check that, run its smoke test with `INSTALL_BASH=/bin/bash`
     (see Tests).
 - **tmux:** the VMs have tmux 3.2a, and `home/.tmux.conf` is written for that version.
-- **cmux:** workgrove supports only the latest cmux release. cmux releases often, and each release can change the
-  commands, fields, and behavior that `wt` depends on. So workgrove tracks the newest release and removes the
-  paths that older releases needed, instead of keeping both. The verified release is 0.65.0 (build 108). See the
-  [cmux compatibility log](#cmux-compatibility-log) for verified behavior.
+- **cmux:** workgrove supports 0.65.1 (build 110). Version 0.65.2 is unverified.
+  Support moves to a newer release after verification, rather than automatically when that release appears.
+  See the [cmux compatibility log](#cmux-compatibility-log) for verified behavior and remaining checks.
   `home/.config/cmux/cmux.json` is `schemaVersion: 1`.
 - **Other tools:** on a Mac, `Brewfile` installs `gh`, `fzf`, cmux itself, Claude Code, and Codex. On a VM,
   [docs/new-vm.md](docs/new-vm.md) installs them.
@@ -236,17 +234,15 @@ and cmux layout. So `install.sh` installs each piece only when you give its flag
 `--opinionated-config` installs all seven at once. `--refresh-config` replaces the machine-local copies (see
 File classes). It is independent of the opt-in flags, and all of these flags combine in any order.
 
-The **relay** in the table below is cmux's channel from a VM row back to cmux on the Mac.
-
 | Flag | Asks for | What arrives instead when you leave it out |
 |---|---|---|
 | `--with-zshrc` | `~/.zshrc`, with the oh-my-zsh theme, the oh-my-zsh prerequisite, and a clone of the two plugins that it enables | Nothing. Your `~/.zshrc` stays untouched. A default install therefore has no oh-my-zsh prerequisite and no network step at all. |
 | `--with-gitconfig` | `~/.gitconfig`: `core.excludesFile`, the github.com credential helper, and the `~/.gitconfig.local` include | Its two core-setup settings only, written into your own `~/.gitconfig`. See the fallbacks below. |
-| `--with-tmux-conf` | `~/.tmux.conf`: the relay line, plus tuning that makes Claude in tmux feel like a bare terminal (listed below the table) | Its one core-setup line, appended to your own `~/.tmux.conf`. See the fallbacks below. |
+| `--with-tmux-conf` | `~/.tmux.conf`: tuning that makes Claude in tmux feel like a bare terminal (listed below the table) | Nothing. Your `~/.tmux.conf` stays untouched. |
 | `--with-keybindings` | `~/.claude/keybindings.json` | Nothing. Claude keeps its own keymap. |
 | `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing. Also, `install.sh` strips `statusLine` from the `~/.claude/settings.json` copy, because that key names a script that would not be there. |
 | `--with-claude-ui` | No file of its own: the `tui`, `voice`, and `theme` keys and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS`, kept in the `~/.claude/settings.json` copy | `install.sh` deletes those keys from the copy, so Claude keeps its own full-screen setting, voice mode, theme, and mouse handling. The hooks and permissions in the same file arrive either way. |
-| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. It also holds the one entry that is core setup. | That one entry only, merged into your own `~/.config/cmux/cmux.json`. See the fallbacks below. |
+| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. | Nothing. Your `~/.config/cmux/cmux.json` stays untouched. |
 
 The full `~/.tmux.conf` from `--with-tmux-conf` tunes tmux with true color, a 10 ms `escape-time`,
 Shift+Enter, and focus events. It also makes the mouse wheel scroll instead of typing arrow keys.
@@ -259,46 +255,20 @@ personal preference:
 
 ### Fallbacks that edit your own files
 
-When you leave out `--with-gitconfig`, `--with-tmux-conf`, or `--with-cmux-config`, `install.sh` adds only the
-core-setup part to your own file:
+When you leave out `--with-gitconfig`, `install.sh` adds the core setup to your own file:
 
 - **`~/.gitconfig`:** `install.sh` writes two settings with `git config --global`. `core.excludesFile` is what
   git-ignores `.worktrees/`. The `~/.gitconfig.local` include is where your identity lives. Every other line
   of your file stays as it is.
-- **`~/.tmux.conf`:** `install.sh` appends one line, `set -ag update-environment`, and creates the file if you
-  have none. Every line already there stays in place. That line is how cmux's relay variables reach a pane
-  started in an already-running session.
-- **`~/.config/cmux/cmux.json`:** `install.sh` merges the `notifications.hooks` entry that names
-  `~/.local/bin/cmux-hook`, and creates the file if you have none. It appends the entry last, so any hook of
-  yours that suppresses a notification still runs first. The merge is keyed on the entry's `id`, so a rerun
-  changes nothing. `schemaVersion` and every other key stay as they are.
-
 - **`~/.cmuxterm/automations.json`:** On the Mac, `install.sh` adds the `wt-native-relay` rule for native VM requests.
   It preserves existing rules and backs up the file before replacement.
   Run `cmux automation reload` after installation.
   See [VM requests after cmux 0.65](docs/vm-open-relay.md) for the transport changes and existing-row recovery.
 
-A running cmux does not read `cmux.json` again. So after the merge, or after you paste the JSON yourself (see
-below), run `cmux reload-config` or relaunch cmux.
-
 There is one deliberate exception to these fallbacks. If `core.excludesFile` already points at a file of your
 own, `install.sh` keeps that file and does not overwrite it. It prints a message instead. In that case, add the
 lines of `.gitignore_global` to your file yourself. The reason for the exception is that an overwrite would
 silently drop every global ignore you had. That harm is what this whole opt-in design is about.
-
-### When the cmux merge declines
-
-The cmux merge is the one fallback that can decline. It declines in these cases:
-
-- Your `cmux.json` is a symlink that a dotfile manager owns.
-- `jq` cannot parse your `cmux.json`. `//` comments are the common case, because cmux accepts JSONC (JSON with
-  comments) and `jq` does not.
-- `notifications.hooks` is not the shape that the merge expects.
-- A hook with that `id` already runs something else.
-
-If the merge declines, it does nothing, says why, and prints the exact JSON to paste. Paste that JSON into your
-`cmux.json` yourself. The install still succeeds. But until you paste the JSON, the relay does not work, so a
-`wt` row on a VM never attaches or opens.
 
 ### How the choice persists
 
@@ -374,7 +344,6 @@ pull request. The workflow makes these checks:
   - On Ubuntu, the job stops when `tmux` is missing, because every VM has tmux. Without tmux, `wt rm` on a
     VM cannot check for a running agent, so it keeps the worktree, and `wt-smoke.sh` fails. The Ubuntu
     runner images include tmux.
-  - `agent-status-linux-smoke.sh` makes its checks only on Linux.
 - The workflow uses no secrets, and its token can only read the repository. The suites contact no host.
   `GIT_ALLOW_PROTOCOL=file` limits git in the suites to local repositories.
 
@@ -389,13 +358,11 @@ for suite in test/*-smoke.sh; do
 done
 ```
 
-Each suite ends with a count line of the form `<n> assertions: <n> passed, 0 failed`. On the Mac,
-`agent-status-linux-smoke.sh` prints only `Linux only`. A failed suite exits non-zero, and the loop then
-prints `FAILED:` and the suite's path.
+Each suite ends with a count line of the form `<n> assertions: <n> passed, 0 failed`.
+A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path.
 
-- **`bash test/install-smoke.sh`** is the repo's smoke test. It makes 649 assertions across seventeen scenario
-  groups. The groups make fifty runs, because most groups have several cases and one group loops over five
-  flags. Each run uses its own throwaway `$HOME` with no network.
+- **`bash test/install-smoke.sh`** checks installation across seventeen scenario groups.
+  Each run uses its own throwaway `$HOME` with no network.
   - It covers:
     - the default no-flags install, into an empty home and over a stranger's own dotfiles
     - `--opinionated-config`, and each file flag on its own
@@ -404,13 +371,12 @@ prints `FAILED:` and the suite's path.
     - the don't-clobber branches of `configure_git`, retirement of renamed links, and `ZSH_CUSTOM`
   - Set `INSTALL_BASH=/bin/bash` to run `install.sh` itself under bash 3.2, which is what a fresh Mac gives it.
   - Set `FORCE_OS=Linux` to drive the Linux-only steps from a Mac.
-  - On a VM it makes 501 assertions, because scenario 17 is about a Mac file and does not run there.
   - A run on a VM is useful, because `FORCE_OS` cannot fake everything that a real Linux box differs in.
     For example, a VM run found that the suite built its fixtures with whatever umask the machine had.
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 941 assertions over sixteen groups against throwaway git repos. Because
+- **`bash test/wt-smoke.sh`** makes 835 assertions over sixteen groups against throwaway git repos. Because
   the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
@@ -434,13 +400,8 @@ prints `FAILED:` and the suite's path.
   - That `wt rm` refuses while an agent runs in any row that may be the task's, whatever the order of the rows.
     Such a row can have a second line that the user edited or cleared. It can also be a local row whose
     directory is in the worktree, as written or through a symlink.
-  - That a suspended VM row's relay is cleared only when a user-owned `sshd` or `sshd-session` holds its
-    mapped port. The port can be on any local address, and the connection must not be from the Mac's current
-    address.
-  - That `wt` types into a recovered row, `--reattach` included, only when all of these are true:
-    - The row is at a shell prompt that names `user@host` (on its own line or the one above).
-    - The row is still connected.
-    - The VM lists no tmux client on the session.
+  - That automatic reattachment requires a connected row, a recognizable task-shell prompt, and a fresh detached-session check.
+  - That explicit `--reattach` requires a shell prompt naming `user@host`, on its own line or the line above.
   - That client replacement requires a fresh status message visible in that row.
   - That `bin/wt`, when `/bin/bash` starts it, runs under bash 5, or stops with a message that names the fix.
   - The last group is different: it tests the `rm -rf` of `test/lib.sh` itself. No real run reaches that
@@ -448,7 +409,7 @@ prints `FAILED:` and the suite's path.
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 683 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
+  On a VM, the suite makes 592 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
   `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
   relay and never consults cmux at all.
 - **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
@@ -459,12 +420,12 @@ prints `FAILED:` and the suite's path.
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
 - **`bash test/named-outputs-smoke.sh`** checks output variables whose names match internal locals, including arrays and forwarded outputs.
-- **`bash test/lib-smoke.sh`** makes 279 assertions about all fourteen functions in `lib/workgrove/common.sh`.
+- **`bash test/lib-smoke.sh`** makes 268 assertions about all fourteen functions in `lib/workgrove/common.sh`.
   It checks versioned task results, malformed records, duplicate records, and the text fallback.
   It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.
   Fixed cmux responses cover row lists across windows, failure policies, checked validation, command wrappers, and lookup by title, repo, and host.
   It pins the exact `tmux_cmd` output for task, `shared`, and `reinit` forms.
-  A stub tmux checks relay identity precedence, explicit empty values, unset names, and native and TCP sessions.
+  A stub tmux checks native identity precedence, explicit empty values, and unset names.
   It does not contact a host.
 - **`bash test/remote-new-smoke.sh`** uses scratch SSH and cmux stubs. It checks these cases:
   - remote task preflight and model forwarding
@@ -493,17 +454,12 @@ prints `FAILED:` and the suite's path.
   It also checks that `wt run` gives the cmux-tui agent hooks the terminal ID from the task's tmux session.
   It uses a scratch home and fake commands.
   It loads only the automation merge function; it does not run `install.sh`.
-- **`bash test/agent-status-smoke.sh`** checks the VM lifecycle relay and the Mac row status handler with a fake
-  cmux. It covers Running, Idle, clear, interruption, delayed events, stale-status expiry, and failed
-  self-teardown cleanup. Stub tmux and cmux commands check the notification child's relay identity after a session change.
-  It needs no VM.
-- **`bash test/agent-status-linux-smoke.sh`** runs on a Linux VM. It checks the real process owner gate,
-  transcript interruption, heartbeat state, and relay timeout against scratch files and a fake cmux.
 - **`bash test/bash5-smoke.sh`** checks all five scripts under bash 5.
   On the Mac, it also starts each script with `/bin/bash` 3.2 and checks the final interpreter.
   Script copies use scratch paths to test missing candidates, older candidates, and candidate order.
-  With no bash 5, the hooks drain their payloads and exit 0 without an answer.
-  With copies that have no `lib/`, the suite checks that `wt` stops and that the hooks drain their payloads and exit 0.
+  With no bash 5 or no `lib/`, `wt` stops and the hooks exit 0 without an answer.
+  `agent-notify` drains its payload.
+  `cmux-hook` reads its event from the environment and leaves standard input unread.
   Through a relative link to an absolute link, the suite checks that each script finds `lib/` from another folder.
   The suite makes 139 assertions on the Mac and 31 on a VM.
 
@@ -543,8 +499,6 @@ prints `FAILED:` and the suite's path.
 7. Undo by hand the edits that `install.sh` made in place instead of replacing a file. They are not in the
    backup:
    - On a VM: the lines it appended to `~/.zshenv.local`, and the `~/.zshenv` line at the top of `~/.bashrc`.
-   - Without `--with-tmux-conf` (for example, on a default run): the `set -ag update-environment` line appended
-     to your own `~/.tmux.conf`.
    - Without `--with-gitconfig` (for example, on a default run): the `core.excludesFile` and
      `~/.gitconfig.local` include added with `git config --global`.
 
@@ -565,7 +519,7 @@ steps to recover a VM row.
 | Shell on a VM | ⌃⌥⌘T → `<vm>` → `vm-shell`. The row title is `shell`, and its second line is `@<vm>`. If you type a host that is not a configured alias, `wt` tries it as typed. Requests from inside that VM need a real `Host` entry |
 | Shell in a repo | ⌃⌥⌘T → where → `repo-shell` → repo. The row title is `<repo> shell` |
 | Re-open a VM task's row | Run `wt -H <vm> attach -r <repo> <name>`. For what it does in each state, see [Recover a VM row](#recover-a-vm-row) |
-| Reconnect after sleep or Wi-Fi loss | cmux usually reconnects the row itself. If the terminal misbehaves or the row stays `[ssh:suspended]`, see [Recover a VM row](#recover-a-vm-row) |
+| Reconnect after sleep or Wi-Fi loss | cmux usually reconnects the row itself. If the terminal misbehaves or the row does not reconnect, see [Recover a VM row](#recover-a-vm-row) |
 | Hand back | The agent reports the branch. It runs `wt pr <name>` only when you ask for it |
 | Clean up | `wt rm <name>`, `wt -H <vm> rm -r <repo> <name>`, `wt prune` |
 | Update a machine | `wt update`, `wt -H <vm> update`. Add `--refresh-config` only after you review a `.base` change |
@@ -584,7 +538,7 @@ and the brief are both blank, the name is `task-<timestamp>`. A blank brief is a
 
 ### Recover a VM row
 
-Use this section when the row of a VM task is closed, suspended, or does not work correctly. The recovery
+Use this section when the row of a VM task is closed or does not work correctly. The recovery
 command is `wt -H <vm> attach -r <repo> <name>`. In this section, `attach` means that command.
 
 What `attach` does depends on the state of the task and its row:
@@ -592,7 +546,6 @@ What `attach` does depends on the state of the task and its row:
 | State | What `attach` does |
 |---|---|
 | The task has never had a tmux session or `.started` marker | It starts the task |
-| The row is suspended | It tries to recover the row. See [Recover a suspended row](#recover-a-suspended-row) |
 | The row is connected, and its agent is attached | It replaces that task's tmux client (a replacement attach), so tmux sends the mouse, focus, bracketed paste and extended-key settings again |
 | A fresh VM check shows the tmux session detached | It reattaches tmux only when the row also shows a recognizable task-shell prompt |
 | The task was started before, but it has lost its agent | It refuses and prints the `--restart-agent` line. That line resumes Claude with `-c` |
@@ -604,41 +557,8 @@ misbehaves after it reconnects, find your symptom in this table:
 |---|---|
 | After a reconnect, the mouse wheel types arrow keys, or paste or Shift+Enter misbehaves | Run `attach`. It restores tmux's terminal settings |
 | A replacement attach failed and left the row at its shell prompt | At that prompt, run `attach` with `--reattach` |
-| After a Wi-Fi network switch, the row shows `[ssh:suspended]` and the relay error | Run `attach`. See [Recover a suspended row](#recover-a-suspended-row) |
 | cmux says `remote session was lost; starting a new shell`, the connected row shows a bare shell, and the VM still lists its old tmux client | Run `attach` with `--reattach` |
 | The VM rebooted | A VM reboot ends the tmux session. Run `attach` with `--restart-agent` |
-
-#### Recover a suspended row
-
-A Wi-Fi network switch can leave the row `[ssh:suspended]` with this error:
-
-`Error: ssh-pty-attach: The cmux relay on <vm> did not become ready (the host may not allow SSH remote port forwarding). Automatic reconnect paused; use Reconnect to try again.`
-
-The port-forwarding warning in this message is misleading. After the Mac's IP address changes, the old SSH
-session may still hold the row's fixed relay port on the VM. So **Reconnect** cannot work until that
-session closes.
-
-To recover the row, run `attach`. For a suspended row, `attach` does these steps:
-
-1. It maps the row's daemon slot to its relay port.
-2. While the row is suspended, it stops only a user-owned `sshd` (or `sshd-session`, OpenSSH 9.8+) that
-   listens on that port on any local address. If that `sshd`'s connection comes from the Mac's current
-   address, that session may still be live. So `attach` refuses at this step and signals no process.
-3. It calls cmux's reconnect RPC (remote procedure call) for that row and waits up to 30 seconds.
-4. It checks the VM session and the row screen.
-5. It reattaches a detached tmux session only at a recognizable task-shell prompt. For an attached task, it
-   re-initializes the client.
-6. Otherwise, it selects the row and prints the exact `--reattach` command.
-
-`attach` also warns when the VM's sshd has no `ClientAliveInterval`. Block 1 of
-[docs/new-vm.md](docs/new-vm.md) sets one.
-
-> **Warning:** Inspect the row before you run the printed `--reattach` command.
-
-If recovery fails, do these steps:
-
-1. Wait for the VM to drop the old SSH session. With the keepalive from block 1, this takes about a minute.
-2. Press **Reconnect** on the row, or run the same `attach` again.
 
 ## `wt` commands
 
@@ -770,11 +690,10 @@ On a VM, these rules apply to a task that runs in its own tmux session:
   After removal, stopping that tmux session ends the terminal and closes its Mac row.
 - If `wt rm` reports that a native row predates this change, it keeps the worktree and prints an attach command.
   Close that row on the Mac, run the attach command, then retry self-removal.
-- Older cmux rows use the TCP relay and Mac hook.
-  The hook closes the verified task row with cmux's `--force`, then stops its tmux session.
+- A native row with a complete relay identity but no cleanup marker requests `wt-close` from the Mac hook.
+  The hook closes the row before stopping tmux, so the row cannot recreate the session.
+  If cleanup does not finish, `wt rm` prints the manual cleanup commands.
 - A refusal leaves both the row and the tmux session open.
-- If the agent is still running after the Mac hook's deadline, `wt rm` warns and names the row and session
-  to close from the Mac.
 
 ### How `wt` decides that a branch is merged
 
@@ -958,20 +877,22 @@ It also tells how to enable VM status on an existing VM.
 This log records cmux versions verified with workgrove. It does not establish support for untested versions.
 Run `cmux version` to check your installed version.
 
-workgrove supports only the latest cmux release. When a new release changes a command, a field, or a behavior that
-`wt` depends on, workgrove moves to the new release and removes the old path. It does not keep a path for each
-release. So the log has one supported row at a time, and an older row is history.
+workgrove supports cmux 0.65.1 until a newer release passes verification. Version 0.65.2 is unverified.
+The log has one supported version at a time. Older rows record historical verification.
+Support does not include the removed cmux 0.64 TCP relay paths.
 
-| Supported cmux version | Verified on | Verified behavior |
-|---|---|---|
-| 0.65.0 (build 108, `dda24fbd2`) | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
+| cmux version | Status | Verified on | Verified behavior |
+|---|---|---|---|
+| 0.65.1 (build 110, `8a853dcc9`) | Supported; native VM and cross-window checks passed | 2026-10-16 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. |
+| 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
 
-[PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to this version's row-closing behavior.
+[PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to cmux 0.65.0's row-closing behavior.
 Local self-removal uses cmux's `--force` only for the verified caller's own row.
 Native VM rows exit with their task's tmux session.
 The earlier `0.64 or newer` requirement did not guarantee compatibility with these changes.
 
-Record each supported version here after testing Claude and Codex self-removal on both the Mac and a VM.
+For each supported version, record the exact build, verified behavior, and remaining checks.
+[VM verification on cmux 0.65.1](docs/vm-open-relay.md#verification-on-cmux-0651) records the current live checks.
 
 ### Hotkeys and configuration
 
@@ -1006,7 +927,7 @@ It also tells when a desktop banner appears instead, and what else the Mac hook 
 `hooks.base.json`. They call `bin/agent-notify`. That script acts as follows:
 
 - In a local cmux pane, it leaves lifecycle tracking to cmux.
-- From a VM pane, it relays the event to the Mac over the cmux socket.
+- On a VM, it leaves lifecycle tracking to cmux-tui.
 - Otherwise, on a Mac, it posts a desktop banner.
 
 **Status from a VM task on cmux 0.65:**
@@ -1016,40 +937,9 @@ It also tells when a desktop banner appears instead, and what else the Mac hook 
 - `wt run` points these hooks at `lib/workgrove/cmux-tui-hook.sh`.
   At each hook, that wrapper reads the row's terminal ID from the task's tmux session.
   Without it, the hooks report to the row that started the tmux server, or to the row from before a reattach.
+- An Esc interruption on a native row was not tested.
 - [Agent status in VM rows](docs/vm-agent-status.md) gives the cause, the check for
   the cmux-tui hooks, and the verification.
-
-**Status from a VM task on cmux 0.64 (TCP relay rows):**
-
-- On the VM, the agent that `wt run` starts sends status updates for prompt, completion, interruption,
-  and session end.
-- On the Mac, the Mac hook (`bin/cmux-hook`) checks that cmux assigned each update to a row connected
-  to the host that the update names. Then it sets that row's `vm-claude` or `vm-codex` status
-  to Running or Idle, or it clears the status.
-- Each status update carries a sequence number, so a delayed update cannot revive an old status.
-
-**The status lease (cmux 0.64 rows).** While `wt run` is alive, its heartbeat renews a two-minute status lease.
-A dead process or a reboot stops the renewals. When cmux next delivers a notification, the Mac hook
-clears an expired status pill (the status that the row shows in the sidebar). The hook's background timer,
-a detached process, also tries to clear the pill. But after the hook exits, cmux may reject that process.
-
-**Why the VM rows use their own status keys.** cmux 0.64's remote CLI has no sidebar status method and
-no agent lifecycle relay. Also, cmux clears its reserved `claude`/`codex` status keys when an SSH pane
-has no local agent process. The VM-specific keys, `vm-claude` and `vm-codex`, avoid that cleanup.
-
-**The control notification (cmux 0.64 rows).** Each status update from a VM reaches the Mac as a control notification.
-When the Mac hook is active, this notification does not appear in history or in banners.
-If the hook is missing, the fallback is a readable status notification.
-
-**Claude events on a cmux 0.64 VM row:**
-
-- Claude's `StopFailure` and `idle_prompt` events return its row to Idle.
-- After you press Esc, the heartbeat also detects Claude's interruption markers in the transcript,
-  including an interrupted tool.
-- If you press Esc while Claude is thinking and Claude writes no marker, the row can stay Running
-  until the next lifecycle event.
-- `/clear` leaves the agent at Idle.
-- On a cmux 0.65 row, only the cmux-tui hooks report the state. An Esc interruption there was not tested.
 
 **Requests from VM tasks.** The same Mac hook handles the `wt-open` and `wt-attach` requests.
 For `wt-open`, it opens the remote folder in VS Code. For `wt-attach`, it creates the row for the new VM task.
@@ -1062,18 +952,10 @@ Expect that state only when Codex itself prompts you.
 
 Do these steps to turn on VM status for an existing VM. Do them in this order.
 
-The Mac enables status relay only when it finds the installed hook and its `cmux.json` entry.
-So an old Mac install cannot make an updated VM post status traffic. That is why you update the Mac first.
-
-A plain `wt update` does not replace the machine-local `hooks.json`. That is why step 3 uses `--refresh-config`.
-
-1. Update the Mac.
-2. Make sure that cmux has loaded the `notifications.hooks` entry for `cmux-hook` in the Mac's `cmux.json`.
-   If you changed `cmux.json`, run `cmux reload-config`.
-3. Run `wt -H <vm> update --refresh-config`.
-4. In Codex on that VM, run `/hooks`. Review and trust the changed Codex hooks.
-5. Exit the agent in the task row.
-6. Run `wt -H <vm> attach --restart-agent -r <repo> <name>`.
+1. Update workgrove on the Mac and VM.
+2. Check the cmux-tui hooks as described in [Agent status in VM rows](docs/vm-agent-status.md).
+3. Exit the agent in the task row.
+4. Run `wt -H <vm> attach --restart-agent -r <repo> <name>`.
 
 To check the result, give the agent a prompt. Make sure that the row's status shows Running,
 and then Idle when the turn ends.
@@ -1283,7 +1165,7 @@ Three files connect events to scripts:
   command to `github-guard`.
 - `hooks.base.json` connects Codex's prompt, permission, completion, interruption and session-end events to
   scripts.
-- `cmux.json` gives cmux `~/.local/bin/cmux-hook` as a notification hook.
+- `~/.cmuxterm/automations.json` connects `notification.created` events to `cmux-hook --event` through the `wt-native-relay` rule.
 
 These scripts are symlinks into this repository's `bin/`, and they run as you. So `wt update` is a
 code-execution event, not a data update. A pull changes the scripts, and the changed scripts then run by
@@ -1299,8 +1181,8 @@ Before you approve the update, read that diff as you would read any other pull t
 
 **Warning:** Any host that you keep a `cmux ssh` row to can make two requests to the Mac. It can ask the
 Mac to open any path on that host in a VS Code remote window. It can also ask the Mac to create a row that
-runs `wt run` there. Anyone with an account on that host can make these requests. So trust each such host as
-much as you trust yourself. Prefer single-user machines for task rows.
+runs `wt run` there. Processes with access to the native relay's Unix socket can make these requests.
+Trust each such host as much as you trust yourself. Prefer single-user machines for task rows.
 
 **How a VM asks the Mac for work.** `wt` on a VM cannot open VS Code or make a row itself. It sends a
 `wt-open` or `wt-attach` notification over the row's relay socket. Then the Mac hook, `bin/cmux-hook`, does
@@ -1326,28 +1208,11 @@ the work on the Mac.
   - to open any path on that host in a VS Code remote window
   - to create a row that runs `wt run` there
 
-**The checks also stop one host from naming a different host.** This is now measured rather than assumed:
-
-- cmux authorizes a relayed notification against the surface and workspace ids in the sender's environment.
-- cmux refuses any request whose identity is not the one that the relay connection itself holds. It rejects
-  a request that names another row's workspace id as `remote_relay_workspace_denied`. It rejects a stale or
-  borrowed surface as `remote_relay_surface_denied`.
-
-So a VM can send a notification only as its own row. The workspace id that `from_row_on_host` reads shows
-where the message came from. It is not a claim that the sender makes. So the check is a proof of origin,
-although it was written only as a consistency check.
-
-The `--workspace` flag does not authorize the request. It also does not decide which row cmux records the
-notification against, on `cmux ssh` rows or locally. `wt` still passes `--workspace` with its own row, so the
-flag agrees with the environment instead of contradicting it.
-
-The signal that would show the origin directly is still unusable. On cmux 0.64, a `cmux ssh` row's own
-notifications report `CMUX_NOTIFICATION_ORIGIN=local` instead of the documented `ssh-relay:<uuid>`. So the
-relay's own refusals are what show the origin.
-
-**The proof depends on the row list.** The proof is only as good as the row list that the hook reads. The
-window scoping in "Rows are found by title, repo and host, in every window" (in [How it works](#how-it-works)) affected
-this check most. Before the fix:
+**The check depends on the row list.** The handler gets the row ID from the native automation event.
+It reads only the notification record with that event's notification ID and row ID.
+It accepts only a row whose backend is `cmux-tui`.
+The window scoping in "Rows are found by title, repo and host, in every window" (in [How it works](#how-it-works)) affected
+this check. Before the fix:
 
 - A hook has no caller surface. So the hook's row list answered only for the window that was current.
 - When the user had moved a task row into another window, the hook could not show that the row belonged to
@@ -1358,19 +1223,6 @@ Now `ws_load` merges the row lists of every window. This widens what the check c
 accept. The check still finds the row whose id is the sending row's workspace id, and compares that row's ssh
 destination with the host.
 
-**The relay ids must be current.** Because cmux enforces identity this way, every one of the six ids must be
-current. They are the six variables that the `update-environment` line in `~/.tmux.conf` lists:
-`CMUX_SOCKET_PATH`, `CMUX_WORKSPACE_ID`, `CMUX_SURFACE_ID`, `CMUX_PANEL_ID`, `CMUX_TAB_ID` and
-`CMUX_TERMINAL_LIFECYCLE_ID`.
-
-A tmux pane keeps the identity of the cmux connection that started it. After cmux reconnects a row, cmux
-refuses a pane that holds the old ids, and `wt new` on a VM can never ask for a row. Two things prevent this:
-
-- `~/.tmux.conf`'s `update-environment` line carries all six into the tmux session environment on each
-  attach.
-- `wt` reads them again from the session environment at call time, instead of trusting the values that the
-  pane started with.
-
 **Within one host, the check is deliberately loose.** It asks only whether the notifying row is a remote row
 whose destination is that host. It does not ask whether a task lives there, or whether you ever ran `wt` on
 that host. So the rows that can send these requests include at least every `cmux ssh` row that you have
@@ -1379,8 +1231,8 @@ build box.
 
 The path has no limit beyond the `hook_safe_path` shape check. It can be `/etc` or a home `.ssh` directory.
 
-The relay socket is loopback TCP on the remote host. So anyone with an account on such a machine can make
-both requests: open a path, or create a row.
+The native relay uses a Unix socket on the VM.
+Treat processes that can access that socket as part of the Mac's trust boundary.
 
 ### Codex approves its own escalations
 
@@ -1441,7 +1293,7 @@ Such a row would work as follows:
 
 ### A Codex session on a VM can need escalation to reach the Mac
 
-Codex's sandbox does not let a command create sockets, and the relay that a VM row uses is a loopback TCP socket.
+Codex's sandbox can block access to the native relay's Unix socket on the VM.
 So a sandboxed `wt open` or `wt new` can fail to notify the Mac. If this happens, rerun the command with
 escalation. The relay then works.
 
@@ -1462,9 +1314,6 @@ If the relay fails, run the manual command on the Mac. Where you run it depends 
 - If it is an `open` command, use any Mac shell.
 - If it is a `new` or `attach` command, use a cmux terminal, because these subcommands need the cmux socket.
 
-Allowing network access in `[sandbox_workspace_write]` does not solve this problem, because it does not lift the
-loopback restriction. It would also open outbound network access for every command that Codex runs on the VM.
-
 ### The notification hooks find `agent-notify` on `PATH`
 
 The portable hooks in `home/.claude/settings.base.json` and `home/.codex/hooks.base.json` call `agent-notify`
@@ -1475,7 +1324,7 @@ If a program that bypasses the login shell launches an agent, the hooks of that 
 The hook then fails silently, without a report of a missing command.
 
 If that ever happens, change the portable hooks to use the absolute path `~/.local/bin/agent-notify`.
-`cmux.json` already calls `cmux-hook` in this way.
+The `wt-native-relay` rule in `~/.cmuxterm/automations.json` already calls `~/.local/bin/cmux-hook --event`.
 
 ## Deliberately left out
 

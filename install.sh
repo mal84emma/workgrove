@@ -51,16 +51,6 @@
 # --refresh-config, and `wt update --refresh-config` cannot forward --with-claude-ui. So a non-sticky flag
 # would make the prescribed update command silently strip the UI keys off every machine that has them.
 #
-# Three of the six files also carry settings that the rest of this repo depends on. A user who declines the
-# file does not decline those settings:
-#   - Without the linked ~/.gitconfig, `git config` puts core.excludesFile (which makes git ignore
-#     .worktrees/) and the ~/.gitconfig.local include into the user's own file, and changes nothing else.
-#   - Without the linked ~/.tmux.conf, the script appends that file's update-environment line to the user's
-#     own file. That line is how cmux's relay variables reach panes in a session that is already running.
-#   - Without the linked cmux.json, hook_cmux_config merges the one hook entry that runs
-#     ~/.local/bin/cmux-hook into the user's own file. This is the only fallback here that the script cannot
-#     always make; see the refusals that are written out at hook_cmux_config.
-#
 # Exit status 2 is a usage error. Exit status 1 means one of these:
 #   - A prerequisite is missing: jq, oh-my-zsh (only when ~/.zshrc is opted in), the VM name (Linux) or a git
 #     identity.
@@ -283,7 +273,7 @@ link() {
 #   Kind "codex" drops the Keychain credential store on a VM, because only macOS has one. It also disables
 #   Codex's terminal animations there.
 # copy_config displaces a SYMLINK at $dst, and does so deliberately. This is the one place that does not leave
-# a dotfile manager's link alone. hook_bashrc, hook_tmux_conf and configure_git all leave such a link alone.
+# a dotfile manager's link alone. hook_bashrc and configure_git leave such a link alone.
 # The apps write their own state into exactly these three files, so each must be a real file at the path that
 # the app opens. A link would send Claude's and Codex's writes into a synced repo, which then fights them.
 # Nothing is lost: only the LINK moves into the backup dir, and the file it pointed at is untouched. The
@@ -464,11 +454,7 @@ link_skills() {
 }
 
 # link_cmux_config: cmux runs only on the Mac. Its UI settings stay a link, so changes show in `git diff`.
-# It is opt-in, like the other five taste files. Of the 279 lines in home/.config/cmux/cmux.json, exactly one
-# entry is machinery: the hook that runs ~/.local/bin/cmux-hook. The rest is a palette, sound overrides, a
-# sidebar layout, three hotkeys and tab-bar buttons that nobody but the author asked for. Without the flag,
-# this function does not link the file, and hook_cmux_config merges that one entry into whatever the user
-# already has.
+CMUX_DST=.config/cmux/cmux.json
 link_cmux_config() {
   if [[ $OS != Darwin ]]; then
     return 0
@@ -670,7 +656,7 @@ check_bashrc() {
   if [[ $OS == Darwin ]]; then
     return 0
   fi
-  require_plain_file .bashrc           # the two refusals hook_bashrc shares with hook_tmux_conf
+  require_plain_file .bashrc
   if [[ -L $rc ]]; then
     return 0                           # a dotfile manager owns it; hook_bashrc leaves it alone and warns
   fi
@@ -756,254 +742,6 @@ hook_bashrc() {
   fi
 }
 
-# check_tmux_conf: the reasoning of check_bashrc, for the other file that this script adds a line to.
-# hook_tmux_conf runs near the end, so this function makes its refusals while the machine is still untouched.
-# Unlike check_bashrc, this check is not Linux-only, because cmux drives tmux on the Mac too.
-check_tmux_conf() {
-  if opted_in "$WITH_TMUX_CONF" .tmux.conf; then
-    return 0                           # ~/.tmux.conf is about to become a link into this repo
-  fi
-  require_plain_file .tmux.conf
-}
-
-# hook_tmux_conf: tmux forwards to a pane only the variables named in update-environment. cmux rebinds
-# CMUX_SOCKET_PATH and CMUX_WORKSPACE_ID on every attach. So without the one line below, a pane started in an
-# already-running session gets a stale socket path, and agent-notify goes nowhere. That line opens
-# home/.tmux.conf, but the rest of that file is the author's taste. So when that file was not asked for, this
-# function APPENDS the line alone to the user's own ~/.tmux.conf. It creates that file if there is none.
-# Because it appends and does not rewrite, every line already there survives. So there is nothing to stash
-# and no mode to carry to a new file. hook_bashrc is different: it must rebuild ~/.bashrc to get its line
-# above Ubuntu's early return.
-# `set -ag` appends to update-environment, so the line cannot clobber a user setting either.
-hook_tmux_conf() {
-  local line='set -ag update-environment " CMUX_SOCKET_PATH CMUX_WORKSPACE_ID"'
-  local rc="$HOME/.tmux.conf"
-  if opted_in "$WITH_TMUX_CONF" .tmux.conf; then
-    return 0                          # the linked home/.tmux.conf already carries this line
-  fi
-  # check_tmux_conf made these refusals before anything moved. They stay here to cover the gap between the
-  # two calls, and because nothing further down may run on a ~/.tmux.conf that it cannot read.
-  require_plain_file .tmux.conf
-  if [[ -L $rc ]]; then               # a live link into a dotfiles repo: an append would write through it,
-    {                                 # into a file that the repo owns and rewrites, which is not ours to edit
-      echo "skipped ~/.tmux.conf: it is a symlink to $(readlink "$rc"), left alone because a dotfile manager owns it."
-      echo "add this line yourself, at the end of that file:"
-      echo "  $line"
-      echo "until then cmux's relay variables never reach panes started in a running tmux session."
-    } >&2
-    return 0
-  fi
-  if [[ ! -e $rc && ! -L $rc ]]; then   # -L as well as -e: only both tests together show that nothing is there
-    printf '%s\n' "$line" > "$rc"
-    echo "created ~/.tmux.conf with the update-environment line cmux needs"
-    return 0
-  fi
-  if awk -v s="$line" 'index($0, s) == 1 { found = 1 } END { exit !found }' "$rc"; then
-    return 0                            # already there: only lines that START with it count, so a mention
-  fi                                    # inside a comment is not mistaken for the setting
-  append_line "$rc" "$line"
-  echo "appended the update-environment line cmux needs to ~/.tmux.conf"
-}
-
-# CMUX_DST, and the three fields of the one hook entry that is machinery. These values are defined here, outside
-# the functions, because four places must name the same thing: link_cmux_config, check_cmux_config,
-# hook_cmux_config, and the fragment that they print. cmux composes the hooks in file order and identifies them
-# by "id", so an entry that differs in any field is a different entry. A fragment that told the user to paste
-# something else would be worse than no fragment at all.
-CMUX_DST=.config/cmux/cmux.json
-# shellcheck disable=SC2088   # the ~ is literal on purpose: cmux expands it itself, and the repo's file spells it so
-CMUX_HOOK_CMD='~/.local/bin/cmux-hook'
-CMUX_HOOK_ID=wt
-CMUX_HOOK_TIMEOUT=20
-
-# cmux_fragment: prints the entry exactly as it appears in home/.config/cmux/cmux.json. The user pastes it when
-# this script will not write the file itself.
-cmux_fragment() {
-  echo "      {"
-  echo "        \"command\": \"$CMUX_HOOK_CMD\","
-  echo "        \"id\": \"$CMUX_HOOK_ID\","
-  echo "        \"timeoutSeconds\": $CMUX_HOOK_TIMEOUT"
-  echo "      }"
-}
-
-# cmux_skip <first line> <the file to name>: every branch of hook_cmux_config that declines to write says the
-# same four things in the same order:
-#   1. what it will not do;
-#   2. what to paste instead;
-#   3. where in the array the pasted entry goes;
-#   4. what stays broken until the user pastes it.
-# One function prints them, so the branches cannot drift, and a reader who has met one of these messages has met
-# all of them. The id-collision branch is the one exception, and only because it has a fifth thing to say: the
-# command that it found under our id. That command is the whole reason it stopped.
-cmux_skip() {
-  { echo "$1"
-    echo "add this yourself, in the notifications.hooks array of $2, as its LAST entry:"
-    cmux_fragment
-    echo "cmux composes hooks in file order, so it goes after any hook of yours that suppresses a notification."
-    echo "until then cmux's relay never reaches $CMUX_HOOK_CMD, so a wt row on a VM never attaches or opens."
-  } >&2
-}
-
-# cmux_hook_state <file>: prints what a cmux.json that this script may write to already says about our entry.
-#   invalid — not one JSON object: JSONC comments (which cmux allows and jq cannot parse), or a real syntax error
-#   shape   — valid JSON, but .notifications or .notifications.hooks is not the type that this merge needs
-#   ours    — the entry is already there, command and all: nothing to do, and nothing to rewrite
-#   foreign — an entry with our id that runs something else: the user's hook, which we may not overwrite
-#   none    — no entry with our id: the one case that gets merged
-# The validity probe slurps the file on purpose. With `jq -e .` as the probe, an EMPTY file passes: jq exits 0
-# and produces nothing. The merge filter would then write an empty file over the user's file.
-# length == 1 also rejects a stream of two.
-# shellcheck disable=SC2016   # the $id/$cmd/$h are jq's variables, passed in with --arg; they must not expand here
-cmux_hook_state() {
-  local f="$1"
-  if ! jq -e -s 'length == 1 and (.[0] | type) == "object"' "$f" >/dev/null 2>&1; then
-    echo invalid
-    return 0
-  fi
-  jq -r --arg id "$CMUX_HOOK_ID" --arg cmd "$CMUX_HOOK_CMD" '
-    def hooks:
-      if (.notifications | type) == "null" then "missing"
-      elif (.notifications | type) != "object" then "bad"
-      elif (.notifications | has("hooks") | not) then "missing"
-      elif (.notifications.hooks | type) != "array" then "bad"
-      else .notifications.hooks end;
-    hooks as $h
-    | if ($h | type) == "string" then (if $h == "bad" then "shape" else "none" end)
-      else [$h[] | select((type == "object") and .id == $id)] as $m
-           | if ($m | length) == 0 then "none"
-             elif ([$m[] | select(.command == $cmd)] | length) > 0 then "ours"
-             else "foreign" end
-      end' "$f" 2>/dev/null || echo invalid
-}
-
-# check_cmux_config: the reasoning of check_tmux_conf, for the fourth file that this script writes into. Like
-# that check, it refuses only when the file is not about to become a link. hook_cmux_config runs near the end.
-# So this function refuses the two things that hook_cmux_config cannot read at all, while the machine is still
-# untouched:
-#   - A dangling symlink. jq would read nothing, and the rewrite would land where the link points, outside $HOME.
-#   - Anything that is not a regular file.
-# The check is Mac only: there is no cmux on a VM, so there is nothing to refuse there.
-# hook_cmux_config declines everything else in place, with cmux_skip, and the install goes on. A cmux.json with
-# // comments in it is an ORDINARY cmux.json. So a die() on one would fail this install, and with it every
-# `wt update`, forever, over one hook entry. check_bashrc's mode rule already names this failure.
-check_cmux_config() {
-  if [[ $OS != Darwin ]]; then
-    return 0
-  fi
-  if opted_in "$WITH_CMUX_CONFIG" "$CMUX_DST"; then
-    return 0                           # ~/.config/cmux/cmux.json is about to become a link into this repo
-  fi
-  require_plain_file "$CMUX_DST"
-}
-
-# hook_cmux_config: the job of hook_tmux_conf, for cmux. cmux runs every hook in notifications.hooks on every
-# notification. ~/.local/bin/cmux-hook is how a `wt` row learns which row fired the notification. Without it,
-# `wt attach`/`wt open` on a VM row never happens. That entry lives in home/.config/cmux/cmux.json, but the
-# other 275 lines of that file are the author's palette and hotkeys. So when that file was not asked for,
-# this function merges the ENTRY alone into the user's own ~/.config/cmux/cmux.json.
-# It creates that file if there is none.
-# Unlike hook_tmux_conf, this function cannot append to the file, because JSON has no append. It rewrites the
-# whole file. So it follows the discipline of copy_config instead: build the new file with jq first, stash the
-# original only when that succeeded, then mv. A jq that fails can never truncate a file that the user cares
-# about. The function appends the entry to the hooks array, never prepends it, because order is semantic
-# there (this repo's own file runs quiet-when-focused before wt). The merge is keyed on the id, so a rerun
-# finds its own entry and changes nothing.
-# This function declines to write in four cases. It says each one out loud and does not skip it quietly,
-# because each one leaves the machinery uninstalled. The user has no other way to find that out. The four cases:
-#   - A live symlink. A dotfile manager owns the file, and a rewrite would orphan the target. hook_tmux_conf
-#     and configure_git make the same skip, for the same reason.
-#   - JSONC or broken JSON. `cmux config check` accepts // comments and jq does not, so the file cannot be read,
-#     let alone rewritten. Here the fragment is the whole answer, so the function prints it in full.
-#   - A shape that this merge does not know: .notifications or .hooks of the wrong type.
-#   - An entry with id "wt" that runs something else. That is the user's own hook, and there is no safe answer:
-#     an overwrite loses it, and a silent skip leaves the relay dead. So the function names it and leaves it
-#     alone.
-# shellcheck disable=SC2016   # as in cmux_hook_state: $cmd/$id/$t are jq variables passed with --arg/--argjson
-# shellcheck disable=SC2088   # and the ~ in the "~/$CMUX_DST" labels is the spelling that every message here uses
-hook_cmux_config() {
-  local rc="$HOME/$CMUX_DST" state tmp mode other
-  if [[ $OS != Darwin ]]; then
-    return 0                            # no cmux on a VM, so no file and nothing to merge into
-  fi
-  if opted_in "$WITH_CMUX_CONFIG" "$CMUX_DST"; then
-    return 0                            # the linked home/.config/cmux/cmux.json already carries the entry
-  fi
-  # check_cmux_config made these refusals before anything moved. They stay here to cover the gap between the
-  # two calls, and because nothing further down may run on a cmux.json that it cannot read.
-  require_plain_file "$CMUX_DST"
-  if [[ -L $rc ]]; then
-    cmux_skip "skipped ~/$CMUX_DST: it is a symlink to $(readlink "$rc"), left alone because a dotfile manager owns it." \
-              "that file"
-    return 0
-  fi
-  if [[ ! -e $rc && ! -L $rc ]]; then    # -L as well as -e: only both tests together show that nothing is there
-    mkdir -p "$(dirname "$rc")"
-    { echo "{"
-      echo "  \"schemaVersion\": 1,"
-      echo "  \"notifications\": {"
-      echo "    \"hooks\": ["
-      cmux_fragment
-      echo "    ]"
-      echo "  }"
-      echo "}"
-    } > "$rc"
-    echo "created ~/$CMUX_DST with the cmux-hook entry wt needs"
-    echo "run 'cmux reload-config' (or relaunch cmux): a running cmux does not reread the file by itself"
-    return 0
-  fi
-  state="$(cmux_hook_state "$rc")"
-  case "$state" in
-    ours)
-      return 0 ;;                        # already merged, byte for byte: a rerun writes nothing at all
-    invalid)
-      if grep -qE '^[[:space:]]*(//|/\*)' "$rc"; then
-        cmux_skip "skipped ~/$CMUX_DST: it has // comments in it (JSONC, which cmux accepts and jq cannot parse), so this script will not rewrite it." \
-                  "~/$CMUX_DST"
-      else
-        cmux_skip "skipped ~/$CMUX_DST: jq cannot parse it, so this script will not rewrite it (run 'cmux config check' to see what is wrong)." \
-                  "~/$CMUX_DST"
-      fi
-      return 0 ;;
-    foreign)
-      other="$(jq -r --arg id "$CMUX_HOOK_ID" \
-        'first(.notifications.hooks[] | select((type == "object") and .id == $id)) | .command // "?"' \
-        "$rc" 2>/dev/null || true)"
-      { echo "skipped ~/$CMUX_DST: it already has a hook with id \"$CMUX_HOOK_ID\", and it runs ${other:-?}, not $CMUX_HOOK_CMD."
-        echo "overwriting it would lose your hook, so this script changed nothing."
-        echo "rename one of the two — the id is what cmux identifies a hook by — and rerun, or add this by hand:"
-        cmux_fragment
-        echo "until then cmux's relay never reaches $CMUX_HOOK_CMD, so a wt row on a VM never attaches or opens."
-      } >&2
-      return 0 ;;
-    none)
-      : ;;                               # the only case that is merged, below
-    *)
-      # "shape", and any state that cmux_hook_state could not name. The merge filter below assumes that
-      # .notifications is an object and .hooks is an array. When they are not, no rewrite keeps what is there.
-      cmux_skip "skipped ~/$CMUX_DST: its notifications.hooks is not a shape this script can merge into." \
-                "~/$CMUX_DST"
-      return 0 ;;
-  esac
-  tmp="$(mktemp "$rc.XXXXXX")"
-  TMPFILES+=("$tmp")                     # the EXIT trap removes it if anything below fails
-  if ! jq --arg cmd "$CMUX_HOOK_CMD" --arg id "$CMUX_HOOK_ID" --argjson t "$CMUX_HOOK_TIMEOUT" \
-       '.notifications = (.notifications // {})
-        | .notifications.hooks = ((.notifications.hooks // [])
-            + [{"command": $cmd, "id": $id, "timeoutSeconds": $t}])' "$rc" >"$tmp" 2>/dev/null; then
-    rm -f "$tmp"                         # the original has not been touched: stash comes after this, not before
-    cmux_skip "skipped ~/$CMUX_DST: jq could not rewrite it, so it is exactly as it was." "~/$CMUX_DST"
-    return 0
-  fi
-  mode="$(stat -c %a "$rc" 2>/dev/null || stat -f %Lp "$rc" 2>/dev/null || true)"   # -c is GNU, -f is BSD
-  if [[ $mode =~ ^[0-7]+$ ]]; then
-    chmod "$mode" "$tmp"                 # the user's own file keeps its own mode, not mktemp's 600
-  fi
-  stash "$rc"                            # the backup contract applies here too: keep the original
-  mv "$tmp" "$rc"
-  echo "merged the cmux-hook entry into ~/$CMUX_DST (the file it replaces is in the backup dir)"
-  echo "run 'cmux reload-config' (or relaunch cmux): a running cmux does not reread the file by itself"
-}
-
 # require_git_identity: commits need an identity, so this check stays unconditional. On every machine, opted in
 # or not, this repo puts the identity in ~/.gitconfig.local, because configure_git includes that file when
 # ~/.gitconfig is not linked. The function reads that file directly, not through git's own lookup, because on a
@@ -1054,7 +792,7 @@ resolve_git_global() {
   fi
 }
 
-# check_gitconfig: the reasoning of check_tmux_conf, for the third file that this script writes into.
+# check_gitconfig: the reasoning of check_bashrc, for the third file that this script writes into.
 # configure_git runs near the end. There, `git config --global` makes its own refusals in git's voice,
 # mid-install, after everything has moved:
 #   - A dangling target gives "error: could not lock config file", exit 255.
@@ -1151,9 +889,7 @@ report() {
 # report_skipped: names each piece of opt-in config that this run did not install, and the flag that would
 # install it. A default install deliberately leaves the user's own shell, git and tmux alone. A user who wanted
 # the author's prompt should not have to read this script to find out why it never arrived.
-# --with-claude-ui is listed the same way, though what it leaves out is the UI keys of ~/.claude/settings.json,
-# not a file of its own. --with-cmux-config is listed too, though what it leaves out is the rest of a file whose
-# one machinery entry hook_cmux_config merged in anyway.
+# --with-claude-ui controls the UI keys of ~/.claude/settings.json.
 # This function is deliberately not part of report(). report() is the EXIT trap, so it also runs after a die().
 # There, a list of optional extras would sit under a failure message and say nothing about the failure.
 report_skipped() {
@@ -1227,9 +963,7 @@ main() {
   require_git_identity
   check_zshenv_local # Linux only: the file that the next two steps append to
   check_bashrc       # Linux only: hook_bashrc's refusals, made while ~/.bashrc is still the only thing at stake
-  check_tmux_conf    # the same, for the ~/.tmux.conf that hook_tmux_conf appends to on both platforms
   check_gitconfig    # the same, for the ~/.gitconfig that configure_git writes two settings into
-  check_cmux_config  # Mac only: the same, for the cmux.json that hook_cmux_config merges one entry into
   ask_vm_host        # Linux only: rejects an unusable VM name before anything moves
   record_repos_dir   # Linux only
   trap 'exit 130' INT    # so $? at report's entry is the signal's status, not the last command's
@@ -1244,9 +978,7 @@ main() {
   remove_retired_links  # after every linking step, so this run's links exist and are live; before the two
                         # steps that can fail, so a rerun still tidies up even without a network or a ~/.bashrc
   hook_bashrc        # Linux only
-  configure_git      # the three fallbacks for the files that were not opted in: after the linking steps, so
-  hook_tmux_conf     # what they look at is this run's final state, and each no-ops when the link was made
-  hook_cmux_config   # instead (hook_cmux_config on a VM too, where there is no cmux at all)
+  configure_git
   hook_cmux_automation
   install_zsh_plugins   # last: the only step that needs the network, so an offline VM still gets the rest
   report_skipped     # after every step, so it lists what is still missing rather than what was about to arrive

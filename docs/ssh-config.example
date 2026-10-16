@@ -15,6 +15,6 @@ Host vm-a
     IdentitiesOnly yes           # use only this key, not every key in the agent
     ServerAliveInterval 30       # keepalive, so a sleeping laptop does not silently drop the session
     ServerAliveCountMax 6        # give up after ~3 minutes; cmux usually reconnects after a brief dropout
-                                 # after a Wi-Fi network switch, recover a suspended task row with wt attach
+                                 # after a reconnect, restore task terminal settings with wt attach
     AddKeysToAgent yes           # add the key to the agent on first use, so a passphrase is asked once
     UseKeychain yes              # macOS only; remove on Linux

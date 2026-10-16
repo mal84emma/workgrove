@@ -1,51 +1,10 @@
 # shellcheck shell=bash
-row_remote_field() { # row_remote_field <id> <field>… — this row's current remote fields (state, daemon slot) from one
+row_remote_field() { # row_remote_field <id> <field>… — this row's current remote fields (such as state) from one
                      # rows_json read, joined by $WT_FS. Never a tab: read would collapse it when a field is empty.
   local id="$1"; shift
   rows_json | jq -r --arg id "$id" --arg fs "$WT_FS" \
     'first((.workspaces? // .)[] | select(.id == $id) | .remote as $r
        | [$ARGS.positional[] as $k | ($r[$k] // "") | tostring] | join($fs)) // empty' --args "$@" 2>/dev/null || true
-}
-
-clear_stale_relay() { # clear_stale_relay <host> <slot> — signal only this user's sshd, and only when its session is
-                      # not from the Mac's current address; the last line on stdout is `stopped <port> <pid>` or `free <port>`
-  remote_sh_raw "$1" "bash -s -- $(shell_join "$2")" <"$WG_LIB_DIR/vm/clear-stale-relay.sh"
-}
-
-recover_suspended_row() { # reconnect one suspended row, after freeing only its own stale SSH forward
-  local host="$1" id="$2" slot="$3" fallback="$4" c out rc=0 reason result reply body state tick port left=0
-  local why="did not connect within 30 seconds"
-  [[ -n "$slot" ]] || { warn "suspended row $id has no persistent daemon slot"; die "manual fallback: $fallback"; }
-  # The relay script writes every refusal to its stderr. A VM's login files may print before its result.
-  out=$(clear_stale_relay "$host" "$slot" 2>&1) || rc=$?
-  [[ $rc -ne 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
-  if printf '%s\n' "$out" | grep -x 'keepalive missing' >/dev/null; then   # no -q: pipefail and SIGPIPE
-    warn "$host's sshd has no ClientAliveInterval, so a stale SSH session holds its relay port until TCP keepalive gives up; apply docs/new-vm.md block 1's keepalive lines"
-  fi
-  if [[ $rc -ne 0 ]]; then   # the script's reason is its last line
-    reason=$(printf '%s\n' "$out" | grep -vx 'keepalive missing' | sed '/^[[:space:]]*$/d' | tail -1 || true)
-    warn "could not clear $id's stale relay on $host: ${reason:-no reason given}"; die "manual fallback: $fallback"
-  fi
-  result=$(printf '%s\n' "$out" | grep -E '^(stopped|free) ' | tail -1 || true)
-  case "$result" in
-    stopped\ *) port=${result#stopped }; port=${port%% *}
-                printf 'relay: stopped stale user sshd %s on %s port %s\n' "${result##* }" "$host" "$port" ;;
-    free\ *) printf 'relay: port %s on %s was free\n' "${result#free }" "$host" ;;
-    *) warn "unexpected relay check: $out"; die "manual fallback: $fallback" ;;
-  esac
-  c=$(cmux_bin); body=$(jq -cn --arg id "$id" '{workspace_id: $id}')
-  rc=0; reply=$(CMUX_QUIET=1 "$c" rpc workspace.remote.reconnect "$body" 2>&1) || rc=$?
-  reply=${reply//$'\n'/ }   # kept for every failure message below
-  [[ $rc -eq 0 ]] || die "cmux reconnect failed for $id (${reply:-no reply}); manual fallback: $fallback"
-  for ((tick=0; tick<30; tick++)); do
-    state=$(row_remote_field "$id" state)
-    if [[ "$state" == connected ]]; then printf 'row: %s connected after reconnect\n' "$id"; return 0; fi
-    # The first reads may still say suspended. Suspended again after any other state means cmux gave up.
-    if [[ "$state" == suspended && $left -eq 1 ]]; then why="went back to suspended after cmux tried to reconnect it"; break; fi
-    [[ -z "$state" || "$state" == suspended ]] || left=1
-    sleep 1
-  done
-  die "row $id $why (last state: ${state:-missing}; cmux reconnect reply: ${reply:-empty}); manual fallback: $fallback"
 }
 
 row_shell_prompt() { # row_shell_prompt <id> <last line output>
@@ -92,19 +51,6 @@ reattach_shell_row() { # reattach_shell_row <id> <session> <last line output> [h
   send_tmux_line "$__id" "$__session"
 }
 
-reattach_recovered_row() { # reattach_recovered_row <host> <id> <session> <last line output>
-  # A reconnected row can report connected before its login shell shows a prompt.
-  # Try for 5 ticks, approximately one second apart.
-  # Each tick reads the screen locally and asks the VM only when the screen shows a prompt.
-  # Return 1 when no tick proves the conditions. Send nothing in that case.
-  local __tick
-  for ((__tick=0; __tick<5; __tick++)); do
-    reattach_shell_row "$2" "$3" "$4" "$1" && return 0
-    [[ $__tick -eq 4 ]] || sleep 1
-  done
-  return 1
-}
-
 reinit_task_client() { # reinit_task_client <host> <id> <session> — restart this task row's attached tmux client
   local host="$1" id="$2" session="$3" line screen_rc=0 nonce proof screen c _last
   [[ "$(row_remote_field "$id" state)" == connected ]] || return 2
@@ -145,7 +91,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   done
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
-  local out session state title id path c remote remote_state slot fallback recovered=0 what=selected result result_rc=0
+  local out session state title id path c what=selected result result_rc=0
   out=$(remote_wt_result "$host" show "$name" -r "$repo")
   result=$(wt_read_result "$out" show) || result_rc=$?
   case $result_rc in
@@ -162,35 +108,14 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$path")" ]] || die "unexpected output from $host"
   title=$(row_title "$name")
   id=$(cmux_row_field "$title" "$path" id "$host")
-  if [[ -n "$id" && $restart -eq 0 ]]; then
-    remote=$(row_remote_field "$id" state persistent_daemon_slot)
-    IFS="$WT_FS" read -r remote_state slot <<<"$remote"
-    if [[ "$remote_state" == suspended ]]; then
-      fallback="once $host has dropped the old SSH session (about a minute with docs/new-vm.md block 1's keepalive), press Reconnect on the row or re-run: wt -H $host attach -r $(shell_join "$repo") $name"
-      recover_suspended_row "$host" "$id" "$slot" "$fallback"
-      recovered=1
-    fi
-  fi
-  if [[ $reattach -eq 1 ]]; then  # A dropped connection can leave the row with a fresh login shell while the VM
-                                  # keeps the pty that holds tmux. The abandoned client is then still listed, and
-                                  # session_state cannot call the session detached. The flag is the user's word
-                                  # that the row shows a shell. The screen check is the backstop: it stops the
-                                  # tmux line from going into a running agent's prompt. A row that reconnected
-                                  # a moment ago may still show its pre-suspension screen, and its restored pty
-                                  # may still hold tmux. The user cannot have seen that, so the row gets
-                                  # reattach_recovered_row's proof.
+  if [[ $reattach -eq 1 ]]; then
+    # The flag confirms that the user sees a shell, even if the VM still lists its abandoned client.
+    # Check the screen before sending the tmux line, so an agent prompt cannot receive it.
     [[ -n "$id" ]] || die "no row $title $(row_tag "$host" "$path") is open; wt -H $host attach -r $(shell_join "$repo") $name opens one"
     c=$(cmux_bin)
     local shell_last
-    if [[ $recovered -eq 1 ]]; then
-      if ! reattach_recovered_row "$host" "$id" "$session" shell_last; then
-        CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
-        die "$title $(row_tag "$host" "$path") reconnected, but its shell prompt and a detached VM session were not both confirmed (last line: ${shell_last:-empty}); look at the row and, if it shows a bare shell, re-run: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
-      fi
-    else
-      reattach_shell_row "$id" "$session" shell_last \
-        || die "$title $(row_tag "$host" "$path") does not end at a shell prompt naming user@host, on its own line or the one above (last line: ${shell_last:-empty}); it is probably still attached to tmux, or its prompt names no user@host. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'"
-    fi
+    reattach_shell_row "$id" "$session" shell_last \
+      || die "$title $(row_tag "$host" "$path") does not end at a shell prompt naming user@host, on its own line or the one above (last line: ${shell_last:-empty}); it is probably still attached to tmux, or its prompt names no user@host. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'"
     CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
     printf 'row: %s %s (re-attached)\n' "$title" "$(row_tag "$host" "$path")"
     return 0
@@ -229,11 +154,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   [[ -n "$id" ]] || { remote_row "$host" "$session" "$title" "$path" ""; return 0; }
   local _last
   c=$(cmux_bin)
-  if [[ $recovered -eq 1 ]]; then
-    # The show above ran before the reconnect. A prompt-shaped footer alone says nothing about what holds
-    # the pty. So wait for a prompt, and ask the VM again immediately before any send.
-    if reattach_recovered_row "$host" "$id" "$session" _last; then what=re-attached; fi
-  elif [[ "$state" == *detached ]]; then   # show may be stale; prove the prompt and detached session again
+  if [[ "$state" == *detached ]]; then   # show may be stale; prove the prompt and detached session again
     if reattach_shell_row "$id" "$session" _last "$host"; then what=re-attached
     else warn "did not re-attach $title $(row_tag "$host" "$path"); inspect the row, then use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
     fi
@@ -250,8 +171,5 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   printf 'row: %s %s (%s)\n' "$title" "$(row_tag "$host" "$path")" "$what"
   if [[ "$what" == re-initialized ]]; then
     printf 'if the replacement attach fails, the row returns to its shell prompt; recover with: wt -H %s attach --reattach -r %s %s\n' "$host" "$(shell_join "$repo")" "$name"
-  fi
-  if [[ $recovered -eq 1 && "$what" == selected ]]; then
-    warn "re-attach this row if it shows a bare shell: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
   fi
 }

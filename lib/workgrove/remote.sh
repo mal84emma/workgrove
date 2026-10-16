@@ -23,14 +23,7 @@ remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the 
   return $rc
 }
 remote_wt_tty() { local host="$1"; shift; remote_sh_tty "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-# shellcheck disable=SC2016   # $HOME must reach the VM unexpanded
-status_bridge_ready() {
-  [[ -f $HOME/.local/bin/cmux-hook ]] && grep -qF 'CMUX_NOTIFICATION_SUBTITLE' "$HOME/.local/bin/cmux-hook" &&
-    jq -e 'any(.notifications.hooks[]?; .id == "wt" and .command == "~/.local/bin/cmux-hook")' \
-      "$HOME/.config/cmux/cmux.json" >/dev/null 2>&1
-}
 remote_run_cmd() {
-  status_bridge_ready && printf 'WT_STATUS_BRIDGE=1 '
   # shellcheck disable=SC2016  # $HOME belongs to the VM shell, not this Mac
   printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"
 }

@@ -92,7 +92,7 @@ test_check_row_removal
 
 test_row_shell_prompt() {
   local -x NAMED_SCREEN="$TEST_ROOT/screen"
-  local screen=unchanged host=unchanged tick=unchanged status=0
+  local screen=unchanged host=unchanged status=0
   row_remote_field() { printf connected; }
   vm_session_detached() { printf '%s' "$1" >"$TEST_ROOT/detached-host"; }
   send_tmux_line() { printf '%s|%s' "$1" "$2" >"$TEST_ROOT/sent-line"; }
@@ -104,8 +104,6 @@ test_row_shell_prompt() {
   assert_eq 'the caller receives the forwarded line' 'tester@machine %' "$host"
   assert_eq 'the VM check keeps its host argument' test-vm "$(cat "$TEST_ROOT/detached-host")"
   assert_eq 'the send keeps its row and session arguments' 'row-1|task-session' "$(cat "$TEST_ROOT/sent-line")"
-  if reattach_recovered_row test-vm row-1 task-session tick; then pass; else fail 'reattach_recovered_row failed'; fi
-  assert_eq 'the caller receives the output through both helpers' 'tester@machine %' "$tick"
   printf 'Context 100%%\n' >"$NAMED_SCREEN"
   row_shell_prompt row-1 screen || status=$?
   assert_eq 'a footer fails the prompt check' 1 "$status"
@@ -122,21 +120,19 @@ test_row_shell_prompt
 test_relay_env() {
   local TMUX=''
   local -x CMUX_SOCKET_PATH=127.0.0.1:1111 CMUX_WORKSPACE_ID=workspace
-  local -x CMUX_TUI_SOCKET='' CMUX_TUI_TERMINAL_ID=''
-  local value=unchanged workspace=unchanged native_socket=unchanged native_terminal=unchanged socket=unchanged
+  local -x CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local value=unchanged native_terminal=unchanged socket=unchanged
   local identity=() relay_vars=(unchanged)
   begin_scenario 'relay scalar and array outputs can use internal local names'
-  if relay_env value workspace identity native_socket native_terminal; then pass; else fail 'scalar relay output failed'; fi
-  assert_eq 'the caller receives its scalar socket' 127.0.0.1:1111 "$value"
-  assert_eq 'the caller receives its workspace' workspace "$workspace"
-  assert_eq 'an absent native socket clears the caller output' '' "$native_socket"
-  assert_eq 'an absent native terminal clears the caller output' '' "$native_terminal"
-  assert_eq 'the identity includes the socket assignment' CMUX_SOCKET_PATH=127.0.0.1:1111 "${identity[0]}"
-  if relay_env socket workspace relay_vars native_socket native_terminal; then pass; else fail 'array relay output failed'; fi
-  assert_eq 'an array output keeps the scalar socket' 127.0.0.1:1111 "$socket"
-  assert_eq 'the caller receives its identity array' CMUX_SOCKET_PATH=127.0.0.1:1111 "${relay_vars[0]}"
+  if relay_env identity value native_terminal; then pass; else fail 'scalar relay output failed'; fi
+  assert_eq 'the caller receives its scalar socket' /tmp/native "$value"
+  assert_eq 'the caller receives its native terminal' term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$native_terminal"
+  assert_eq 'the identity includes the socket assignment' CMUX_TUI_SOCKET=/tmp/native "${identity[0]}"
+  if relay_env relay_vars socket native_terminal; then pass; else fail 'array relay output failed'; fi
+  assert_eq 'an array output keeps the scalar socket' /tmp/native "$socket"
+  assert_eq 'the caller receives its identity array' CMUX_TUI_SOCKET=/tmp/native "${relay_vars[0]}"
   end_scenario
 }
 test_relay_env
 
-lib_summary 35
+lib_summary 31

@@ -8,8 +8,8 @@ It records the cmux 0.65 regression and the verified fix.
 
 cmux 0.65.0 (108), commit `dda24fbd2`, uses `cmux-tui` for new SSH rows.
 Those rows supply `CMUX_TUI_SOCKET` and `CMUX_TUI_TERMINAL_ID` instead of the old TCP relay variables.
-The old `wt` sender accepts only TCP sockets.
-It stops before sending a notification:
+Before native request support, the `wt` sender accepted only TCP sockets.
+It stopped before sending a notification:
 
 ```text
 wt: no cmux relay socket in this session; run the line below on the Mac
@@ -23,7 +23,9 @@ Sending through `cmux-tui notify` reaches the Mac's notification list.
 However, that delivery path bypasses `notifications.hooks` in cmux 0.65.
 [CloudNotificationLocalDelivery.swift](https://github.com/manaflow-ai/cmux/blob/v0.65.0/Sources/Cloud/CloudNotificationLocalDelivery.swift) calls `addNotification` without resolved hooks.
 [TerminalNotificationStore.swift](https://github.com/manaflow-ai/cmux/blob/v0.65.0/Sources/TerminalNotificationStore.swift) substitutes an empty hook array for a remote origin.
-A local notification still runs `cmux-hook` with the `CMUX_NOTIFICATION_*` fields and a version-1 JSON envelope.
+
+At that time, local notifications ran `cmux-hook` through the repository's `notifications.hooks` configuration.
+They supplied the `CMUX_NOTIFICATION_*` fields and a version-1 JSON envelope.
 The [0.65 schema](https://raw.githubusercontent.com/manaflow-ai/cmux/v0.65.0/web/data/cmux.schema.json) still accepts the existing notification hook configuration.
 The hook's event names and configuration did not cause this failure.
 
@@ -35,10 +37,10 @@ The fix records the current row's native identity in its task's tmux session bef
 ## Fix
 
 `wt` sends native requests with `cmux-tui`, the explicit socket, and the current session's terminal ID.
-It retains the old sender for TCP relay rows.
-Each attachment clears the inactive transport's session variables before binding the current row.
+TCP relay rows are no longer supported.
+Each native attachment clears obsolete TCP session variables before binding the current row.
 Empty session values override an older pane's saved identity.
-Native delivery also takes precedence when an older session still contains both transports.
+Native requests ignore any obsolete TCP identity in the session.
 
 Each native request adds a random `request_id` to its JSON body.
 cmux suppresses identical terminal, title, and body content for five seconds before automation runs.
@@ -144,6 +146,47 @@ The hook recorded both repeated requests and the mixed-transport request:
 2026-10-08T13:29:56 handled wt-open for workspace 1ADA0A4D-C4F0-4CC6-A05B-F8FE80F40634
 ```
 
+## Verification on cmux 0.65.1
+
+On 2026-10-16, the live checks used cmux 0.65.1, build 110, commit `8a853dcc9`.
+The VM ran a temporary copy of workgrove commit `1c9cad7` in a disposable repository.
+The Mac used its existing `wt-native-relay` automation rule.
+No installed workgrove scripts or automation configuration were replaced.
+
+These checks passed:
+
+- A Claude turn in the native VM task showed Running, then Idle after completion.
+- `wt open` from that task opened its remote folder in VS Code on the Mac.
+  VS Code's status output listed the task's remote window.
+- `wt rm` from a second native task removed its worktree, closed its row, and ended its tmux session.
+  The task's tmux session held `WT_CMUX_CLOSE_ON_EXIT=1`.
+- The two existing VM task rows and their tmux sessions remained present after self-removal.
+
+The native row reported `backend: cmux-tui` and `state: connected`.
+Its status payload omitted `persistent_daemon_slot`.
+The user moved the row into a second window, disconnected the Mac's network for 90 seconds, and reconnected it.
+The user then put the Mac to sleep for 30 seconds and woke it.
+A command in the row confirmed that the connection worked afterward.
+The recorder polled every two seconds while awake and logged state changes.
+Every recorded state for the live row was connected.
+It observed neither `suspended` nor `persistent_daemon_slot`.
+The user also saw no `[ssh:suspended]` label.
+
+The moved row kept its UUID, title, and `workspace:N` ref.
+The caller-window list omitted it, but workgrove's combined window lookup found it.
+Description updates and targeted input reached it by UUID from the original window.
+Self-removal then closed that row and ended its session across windows.
+
+The [cmux 0.65.1 native setup](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/Workspace%2BSSHTui.swift)
+clears the legacy remote session controller and its active controller ID.
+Its [native status payload](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/Workspace%2BSSHTuiStatus.swift)
+omits `persistent_daemon_slot`.
+The [native coordinator](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/SSHTuiWorkspaceCoordinator.swift)
+reports connecting, connected, or error states through its own lifecycle.
+Together, the source and live checks answer issue #62 Step 1 for supported cmux 0.65.1.
+The legacy suspended-row recovery and its stale TCP listener cleanup were removed.
+These checks do not verify cmux 0.65.2.
+
 ## Smoke tests
 
 Run these tests from the repository root:
@@ -152,11 +195,10 @@ Run these tests from the repository root:
 bash test/wt-smoke.sh
 WT_BASH=/bin/bash bash test/wt-smoke.sh
 bash test/native-relay-smoke.sh
-bash test/agent-status-smoke.sh
 shellcheck bin/wt bin/cmux-hook install.sh test/native-relay-smoke.sh
 ```
 
 The native test checks the automation merge function in a scratch home.
 It does not run `install.sh` or change installed files.
-It checks transport changes in both directions and repeated native requests with identical operation fields.
+It checks native identity changes and repeated native requests with identical operation fields.
 It also executes the installed rule's command and checks its VS Code request and notification dismissal.
