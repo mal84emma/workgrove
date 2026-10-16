@@ -192,7 +192,10 @@ It also describes what a run changes, the repo's test suites, and how to remove 
   - `install.sh` still runs under bash 3.2. To check that, run its smoke test with `INSTALL_BASH=/bin/bash`
     (see Tests).
 - **tmux:** the VMs have tmux 3.2a, and `home/.tmux.conf` is written for that version.
-- **cmux:** workgrove supports cmux 0.65.0 (build 108). See the [cmux compatibility log](#cmux-compatibility-log) for verified behavior.
+- **cmux:** workgrove supports only the latest cmux release. cmux releases often, and each release can change the
+  commands, fields, and behavior that `wt` depends on. So workgrove tracks the newest release and removes the
+  paths that older releases needed, instead of keeping both. The verified release is 0.65.0 (build 108). See the
+  [cmux compatibility log](#cmux-compatibility-log) for verified behavior.
   `home/.config/cmux/cmux.json` is `schemaVersion: 1`.
 - **Other tools:** on a Mac, `Brewfile` installs `gh`, `fzf`, cmux itself, Claude Code, and Codex. On a VM,
   [docs/new-vm.md](docs/new-vm.md) installs them.
@@ -955,9 +958,13 @@ It also tells how to enable VM status on an existing VM.
 This log records cmux versions verified with workgrove. It does not establish support for untested versions.
 Run `cmux version` to check your installed version.
 
+workgrove supports only the latest cmux release. When a new release changes a command, a field, or a behavior that
+`wt` depends on, workgrove moves to the new release and removes the old path. It does not keep a path for each
+release. So the log has one supported row at a time, and an older row is history.
+
 | Supported cmux version | Verified on | Verified behavior |
 |---|---|---|
-| 0.65.0 (build 108, `dda24fbd2`) | 2026-10-08 | Claude and Codex self-removal, locally and on `ci-mal-c4-m14`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
+| 0.65.0 (build 108, `dda24fbd2`) | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
 
 [PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to this version's row-closing behavior.
 Local self-removal uses cmux's `--force` only for the verified caller's own row.
