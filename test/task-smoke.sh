@@ -13,7 +13,8 @@ scenario_exit_handlers() {
   local rc=0
   bash -c '
     source "$1/lib/workgrove/common.sh"
-    first() { printf "first:%s\n" "$1" >>"$2"; return 9; }
+    # Callbacks can assign a global rc without changing the status of later callbacks.
+    first() { printf "first:%s\n" "$1" >>"$2"; rc=0; return 9; }
     second() { printf "second:%s\n" "$1" >>"$2"; }
     # Callback functions receive one status argument.
     a() { first "$1" "$LOG"; }

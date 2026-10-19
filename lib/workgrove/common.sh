@@ -31,11 +31,12 @@ on_exit() {
   trap 'wg_on_exit "$?"' EXIT
 }
 wg_on_exit() {
-  local rc=$1 handler
+  local handler
+  # Callbacks cannot change the positional arguments of this dispatcher.
   for handler in "${WG_EXIT_HANDLERS[@]}"; do
-    "$handler" "$rc" || true
+    "$handler" "$1" || true
   done
-  return "$rc"
+  return "$1"
 }
 
 # shellcheck source=lib/workgrove/task.sh
