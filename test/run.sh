@@ -130,16 +130,44 @@ run_task() {
   return "$rc"
 }
 
+stop_worker_group() {
+  local pid=$1
+  kill -TERM -- "-$pid" 2>/dev/null || true
+  if kill -0 -- "-$pid" 2>/dev/null; then
+    sleep 0.05
+    kill -KILL -- "-$pid" 2>/dev/null || true
+  fi
+}
+
 collect_task() {
-  local index=$1 rc=0 started ended suite_index elapsed
+  local index=$1 rc=0 started ended suite_index elapsed now recorded_rc status_error=''
+  local records=() status_pattern
   wait "${TASK_PIDS[$index]}" || rc=$?
+  now=${EPOCHREALTIME/./}
   if [[ -f $RUN_ROOT/$index.status ]]; then
-    read -r _ started ended <"$RUN_ROOT/$index.status"
+    mapfile -t records <"$RUN_ROOT/$index.status"
+    # Bound digit counts before arithmetic. Leading zeros and additional fields are invalid.
+    status_pattern=$'^(0|[1-9][0-9]{0,2})\t([1-9][0-9]{0,17})\t([1-9][0-9]{0,17})$'
+    if ((${#records[@]} != 1)); then
+      status_error='expected exactly one status line'
+    elif [[ ! ${records[0]} =~ $status_pattern ]]; then
+      status_error='expected three canonical numeric fields separated by tabs'
+    else
+      recorded_rc=${BASH_REMATCH[1]}
+      started=${BASH_REMATCH[2]} ended=${BASH_REMATCH[3]}
+      if ((recorded_rc > 255 || recorded_rc != rc)); then
+        status_error='exit status is invalid or differs from the worker result'
+      fi
+    fi
+    if [[ -n $status_error ]]; then
+      stop_worker_group "${TASK_PIDS[$index]}"
+      printf 'invalid worker status: %s\n' "$status_error" >>"$RUN_ROOT/$index.log"
+      started=${TASK_STARTS[$index]} ended=$now
+      ((rc != 0)) || rc=1
+    fi
   else
     # A crashed worker can leave its suite running in the original process group.
-    kill -TERM -- "-${TASK_PIDS[$index]}" 2>/dev/null || true
-    sleep 0.05
-    kill -KILL -- "-${TASK_PIDS[$index]}" 2>/dev/null || true
+    stop_worker_group "${TASK_PIDS[$index]}"
     started=${TASK_STARTS[$index]}
     ended=${EPOCHREALTIME/./}
     printf 'worker exited before reporting its result\n' >>"$RUN_ROOT/$index.log"

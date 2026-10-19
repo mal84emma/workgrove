@@ -16,7 +16,7 @@ cat >"$TEST_ROOT/suites with spaces/worker.sh" <<'WORKER'
 name=${0##*/}
 printf 'start %s\n' "$name" >>"$RUNNER_TEST_STATE/events"
 printf 'output from %s\n' "$name"
-sleep 0.15
+sleep "${RUNNER_TEST_DELAY:-0.15}"
 printf 'end %s\n' "$name" >>"$RUNNER_TEST_STATE/events"
 [[ $name != failure.sh ]] || exit 7
 WORKER
@@ -73,6 +73,52 @@ scenario_failures() {
   end_scenario
 }
 scenario_failures
+
+scenario_malformed_status() {
+  begin_scenario 'runner rejects malformed worker status and finishes remaining tasks' || return 0
+  # BASH_ENV supplies a printf shim to the scratch runner and its workers.
+  cat >"$TEST_ROOT/status-env" <<'SHIM'
+printf() {
+  if [[ $1 == '%s\t%s\t%s\n' && ${index:-} == 0 ]]; then
+    builtin printf '%b\n' "$RUNNER_TEST_STATUS"
+  else
+    builtin printf "$@"
+  fi
+}
+SHIM
+  local record logs
+  local records=(
+    ''
+    '0\tword\t2'
+    '0\t01\t2'
+    '0\t1\t2\textra'
+    '0\t1\t2\n0\t1\t2'
+    '0\t999999999999999999999999\t2'
+    '0\t-2\t1'
+    '0\t0\t2'
+    '999\t1\t2'
+    '7\t1\t2'
+  )
+  for record in "${records[@]}"; do
+    : >"$TEST_ROOT/events"
+    BASH_ENV="$TEST_ROOT/status-env" RUNNER_TEST_STATUS="$record" RUNNER_JOBS=1 RUNNER_TEST_DELAY=0 \
+      capture_runner "$TEST_ROOT/suites with spaces/first.sh" "$TEST_ROOT/suites with spaces/third.sh"
+    assert_eq 'malformed status fails the runner' 1 "$RUNNER_RC"
+    check_contains 'malformed status reports its cause' "$RUNNER_OUT" 'invalid worker status:'
+    assert_eq 'both tasks finish despite malformed status' 2 \
+      "$(awk '$1 == "end" {n++} END {print n+0}' "$TEST_ROOT/events")"
+    check_contains 'only the malformed task fails' "$RUNNER_OUT" '2 tasks, 1 failed'
+    logs=${RUNNER_OUT##*runner logs kept in }
+    assert_eq 'malformed status keeps its logs' yes "$([[ -d $logs ]] && echo yes || echo no)"
+    [[ ! -d $logs ]] || rm -rf "$logs"
+  done
+  BASH_ENV="$TEST_ROOT/status-env" RUNNER_TEST_STATUS='0\t2\t1' RUNNER_TEST_DELAY=0 \
+    capture_runner "$TEST_ROOT/suites with spaces/first.sh"
+  assert_eq 'a backward clock correction does not fail a task' 0 "$RUNNER_RC"
+  check_contains 'a backward clock correction clamps elapsed time' "$RUNNER_OUT" 'first.sh: 0.000 s (exit 0)'
+  end_scenario
+}
+scenario_malformed_status
 
 scenario_invalid_input() {
   begin_scenario 'runner rejects invalid workers and missing suites' || return 0
@@ -175,6 +221,37 @@ WORKER
 }
 scenario_interruption
 
+scenario_interrupt_signal() {
+  begin_scenario 'runner INT handling stops workers and descendants' || return 0
+  cat >"$TEST_ROOT/interrupt.sh" <<'WORKER'
+#!/usr/bin/env bash
+printf '%s\n' "$$" >"$RUNNER_TEST_STATE/interrupt-child.pid"
+sleep 60 &
+printf '%s\n' "$!" >"$RUNNER_TEST_STATE/interrupt-grandchild.pid"
+wait "$!"
+WORKER
+  local runner rc=0 logs
+  # Job control starts this background runner with the default INT disposition.
+  set -m
+  env -u ONLY JOBS=1 "$BASH" "$REPO/test/run.sh" "$TEST_ROOT/interrupt.sh" >"$TEST_ROOT/interrupt.log" 2>&1 &
+  runner=$!
+  set +m
+  if wait_for_file "$TEST_ROOT/interrupt-grandchild.pid"; then
+    kill -INT "$runner"
+    wait "$runner" || rc=$?
+    assert_eq 'INT exits with its signal status' 130 "$rc"
+    assert_stopped 'INT cleanup stops the child' "$(cat "$TEST_ROOT/interrupt-child.pid")"
+    assert_stopped 'INT cleanup stops the grandchild' "$(cat "$TEST_ROOT/interrupt-grandchild.pid")"
+  else
+    kill -TERM "$runner" 2>/dev/null || true
+    wait "$runner" 2>/dev/null || true
+  fi
+  logs=$(sed -n 's/^runner logs kept in //p' "$TEST_ROOT/interrupt.log")
+  [[ ! -d $logs ]] || rm -rf "$logs"
+  end_scenario
+}
+scenario_interrupt_signal
+
 scenario_ignores_term() {
   begin_scenario 'runner interruption kills workers that ignore TERM' || return 0
   cat >"$TEST_ROOT/signal.sh" <<'WORKER'
@@ -222,4 +299,33 @@ WORKER
   end_scenario
 }
 scenario_worker_crash
+
+scenario_partial_status_crash() {
+  begin_scenario 'runner partial status crash handling stops orphaned descendants' || return 0
+  cat >"$TEST_ROOT/partial-status-env" <<'SHIM'
+printf() {
+  if [[ $1 == '%s\t%s\t%s\n' && ${index:-} == 0 ]]; then
+    sleep 60 &
+    builtin printf '%s\n' "$!" >"$RUNNER_TEST_STATE/partial-status-orphan.pid"
+    kill -KILL "$BASHPID"
+  else
+    builtin printf "$@"
+  fi
+}
+SHIM
+  : >"$TEST_ROOT/events"
+  BASH_ENV="$TEST_ROOT/partial-status-env" RUNNER_TEST_DELAY=0 RUNNER_JOBS=1 \
+    capture_runner "$TEST_ROOT/suites with spaces/first.sh" "$TEST_ROOT/suites with spaces/third.sh"
+  assert_eq 'a partial status crash fails the runner' 1 "$RUNNER_RC"
+  check_contains 'the partial status error is reported' "$RUNNER_OUT" 'invalid worker status:'
+  check_contains 'later tasks succeed after a partial status crash' "$RUNNER_OUT" '2 tasks, 1 failed'
+  assert_eq 'both task bodies finish' 2 "$(awk '$1 == "end" {n++} END {print n+0}' "$TEST_ROOT/events")"
+  assert_stopped 'the partial status orphan stops' "$(cat "$TEST_ROOT/partial-status-orphan.pid")"
+  local logs=${RUNNER_OUT##*runner logs kept in }
+  assert_eq 'the partial status file remains available' yes \
+    "$([[ -f $logs/0.status && ! -s $logs/0.status ]] && echo yes || echo no)"
+  [[ ! -d $logs ]] || rm -rf "$logs"
+  end_scenario
+}
+scenario_partial_status_crash
 lib_summary

@@ -35,6 +35,8 @@ SCENARIO="(startup)"
 SCENARIO_FAILS=0
 SCENARIO_START=0
 SCENARIOS=0
+# A matching begin owns this state until end_scenario clears it.
+SCENARIO_ACTIVE=0
 
 # lib_label <base> <rel>: how a base/rel pair is named in a failure message. See LIB_BASE_LABEL.
 lib_label() {
@@ -141,11 +143,21 @@ scenario_matches() {
   [[ $1 == *${ONLY:-}* ]]
 }
 
+lib_reject_unfinished_scenario() {
+  if [[ $SCENARIO_ACTIVE -eq 1 ]]; then
+    fail "scenario did not call end_scenario"
+    SCENARIO_ACTIVE=0
+  fi
+}
+
 # ONLY selects scenario names by shell glob, with an implicit * on each side.
 # Call begin_scenario inside a function with `|| return 0` to skip an unmatched scenario.
 begin_scenario() {
   scenario_matches "$1" || return 1
+  # Skipped scenarios cannot close or replace the active scenario.
+  lib_reject_unfinished_scenario
   SCENARIO="$1"
+  SCENARIO_ACTIVE=1
   SCENARIO_FAILS=0
   SCENARIO_START=$((PASS + FAIL))
   SCENARIO_STARTED=${EPOCHREALTIME:-$SECONDS.000000}
@@ -154,6 +166,10 @@ begin_scenario() {
 }
 
 end_scenario() {
+  if [[ $SCENARIO_ACTIVE -ne 1 ]]; then
+    fail "end_scenario called without begin_scenario"
+    return 0
+  fi
   if [[ $((PASS + FAIL)) -eq $SCENARIO_START ]]; then
     fail "scenario made no assertions"
   fi
@@ -167,6 +183,7 @@ end_scenario() {
   elapsed=$((now - SCENARIO_STARTED))
   ((elapsed >= 0)) || elapsed=0
   printf 'scenario time: %s: %s s\n' "$SCENARIO" "$(lib_seconds "$elapsed")"
+  SCENARIO_ACTIVE=0
 }
 
 # lib_cleanup: the EXIT trap that every suite installs. KEEP=1 keeps the scratch tree for inspection. Any
@@ -204,6 +221,7 @@ lib_cleanup() {
 
 # Print the derived assertion total. Fail when assertions fail or the filter selects no scenarios.
 lib_summary() {
+  lib_reject_unfinished_scenario
   echo "$((PASS + FAIL)) assertions: $PASS passed, $FAIL failed"
   if [[ $SCENARIOS -eq 0 ]]; then
     echo "FAIL: no scenarios matched ONLY=${ONLY:-}" >&2

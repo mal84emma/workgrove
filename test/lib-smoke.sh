@@ -468,6 +468,24 @@ scenario_assertion_guard() {
   assert_eq 'a previous assertion cannot hide an empty scenario' 1 "$HARNESS_RC"
   run_harness '' 'begin_scenario broken; assert_eq value expected actual; end_scenario; begin_scenario good; pass; end_scenario'
   assert_eq 'a later pass cannot hide an earlier failure' 1 "$HARNESS_RC"
+  run_harness '' 'empty() { begin_scenario empty; return 0; }; empty'
+  assert_eq 'an empty early return fails' 1 "$HARNESS_RC"
+  assert_eq 'an early return reports its unfinished scenario' yes \
+    "$([[ $HARNESS_OUT == *'FAIL [empty] scenario did not call end_scenario'* ]] && echo yes || echo no)"
+  run_harness '' 'begin_scenario unfinished; pass'
+  assert_eq 'assertions cannot complete an unfinished scenario' 1 "$HARNESS_RC"
+  run_harness '' 'begin_scenario first; pass; begin_scenario second; pass; end_scenario'
+  assert_eq 'a later scenario cannot replace an unfinished scenario' 1 "$HARNESS_RC"
+  assert_eq 'an overwritten scenario retains its name in the failure' yes \
+    "$([[ $HARNESS_OUT == *'FAIL [first] scenario did not call end_scenario'* ]] && echo yes || echo no)"
+  run_harness 'selected' 'begin_scenario selected; pass; begin_scenario skipped || :; end_scenario'
+  assert_eq 'a skipped scenario does not replace an active scenario' 0 "$HARNESS_RC"
+  run_harness '' 'end_scenario'
+  assert_eq 'ending without a matching begin fails' 1 "$HARNESS_RC"
+  assert_eq 'an unmatched end reports its cause' yes \
+    "$([[ $HARNESS_OUT == *'end_scenario called without begin_scenario'* ]] && echo yes || echo no)"
+  run_harness '' 'begin_scenario complete; pass; end_scenario; end_scenario'
+  assert_eq 'ending the same scenario twice fails' 1 "$HARNESS_RC"
   run_harness '' 'begin_scenario good; pass; pass; end_scenario'
   assert_eq 'the summary derives the total' 0 "$HARNESS_RC"
   assert_eq 'the summary reports the derived total' yes \
