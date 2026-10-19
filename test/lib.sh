@@ -132,14 +132,24 @@ assert_grep() {
   pass
 }
 
+lib_seconds() {
+  printf '%d.%03d' "$(($1 / 1000000))" "$(($1 % 1000000 / 1000))"
+}
+
+scenario_matches() {
+  # shellcheck disable=SC2053  # ONLY is a pattern, not a literal string.
+  [[ $1 == *${ONLY:-}* ]]
+}
+
 # ONLY selects scenario names by shell glob, with an implicit * on each side.
 # Call begin_scenario inside a function with `|| return 0` to skip an unmatched scenario.
 begin_scenario() {
-  # shellcheck disable=SC2053  # ONLY is a pattern, not a literal string.
-  [[ $1 == *${ONLY:-}* ]] || return 1
+  scenario_matches "$1" || return 1
   SCENARIO="$1"
   SCENARIO_FAILS=0
   SCENARIO_START=$((PASS + FAIL))
+  SCENARIO_STARTED=${EPOCHREALTIME:-$SECONDS.000000}
+  SCENARIO_STARTED=${SCENARIO_STARTED/./}
   SCENARIOS=$((SCENARIOS + 1))
 }
 
@@ -152,6 +162,11 @@ end_scenario() {
   else
     echo "FAIL $SCENARIO ($SCENARIO_FAILS assertion(s) failed)"
   fi
+  local now=${EPOCHREALTIME:-$SECONDS.000000} elapsed
+  now=${now/./}
+  elapsed=$((now - SCENARIO_STARTED))
+  ((elapsed >= 0)) || elapsed=0
+  printf 'scenario time: %s: %s s\n' "$SCENARIO" "$(lib_seconds "$elapsed")"
 }
 
 # lib_cleanup: the EXIT trap that every suite installs. KEEP=1 keeps the scratch tree for inspection. Any
