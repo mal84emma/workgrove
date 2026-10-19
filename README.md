@@ -70,7 +70,7 @@ It also covers per-repo hooks and the logins that you supply.
     Only the listing is limited to the caller's window.
     On cmux 0.65.1, a moved native VM row kept its UUID, title, and ref.
     Combined window lookup, description updates, targeted input, and self-removal also passed.
-  - *The decision:* `rows_json` in `bin/wt` and `ws_load` in `bin/cmux-hook` enumerate the windows and merge their lists.
+  - *The decision:* `rows_json` in `lib/workgrove/cmux.sh` and `ws_load` in `bin/cmux-hook` enumerate the windows and merge their lists.
     Because the commands that act on a row already reach it in any window, no other code had to change.
     Both functions enumerate windows by window uuid, never by the index that `cmux list-windows` prints first, because opening a window renumbers the other windows.
 
@@ -130,6 +130,11 @@ workgrove/
 │       ├── automation.sh      installer support for the native notification rule
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
+│       ├── hosts.sh           SSH host inventory and hardware probes
+│       ├── picker.sh          task picker and driver commands
+│       ├── recovery.sh        VM row recovery and task attachment
+│       ├── remote.sh          remote commands and result parsing
+│       ├── safety.sh          worktree removal checks
 │       └── vm/                scripts that bin/wt sends to a VM on SSH standard input
 │           ├── host-new-preflight.sh
 │           ├── probe-host.sh
@@ -137,15 +142,28 @@ workgrove/
 │           ├── reinit-client-detach.sh
 │           └── reinit-client-proof.sh
 ├── home/
-│   ├── .zshenv .gitignore_global   always installed; .zshrc .gitconfig .tmux.conf are opt-in
+│   ├── .zshenv                always installed
+│   ├── .gitignore_global      always installed
+│   ├── .zshrc                 opt-in shell config
+│   ├── .gitconfig             opt-in Git config
+│   ├── .tmux.conf             opt-in tmux config
 │   ├── .oh-my-zsh/custom/themes/workgrove.zsh-theme   with the .zshrc opt-in
 │   ├── .claude/
 │   │   ├── AGENTS.md          the working conventions both agents read
 │   │   ├── CLAUDE.md          one line: @AGENTS.md
-│   │   └── settings.base.json; keybindings.json and statusline-command.sh are opt-in
-│   ├── .agents/skills/        task-driver, worktree-create, worktree-work, worktree-show, worktree-teardown,
-│   │                          azml-compute
-│   ├── .codex/                config.base.toml, hooks.base.json
+│   │   ├── settings.base.json
+│   │   ├── keybindings.json   opt-in
+│   │   └── statusline-command.sh  opt-in
+│   ├── .agents/skills/
+│   │   ├── azml-compute/SKILL.md
+│   │   ├── task-driver/SKILL.md
+│   │   ├── worktree-create/SKILL.md
+│   │   ├── worktree-work/SKILL.md
+│   │   ├── worktree-show/SKILL.md
+│   │   └── worktree-teardown/SKILL.md
+│   ├── .codex/
+│   │   ├── config.base.toml
+│   │   └── hooks.base.json
 │   ├── .cmuxterm/automations.json  native VM notification rule
 │   └── .config/cmux/cmux.json
 ├── vscode/
@@ -158,6 +176,9 @@ workgrove/
 │   ├── runner-git-smoke.sh    Git selection, fallback, and fixture precedence
 │   ├── wt-scenarios.sh        the wt scenario IDs and names shared by discovery and execution
 │   ├── lib.sh                 the assertion functions shared by the suites
+│   ├── docs-smoke.sh          Layout files, required citations, and local links and anchors
+│   ├── options-smoke.sh       command metadata and option parsing
+│   ├── task-smoke.sh          task context, sidecars, identity, and cleanup
 │   ├── lib-smoke.sh           unit tests for every shared shell function
 │   ├── named-outputs-smoke.sh caller-named outputs that match internal local names
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
@@ -340,6 +361,9 @@ The line must be at the top because Ubuntu's `~/.bashrc` returns early in a non-
 the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
 
 ### Tests
+
+`bash test/docs-smoke.sh` checks the Layout tree, the documentation guide's required citations, and relative links and anchors.
+It needs `python3` and Git. The shared runner and CI discover it through `test/*-smoke.sh`.
 
 GitHub Actions runs [`.github/workflows/tests.yml`](.github/workflows/tests.yml) when a pull request opens,
 reopens, or receives new commits. It also runs on pushes to `main`, including merges.
@@ -802,19 +826,34 @@ git's own dirty count, with no paths excused.
 
 ### Environment variables
 
-| Variable | Meaning |
+This table lists configuration variables, test overrides, and repository settings.
+
+| Knob | Default and behavior |
 |---|---|
-| `WT_REPOS_DIR` | The folders that `wt` looks for repos in |
-| `WT_AGENT` | The default agent |
-| `WT_AGENT_ARGS` | Extra agent arguments |
-| `WT_HOST` | On a VM, this VM's alias in the Mac's `~/.ssh/config`. `install.sh` records it |
+| `WT_REPOS_DIR` | Colon-separated repository folders. The default is `~/Documents/Repositories`; the VM installer records `$HOME`. |
+| `WT_HOST` | No default. The VM's alias in the Mac's `~/.ssh/config`; the VM installer records it. |
+| `WT_AGENT` | `claude`. Selects the default agent for new tasks. |
+| `WT_AGENT_ARGS` | Empty. Adds shell-split agent arguments. |
+| `WT_MACHINE` | Unset. `1` enables versioned results for supported commands. The Mac sets it for VM requests. |
+| `WT_CMUX_TUI_HOOK` | Internal helper path for the hook wrapper. `wt run` sets it from `CMUX_TUI_HOOK` or the cmux-tui data folder. |
+| `WT_CLOSE_WAIT_SECONDS` | `22`. Sets the wait for older VM rows to close during self-removal. |
+| `WT_STATUS_LEASE_SECONDS` | Retired with the TCP status paths. Current code ignores it. |
+| `AGENT_NOTIFY_MIN_SECONDS` | `180`. Suppresses completion banners for shorter turns outside cmux. |
+| `INSTALL_BASH` | `bash` on `PATH`. Selects the interpreter for `install.sh` in `test/install-smoke.sh`. |
+| `FORCE_OS` | The result of `uname -s`. Overrides the installer platform for tests. |
+| `GUARD_BASH` | `bash` on `PATH`. Selects the guard interpreter in `test/github-guard-smoke.sh`. |
+| `WT_BASH` | `bash` on `PATH`. Selects the `wt` interpreter in `test/wt-smoke.sh`. |
+| `JOBS` | `4`. Limits concurrent workers in `test/run.sh`. |
+| `ONLY` | Unset. Filters smoke scenarios by shell pattern. The runner requires one selected suite. |
+| `KEEP` | Unset. A nonempty value preserves test fixtures and runner logs. Failures also preserve them. |
+| `wt.dir` | `.worktrees`. Git config key that sets a repository's worktree folder. |
+| `.wt-include` | Absent. Lists gitignore-style patterns of ignored files to copy into new worktrees. |
+| `.wt-setup` | Absent. An executable repository hook that runs inside each new worktree. |
+| `~/.zshenv.local` | Optional machine-local shell overrides. `~/.zshenv` sources it; the VM installer adds missing host and repository settings. |
 
 A model chosen with `wt new -m` persists for every `wt run` launch, including Claude resumes. It overrides
 model options in `WT_AGENT_ARGS`. When the task has a model, `wt` also removes Claude's `--fallback-model`.
 Without `-m`, those arguments still apply.
-
-One related setting is a git config key, not an environment variable: `git config wt.dir` renames the
-worktree folder for one repo.
 
 ### Repo folders
 

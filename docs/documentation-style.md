@@ -124,13 +124,13 @@ If you must change one, update every file that cites it in the same change.
 | Item | Cited by |
 |---|---|
 | `## Security` in `README.md` | `bin/github-guard` ("the README's Security section") |
-| Blocks `# 1.` to `# 4.` in `docs/new-vm.md`, in the same order. Block 1's keepalive lines start at its `sshd_config.d` comment. | `bin/wt` warnings ("docs/new-vm.md block 1's keepalive lines") |
+| Blocks `# 1.` to `# 4.` in `docs/new-vm.md`, in the same order. Block 1's keepalive lines start at its `sshd_config.d` comment. | The setup procedure in `docs/new-vm.md` |
 | The file names `docs/new-mac.md` and `docs/new-vm.md` | `install.sh`, which builds the path `docs/new-$page.md` |
 | `## Install` and the sync table in `## Keeping machines in sync` in `README.md` | `docs/new-mac.md` and `docs/new-vm.md` |
 | `## Notes` in `docs/new-vm.md`, with its rsync line | `README.md` ("the notes of docs/new-vm.md") |
 | `## Agents` and the "Rows are found by title, repo and host, in every window" bullet in `README.md` | The README's Security section |
 | `### Recover a VM row` in `README.md` | The README's Daily use table, and `docs/azml-compute.md` (`../README.md#recover-a-vm-row`) |
-| `## Opening apps` in `home/.claude/AGENTS.md` | The worktree-show skill ("`AGENTS.md`, Opening apps") |
+| `## Opening apps` in `home/.claude/AGENTS.md` | The worktree-show skill's app launch policy link |
 | The `name:` of each skill | `home/.claude/AGENTS.md`, the other skills, and the README's skills table |
 
 ### Edit comments and help text

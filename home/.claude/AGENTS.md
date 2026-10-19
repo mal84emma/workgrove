@@ -64,6 +64,9 @@ Never do task work directly in a repository's main checkout unless the user expl
   - Stay inside the worktree for task work.
   - Commit on its `wt/<name>` branch.
   - Never edit the main checkout or sibling worktrees.
+  - Do not switch branches or create nested worktrees.
+  - Make small commits and describe each one.
+  - Keep dependencies and environment settings inside the worktree. Do not use the main checkout's copies.
   - When you are asked to remove your own worktree, change to the main checkout and run `wt rm` from there, as the `worktree-teardown` skill describes.
   - See the `worktree-work` skill.
 - **The user wants to look at the code** ("show me the code", "open the worktree", "let me see it").
@@ -188,6 +191,19 @@ On the Mac only, use the `azml-compute` skill (`azml-ssh-host add <instance>`) t
 
 Only the user runs `az login` and `az account set`. Do not run them yourself. When the `azml-ssh-host` helper gives an error, report the error and stop.
 
+### Per-repo setup
+
+Add `.wt-include` and `.wt-setup` only when the user asks.
+
+### Driver sessions
+
+Do not do a task's coding in the driver session. Start a task session for that work.
+Use the [task-driver procedure](../.agents/skills/task-driver/SKILL.md) to prepare and launch VM tasks.
+
+### VM task recovery
+
+Run recovery, `--reattach`, or `--restart-agent` only when the user asks.
+
 ### Interactive commands
 
 Never run interactive `wt attach`, `wt task` or `wt driver` from a task session. These commands belong to the user's own session on the Mac.
@@ -217,4 +233,6 @@ Each task worktree normally has a cmux row that shows its branch, agent state, a
 ## Reporting
 
 - When you create tasks, list them. For each task, give the name, row title, branch, path, and the brief that you gave it. For a task on a VM, also give the tmux session.
+- After task creation, do not wait on or poll the new session.
+- For deferred creation, report the row only after attach succeeds.
 - When you finish a task, summarize the changes, commits, tests run, and anything left undone. Then stop.
