@@ -7,6 +7,11 @@ on:
   push:
   pull_request:
 
+# Keep branch pushes and pull-request merge checks in separate cancellation groups.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -16,18 +21,25 @@ defaults:
 
 jobs:
   shellcheck:
-    # The job uses Homebrew's shellcheck, as Brewfile does on the Mac.
-    runs-on: macos-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: 1
-      HOMEBREW_NO_INSTALL_CLEANUP: 1
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Install shellcheck
-        run: brew install shellcheck
+        # Ubuntu's bundled version is older than the ShellCheck version used here.
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          archive="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl --fail --location --retry 3 --connect-timeout 10 --max-time 120 \
+            "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz" \
+            --output "$archive"
+          printf '%s  %s\n' "$SHELLCHECK_SHA256" "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$RUNNER_TEMP" "shellcheck-$SHELLCHECK_VERSION/shellcheck"
+          echo "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION" >> "$GITHUB_PATH"
       - name: Run shellcheck
         run: |
           shellcheck --version

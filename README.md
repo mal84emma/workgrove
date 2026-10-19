@@ -338,10 +338,13 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
 ### Tests
 
 GitHub Actions runs [`.github/workflows/tests.yml`](.github/workflows/tests.yml) on every push and every
-pull request. The workflow makes these checks:
+pull request. A new run cancels older runs for the same branch or pull request.
+Branch pushes and pull-request merge checks use separate cancellation groups.
+The workflow makes these checks:
 
-- On `macos-latest`, `shellcheck -x` checks `bin/*`, `lib/workgrove/*.sh`, `lib/workgrove/vm/*.sh`,
-  `install.sh`, and `test/*.sh`. It uses Homebrew's shellcheck, as `Brewfile` does on the Mac.
+- On `ubuntu-24.04`, `shellcheck -x` checks `bin/*`, `lib/workgrove/*.sh`, `lib/workgrove/vm/*.sh`,
+  `install.sh`, and `test/*.sh`. The job downloads ShellCheck 0.11.0 from its official release
+  and verifies the archive's SHA-256 checksum.
 - The suites in `test/` run in parallel on `macos-latest`, `ubuntu-22.04`, and `ubuntu-24.04`.
   Each scenario must make at least one assertion.
   - On macOS, Homebrew's bash is first on `PATH`. `install-smoke.sh` runs `install.sh` with
