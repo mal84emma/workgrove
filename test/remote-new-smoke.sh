@@ -269,10 +269,11 @@ TMUX
   run_wt wt-demo claude 'two words'
   check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'invalid model'* ]] && echo yes)" 'invalid remote model reached task creation'
 
-  # The VM parser does not accept combined spellings, so the Mac rejects them before any SSH call.
+  # Valued long options accept equals syntax. Combined short options remain unsupported.
   rm -f "$TEST_ROOT/ssh.log"
   invoke_wt -H fakevm new task -r wt-demo --model=fable
-  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'use -m <model>'* && ! -e "$TEST_ROOT/ssh.log" && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'combined long model option reached SSH'
+  check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/ssh.log" && -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'long model equals syntax failed'
+  rm -f "$TEST_ROOT/ssh.log" "$TEST_ROOT/remote-new"
   invoke_wt -H fakevm new task -r wt-demo -mfable
   check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'use -m <model>'* && ! -e "$TEST_ROOT/ssh.log" && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'combined short model option reached SSH'
 

@@ -54,16 +54,13 @@ reinit_task_client() { # reinit_task_client <host> <id> <session> — restart th
 
 host_attach() { # re-attach to the VM's session; start an agent only for a task never started before
   local host="$1" restart=0 reattach=0 name="" repo=""; shift
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --restart-agent) restart=1; shift ;;
-      --reattach) reattach=1; shift ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "attach: $1 needs a repo"; repo="$2"; shift 2 ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "attach: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "attach: unexpected argument $1"; name="$1"; shift ;;
-    esac
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec attach remote)" opts "$@"
+  name=${opts[name]-$name}
+  restart=${opts[restart]-$restart}
+  reattach=${opts[reattach]-$reattach}
+  repo=${opts[repo]-$repo}
+  need_r "$host" attach "$@"
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
   local out session state title id path what=selected result result_rc=0
