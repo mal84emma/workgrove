@@ -1,6 +1,7 @@
 """Check tracked Layout files, required citations, and local documentation links."""
 
 import argparse
+from bisect import bisect_right
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -20,8 +21,94 @@ def blank(text):
     return re.sub(r"[^\n]", " ", text)
 
 
+def inline_boundaries(text):
+    """Keep code spans inside a paragraph, heading, or list item."""
+    boundaries = {len(text)}
+    offset = 0
+    previous_depth = 0
+    for line in text.splitlines(keepends=True):
+        depth, prefix = blockquote_prefix(line)
+        content = line[prefix:]
+        heading = re.match(r"^ {0,3}#{1,6}(?:[ \t]|$)", content)
+        fence = re.match(r"^ {0,3}(?:`{3,}|~{3,})", content)
+        item = re.match(r"^ *(?:[-+*]|[0-9]+[.)]) +", content)
+        comment = re.match(r"^ {0,3}<!--", content)
+        underline = re.match(r"^ {0,3}(?:=+|-+)[ \t]*$", content.rstrip("\n"))
+        if not content.strip() or depth != previous_depth or heading or fence or item or comment or underline:
+            boundaries.add(offset)
+        if heading or fence:
+            boundaries.add(offset + len(line))
+        offset += len(line)
+        previous_depth = depth
+    return sorted(boundaries)
+
+
+def code_spans(text):
+    """Match complete backtick runs within each paragraph."""
+    runs = list(re.finditer(r"`+", text))
+    boundaries = inline_boundaries(text)
+    index = 0
+    while index < len(runs):
+        opener = runs[index]
+        backslashes = len(text[:opener.start()]) - len(text[:opener.start()].rstrip("\\"))
+        if backslashes % 2:
+            index += 1
+            continue
+        closing_index = None
+        boundary = boundaries[bisect_right(boundaries, opener.start())]
+        for candidate in range(index + 1, len(runs)):
+            closer = runs[candidate]
+            if closer.start() >= boundary:
+                break
+            if len(closer[0]) == len(opener[0]):
+                closing_index = candidate
+                break
+        if closing_index is None:
+            index += 1
+        else:
+            closer = runs[closing_index]
+            yield opener.start(), closer.end(), text[opener.end():closer.start()]
+            index = closing_index + 1
+
+
 def inline_prose(text):
-    return re.sub(r"(`+).*?\1", lambda match: blank(match[0]), text)
+    parts = []
+    cursor = 0
+    for start, end, _ in code_spans(text):
+        parts.extend((text[cursor:start], blank(text[start:end])))
+        cursor = end
+    return "".join(parts) + text[cursor:]
+
+
+def blockquote_prefix(line, limit=None):
+    """Return the quote depth and the end of its container prefix."""
+    depth = 0
+    offset = 0
+    while limit is None or depth < limit:
+        match = re.match(r" {0,3}>[ \t]?", line[offset:])
+        if not match:
+            break
+        depth += 1
+        offset += match.end()
+    return depth, offset
+
+
+def without_blockquotes(text):
+    return "".join(line[blockquote_prefix(line)[1]:] for line in text.splitlines(keepends=True))
+
+
+def markdown_links(text):
+    """Match link labels with balanced brackets before reading destinations."""
+    stack = []
+    destination = re.compile(r"\(\s*(<[^>]+>|(?:[^\s()]|\([^()]*\))+)")
+    for marker in re.finditer(r"[\[\]]", text):
+        if marker[0] == "[":
+            stack.append(marker.start())
+        elif stack:
+            start = stack.pop()
+            target = destination.match(text, marker.end())
+            if target:
+                yield text.count("\n", 0, start) + 1, target[1].strip("<>")
 
 
 class IndentedCode:
@@ -57,19 +144,25 @@ class IndentedCode:
 
 def mask_escaped_brackets(text):
     # Consume escaped backslashes in pairs before considering an escaped bracket.
-    return re.sub(r"\\[\\\[]", lambda match: blank(match[0]), text)
+    return re.sub(r"\\[\\\[\]]", lambda match: blank(match[0]), text)
 
 
 def heading_text(title):
     """Use displayed text while preserving punctuation inside code and escapes."""
     literals = []
 
-    def protect(match):
-        literals.append(match[2] if match[1] else match[3])
+    def protect(value):
+        literals.append(value)
         return f"\x00{len(literals) - 1}\x00"
 
-    pattern = r"(`+)(.*?)\1|\\([" + re.escape(string.punctuation) + r"])"
-    title = re.sub(pattern, protect, title)
+    parts = []
+    cursor = 0
+    for start, end, content in code_spans(title):
+        parts.extend((title[cursor:start], protect(content)))
+        cursor = end
+    title = "".join(parts) + title[cursor:]
+    pattern = r"\\([" + re.escape(string.punctuation) + r"])"
+    title = re.sub(pattern, lambda match: protect(match[1]), title)
     title = re.sub(r"!?\[([^]]+)\]\([^)]*\)", r"\1", title)
     title = re.sub(r"<[^>]+>", "", title)
     previous = None
@@ -97,16 +190,28 @@ def prose(text):
     fence = None
     in_comment = False
     indented = IndentedCode()
-    for line in text.splitlines(keepends=True):
+    quote_depth = 0
+    protected_lines = inline_prose(text).splitlines(keepends=True)
+    for line, protected in zip(text.splitlines(keepends=True), protected_lines):
+        depth, prefix = blockquote_prefix(line, quote_depth if fence else None)
+        container_prefix = line[:prefix]
+        line, protected = line[prefix:], protected[prefix:]
+        if depth != quote_depth:
+            fence = None
+            indented = IndentedCode()
+        quote_depth = depth
         if fence:
             marker = re.match(r"^\s*([`~]+)\s*$", line)
             if marker and set(marker[1]) == {fence[0]} and len(marker[1]) >= len(fence):
                 fence = None
                 indented.paragraph = False
-            lines.append(blank(line))
+            lines.append(blank(container_prefix + line))
             continue
         if not in_comment:
-            line = indented.mask(line)
+            masked = indented.mask(line)
+            if masked != line:
+                protected = blank(protected)
+            line = masked
         visible = ""
         remaining = line
         while remaining:
@@ -117,14 +222,16 @@ def prose(text):
                     break
                 visible += blank(remaining[:end + 3])
                 remaining = remaining[end + 3:]
+                protected = protected[end + 3:]
                 in_comment = False
             else:
-                start = inline_prose(remaining).find("<!--")
+                start = protected.find("<!--")
                 if start < 0:
                     visible += remaining
                     break
                 visible += remaining[:start]
                 remaining = remaining[start:]
+                protected = protected[start:]
                 in_comment = True
         marker = re.match(r"^\s*(`{3,}|~{3,})", visible)
         if marker:
@@ -132,7 +239,7 @@ def prose(text):
             visible = blank(visible)
         elif visible.strip():
             indented.observe(visible)
-        lines.append(visible)
+        lines.append(container_prefix + visible)
     return "".join(lines)
 
 
@@ -163,7 +270,7 @@ def anchors(path):
     text = prose(path.read_text())
     found = HtmlTargets(inline_prose(text)).anchors
     emitted = set()
-    lines = text.splitlines()
+    lines = without_blockquotes(text).splitlines()
     for index, line in enumerate(lines):
         heading = re.match(r"^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?$", line)
         if heading:
@@ -178,7 +285,7 @@ def anchors(path):
 
 def document_links(path):
     text = prose(path.read_text())
-    text = inline_prose(text)
+    text = without_blockquotes(inline_prose(text))
     links = HtmlTargets(text).links
     text = mask_escaped_brackets(text)
     references = {}
@@ -186,9 +293,7 @@ def document_links(path):
     for match in re.finditer(pattern, text, re.M):
         references[match[1].lower()] = match[2]
         links.append((text.count("\n", 0, match.start()) + 1, match[2]))
-    pattern = r"!?\[[^]]*\]\(\s*(<[^>]+>|(?:[^\s()]|\([^()]*\))+)"
-    for match in re.finditer(pattern, text):
-        links.append((text.count("\n", 0, match.start()) + 1, match[1].strip("<>")))
+    links.extend(markdown_links(text))
     for match in re.finditer(r"\[([^]]+)\](?:\[([^]]*)\])?", text):
         label = (match[2] or match[1]).lower()
         if label in references:

@@ -127,6 +127,55 @@ class DocsCheckTests(unittest.TestCase):
         self.assertEqual(["README.md:1: dead link: missing.png"], self.links('<img src="missing.png" alt="Example">\n'))
         self.assertEqual(["README.md:1: dead link: missing.png"], self.links('![Example](missing.png)\n'))
 
+    def test_nested_link_labels_use_destination_checks(self):
+        self.assertEqual([], self.links("[Read [the guide]](docs/target.md#target)\n"))
+        self.assertEqual(["README.md:1: dead link: missing.md"], self.links("[Read [the guide]](missing.md)\n"))
+        self.assertEqual(["README.md:1: dead link: missing.md"], self.links("[One [two [three]]](missing.md)\n"))
+
+    def test_multiline_code_spans_preserve_later_links(self):
+        text = "`literal\n[example](missing.md)`\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:3: dead link: visible-missing.md"], self.links(text))
+        text = "``literal `\ntext <!-- [example](missing.md)``\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:3: dead link: visible-missing.md"], self.links(text))
+
+    def test_code_spans_match_complete_backtick_runs(self):
+        text = "``literal ` [example](missing.md) `` [go](visible-missing.md)\n"
+        self.assertEqual(["README.md:1: dead link: visible-missing.md"], self.links(text))
+        self.assertEqual(["README.md:2: dead link: missing.md"], self.links("`unclosed\n[go](missing.md)\n"))
+        self.assertEqual(["README.md:3: dead link: missing.md"], self.links("`unclosed\n\n[go](missing.md)`\n"))
+
+    def test_blockquote_fences_preserve_later_live_links(self):
+        text = "> ```md\n> [example](missing.md)\n> ```\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:4: dead link: visible-missing.md"], self.links(text))
+        text = "> > ~~~md\n> > [example](missing.md)\n> > ~~~\n> [go](visible-missing.md)\n"
+        self.assertEqual(["README.md:4: dead link: visible-missing.md"], self.links(text))
+
+    def test_fenced_quote_contents_do_not_create_new_containers(self):
+        text = "> ```md\n> > [example](missing.md)\n> ```\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:4: dead link: visible-missing.md"], self.links(text))
+        text = "> ```md\n> [example](missing.md)\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:3: dead link: visible-missing.md"], self.links(text))
+
+    def test_escaped_closing_brackets_do_not_end_labels(self):
+        text = r"[Read \] guide](missing.md)"
+        self.assertEqual(["README.md:1: dead link: missing.md"], self.links(text))
+        text = r"[Read \\](missing.md)"
+        self.assertEqual(["README.md:1: dead link: missing.md"], self.links(text))
+        text = r"[Read \\\] guide](docs/target.md)"
+        self.assertEqual([], self.links(text))
+
+    def test_code_spans_stop_at_block_interruptions(self):
+        for block in ("# Heading", "- Item", "> Quote"):
+            with self.subTest(block=block):
+                text = f"`literal\n{block} [go](missing.md) `\n"
+                self.assertEqual(["README.md:2: dead link: missing.md"], self.links(text))
+        text = "`literal\n<!-- [example](missing.md)` -->\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:3: dead link: visible-missing.md"], self.links(text))
+        text = "# Heading `literal\n[go](missing.md) `\n"
+        self.assertEqual(["README.md:2: dead link: missing.md"], self.links(text))
+        text = "`literal\n```md\n[example](missing.md) `\n```\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:5: dead link: visible-missing.md"], self.links(text))
+
     def test_external_links_are_skipped(self):
         self.assertEqual([], self.links('[web](https://example.com/missing#missing)\n<a href="mailto:test@example.com">mail</a>\n'))
 
