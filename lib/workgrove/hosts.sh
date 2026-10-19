@@ -1,8 +1,13 @@
 # shellcheck shell=bash
 probe_host() { # one SSH login proves remote-command access and gathers Linux hardware
   local out_file err_file ssh_pid rc=0 tick timeout=${WG_HOST_PROBE_TIMEOUT:-20}
-  if [[ ! $timeout =~ ^[1-9][0-9]*$ ]]; then
-    printf 'WG_HOST_PROBE_TIMEOUT must be a positive integer in seconds\n' >&2
+  # Ten ticks per second must fit in signed 64-bit arithmetic.
+  local timeout_max=922337203685477580
+  # Compare decimal strings before arithmetic, so an oversized value cannot overflow.
+  # shellcheck disable=SC2071
+  if [[ ! $timeout =~ ^[1-9][0-9]*$ || ${#timeout} -gt ${#timeout_max} ||
+        ( ${#timeout} -eq ${#timeout_max} && $timeout > $timeout_max ) ]]; then
+    printf 'WG_HOST_PROBE_TIMEOUT must be a positive integer in seconds (maximum %s)\n' "$timeout_max" >&2
     return 1
   fi
   out_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stdout.XXXXXX") || return 1
@@ -20,7 +25,7 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
   done
   if kill -0 "$ssh_pid" 2>/dev/null; then
     kill -KILL "$ssh_pid" 2>/dev/null || true
-    wait "$ssh_pid" 2>/dev/null || true
+    # An uninterruptible SSH client can survive KILL. Do not wait after the deadline.
     printf 'SSH probe timed out after %s seconds\n' "$timeout" >&2
     rc=124
   else

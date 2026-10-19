@@ -391,7 +391,11 @@ Set `KEEP=1` to keep scratch files for inspection.
 
 `wt-smoke.sh` and `remote-new-smoke.sh` set `WG_POLL_INTERVAL=0` to shorten production poll waits.
 Other suites keep the default one-second interval for checks that need real waits.
-The host probe defaults to 20 seconds. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for its deadline check.
+`WG_POLL_INTERVAL` passes directly to `sleep`. Invalid values produce a sleep error; no fallback interval replaces them.
+An unset or empty value uses one second.
+
+The host probe defaults to 20 seconds. `WG_HOST_PROBE_TIMEOUT` accepts decimal integers from 1 through 922337203685477580 seconds.
+Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for its deadline check.
 
 - **`bash test/install-smoke.sh`** checks installation across seventeen scenario groups.
   Each run uses its own throwaway `$HOME` with no network.

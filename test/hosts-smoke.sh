@@ -90,6 +90,29 @@ run_wt() {
     PATH="$TEST_ROOT/bin:$PATH" "${WT_BASH:-bash}" "$REPO/bin/wt" "$@"
 }
 
+run_stubbed_probe() (
+  # Shell functions model a client that survives KILL without starting a stuck process.
+  local stub_mode=$1 stub_rc=${3:-0}
+  WG_LIB_DIR="$REPO/lib/workgrove"
+  TMPDIR="$TEST_ROOT"
+  if [[ -n $2 ]]; then WG_HOST_PROBE_TIMEOUT=$2; else unset WG_HOST_PROBE_TIMEOUT; fi
+  # shellcheck source=lib/workgrove/hosts.sh
+  source "$REPO/lib/workgrove/hosts.sh"
+  : >"$TEST_ROOT/probe-calls"
+  ssh() { return "$stub_rc"; }
+  sleep() { printf 'sleep %s\n' "$*" >>"$TEST_ROOT/probe-calls"; }
+  kill() {
+    printf 'kill %s\n' "$*" >>"$TEST_ROOT/probe-calls"
+    [[ $stub_mode == running ]]
+  }
+  # shellcheck disable=SC2329
+  wait() {
+    printf 'wait %s\n' "$*" >>"$TEST_ROOT/probe-calls"
+    builtin wait "$@"
+  }
+  probe_host alpha
+)
+
 scenario_records() {
   begin_scenario 'records, errors and concurrent order' || return 0
 json=$(run_wt hosts --json)
@@ -141,6 +164,39 @@ assert_eq 'hung SSH probe returns unavailable' 'true' "$(printf '%s' "$json" | j
 }
 scenario_probe_deadline
 
+scenario_probe_cleanup() {
+  begin_scenario 'client deadline skips wait after KILL and preserves completed status' || return 0
+  local rc=0
+  run_stubbed_probe running 1 >"$TEST_ROOT/probe-out" 2>"$TEST_ROOT/probe-err" || rc=$?
+  assert_eq 'unkillable client times out' 124 "$rc"
+  assert_eq 'deadline polls ten times per second' 10 \
+    "$(awk '$1 == "sleep" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  assert_grep 'deadline sends KILL' "$TEST_ROOT/probe-calls" 'kill -KILL '
+  assert_eq 'deadline never waits for an unkillable client' 0 \
+    "$(awk '$1 == "wait" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  assert_grep 'deadline reports its duration' "$TEST_ROOT/probe-err" 'timed out after 1 seconds'
+  assert_eq 'deadline removes temporary output files' 0 \
+    "$(find "$TEST_ROOT" -name 'wt-host-std*' | wc -l | tr -d ' ')"
+
+  rc=0
+  run_stubbed_probe running '' >"$TEST_ROOT/probe-out" 2>"$TEST_ROOT/probe-err" || rc=$?
+  assert_eq 'default deadline times out' 124 "$rc"
+  assert_eq 'default deadline remains twenty seconds' 200 \
+    "$(awk '$1 == "sleep" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  assert_grep 'default deadline reports twenty seconds' "$TEST_ROOT/probe-err" 'timed out after 20 seconds'
+
+  local status
+  for status in 0 42 255; do
+    rc=0
+    run_stubbed_probe finished 1 "$status" >"$TEST_ROOT/probe-out" 2>"$TEST_ROOT/probe-err" || rc=$?
+    assert_eq "completed SSH retains exit $status" "$status" "$rc"
+    assert_eq "completed SSH with exit $status is reaped" 1 \
+      "$(awk '$1 == "wait" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  done
+  end_scenario
+}
+scenario_probe_cleanup
+
 scenario_empty_config() {
   begin_scenario 'no SSH aliases' || return 0
   : >"$TEST_ROOT/home/.ssh/config"
@@ -153,12 +209,31 @@ scenario_invalid_timeout() {
   begin_scenario 'invalid host probe timeout' || return 0
   printf 'Host alpha\n' >"$TEST_ROOT/home/.ssh/config"
   local timeout json
-  for timeout in 0 -1 1.5 invalid; do
+  : >"$TEST_ROOT/ssh.log"
+  for timeout in 0 -1 1.5 invalid 01 020 922337203685477581 9223372036854775807 \
+      18446744073709551617 99999999999999999999999999999999999999999999999999; do
     json=$(WG_HOST_PROBE_TIMEOUT=$timeout run_wt hosts --json)
     assert_eq "$timeout timeout fails without probing" true \
       "$(jq -r '.[0] | .status == "unavailable" and (.error | contains("must be a positive integer in seconds"))' <<<"$json")"
   done
+  assert_eq 'invalid timeouts never start SSH' 0 "$(wc -l <"$TEST_ROOT/ssh.log" | tr -d ' ')"
   end_scenario
 }
 scenario_invalid_timeout
+
+scenario_timeout_boundary() {
+  begin_scenario 'maximum host probe timeout is accepted without waiting' || return 0
+  local timeout rc
+  for timeout in 1 922337203685477579 922337203685477580; do
+    rc=0
+    run_stubbed_probe finished "$timeout" >"$TEST_ROOT/probe-out" 2>"$TEST_ROOT/probe-err" || rc=$?
+    assert_eq "$timeout timeout accepts a completed SSH probe" 0 "$rc"
+    assert_eq "$timeout timeout does not sleep" 0 \
+      "$(awk '$1 == "sleep" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+    assert_eq "$timeout timeout reaps the completed probe" 1 \
+      "$(awk '$1 == "wait" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  done
+  end_scenario
+}
+scenario_timeout_boundary
 lib_summary
