@@ -25,19 +25,15 @@ cat >"$TEST_ROOT/bin/uname" <<'UNAME'
 #!/bin/sh
 printf 'Darwin\n'
 UNAME
-cat >"$TEST_ROOT/bin/ssh" <<'SSH'
+cat >"$TEST_ROOT/bin/ssh.fixture" <<'SSH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$SSH_LOG"
-host=''
-for arg do
-  case "$arg" in alpha|beta|down|broken|nogpu|unified|slow1|slow2|warning|numericwarning|duplicate|empty|stuck|pci|hang) host=$arg ;; esac
-done
 if [[ "$host" == hang ]]; then cat >/dev/null; exec /bin/sleep 60; fi
 if [[ "$PROBE_MODE" == actual ]]; then
   script=$(mktemp "$TEST_ROOT/probe.XXXXXX")
   sed -e "s|/proc/meminfo|$TEST_ROOT/fixtures/meminfo|g" \
       -e "s|/sys/bus/pci/devices|$TEST_ROOT/fixtures/pci|g" >"$script"
-  PROBE_HOST="$host" /bin/sh "$script"
+  PROBE_HOST="$host" fake_ssh_run "$cmd" <"$script"
   rc=$?
   rm -f "$script"
   exit "$rc"
@@ -57,7 +53,9 @@ case "$host" in
     [[ -e "$TEST_ROOT/$other.start" ]] || exit 88
     printf 'cpu\t2\nmem_kib\t4194304\ngpu_status\tnone\n' ;;
 esac
+exit $?
 SSH
+make_fake_ssh "$TEST_ROOT/bin/ssh" "$TEST_ROOT/bin/ssh.fixture"
 cat >"$TEST_ROOT/bin/nvidia-smi" <<'NVIDIA'
 #!/bin/sh
 case "$PROBE_HOST" in

@@ -73,13 +73,12 @@ case "$1" in
   workspace-action) case "$CMUX_MODE" in tag-fail|race) exit 1 ;; esac ;;
 esac
 CMUX
-cat >"$TEST_ROOT/local/bin/ssh" <<'SSH'
+cat >"$TEST_ROOT/local/bin/ssh.fixture" <<'SSH'
 #!/usr/bin/env bash
-cmd="${@: -1}"
 printf '%s\n' "$cmd" >>"$SSH_LOG"
 if [[ "$SSH_MODE" == lost && "$cmd" == *' new '* ]]; then
   HOME="$REMOTE_HOME" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
-    REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" bash -c "$cmd" >/dev/null
+    REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" fake_ssh_run "$cmd" >/dev/null
   exit 255
 fi
 if [[ "$SSH_MODE" == refuse && "$cmd" == *' new '* ]]; then
@@ -88,8 +87,10 @@ if [[ "$SSH_MODE" == refuse && "$cmd" == *' new '* ]]; then
 fi
 HOME="$REMOTE_HOME" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
   REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" \
-  REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" bash -c "$cmd"
+  REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" fake_ssh_run "$cmd"
+exit $?
 SSH
+make_fake_ssh "$TEST_ROOT/local/bin/ssh" "$TEST_ROOT/local/bin/ssh.fixture"
 cat >"$TEST_ROOT/remote/.local/bin/wt" <<'WT'
 #!/bin/sh
 case "$1" in
