@@ -176,6 +176,46 @@ class DocsCheckTests(unittest.TestCase):
         text = "`literal\n```md\n[example](missing.md) `\n```\n[go](visible-missing.md)\n"
         self.assertEqual(["README.md:5: dead link: visible-missing.md"], self.links(text))
 
+    def test_destinations_balance_parentheses_without_truncation(self):
+        self.write("stem", "fixture")
+        text = "[go](stem(a(b)).md)\n"
+        self.assertEqual(["README.md:1: dead link: stem(a(b)).md"], self.links(text))
+        self.write("stem(a(b)).md", "fixture")
+        self.assertEqual([], self.links(text))
+
+    def test_destinations_decode_markdown_escapes_and_entities(self):
+        for name in ("target(a).md", "a&b.md", "a[1].md", "a file.md"):
+            self.write(name, "fixture")
+        text = r"[one](target\(a\).md) [two](a&amp;b.md) [three](a\[1\].md) [four](<a file.md>)"
+        self.assertEqual([], self.links(text))
+        text = r"[one][ref]" + "\n\n" + r"[ref]: target\(a\).md" + "\n"
+        self.assertEqual([], self.links(text))
+
+    def test_inline_links_require_complete_syntax(self):
+        text = "[literal](missing.md\n\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:3: dead link: visible-missing.md"], self.links(text))
+        text = '[go](docs/target.md "Title") [other](docs/target.md)\n'
+        self.assertEqual([], self.links(text))
+
+    def test_reference_destinations_on_continuation_lines(self):
+        text = "[go][ref]\n\n[ref]:\n  docs/target.md\n"
+        self.assertEqual([], self.links(text))
+        errors = self.links(text.replace("docs/target.md", "missing.md"))
+        self.assertIn("README.md:1: dead link: missing.md", errors)
+        self.assertIn("README.md:4: dead link: missing.md", errors)
+
+    def test_fences_inside_list_items_preserve_later_links(self):
+        text = "- ```markdown\n  [example](missing.md)\n  ```\n\n[go](live.md)\n"
+        self.assertEqual(["README.md:5: dead link: live.md"], self.links(text))
+        text = "> - ~~~markdown\n>   [example](missing.md)\n>   ~~~\n\n[go](live.md)\n"
+        self.assertEqual(["README.md:5: dead link: live.md"], self.links(text))
+
+    def test_list_headings_share_container_normalization(self):
+        text = "[go](#heading)\n\n- # Heading\n"
+        self.assertEqual([], self.links(text))
+        text = "[go](#nested)\n\n- Outer.\n  - ## Nested\n"
+        self.assertEqual([], self.links(text))
+
     def test_external_links_are_skipped(self):
         self.assertEqual([], self.links('[web](https://example.com/missing#missing)\n<a href="mailto:test@example.com">mail</a>\n'))
 
