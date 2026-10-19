@@ -3,7 +3,7 @@
 # CMUX_ERROR holds a diagnostic; callers choose whether to stop or log it.
 # Callers read the exported diagnostics and creation state.
 # shellcheck disable=SC2034
-CMUX_ERROR="" CMUX_ROW_EXISTING=""
+CMUX_ERROR="" CMUX_ROW_EXISTING="" CMUX_ROW_ID=""
 CMUX_RUN=()
 
 cmux_error() { CMUX_ERROR=$*; return 1; }
@@ -99,8 +99,8 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   # Refuse unreadable rows or another running agent. Without a host, the path names the local worktree.
   local -n __rm_row=$3 __rm_self=$4
   __rm_row=""; __rm_self=""
-  local __c __err
-  if ! __c=$(cmux_bin); then
+  local __err
+  if ! cmux_bin >/dev/null; then
     [[ -z ${CMUX_WORKSPACE_ID:-} ]] || { cmux_error "cmux CLI not found; kept the worktree"; return 1; }
     return 0
   fi
@@ -139,7 +139,7 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
       path_within "$__dir" "${6:-}" || path_within "$(physical_dir "$__dir")" "$__root" || continue
     fi
     [[ $__kind != found || -n "$__rm_row" ]] || __rm_row=$__id
-    row_agent "$__c" "$__id" || return
+    row_agent "$__id" || return
     case $__kind/$ROW_AGENT in
       found/self|unclaimed/self) __self_row=$__id ;;
       found/busy) cmux_error "another agent is running in cmux row $__id; kept the worktree"; return 1 ;;
@@ -150,15 +150,15 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   if [[ -n "$__self_row" ]]; then __rm_row=$__self_row; __rm_self=self; fi
 }
 
-row_agent() { # row_agent <cmux> <row id> — sets ROW_AGENT: "self" for the caller's own row, "busy" when an agent
+row_agent() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's own row, "busy" when an agent
   # runs in the row, else "idle". A failed check returns a diagnostic in CMUX_ERROR.
   local state
-  state=$(cmux_call top --workspace "$2" --json 2>/dev/null) \
-    || { cmux_error "cannot check the agent in cmux row $2; kept the worktree"; return 1; }
+  state=$(cmux_call top --workspace "$1" --json 2>/dev/null) \
+    || { cmux_error "cannot check the agent in cmux row $1; kept the worktree"; return 1; }
   printf '%s' "$state" | jq -e '.coding_agents | type == "array"
     and all(.[]; .resources.process_count | type == "number" and . >= 0)' >/dev/null 2>&1 \
-    || { cmux_error "cannot check the agent in cmux row $2; kept the worktree"; return 1; }
-  if printf '%s' "$state" | jq -e --arg id "$2" '.caller.workspace_id == $id' >/dev/null; then
+    || { cmux_error "cannot check the agent in cmux row $1; kept the worktree"; return 1; }
+  if printf '%s' "$state" | jq -e --arg id "$1" '.caller.workspace_id == $id' >/dev/null; then
     ROW_AGENT=self
   elif printf '%s' "$state" | jq -e 'any(.coding_agents[]; .resources.process_count > 0)' >/dev/null; then
     ROW_AGENT=busy
@@ -369,10 +369,11 @@ cmux_row_create_ssh() {
 }
 
 # cmux_row_open_ssh shares existing-row selection and new-row creation between wt and the hook.
-# CMUX_ROW_EXISTING distinguishes their output. CMUX_ERROR can hold a nonfatal description diagnostic.
+# CMUX_ROW_ID identifies the existing row when CMUX_ROW_EXISTING is set.
+# CMUX_ERROR can hold a nonfatal description diagnostic.
 cmux_row_open_ssh() {
   local host=$1 title=$2 description=$3 command=$4 repo ref; shift 4
-  CMUX_ROW_EXISTING='' CMUX_ERROR=''
+  CMUX_ROW_EXISTING='' CMUX_ROW_ID='' CMUX_ERROR=''
   # Use the hook's fail-closed policy: a failed window list cannot prove that this row is absent.
   cmux_rows_load checked || { cmux_error "cannot list cmux rows; not creating a row on a lookup that failed"; return 1; }
   repo=${description#*"$ROW_SEP"}; [[ $description == *"$ROW_SEP"* ]] || repo=''
@@ -382,7 +383,7 @@ cmux_row_open_ssh() {
     return
   fi
   # shellcheck disable=SC2034
-  CMUX_ROW_EXISTING=1
+  CMUX_ROW_EXISTING=1 CMUX_ROW_ID=$ref
   case " $* " in *' --no-focus '*) ;; *) cmux_select "$ref" || return ;; esac
   cmux_call workspace-action --workspace "$ref" --action set-description --description "$description" >/dev/null 2>&1 && return 0
   # Use the hook's nonfatal policy: the existing row already has its identity, so a failed rewrite changes nothing.

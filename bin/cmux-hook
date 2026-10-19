@@ -83,8 +83,7 @@ attach_row() { # attach_row <host> <session> <title> <repo id> <command>
   local rc=0
   cmux_row_open_ssh "$1" "$3" "@$1$ROW_SEP$4" "$(tmux_cmd "$2" "$5")" --no-focus || rc=$?
   if [[ $rc == 0 && -n ${CMUX_ROW_EXISTING:-} ]]; then
-    local ref; ref=$(row_by_title "$3" "$4" "$1")
-    cmux_select "$ref" || { log "$CMUX_ERROR"; return 1; }
+    cmux_select "$CMUX_ROW_ID" || { log "$CMUX_ERROR"; return 1; }
   fi
   [[ -z $CMUX_ERROR ]] || log "$CMUX_ERROR"
   return "$rc"
@@ -97,7 +96,7 @@ case $mode in
     nid=$(printf '%s' "$event" | jq -er 'select(.name == "notification.created") | .payload.notification_id | strings' 2>/dev/null) || exit 0
     ws=$(printf '%s' "$event" | jq -er '.workspace_id | strings' 2>/dev/null) || exit 0
     [[ $nid =~ ^[A-Fa-f0-9-]{36}$ && $ws =~ ^[A-Fa-f0-9-]{36}$ ]] || exit 0
-    ws_load || exit 0
+    ws_load || { log "$CMUX_ERROR"; exit 0; }
     printf '%s' "$WS_JSON" | jq -e --arg w "$ws" 'any(.workspaces[]; .id == $w and .remote.enabled and .remote.backend == "cmux-tui")' >/dev/null 2>&1 || exit 0
     # Public events redact notification text. Read only the record with the event's ID and row.
     record=$(cmux_notifications 2>/dev/null | jq -ec --arg i "$nid" --arg w "$ws" 'first(.[] | select(.id == $i and .workspace_id == $w))' 2>/dev/null) || exit 0

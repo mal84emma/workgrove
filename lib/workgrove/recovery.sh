@@ -1,10 +1,5 @@
 # shellcheck shell=bash
 
-
-
-
-
-
 vm_session_detached() { # vm_session_detached <host> <session> — 0 only when the VM has that tmux session and lists no
                         # client on it. One ssh call; any failure, ssh's own included, counts as "not proven"
   local q; q=$(shell_join "=$2")

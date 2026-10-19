@@ -346,7 +346,7 @@ set_line() {
 # Each of those characters is a way for a shell to mangle a string that it must only carry.
 PROMPT_FIXTURE=$'first "line": $HOME `date` \'quoted\' back\\slash\nsecond line: café — ünïcode ✓'
 
-# stub_cmux dead|alive: cmux_bin in bin/wt prefers $CMUX_BUNDLED_CLI_PATH when it is executable. So
+# stub_cmux dead|alive: cmux_bin prefers $CMUX_BUNDLED_CLI_PATH when it is executable. So
 # this setting alone decides what cmux_ok believes. "dead" logs its argv and exits 1, like a cmux that is not
 # running. "alive" answers ping with 0 and serves $WT_ROWS for `workspace list --json`. Both truncate the
 # log, so assert_cmux_calls always reads the calls of one scenario only.
