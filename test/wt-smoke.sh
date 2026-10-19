@@ -1827,8 +1827,7 @@ ROWS
 printf 'ssh %s\n' "$*" >>"$CMUX_STUB_LOG"
 [ "${VM_AGENT_ACTIVE:-}" = 1 ] && exit 0
 if [ "${VM_AGENT_QUERY_FAIL:-}" = 1 ]; then
-  for command in "$@"; do :; done
-  fake_ssh_run "$command"
+  fake_ssh_run "$cmd"
   exit $?
 fi
 exit 99

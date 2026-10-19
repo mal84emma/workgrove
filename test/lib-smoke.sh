@@ -13,6 +13,41 @@ source "$REPO/test/lib.sh"
 source "$REPO/lib/workgrove/common.sh"
 trap lib_cleanup EXIT
 
+scenario_fake_ssh() {
+  begin_scenario 'shared fake SSH shell selection and command execution' || return 0
+  local fixture="$TEST_ROOT/fake-ssh" tool selected out rc
+  mkdir -p "$fixture/bin"
+  # A controlled PATH makes shell selection independent of the installed shells.
+  for tool in cat chmod; do
+    ln -s "$(command -v "$tool")" "$fixture/bin/$tool"
+  done
+  ln -s "$BASH" "$fixture/bin/bash"
+  cat >"$fixture/bin/sh" <<'SHELL'
+#!/bin/sh
+export FAKE_LOGIN_SHELL=${0##*/}
+exec /bin/sh "$@"
+SHELL
+  cp "$fixture/bin/sh" "$fixture/bin/zsh"
+  chmod +x "$fixture/bin/sh" "$fixture/bin/zsh"
+  printf 'input survives SSH\n' >"$fixture/input"
+  for selected in zsh sh; do
+    if [[ $selected == sh ]]; then rm "$fixture/bin/zsh"; fi
+    PATH="$fixture/bin" make_fake_ssh "$fixture/ssh"
+    rc=0
+    # shellcheck disable=SC2016  # The selected shell expands its name in the remote command.
+    out=$(PATH="$fixture/bin" "$fixture/ssh" -T -o BatchMode=yes -o ConnectTimeout=5 \
+      test.invalid 'printf "%s\n" "$FAKE_LOGIN_SHELL"; cat; exit 23' <"$fixture/input" 2>&1) || rc=$?
+    assert_eq "$selected receives the command and stdin" "$selected"$'\ninput survives SSH' "$out"
+    assert_eq "$selected preserves the remote exit status" 23 "$rc"
+    rc=0
+    out=$(PATH="$fixture/bin" "$fixture/ssh" test.invalid printf "'%s'" "'two words'" 2>&1) || rc=$?
+    assert_eq "$selected joins split SSH command arguments" 'two words' "$out"
+    assert_eq "$selected returns success from a split command" 0 "$rc"
+  done
+  end_scenario
+}
+scenario_fake_ssh
+
 scenario_results() {
   begin_scenario 'versioned wt results' || return 0
   record=$(WG_MACHINE_RESULT=1 wt_result new created task '/repos/two words' wt-two-words-task)
