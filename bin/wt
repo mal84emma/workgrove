@@ -12,8 +12,10 @@
 #                                                             create a worktree and a cmux row that runs `wt run`.
 #                                                             --no-workspace leaves the worktree ready for `wt attach`
 #   wt run  <name> [-r PATH]                                  run the worktree's agent with its brief (cmux runs this)
-#   wt list [--all] [-r PATH]                                 list worktrees (--all: every repo in $WT_REPOS_DIR)
-#   wt show <name> [--diff] [-r PATH]                         show a status summary. --diff also opens a cmux diff pane
+#   wt list [--all] [--json] [-r PATH]                        list worktrees (--all: every repo in $WT_REPOS_DIR)
+#                                                             --json prints task status for scripts.
+#   wt show <name> [--diff|--json] [-r PATH]                   show a status summary. --diff also opens a cmux diff pane
+#                                                             --json prints task status for scripts.
 #   wt open [name] [-r PATH]                                  open a worktree in VS Code (default: the one you are in)
 #   wt diff <name>                                            = wt show <name> --diff
 #   wt attach <name> [-a AGENT] [-p TEXT] [-r PATH]           open a cmux row for an existing worktree
@@ -249,14 +251,14 @@ cmd_new() {
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; fi
   meta_set "$name" "base=$base" "created=$(date -u +%FT%TZ)" "agent=$agent" "model=$model" \
     "title=$(row_title "$name")" "session=$(wt_session "$name" "$REPO")" \
-    "includes=" "setup="
+    "includes:=[]" "setup:=[]"
   local includes; includes=$(copy_includes "$p")
-  meta_set "$name" "includes=$includes"
+  meta_set "$name" "includes:=$(printf '%s' "$includes" | jq -Rs 'split("\n") | map(select(length > 0))')"
   local setup=""
   if [[ -x "$REPO/.wt-setup" ]]; then
     ( cd "$p" && WT_NAME="$name" WT_REPO="$REPO" "$REPO/.wt-setup" ) || warn ".wt-setup exited non-zero"
     setup=$(setup_dirt "$p")               # recorded even when the hook failed: it may have written part of it
-    meta_set "$name" "setup=$setup"
+    meta_set "$name" "setup:=$(printf '%s' "$setup" | jq -Rs 'split("\n") | map(select(length > 0))')"
   fi
 
   printf 'created %s\n  path:   %s\n  branch: %s (from %s)\n  repo:   %s\n  session: %s\n' \
@@ -278,7 +280,8 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac
   cd "$path"
   local agent model brief="" f rc=0
-  IFS="$WT_FS" read -r agent model <<<"$(meta_get_pair "$name" agent model 2>/dev/null || true)"
+  meta_require "$name"
+  agent=${WT_META[agent]-} model=${WT_META[model]-}
   [[ -n "$agent" ]] || agent="$DEFAULT_AGENT"
   case "$agent" in
     none|shell|"") printf '%s: %s\n  agent:  none — this is your shell\n' "$name" "$path"; return 0 ;;
@@ -333,12 +336,13 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
 }
 
 cmd_list() {
-  local all=0 repo=""
-  local -A opts=()
+  local all=0 repo="" format=human r n nn br base ah be di last mg
+  local -A opts=() status=()
   wt_opts "$(wt_spec list)" opts "$@"
   all=${opts[all]-$all}
   repo=${opts[repo]-$repo}
-  local repos=()
+  format=${opts[format]-$format}
+  local repos=() records=()
   if [[ $all -eq 1 ]]; then
     need_repos_dir
     mapfile -t repos < <(repo_dirs)
@@ -348,32 +352,50 @@ cmd_list() {
   for r in "${repos[@]}"; do
     set_repo "$r" || continue
     local names; names=$(list_names); [[ -n "$names" ]] || continue
-    printf '\n%s  (%s)\n' "$(basename "$REPO")" "$REPO"
-    printf '  %-28s %-26s %-16s %6s %6s %6s %6s  %s\n' NAME BRANCH BASE AHEAD BEHIND MERGED DIRTY LAST
+    if [[ $format == human ]]; then
+      printf '\n%s  (%s)\n' "$(basename "$REPO")" "$REPO"
+      printf '  %-28s %-26s %-16s %6s %6s %6s %6s  %s\n' NAME BRANCH BASE AHEAD BEHIND MERGED DIRTY LAST
+    fi
     while IFS= read -r n; do
-      IFS="$WT_FS" read -r nn br base ah be di last mg why <<<"$(wt_status_line "$n")"
-      # the columns are numbers: a '?' from a base that no longer resolves must not print as a count
-      [[ "$ah" =~ ^[0-9]+$ ]] || ah='?'; [[ "$be" =~ ^[0-9]+$ ]] || be='?'; [[ "$di" =~ ^[0-9]+$ ]] || di=0
-      printf '  %-28s %-26s %-16s %6s %6s %6s %6s  %s\n' "$nn" "$br" "$base" "$ah" "$be" "$mg" "$di" "$last"
+      wt_status "$n" status
+      if [[ $format == json ]]; then
+        status[last_commit_at]=$(git -C "${status[path]}" log -1 --format=%cI 2>/dev/null || true)
+        wt_status_args status records
+      else
+        nn=${status[name]} br=${status[human_branch]} base=${status[base]}
+        ah=${status[ahead]} be=${status[behind]} di=${status[human_dirty]} last=${status[last]} mg=${status[merged]}
+        printf '  %-28s %-26s %-16s %6s %6s %6s %6s  %s\n' "$nn" "$br" "$base" "$ah" "$be" "$mg" "$di" "$last"
+      fi
     done <<<"$names"
   done
+  if [[ $format == json ]]; then wt_status_json list "${records[@]}"; fi
   return 0
 }
 
 cmd_show() {
-  local name="" diff=0 repo=""
-  local -A opts=()
+  local name="" diff=0 repo="" format=human
+  local -A opts=() status=()
   wt_opts "$(wt_spec show)" opts "$@"
   name=${opts[name]-$name}
   diff=${opts[diff]-$diff}
+  format=${opts[format]-$format}
+  [[ $format != json || $diff == 0 ]] || die "show: --json and --diff cannot be combined"
   repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "show: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "show"
-  IFS="$WT_FS" read -r nn br base ah be di last mg why <<<"$(wt_status_line "$name")"
-  # the counts are numbers: a '?' from a base that no longer resolves must not print as a count
-  [[ "$ah" =~ ^[0-9]+$ ]] || ah='?'; [[ "$be" =~ ^[0-9]+$ ]] || be='?'; [[ "$di" =~ ^[0-9]+$ ]] || di=0
-  local title model; IFS="$WT_FS" read -r title model <<<"$(meta_get_pair "$name" title model 2>/dev/null || true)"
-  title=$(task_title "$name" "$title")
+  wt_status "$name" status
+  if [[ $format == json ]]; then
+    local records=()
+    status[last_commit_at]=$(git -C "$path" log -1 --format=%cI 2>/dev/null || true)
+    wt_status_args status records
+    records+=("$(task_title "$name" "${WT_META[title]-}")" "$(prompt_line "$name")" "${WT_META[model]-}")
+    wt_status_json show "${records[@]}"
+    return
+  fi
+  local nn br base ah be di last mg why title model
+  nn=${status[name]} br=${status[human_branch]} base=${status[base]}
+  ah=${status[ahead]} be=${status[behind]} di=${status[human_dirty]} last=${status[last]} mg=${status[merged]} why=${status[why]}
+  title=$(task_title "$name" "${WT_META[title]-}") model=${WT_META[model]-}
   case "$mg" in   # wt list's MERGED value, with room here for the reason behind it
     squash) mg="squash (every change on $br is in $base, though no commit is)" ;;
     no)     mg="no ($why)" ;;
@@ -426,9 +448,10 @@ cmd_attach() {
   repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "attach: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "attach"
+  meta_require "$name"
   if [[ -n "$agent" ]]; then
     valid_agent "$agent"
-    local old_agent; old_agent=$(meta_get "$name" agent 2>/dev/null || true)
+    local old_agent; old_agent=${WT_META[agent]-}
     [[ -n "$old_agent" ]] || old_agent="$DEFAULT_AGENT"
     if [[ "$agent" != "$old_agent" ]]; then
       meta_set "$name" "agent=$agent" "model="
@@ -450,7 +473,8 @@ cmd_sync() {
   repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "sync: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "sync"
-  local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  meta_require "$name"
+  local base; base=${WT_META[base]-}; [[ -n "$base" ]] || base=$(default_base)
   [[ "$base" == origin/* ]] && git -C "$REPO" fetch -q origin "${base#origin/}"
   [[ -z "$(git -C "$path" status --porcelain)" ]] || die "worktree has uncommitted changes; commit or stash first"
   if [[ $merge -eq 1 ]]; then git -C "$path" merge --no-edit "$base"; else git -C "$path" rebase "$base"; fi
@@ -467,8 +491,9 @@ cmd_pr() {
   [[ -n "$name" ]] || die "pr: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "pr"; have gh || die "gh not installed"
   [[ -z "$(git -C "$path" status --porcelain)" ]] || die "worktree has uncommitted changes; commit first"
+  meta_require "$name"
   git -C "$path" push -u origin "$branch"
-  local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  local base; base=${WT_META[base]-}; [[ -n "$base" ]] || base=$(default_base)
   ( cd "$path" && gh pr create --fill --base "${base#origin/}" "${draft[@]}" )
 }
 
@@ -486,8 +511,9 @@ cmd_rm() {
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "rm"
   local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
+  meta_require "$name"
   # shellcheck disable=SC2034
-  local base landed_why; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+  local base landed_why; base=${WT_META[base]-}; [[ -n "$base" ]] || base=$(default_base)
   if [[ $force -eq 0 ]]; then
     local reasons=()
     rm_reasons "$name" "$path" "$branch" "$base" reasons "$discard_commits"
@@ -597,7 +623,8 @@ cmd_prune() {
                           # registration here and is never examined, so its branch and metadata stay forever
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
-    p=$(wt_path "$n"); base=$(meta_get "$n" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+    meta_require "$n"
+    p=$(wt_path "$n"); base=${WT_META[base]-}; [[ -n "$base" ]] || base=$(default_base)
     rm_reasons "$n" "$p" "$(wt_branch "$n")" "$base" reasons
     why=$(IFS=';'; echo "${reasons[*]}")
     if [[ -n "$why" ]]; then printf 'keep %s (%s)\n' "$n" "$why"                            # dry run included
@@ -830,12 +857,8 @@ cmd_task() {
 }
 
 # ---------------------------------------------------------------- dispatch
-# One guard, not one per caller. jq reads and writes every sidecar (meta_get/meta_set), reads cmux's row
-# list and builds the relay body, so a missing jq is not a per-command problem. Left to fail where it is used,
-# it fails in one of two ways. It can fail quietly: every call site swallows meta_get's error, and `base`
-# silently becomes default_base(), the base that `wt rm` then judges "not merged" against. Or it can fail
-# halfway through `wt new`, after `git worktree add` has already registered a worktree. So refuse up front,
-# but keep `wt help` readable, so that the line that fixes the problem is still one command away.
+# Check jq before a command creates a worktree or reads task and row data.
+# Keep help available so the installation instructions remain accessible.
 if [[ ${1:-} == --host=* ]]; then set -- --host "${1#*=}" "${@:2}"; fi
 if [[ ${1:-} == -- ]]; then shift; fi
 if [[ "${1:-}" == -H || "${1:-}" == --host ]]; then

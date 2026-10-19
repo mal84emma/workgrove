@@ -77,7 +77,6 @@ test_branch_landed
 test_rm_reasons() {
   local REPO="$TEST_ROOT/project" path="$TEST_ROOT/project/.worktrees/task"
   local dirty=(old)
-  meta_get() { return 1; }
   begin_scenario 'removal reasons fill and clear a caller array' || return 0
   printf 'unsaved\n' >"$path/scratch.txt"
   rm_reasons task "$path" wt/task missing dirty >"$TEST_ROOT/reasons-stdout"

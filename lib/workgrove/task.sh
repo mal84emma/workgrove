@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: CMUX_ERROR, CMUX_SSH_ATTEMPT_ID, CODEX_SANDBOX, HOME, PWD, REPO, REPOS_PATH,
-#   ROW_SEP, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_FS, WT_HOST, WT_REPOS_DIR, WT_TMPFILES.
+#   ROW_SEP, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_HOST, WT_REPOS_DIR, WT_TMPFILES.
 # Requires cmux.sh: cmux_notify, cmux_ok, cmux_row_field, row_label.
 # Requires common.sh: die, have, hook_safe_path, on_exit, repo_id, row_title, shell_join,
 #   valid_host, valid_name, warn, wt_result, wt_session.
@@ -154,34 +154,83 @@ default_base() {
   git -C "$REPO" symbolic-ref -q --short HEAD || git -C "$REPO" rev-parse HEAD
 }
 
-meta_get() { # meta_get <name> <key> — "" for a missing key, and for a key stored as null
-  # `.[$k] // ""` looks correct but is not: // also fires on a stored `false`, which would then read as "".
-  # has/tojson is exact. A non-string (a number, a bool) comes back as JSON, so `false` reads as "false".
-  local f; f=$(wt_meta "$1"); [[ -f "$f" ]] || return 1
-  jq -r --arg k "$2" 'if has($k) and .[$k] != null then .[$k] else "" end
-                      | if type == "string" then . else tojson end' "$f"
+# Cache the current task in the parent shell before helpers run in command substitutions.
+declare -A WT_META=()
+WT_META_FILE=''
+WT_META_JSON='{}'
+# shellcheck disable=SC2016  # jq expressions use their own variables.
+WT_META_FILTER='
+  if type != "object" then error("expected an object") else . end
+  | if any(to_entries[]; .key == "" or (.key | contains("\u0000"))
+         or (.value | any(.. | strings; contains("\u0000"))))
+    then error("unsupported NUL or empty key") else . end
+  | ("", tojson, (to_entries[] | .key,
+      (. as $entry | .value | if . == null then ""
+        elif type == "string" then .
+        elif type == "array" and ($entry.key == "includes" or $entry.key == "setup") then join("\n")
+        else tojson end))) + "\u0000"'
+
+meta_decode() { # meta_decode <stream file> — install a successful jq result in the cache.
+  # The empty key carries the complete JSON object for later writes.
+  local __key __value
+  WT_META=()
+  {
+    IFS= read -r -d '' __key
+    IFS= read -r -d '' WT_META_JSON
+    while IFS= read -r -d '' __key && IFS= read -r -d '' __value; do
+      WT_META[$__key]=$__value
+    done
+  } <"$1"
 }
-meta_get_pair() { # meta_get_pair <name> <key> <key> — one read for fields used together on each launch/show
-  local f; f=$(wt_meta "$1"); [[ -f "$f" ]] || return 1
-  jq -r --arg a "$2" --arg b "$3" --arg fs "$WT_FS" '
-    [.[$a], .[$b]] | map(if . == null then "" elif type == "string" then . else tojson end) | join($fs)' "$f"
+
+meta_load() { # meta_load <name> <associative output> — 1: missing, 2: unreadable.
+  local -n __meta_out=$2
+  local __file __temp __key
+  __file=$(wt_meta "$1")
+  __meta_out=()
+  if [[ $WT_META_FILE != "$__file" ]]; then
+    WT_META_FILE='' WT_META_JSON='{}' WT_META=()
+    if [[ ! -e $__file ]]; then return 1; fi
+    __temp=$(mktemp "${TMPDIR:-/tmp}/wt-meta.XXXXXX") || return 2
+    WT_TMPFILES+=("$__temp")
+    if ! jq -j -s 'if length == 1 then .[0] else error("expected one object") end | '"$WT_META_FILTER" "$__file" >"$__temp" 2>/dev/null; then
+      rm -f "$__temp"; return 2
+    fi
+    meta_decode "$__temp"
+    rm -f "$__temp"
+    WT_META_FILE=$__file
+  fi
+  # shellcheck disable=SC2004  # The output names an associative array.
+  for __key in "${!WT_META[@]}"; do __meta_out[$__key]=${WT_META[$__key]}; done
 }
-meta_set() { # meta_set <name> key=value ...  — a key with no '=' is stored with an empty value
-  # jq cannot write the file that it reads, so meta_set writes through a temp file. The mv also makes
-  # meta_set crash-safe. The earlier json.dump(d, open(f,'w')) was not: an interrupted write used to truncate
-  # the sidecar.
-  # In jq, index("=") is null when there is no '=', and null+1 is 1. So the no-'=' arm is necessary: without
-  # it, `meta_set x bare` would slice the key and store the wrong one.
-  local f t; f=$(wt_meta "$1"); shift; mkdir -p "$(dirname "$f")"; t="$f.new.$$"
-  WT_TMPFILES+=("$t")                    # a signal between the jq below and the mv would otherwise orphan it
-  if ! { if [[ -f "$f" ]]; then cat "$f"; else printf '{}\n'; fi; } \
-       | jq --indent 1 'reduce ($ARGS.positional[]) as $kv (.;
-             ($kv | index("=")) as $i
-             | if $i == null then .[$kv] = "" else .[$kv[0:$i]] = $kv[$i+1:] end)' --args "$@" >"$t" \
-     || ! mv "$t" "$f"; then
+
+meta_require() { # Missing metadata uses command defaults; unreadable metadata stops the command.
+  local -A __loaded=()
+  local __rc=0
+  meta_load "$1" __loaded || __rc=$?
+  [[ $__rc != 2 ]] || die "could not read $(wt_meta "$1")"
+}
+
+meta_set() { # meta_set <name> key=value key:=json ... — update strings or typed JSON values.
+  local f t
+  meta_require "$1"
+  f=$(wt_meta "$1"); shift
+  mkdir -p "$(dirname "$f")"; t="$f.new.$$"
+  WT_TMPFILES+=("$t")
+  if ! jq -jn --argjson current "$WT_META_JSON" '
+       reduce ($ARGS.positional[]) as $kv ($current;
+         ($kv | index("=")) as $i
+         | if $i == null then .[$kv] = ""
+           elif $kv[$i-1:$i] == ":" then .[$kv[0:$i-1]] = ($kv[$i+1:] | fromjson)
+           else .[$kv[0:$i]] = $kv[$i+1:] end) | '"$WT_META_FILTER" --args "$@" >"$t"; then
     rm -f "$t"; die "could not write $f"
   fi
+  meta_decode "$t"
+  printf '%s\n' "$WT_META_JSON" >"$t"
+  if ! mv "$t" "$f"; then rm -f "$t"; die "could not write $f"; fi
+  WT_META_FILE=$f
 }
+
 prompt_line() { local f; f=$(wt_prompt "$1"); if [[ -f "$f" ]]; then head -1 "$f"; fi; }
 
 require_wt() { # require_wt <name> <path output> <branch output> <command> requires a registered worktree.
@@ -205,7 +254,7 @@ require_wt() { # require_wt <name> <path output> <branch output> <command> requi
 task_title() { # task_title <name> [saved title] — the title of the task's row. No saved title: read the sidecar.
   # A title that an older wt saved ("<repo>:<name>") reads as the name, so the sidecar moves to the new form.
   local t="${2-}"
-  if [[ $# -lt 2 ]]; then t=$(meta_get "$1" title 2>/dev/null || true); fi
+  if [[ $# -lt 2 ]]; then meta_require "$1"; t=${WT_META[title]-}; fi
   if [[ -z "$t" || "$t" == "$(repo_id "$REPO"):$1" ]]; then t=$(row_title "$1"); fi
   printf '%s' "$t"
 }
@@ -296,18 +345,25 @@ tmux_agent() { # tmux_agent <session> — 0 for a running agent, 1 for absent or
 }
 
 # ---------------------------------------------------------------- status
-wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<US>last<US>merged<US>why
-  local n="$1" p b base ahead behind dirty last merged='?' why=""
-  p=$(wt_path "$n"); b=$(wt_branch "$n")
-  base=$(meta_get "$n" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
+wt_status() { # wt_status <name> <associative output> — keep merge caches and cleanup in this shell.
+  local -n __status=$2
+  __status=()
+  local __n="$1" __p __b __base __ahead __behind __dirty __last __merged='?' __why=""
+  __p=$(wt_path "$__n"); __b=$(wt_branch "$__n")
+  meta_require "$__n"
+  __base=${WT_META[base]-}; [[ -n "$__base" ]] || __base=$(default_base)
   # Count against the BRANCH, not HEAD, because the column is labeled with the branch. In a worktree that is
   # mid-bisect or on a detached checkout, the two differ. That is the shape of the bug that wt rm had.
-  ahead=$(git -C "$p" rev-list --count "$base..$b" 2>/dev/null || echo '?')
-  behind=$(git -C "$p" rev-list --count "$b..$base" 2>/dev/null || echo '?')
-  dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-  last=$(git -C "$p" log -1 --format='%cr' 2>/dev/null || echo '-')
-  local cur; cur=$(git -C "$p" branch --show-current 2>/dev/null || true)   # empty, exit 0, on a detached HEAD
-  [[ -n "$cur" ]] || cur="$b (HEAD detached)"
+  __ahead=$(git -C "$__p" rev-list --count "$__base..$__b" 2>/dev/null || echo '?')
+  __behind=$(git -C "$__p" rev-list --count "$__b..$__base" 2>/dev/null || echo '?')
+  local __porcelain
+  if __porcelain=$(git -C "$__p" status --porcelain 2>/dev/null); then
+    if [[ -z $__porcelain ]]; then __dirty=0; else __dirty=$(printf '%s\n' "$__porcelain" | wc -l | tr -d ' '); fi
+  else __dirty='?'; fi
+  __last=$(git -C "$__p" log -1 --format='%cr' 2>/dev/null || echo '-')
+  local __cur; __cur=$(git -C "$__p" branch --show-current 2>/dev/null || true)   # empty, exit 0, on a detached HEAD
+  local __checkout=$__cur
+  [[ -n "$__cur" ]] || __cur="$__b (HEAD detached)"
   # merged, judged the way `wt rm` will judge it:
   # - "yes" when every commit is in the base (an ahead of 0 is exactly that);
   # - "squash" when the commits are not in the base but their work is (branch_landed, the check rm makes);
@@ -319,12 +375,45 @@ wt_status_line() { # prints: name<US>branch<US>base<US>ahead<US>behind<US>dirty<
   # and `wt new` all refresh it. The AHEAD and BEHIND columns have always carried the same caveat. The
   # literal HEAD as a base resolves to the worktree's own tip and would read as 0 ahead. So a HEAD base
   # shows "?" here, as it is a refusal in rm_reasons.
-  if [[ "$base" != HEAD && "$ahead" =~ ^[0-9]+$ ]]; then
-    if [[ "$ahead" -eq 0 ]]; then merged=yes
-    elif branch_landed "$b" "$base" why; then merged=squash
-    else merged=no; fi
+  if [[ "$__base" != HEAD && "$__ahead" =~ ^[0-9]+$ ]]; then
+    if [[ "$__ahead" -eq 0 ]]; then __merged=yes
+    elif branch_landed "$__b" "$__base" __why; then __merged=squash
+    else __merged=no; fi
   fi
-  printf '%s\n' "$n$WT_FS$cur$WT_FS$base$WT_FS$ahead$WT_FS$behind$WT_FS$dirty$WT_FS$last$WT_FS$merged$WT_FS$why"
+  [[ $__ahead =~ ^[0-9]+$ ]] || __ahead='?'
+  [[ $__behind =~ ^[0-9]+$ ]] || __behind='?'
+  [[ $__dirty =~ ^[0-9]+$ ]] || __dirty='?'
+  __status["human_dirty"]=$__dirty
+  [[ $__dirty != '?' ]] || __status["human_dirty"]=0
+  __status["name"]=$__n __status["branch"]=$__b __status["human_branch"]=$__cur __status["base"]=$__base
+  __status["checkout_branch"]=$__checkout __status["ahead"]=$__ahead __status["behind"]=$__behind
+  __status["dirty"]=$__dirty __status["last"]=$__last __status["merged"]=$__merged __status["why"]=$__why
+  __status["repo"]=$REPO __status["path"]=$__p
+}
+
+wt_status_args() { # wt_status_args <status array> <argument array> — encode every record in one final jq call.
+  local -n __record=$1 __args=$2
+  local __key
+  for __key in name repo path branch checkout_branch base ahead behind dirty last_commit_at merged why; do
+    __args+=("${__record[$__key]-}")
+  done
+}
+
+wt_status_json() { # wt_status_json <list|show> <record values...>
+  local command=$1; shift
+  { if (($#)); then printf '%s\0' "$@"; fi; } | jq -Rs --arg command "$command" '
+    def count: if test("^[0-9]+$") then tonumber else null end;
+    def optional: if . == "" then null else . end;
+    (split("\u0000") | .[:-1]) as $values
+    | (if $command == "show" then 15 else 12 end) as $width
+    | [range(0; $values | length; $width) as $i
+       | $values[$i:$i+$width] as $v
+       | {name:$v[0], repo:$v[1], path:$v[2], branch:$v[3],
+          checkout_branch:($v[4] | optional), base:$v[5],
+          ahead:($v[6] | count), behind:($v[7] | count), dirty:($v[8] | count),
+          last_commit_at:($v[9] | optional), merged:$v[10], why:$v[11]}
+         + (if $command == "show" then {title:$v[12], task:$v[13], model:$v[14]} else {} end)]
+    | if $command == "show" then .[0] else . end'
 }
 
 list_names() { # registered worktrees under the wt root

@@ -7,8 +7,8 @@
 # Remote overrides beginning with +; append rules to the direct specification.
 WT_COMMANDS='new||host_new|Create a task.|name;-p,--prompt:prompt:a brief;--prompt-stdin:stdin_prompt:=1;-b,--base:base:a ref;--head:from_head:=1;-a,--agent:agent:an agent;-m,--model:model:a model:need_model;--no-workspace:workspace:=0;-r,--repo:repo:a repo|+;-m?*:@error:use -m <model>
 attach||host_attach|Open or recover a task row.|name;-a,--agent:agent:an agent;-p,--prompt:prompt:a brief;-r,--repo:repo:a repo|name;--restart-agent:restart:=1;--reattach:reattach:=1;-r,--repo:repo:a repo
-list|ls|host_list|List tasks.|!unknown;--all:all:=1;-r,--repo:repo:a repo|
-show||forward with -r|Show task status.|name;--diff:diff:=1;-r,--repo:repo:a repo|
+list|ls|host_list|List tasks.|!unknown;--all:all:=1;--json:format:=json;-r,--repo:repo:a repo|
+show||forward with -r|Show task status.|name;--diff:diff:=1;--json:format:=json;-r,--repo:repo:a repo|
 rm|remove|host_rm|Remove a task.|name;--force,-f:force:=1;--keep-branch:keep:=1;--discard-commits:discard_commits:=1;-r,--repo:repo:a repo|
 path||forward with -r|Print a task path.|name;-r,--repo:repo:a repo|
 open||host_open|Open a task in VS Code.|name;-r,--repo:repo:a repo|

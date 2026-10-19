@@ -219,7 +219,7 @@ assert_registered() {
 
 # assert_meta <repo> <name> <key> <value>: checks the sidecar that every later command reads. A missing key
 # reads as "(missing)", not as "", because a key stored empty and a key never written are different bugs.
-# meta_get maps both to "" on purpose, and this is the one place that has to tell them apart.
+# The metadata reader maps both to "" on purpose, and this is the one place that has to tell them apart.
 assert_meta() {
   local f="$1/.git/wt/$2.json" got
   if [[ ! -f "$f" ]]; then
@@ -605,7 +605,7 @@ scenario_new_and_sidecar() {
   assert_meta "$r" demo model ""
   assert_meta "$r" demo title demo
   assert_meta "$r" demo session "wt-$id-demo"
-  assert_meta "$r" demo includes ""
+  assert_meta "$r" demo includes "[]"
   assert_meta_matches "$r" demo created '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 
   # The brief, byte for byte. printf '%s' writes it with no trailing newline, and `wt run` reads exactly
@@ -757,7 +757,7 @@ scenario_base_resolution() {
   assert_gone "a base that does not resolve makes nothing" "$r/.worktrees/b-bad"
 
   # git allows '|' in a branch name. A base such as 'feat|x' used to shift every column of the status line
-  # to the right. WT_FS is why it does not any more.
+  # to the right. Named status fields preserve these values.
   fixture_git "$r" branch 'feat|x' main
   assert_wt_ok "wt new -b 'feat|x'" new b-pipe --no-workspace -r "$r" -b 'feat|x'
   assert_meta "$r" b-pipe base 'feat|x'
@@ -810,8 +810,7 @@ scenario_names_and_collisions() {
   end_scenario
 }
 
-# 4. The read-only commands. Commit b317fbc removed --json, so wt must now refuse it like any other unknown
-# option, not ignore it silently.
+# 4. The read-only commands retain human output and reject unknown options.
 scenario_list_show_path() {
   begin_scenario "$1" || return 0
   local saved="$REPOS_DIR" ra rb base
@@ -884,8 +883,8 @@ SHIM
   assert_wt_fails 1 "show: worktree name required" show -r "$ra"
   assert_wt_fails 1 "not inside a git repo" list
 
-  assert_wt_fails 1 "list: unknown option --json" list --json -r "$ra"
-  assert_wt_fails 1 "show: unknown option --json" show a1 --json -r "$ra"
+  assert_wt_fails 1 "list: unknown option --unknown-json" list --unknown-json -r "$ra"
+  assert_wt_fails 1 "show: unknown option --unknown-json" show a1 --unknown-json -r "$ra"
 
   # A worktree whose HEAD is detached at the BASE while its branch is one commit ahead. The counts must be
   # the branch's, not HEAD's. HEAD's counts would read 0 and call this nothing to lose.
@@ -964,7 +963,7 @@ scenario_include_and_setup() {
   p="$r/.worktrees/inc"
   assert_wt_ok "wt new inc" new inc --no-workspace -r "$r"
   assert_same_bytes "an ignored file .wt-include names is copied in" "$r/.env" "$p/.env"
-  assert_meta "$r" inc includes ".env:$(sha256_of "$p/.env")"
+  assert_meta "$r" inc includes "[\".env:$(sha256_of "$p/.env")\"]"
   assert_gone "an ignored file it does not name is not" "$p/other.log"
   assert_regular "$p" setup-ran.log
   assert_eq ".wt-setup ran in the worktree with WT_NAME and WT_REPO set" "inc $r" \
@@ -991,7 +990,7 @@ scenario_include_and_setup() {
   printf '%s\n' '#!/bin/sh' 'printf "lock v2\n" >lock.txt' >"$r/.wt-setup"
   p="$r/.worktrees/relock"
   assert_wt_ok "wt new relock, whose .wt-setup rewrites a tracked file" new relock --no-workspace -r "$r"
-  assert_meta "$r" relock setup "lock.txt:$(sha256_of "$p/lock.txt")"
+  assert_meta "$r" relock setup "[\"lock.txt:$(sha256_of "$p/lock.txt")\"]"
   assert_wt_ok "what .wt-setup itself wrote is not a reason to refuse" rm relock -r "$r"
   assert_gone "…so the worktree goes" "$p"
 

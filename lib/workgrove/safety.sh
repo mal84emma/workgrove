@@ -1,7 +1,7 @@
 # shellcheck shell=bash
-# Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WT_BASE_FETCHES, WT_DIRNAME, WT_MERGE_TREE, WT_TMPFILES.
+# Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WT_BASE_FETCHES, WT_DIRNAME, WT_MERGE_TREE, WT_META, WT_TMPFILES.
 # Requires common.sh: have, warn.
-# Requires task.sh: meta_get.
+# Requires task.sh: meta_require.
 file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shasum, Linux sha256sum)
   local h=""
   if have shasum; then h=$(shasum -a 256 "$1" 2>/dev/null) || h=""
@@ -53,7 +53,8 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
   # - Every ignored file that the patterns cover *now*. An .env.local that an agent wrote in the worktree is
   #   in no snapshot, and `worktree remove --force` deletes it without a warning.
   local n="$1" p="$2" f h e seen="" list
-  list=$(printf '%s\n%s\n' "$(meta_get "$n" includes 2>/dev/null || true)" "$(worktree_includes "$p")")
+  meta_require "$n"
+  list=$(printf '%s\n%s\n' "${WT_META[includes]-}" "$(worktree_includes "$p")")
   while IFS= read -r e; do
     [[ -n "$e" ]] || continue
     f="${e%:*}"; h="${e##*:}"
@@ -103,7 +104,8 @@ unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-s
   # from before wt recorded this has no "setup" key. Then every path is unexplained, and the old refusal
   # stays unchanged.
   local n="$1" p="$2" recorded f h e explained
-  recorded=$(meta_get "$n" setup 2>/dev/null || true)
+  meta_require "$n"
+  recorded=${WT_META[setup]-}
   [[ -n "$recorded" ]] || { porcelain_paths "$p"; return 0; }
   porcelain_paths "$p" | while IFS= read -r f; do
     h=$(file_hash "$p/$f"); explained=0
@@ -240,6 +242,7 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
   local __discard_commits=${6:-0}
   local -n __reasons=$5
   local __n="$1" __p="$2" __b="$3" __base="$4" __dirty __ahead=0 __merged=0 __base_ok=0 __head_ref __f __why="" __rc __landed_reason
+  meta_require "$__n"
   __reasons=()
   __dirty=$(unexplained_dirt "$__n" "$__p" | wc -l | tr -d ' ')
   [[ "$__dirty" -gt 0 ]] && __reasons+=("$__dirty uncommitted change(s)")
