@@ -125,6 +125,7 @@ workgrove/
 ├── lib/
 │   └── workgrove/
 │       ├── common.sh          shared helpers that bin/wt, cmux-hook and agent-notify load
+│       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
 │       └── vm/                scripts that bin/wt sends to a VM on SSH standard input
 │           ├── host-new-preflight.sh
@@ -925,6 +926,17 @@ The earlier `0.64 or newer` requirement did not guarantee compatibility with the
 
 For each supported version, record the exact build, verified behavior, and remaining checks.
 [VM verification on cmux 0.65.1](docs/vm-open-relay.md#verification-on-cmux-0651) records the current live checks.
+
+### SSH row creation
+
+`wt` and the Mac hook use `lib/workgrove/cmux.sh` to create SSH rows.
+The adapter reads the JSON window list before it looks for an existing row.
+If any window fails, it stops before creating a row.
+If `cmux ssh` prints no row ref, the adapter waits one second and makes one lookup.
+
+The second line identifies the row's host and repo.
+If the adapter cannot write it on a new row, it closes that row and reports the failure.
+If a description rewrite fails on an existing row, the caller reports the failure and keeps the row open.
 
 ### Hotkeys and configuration
 

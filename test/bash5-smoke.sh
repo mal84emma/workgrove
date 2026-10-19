@@ -21,6 +21,7 @@ for script in "${SCRIPTS[@]}"; do
     "$REPO/bin/$script" > "$TEST_ROOT/copies/$script"
 done
 # A copy loads the libraries from ../lib, as the scripts in bin/ do. So copies/ needs lib/ beside it.
+cp "$REPO/lib/workgrove/cmux.sh" "$TEST_ROOT/lib/workgrove/cmux.sh"
 cp "$REPO/lib/workgrove/common.sh" "$TEST_ROOT/lib/workgrove/common.sh"
 cp "$REPO/lib/workgrove/safety.sh" "$TEST_ROOT/lib/workgrove/safety.sh"
 cp "$REPO/lib/workgrove/remote.sh" "$TEST_ROOT/lib/workgrove/remote.sh"

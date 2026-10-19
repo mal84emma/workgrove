@@ -23,10 +23,11 @@ cat > "$TEST_ROOT/bin/cmux" <<'CMUX'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CMUX_LOG"
 case "$1 ${2:-}" in
-  'list-windows ') echo '* 0: CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC' ;;
+  '--json list-windows') echo '[{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"}]' ;;
   'workspace list') jq -cn --arg w "$ROW_ID" --arg b "$BACKEND" '{workspaces:[{id:$w,title:"task",description:"@test-vm · repo",remote:{enabled:true,destination:"test-vm",backend:$b}}]}' ;;
   '--json list-notifications') cat "$RECORD_FILE" ;;
   'ssh test-vm') echo workspace:99 ;;
+  'workspace-action --workspace') [[ ${CMUX_TAG_FAIL:-0} == 0 ]] || exit 1 ;;
 esac
 exit 0
 CMUX
@@ -147,6 +148,27 @@ TUI
   end_scenario
 }
 scenario_reattachment
+
+scenario_shared_creation() {
+  begin_scenario 'native attach uses shared SSH creation and description failure policy' || return 0
+  record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"new-task"}'
+  hook >/dev/null
+  has "$CMUX_LOG" 'ssh test-vm --name new-task --no-focus --command'
+  has "$CMUX_LOG" 'workspace-action --workspace workspace:99 --action set-description --description @test-vm · repo'
+  has "$CMUX_LOG" 'dismiss-notification'
+  record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"new-task"}'
+  CMUX_TAG_FAIL=1 hook >/dev/null
+  has "$CMUX_LOG" 'workspace close workspace:99 --force'
+  lacks "$CMUX_LOG" 'dismiss-notification'
+  record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  CMUX_TAG_FAIL=1 hook >/dev/null
+  has "$CMUX_LOG" "workspace select $ROW_ID"
+  lacks "$CMUX_LOG" 'workspace close'
+  has "$CMUX_LOG" 'dismiss-notification'
+  has "$XDG_STATE_HOME/cmux-hook.log" "set-description @test-vm · repo failed for $ROW_ID"
+  end_scenario
+}
+scenario_shared_creation
 
 scenario_native_open() {
   begin_scenario 'native open uses the recorded ID and validates the sending row' || return 0

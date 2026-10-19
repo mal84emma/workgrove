@@ -110,7 +110,7 @@ cmd_task() {
       if [[ "$where" == local ]]; then
         resolve_repo "$repo"; id=$(repo_id "$REPO")
         cmux_ok || die "cmux is not running; start cmux, then: wt task"
-        out=$(CMUX_QUIET=1 "$(cmux_bin)" workspace create --name "$id shell" --description "$(row_tag)" --cwd "$REPO" 2>&1) \
+        out=$(cmux_create --name "$id shell" --description "$(row_tag)" --cwd "$REPO" 2>&1) \
           || die "cmux workspace create failed: $out"
         printf 'row: %s shell %s\n' "$id" "$(row_tag)"
       else
