@@ -40,12 +40,29 @@ git -C "$TEST_ROOT/project" worktree add -qb wt/task "$TEST_ROOT/project/.worktr
 test_require_wt() {
   local REPO="$TEST_ROOT/project" n=unchanged branch=unchanged
   begin_scenario 'worktree outputs can use an internal local name' || return 0
-  if require_wt task n branch; then pass; else fail 'require_wt failed'; fi
+  if require_wt task n branch show; then pass; else fail 'require_wt failed'; fi
   assert_eq 'the caller receives its path' "$TEST_ROOT/project/.worktrees/task" "$n"
   assert_eq 'the caller receives its branch' wt/task "$branch"
   end_scenario
 }
 test_require_wt
+
+test_require_wt_command() {
+  local REPO="$TEST_ROOT/project" path='' branch='' sub=show output rc=0
+  begin_scenario 'the command argument controls missing-worktree records' || return 0
+  output=$(WG_MACHINE_RESULT=1 require_wt missing path branch path 2>&1) || rc=$?
+  assert_eq 'a missing path command fails' 1 "$rc"
+  assert_eq "the path argument emits a missing record despite sub=$sub" missing \
+    "$(wt_read_result "$output" path | jq -r .status)"
+  sub=path; rc=0
+  output=$(WG_MACHINE_RESULT=1 require_wt missing path branch show 2>&1) || rc=$?
+  assert_eq 'a missing show command fails' 1 "$rc"
+  rc=0
+  wt_read_result "$output" path >/dev/null || rc=$?
+  assert_eq "the show argument emits no record despite sub=$sub" 2 "$rc"
+  end_scenario
+}
+test_require_wt_command
 
 test_branch_landed() {
   local REPO="$TEST_ROOT/project" b=unchanged status=0

@@ -27,6 +27,26 @@ scenario_exit_handlers() {
   end_scenario
 }
 
+scenario_repeated_source() {
+  begin_scenario 'repeated sourcing preserves callbacks and pending cleanup paths' || return 0
+  local rc=0
+  LOG="$TEST_ROOT/repeated-callback" bash -c '
+    source "$1/lib/workgrove/common.sh"
+    record() { printf "callback:%s\n" "$1" >"$LOG"; }
+    on_exit record
+    touch "$2/pending"
+    WT_TMPFILES+=("$2/pending")
+    source "$1/lib/workgrove/common.sh"
+    source "$1/lib/workgrove/task.sh"
+    printf "%s\n" "${WG_EXIT_HANDLERS[@]}" >"$2/registry"
+  ' bash "$REPO" "$TEST_ROOT" || rc=$?
+  assert_eq 'repeated sourcing exits successfully' 0 "$rc"
+  assert_eq 'cleanup and the callback remain registered once' $'wt_cleanup\nrecord' "$(cat "$TEST_ROOT/registry")"
+  assert_eq 'the registered callback still runs' callback:0 "$(cat "$TEST_ROOT/repeated-callback" 2>/dev/null || true)"
+  if [[ ! -e $TEST_ROOT/pending ]]; then pass; else fail 'repeated sourcing lost the cleanup path'; fi
+  end_scenario
+}
+
 scenario_task_signal() {
   begin_scenario 'wt task removes a sidecar temp file after TERM' || return 0
   local rc=0
@@ -61,5 +81,6 @@ MV
 }
 LOG="$TEST_ROOT/handlers"; export LOG
 scenario_exit_handlers
+scenario_repeated_source
 scenario_task_signal
 lib_summary

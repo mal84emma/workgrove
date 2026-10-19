@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
-#   WG_PREFIX.
+#   WG_COMMON_LOADED, WG_PREFIX.
 # Requires no functions from other modules. Loads cmux.sh and task.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
@@ -9,12 +9,13 @@
 # After the version check, this file loads the cmux adapter and task core, and defines shared functions.
 # It sets no shell options, so it works under the "set -euo pipefail" of bin/wt and the "set -u" of the hooks.
 if ((BASH_VERSINFO[0] < 5)); then return 1; fi
+# Repeated loads must preserve registered cleanup callbacks and module state.
+if [[ ${WG_COMMON_LOADED:-0} == 1 ]]; then return 0; fi
 WT_FS=$'\x1f'   # the status line's field separator: git allows '|' in a branch name, and a base like
                 # 'feat|x' used to shift every field of the line right, so the branch column printed the base
 
 # shellcheck source=lib/workgrove/cmux.sh
 source "${BASH_SOURCE[0]%/*}/cmux.sh" || return
-
 
 die()  { printf '%s: %s\n' "${WG_PREFIX:-wt}" "$*" >&2; exit 1; }
 warn() { printf '%s: %s\n' "${WG_PREFIX:-wt}" "$*" >&2; }
@@ -156,3 +157,5 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
     printf "for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=%s' \"\$v\" \"\$(printenv \"\$v\")\"; done; %sexec tmux attach -d -t '=%s'" "$1" "$native_mark" "$1"
   fi
 }
+
+WG_COMMON_LOADED=1
