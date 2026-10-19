@@ -177,6 +177,8 @@ workgrove/
 │   ├── wt-scenarios.sh        the wt scenario IDs and names shared by discovery and execution
 │   ├── lib.sh                 the assertion functions shared by the suites
 │   ├── docs-smoke.sh          Layout files, required citations, and local links and anchors
+│   ├── docs_check.py          documentation checks shared by the suite and fixtures
+│   ├── docs_check_test.py     regression fixtures for documentation checks
 │   ├── options-smoke.sh       command metadata and option parsing
 │   ├── task-smoke.sh          task context, sidecars, identity, and cleanup
 │   ├── lib-smoke.sh           unit tests for every shared shell function
@@ -363,6 +365,7 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
 ### Tests
 
 `bash test/docs-smoke.sh` checks the Layout tree, the documentation guide's required citations, and relative links and anchors.
+It also runs isolated regression fixtures for the checker.
 It needs `python3` and Git. The shared runner and CI discover it through `test/*-smoke.sh`.
 
 GitHub Actions runs [`.github/workflows/tests.yml`](.github/workflows/tests.yml) when a pull request opens,
