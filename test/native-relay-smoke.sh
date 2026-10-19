@@ -57,7 +57,8 @@ has() { if grep -qF -- "$2" "$1"; then pass; else fail "missing '$2' in $1"; fi;
 lacks() { if grep -qF -- "$2" "$1"; then fail "unexpected '$2' in $1"; else pass; fi; }
 printf 'Host test-vm\n' > "$HOME/.ssh/config"
 
-begin_scenario 'tmux rebinds native identity instead of retaining the pane identity'
+scenario_native_identity() {
+  begin_scenario 'tmux rebinds native identity instead of retaining the pane identity' || return 0
 cat > "$TEST_ROOT/bin/tmux" <<'TMUX'
 #!/bin/sh
 case "$1" in
@@ -74,9 +75,12 @@ assert_eq 'the native socket comes from the current session' /tmp/current-native
 assert_eq 'the native terminal comes from the current session' term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$relay_tui_terminal"
 assert_eq 'the old pane identity does not reach the CLI' 0 "$(printf '%s\n' "${relay_ident[@]}" | grep -cF term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa || true)"
 rm "$TEST_ROOT/bin/tmux"
-end_scenario
+  end_scenario
+}
+scenario_native_identity
 
-begin_scenario 'reattachment replaces the previous transport and repeated requests survive content suppression'
+scenario_reattachment() {
+  begin_scenario 'reattachment replaces the previous transport and repeated requests survive content suppression' || return 0
 eval "$(sed -n '/^notify_mac()/,/^}/p' "$REPO/bin/wt")"
 cmux_bin() { printf '%s' "$TEST_ROOT/bin/cmux"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -140,9 +144,12 @@ printf '%s' 127.0.0.1:9999 > "$RELAY_STATE/CMUX_SOCKET_PATH"
 TMUX=/tmp/fake notify_mac wt-open host test-vm path /vm/repos/repo/.worktrees/task
 assert_eq 'a valid native identity overrides stale TCP fields' 7 "$(wc -l < "$RELAY_DELIVERED" | tr -d ' ')"
 rm "$TEST_ROOT/bin/tmux" "$TEST_ROOT/bin/cmux-tui"
-end_scenario
+  end_scenario
+}
+scenario_reattachment
 
-begin_scenario 'native open uses the recorded ID and validates the sending row'
+scenario_native_open() {
+  begin_scenario 'native open uses the recorded ID and validates the sending row' || return 0
 record wt-open '{"host":"test-vm","path":"/vm/repos/repo/.worktrees/task","request_id":"unique"}'
 hook >/dev/null
 has "$CODE_LOG" '--folder-uri vscode-remote://ssh-remote+test-vm/vm/repos/repo/.worktrees/task/'
@@ -176,9 +183,12 @@ lacks "$CMUX_LOG" 'dismiss-notification'
 has "$XDG_STATE_HOME/cmux-hook.log" 'failed; no window opened'
 CMUX_AUTOMATION_EVENT_JSON='{"name":"notification.read"}' hook >/dev/null
 lacks "$CMUX_LOG" 'dismiss-notification'
-end_scenario
+  end_scenario
+}
+scenario_native_open
 
-begin_scenario 'native attach and close preserve the existing control checks'
+scenario_native_attach_close() {
+  begin_scenario 'native attach and close preserve the existing control checks' || return 0
 record wt-attach '{"host":"test-vm","repo":"/vm/repos/child","task":"child"}'
 hook >/dev/null
 has "$CMUX_LOG" 'ssh test-vm --name child --no-focus'
@@ -194,9 +204,12 @@ has "$XDG_STATE_HOME/cmux-hook.log" 'could not confirm its worktree is gone'
 hook >/dev/null
 has "$CMUX_LOG" "workspace close $ROW_ID --force"
 lacks "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
-end_scenario
+  end_scenario
+}
+scenario_native_attach_close
 
-begin_scenario 'notification bursts do not consume the open request budget'
+scenario_notification_budget() {
+  begin_scenario 'notification bursts do not consume the open request budget' || return 0
 # Model cmux 0.65's admission window for an ordinary notification followed by two open requests.
 # The omitted rate limit admits only the first event, so both open requests disappear.
 admitted_burst() {
@@ -212,9 +225,11 @@ admitted_burst() {
 }
 assert_eq 'the cmux default reproduces dropped requests' 1 "$(jq 'del(.rules[].rate_limit)' "$REPO/home/.cmuxterm/automations.json" | admitted_burst)"
 assert_eq 'an unrelated notification and two open requests are admitted' 3 "$(admitted_burst < "$REPO/home/.cmuxterm/automations.json")"
-end_scenario
+  end_scenario
+}
+scenario_notification_budget
 
-begin_scenario 'automation installation preserves user rules and backups'
+setup_automation() {
 # Load only the merge function. Do not run install.sh or its main function.
 eval "$(sed -n '/^hook_cmux_automation()/,/^}/p' "$REPO/install.sh")"
 # shellcheck disable=SC2034  # read by the extracted installation function
@@ -225,6 +240,12 @@ BK="$TEST_ROOT/backup"
 # shellcheck disable=SC2034  # read by the extracted installation function
 TMPFILES=()
 stash() { mkdir -p "$BK/$(dirname "${1#"$HOME"/}")"; mv "$1" "$BK/${1#"$HOME"/}"; }
+config="$HOME/.cmuxterm/automations.json"
+}
+
+scenario_automation_merge() {
+  begin_scenario 'automation installation preserves user rules and backups' || return 0
+setup_automation
 hook_cmux_automation >/dev/null
 config="$HOME/.cmuxterm/automations.json"
 assert_eq 'new configuration contains the native rule' wt-native-relay "$(jq -r '.rules[0].id' "$config")"
@@ -249,9 +270,13 @@ OS=Linux
 rm "$config"
 hook_cmux_automation >/dev/null
 if [[ ! -e $config ]]; then pass; else fail 'Linux installed Mac automation'; fi
-end_scenario
+  end_scenario
+}
+scenario_automation_merge
 
-begin_scenario 'the installed native rule dispatches an open request through its configured command'
+scenario_installed_rule() {
+  begin_scenario 'the installed native rule dispatches an open request through its configured command' || return 0
+setup_automation
 OS=Darwin hook_cmux_automation >/dev/null
 mkdir -p "$HOME/.local/bin"
 ln -s "$REPO/bin/cmux-hook" "$HOME/.local/bin/cmux-hook"
@@ -264,9 +289,12 @@ command=$(jq -r '.rules[] | select(.id == "wt-native-relay") | .then[] | select(
 "$BASH" -c "$command" </dev/null >/dev/null
 has "$CODE_LOG" '--folder-uri vscode-remote://ssh-remote+test-vm/vm/repos/repo/.worktrees/task/'
 has "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
-end_scenario
+  end_scenario
+}
+scenario_installed_rule
 
-begin_scenario 'cmux-tui agent hooks report to the terminal that the tmux session names'
+scenario_agent_hooks() {
+  begin_scenario 'cmux-tui agent hooks report to the terminal that the tmux session names' || return 0
 # The fake tmux has one session. TMUX_ENV holds its environment, one NAME=value or -NAME per line.
 # The two query branches read stdin, so a wrapper that does not redirect it loses the agent's payload.
 # When TMUX_CALLS is set, each call adds a line to it.
@@ -352,5 +380,7 @@ assert_eq 'a nested wt run keeps the cmux-tui helper' 'helper=/opt/cmux-tui-hook
 (cd "$TEST_ROOT" && unset TMUX && CMUX_SSH_ATTEMPT_ID=1 CMUX_TUI_HOOK=/opt/cmux-tui-hook \
   "$HOME/.local/bin/wt" run task -r "$TEST_ROOT/repo" >/dev/null)
 assert_eq 'wt run outside tmux leaves the hooks alone' 'hook=/opt/cmux-tui-hook' "$(sed -n 1p "$AGENT_ENV")"
-end_scenario
-lib_summary 65
+  end_scenario
+}
+scenario_agent_hooks
+lib_summary

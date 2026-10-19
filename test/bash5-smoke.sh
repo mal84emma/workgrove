@@ -72,13 +72,17 @@ run_script() {
   fi
 }
 
-begin_scenario 'all scripts run directly under bash 5'
+scenario_direct_bash5() {
+  begin_scenario 'all scripts run directly under bash 5' || return 0
 for script in "${SCRIPTS[@]}"; do
   run_script "$script" "$REPO/bin/$script" "$BASH5" 0 "${BASH_VERSINFO[0]}:$BASH5"
 done
-end_scenario
+  end_scenario
+}
+scenario_direct_bash5
 
-begin_scenario 'scripts with no library: wt stops and the hooks exit 0'
+scenario_missing_library() {
+  begin_scenario 'scripts with no library: wt stops and the hooks exit 0' || return 0
 for script in wt cmux-hook agent-notify; do
   rc=0
   args=()
@@ -104,7 +108,9 @@ for script in wt cmux-hook agent-notify; do
     fi
   fi
 done
-end_scenario
+  end_scenario
+}
+scenario_missing_library
 
 # install.sh links each script into ~/.local/bin. Here a relative link points to an absolute link, which
 # points to the script in this checkout. Each run starts in another folder, so only the link leads to lib/.
@@ -113,7 +119,8 @@ for script in wt cmux-hook agent-notify; do
   ln -s "$REPO/bin/$script" "$TEST_ROOT/links/chain/$script"
   ln -s "../chain/$script" "$TEST_ROOT/links/bin/$script"
 done
-begin_scenario 'scripts find the library through a chain of links'
+scenario_linked_library() {
+  begin_scenario 'scripts find the library through a chain of links' || return 0
 out=$(cd "$TEST_ROOT/home" && env -i PATH="$PATH" HOME="$TEST_ROOT/home" "$TEST_ROOT/links/bin/wt" help 2>&1) || true
 assert_eq 'wt prints its help through the links' yes "$([[ $out == *'wt new  [name]'* ]] && echo yes || echo "$out")"
 out=$(cd "$TEST_ROOT/links/bin" && env -i PATH="$PATH" HOME="$TEST_ROOT/home" "$BASH5" wt help 2>&1) || true
@@ -133,46 +140,54 @@ assert_grep 'cmux-hook loads the library through the links' "$TEST_ROOT/cmux.log
 out=$(cd "$TEST_ROOT/home" && printf '{}\n' | env -i PATH="$PATH" HOME="$TEST_ROOT/home" \
   XDG_STATE_HOME="$TEST_ROOT/home/.local/state" "$TEST_ROOT/links/bin/agent-notify" 2>&1) || true
 assert_eq 'agent-notify loads the library through the links' '' "$out"
-end_scenario
+  end_scenario
+}
+scenario_linked_library
 
 # Linux has no older /bin/bash. The Mac exercises the actual bash 3.2 handoff.
 SYS_MAJOR=$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"')
-OLD_ASSERTIONS=0
-if ((SYS_MAJOR < 5)); then
-  OLD_ASSERTIONS=108
-  installed=''
+scenario_installed_bash5() {
+  begin_scenario 'all scripts reach installed bash 5 when /bin/bash starts them' || return 0
+  local installed='' candidate script
   for candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
     if [[ -x $candidate ]] && "$candidate" -c '((BASH_VERSINFO[0] >= 5))'; then
       installed=$candidate
       break
     fi
   done
-  begin_scenario 'all scripts reach installed bash 5 when /bin/bash starts them'
   for script in "${SCRIPTS[@]}"; do
     run_script "$script" "$REPO/bin/$script" /bin/bash 0 "${BASH_VERSINFO[0]}:$installed"
   done
   end_scenario
+}
 
+scenario_candidate_selection() {
+  local scenario=$1 chosen script rc major
+  begin_scenario "candidate selection: $scenario" || return 0
+  rm -f "$FIRST" "$SECOND"
+  case $scenario in
+    first-valid) ln -s "$BASH5" "$FIRST"; ln -s "$BASH5" "$SECOND"; chosen=$FIRST;;
+    first-old) ln -s /bin/bash "$FIRST"; ln -s "$BASH5" "$SECOND"; chosen=$SECOND;;
+    first-missing) ln -s "$BASH5" "$SECOND"; chosen=$SECOND;;
+    none) chosen=/bin/bash;;
+    both-old) ln -s /bin/bash "$FIRST"; ln -s /bin/bash "$SECOND"; chosen=/bin/bash;;
+  esac
+  for script in "${SCRIPTS[@]}"; do
+    rc=0
+    major=${BASH_VERSINFO[0]}
+    if [[ $chosen == /bin/bash ]]; then
+      major=$SYS_MAJOR
+      case $script in wt|azml-ssh-host) rc=1;; esac
+    fi
+    run_script "$script" "$TEST_ROOT/copies/$script" /bin/bash "$rc" "$major:$chosen"
+  done
+  end_scenario
+}
+
+if ((SYS_MAJOR < 5)); then
+  scenario_installed_bash5
   for scenario in first-valid first-old first-missing none both-old; do
-    rm -f "$FIRST" "$SECOND"
-    case $scenario in
-      first-valid) ln -s "$BASH5" "$FIRST"; ln -s "$BASH5" "$SECOND"; chosen=$FIRST;;
-      first-old) ln -s /bin/bash "$FIRST"; ln -s "$BASH5" "$SECOND"; chosen=$SECOND;;
-      first-missing) ln -s "$BASH5" "$SECOND"; chosen=$SECOND;;
-      none) chosen=/bin/bash;;
-      both-old) ln -s /bin/bash "$FIRST"; ln -s /bin/bash "$SECOND"; chosen=/bin/bash;;
-    esac
-    begin_scenario "candidate selection: $scenario"
-    for script in "${SCRIPTS[@]}"; do
-      rc=0
-      major=${BASH_VERSINFO[0]}
-      if [[ $chosen == /bin/bash ]]; then
-        major=$SYS_MAJOR
-        case $script in wt|azml-ssh-host) rc=1;; esac
-      fi
-      run_script "$script" "$TEST_ROOT/copies/$script" /bin/bash "$rc" "$major:$chosen"
-    done
-    end_scenario
+    scenario_candidate_selection "$scenario"
   done
 fi
-lib_summary $((31 + OLD_ASSERTIONS))
+lib_summary

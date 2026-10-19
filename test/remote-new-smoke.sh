@@ -152,7 +152,8 @@ run_wt() {
 }
 check() { if [[ "$1" ]]; then pass; else fail "$2; output: $WT_OUT"; fi; }
 
-begin_scenario 'remote preflight and recovery'
+scenario_preflight_recovery() {
+  begin_scenario 'remote preflight and recovery' || return 0
 
 # A local cmux failure must stop creation before the first SSH command.
 CMUX_MODE=down
@@ -356,9 +357,12 @@ invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
 check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux workspace-action failed; run:'* ]] && grep -qF -- 'workspace-action --workspace race-row ' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'workspace close' "$TEST_ROOT/cmux.log" && echo yes)" 'a row that a lookup found was closed for a failed description'
 rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.listed"
 CMUX_MODE=alive
-end_scenario
+  end_scenario
+}
+scenario_preflight_recovery
 
-begin_scenario 'interrupted setup retains the brief, agent and model'
+scenario_interrupted_setup() {
+  begin_scenario 'interrupted setup retains the brief, agent and model' || return 0
 SCRATCH_REPO="$TEST_ROOT/local-repo"
 git init -q "$SCRATCH_REPO"
 git -C "$SCRATCH_REPO" config user.name Test
@@ -377,9 +381,19 @@ printf 'the brief' | env HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PAT
 set -o pipefail
 check "$([[ -d "$SCRATCH_REPO/.worktrees/task" && -f "$SCRATCH_REPO/.git/wt/task.json" && -f "$SCRATCH_REPO/.git/wt/task.prompt" ]] && echo yes)" 'interrupted setup lost task metadata'
 check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex && $(jq -r .model "$SCRATCH_REPO/.git/wt/task.json") == gpt-5.3-codex ]] && echo yes)" 'interrupted setup lost brief, agent or model choice'
-end_scenario
+  end_scenario
+}
+scenario_interrupted_setup
 
-begin_scenario 'machine requests do not reach setup hooks or nested commands'
+scenario_nested_commands() {
+  begin_scenario 'machine requests do not reach setup hooks or nested commands' || return 0
+SCRATCH_REPO="$TEST_ROOT/nested-repo"
+git init -q "$SCRATCH_REPO"
+git -C "$SCRATCH_REPO" config user.name Test
+git -C "$SCRATCH_REPO" config user.email test@example.invalid
+git -C "$SCRATCH_REPO" commit -q --allow-empty -m initial
+env HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
+  "${WT_BASH:-bash}" "$REPO/bin/wt" new task -r "$SCRATCH_REPO" -a none --no-workspace >/dev/null
 cat >"$SCRATCH_REPO/.wt-setup" <<'SETUP'
 #!/bin/sh
 [ -z "${WT_MACHINE+x}" ] && [ -z "${WG_MACHINE_RESULT+x}" ] || exit 1
@@ -387,6 +401,7 @@ path=$("$TEST_WT" path task -r "$WT_REPO") || exit 1
 [ "$path" = "$WT_REPO/.worktrees/task" ] || exit 1
 printf '%s\n' "$path" >"$WT_REPO/nested-path"
 SETUP
+chmod +x "$SCRATCH_REPO/.wt-setup"
 WT_RC=0
 WT_OUT=$(env HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
   WT_MACHINE=1 WG_MACHINE_RESULT=1 TEST_WT="$REPO/bin/wt" \
@@ -394,6 +409,8 @@ WT_OUT=$(env HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
 check "$([[ $WT_RC -eq 0 && "$WT_OUT" != *'.wt-setup exited non-zero'* ]] && echo yes)" 'machine request broke the setup hook'
 check "$([[ -f "$SCRATCH_REPO/nested-path" && $(cat "$SCRATCH_REPO/nested-path") == "$SCRATCH_REPO/.worktrees/task" ]] && echo yes)" 'nested wt path did not return one path'
 check "$([[ $(printf '%s\n' "$WT_OUT" | grep -c $'^WT_RESULT\t') -eq 1 ]] && echo yes)" 'the parent lost its requested result'
-end_scenario
+  end_scenario
+}
+scenario_nested_commands
 
-lib_summary 48
+lib_summary

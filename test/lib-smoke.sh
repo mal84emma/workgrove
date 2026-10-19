@@ -13,7 +13,8 @@ source "$REPO/test/lib.sh"
 source "$REPO/lib/workgrove/common.sh"
 trap lib_cleanup EXIT
 
-begin_scenario 'versioned wt results'
+scenario_results() {
+  begin_scenario 'versioned wt results' || return 0
 record=$(WG_MACHINE_RESULT=1 wt_result new created task '/repos/two words' wt-two-words-task)
 assert_eq 'result round trip' 'created|task|/repos/two words|wt-two-words-task' \
   "$(wt_read_result "$record" new | jq -r '[.status,.name,.repo,.session] | join("|" )')"
@@ -41,7 +42,9 @@ for sample in text empty malformed duplicate blank-duplicate version command con
   wt_read_result "$output" new >/dev/null || rc=$?
   assert_eq "$sample result status" "$expected" "$rc"
 done
-end_scenario
+  end_scenario
+}
+scenario_results
 
 assert_result() { # <what> <expected: yes|no> <function> <argument>
   local what=$1 expected=$2 actual=no
@@ -50,7 +53,8 @@ assert_result() { # <what> <expected: yes|no> <function> <argument>
   assert_eq "$what" "$expected" "$actual"
 }
 
-begin_scenario 'SSH alias syntax'
+scenario_aliases() {
+  begin_scenario 'SSH alias syntax' || return 0
 assert_result 'letter first' yes valid_host alpha
 assert_result 'digit first and punctuation later' yes valid_host '9a._-'
 assert_result 'capital letter' yes valid_host Alpha
@@ -59,9 +63,12 @@ assert_result 'dot first' no valid_host .alpha
 assert_result 'slash' no valid_host alpha/beta
 assert_result 'space' no valid_host 'alpha beta'
 assert_result 'empty alias' no valid_host ''
-end_scenario
+  end_scenario
+}
+scenario_aliases
 
-begin_scenario 'paths accepted by the Mac hook'
+scenario_paths() {
+  begin_scenario 'paths accepted by the Mac hook' || return 0
 assert_result 'absolute path' yes hook_safe_path '/tmp/task name/.hidden'
 assert_result 'single component' yes hook_safe_path '/task'
 assert_result 'root path' no hook_safe_path /
@@ -77,7 +84,9 @@ assert_result 'semicolon' no hook_safe_path '/tmp/a;b'
 assert_result 'double slash' no hook_safe_path '/tmp//task'
 assert_result 'parent component' no hook_safe_path '/tmp/../task'
 assert_result 'final parent component' no hook_safe_path '/tmp/..'
-end_scenario
+  end_scenario
+}
+scenario_paths
 
 name63=$(printf 'a%.0s' {1..63})
 name64=${name63}a
@@ -90,7 +99,8 @@ check_identity() { # <name> <repo id> <valid: yes|no>
   assert_result "valid name for $name" "$valid" valid_name "$name"
 }
 
-begin_scenario 'task and repository identities'
+scenario_identities() {
+  begin_scenario 'task and repository identities' || return 0
 check_identity task task yes
 check_identity 'two words' two-words no
 check_identity 'has.dot' has-dot no
@@ -101,7 +111,9 @@ assert_eq 'repo id uses only the last path component' final "$(repo_id '/repos/o
 assert_result 'underscore after the first character' yes valid_name task_2
 assert_result 'underscore first' no valid_name _task
 assert_result 'empty task name' no valid_name ''
-end_scenario
+  end_scenario
+}
+scenario_identities
 
 ROW_WINDOW_ONE=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
 ROW_WINDOW_TWO=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
@@ -143,7 +155,8 @@ check_rows_load() {
   assert_eq "$policy wraps every cmux call" "$(cat "$TEST_ROOT/row-calls")" "$(cat "$TEST_ROOT/row-caps")"
 }
 
-begin_scenario 'cmux row lists across windows'
+scenario_row_windows() {
+  begin_scenario 'cmux row lists across windows' || return 0
 for policy in skip stop checked; do
   row_cmux_reset
   check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 1
@@ -155,9 +168,12 @@ for policy in skip stop checked; do
     "$(printf 'list-windows\nworkspace list --json --window %s\nworkspace list --json --window %s' "$ROW_WINDOW_ONE" "$ROW_WINDOW_TWO")" \
     "$(tail -3 "$TEST_ROOT/row-calls")"
 done
-end_scenario
+  end_scenario
+}
+scenario_row_windows
 
-begin_scenario 'cmux window failures and older versions'
+scenario_row_failures() {
+  begin_scenario 'cmux window failures and older versions' || return 0
 for policy in skip stop checked; do
   row_cmux_reset
   ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"$'\n'"  2: $ROW_WINDOW_THREE"
@@ -193,9 +209,12 @@ check_rows_load checked 0 "{\"workspaces\":[$ROW_ONE]}" 0
 ROW_FALLBACK_RC=142
 check_rows_load stop 142 '' 0
 check_rows_load checked 142 '' 0
-end_scenario
+  end_scenario
+}
+scenario_row_failures
 
-begin_scenario 'cmux checked row validation'
+scenario_row_validation() {
+  begin_scenario 'cmux checked row validation' || return 0
 row_cmux_reset
 ROW_ONE_LIST='[]'
 check_rows_load checked 0 '{"workspaces":[]}' 1
@@ -216,9 +235,12 @@ ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"
 ROW_TWO_LIST=''
 check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
 check_rows_load checked 1 '' 0
-end_scenario
+  end_scenario
+}
+scenario_row_validation
 
-begin_scenario 'cmux row lookup by title, repository and host'
+scenario_row_lookup() {
+  begin_scenario 'cmux row lookup by title, repository and host' || return 0
 ROW_LOOKUP="[$ROW_TWO,{\"id\":\"other-repo\",\"title\":\"task\",\"description\":\"@local · other\"},$ROW_ONE,\
 {\"id\":\"legacy\",\"title\":\"repo:old-task\"},\
 {\"id\":\"description-host\",\"title\":\"task\",\"description\":\"@other-vm · repo\",\"remote\":{\"enabled\":true,\"destination\":\"user@other-vm\"}},\
@@ -239,7 +261,9 @@ assert_eq 'a missing host returns a failure' 4 "$rc"
 assert_result 'a remote description alone cannot enable a remote row' no cmux_find_row local-task repo id test-vm <<<"$ROW_LOOKUP"
 assert_result 'another repository does not match' no cmux_find_row task absent id <<<"$ROW_LOOKUP"
 assert_eq 'the first matching row wins' row-one "$(printf '[%s,{"id":"later-row","title":"task","description":"@local · repo"}]' "$ROW_ONE" | cmux_find_row task repo id)"
-end_scenario
+  end_scenario
+}
+scenario_row_lookup
 
 mkdir -p "$TEST_ROOT/home/.ssh"
 cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
@@ -254,7 +278,7 @@ CONFIG
 
 test_ssh_hosts() {
   local HOME="$TEST_ROOT/home"
-  begin_scenario 'SSH aliases from the config file'
+  begin_scenario 'SSH aliases from the config file' || return 0
   assert_eq 'literal aliases are sorted and unique' $'alpha\nbeta\ndelta\nepsilon\ngamma' \
     "$(ssh_hosts)"
   assert_result 'known literal alias' yes known_host beta
@@ -270,7 +294,8 @@ test_ssh_hosts() {
 }
 test_ssh_hosts
 
-begin_scenario 'exact tmux command lines'
+scenario_tmux_commands() {
+  begin_scenario 'exact tmux command lines' || return 0
 expected_task=$(cat <<'COMMAND'
 tmux new-session -d -s 'wt-test' echo\ task\ ready\;\ exec\ bash 2>/dev/null; for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=wt-test' "$v" "$(printenv "$v")"; done; tmux set-environment -t '=wt-test' WT_CMUX_CLOSE_ON_EXIT 1; exec tmux attach -d -t '=wt-test'
 COMMAND
@@ -296,10 +321,12 @@ tmux new-session -d -s 'wt-test'  2>/dev/null; tmux attach -t '=wt-test'
 COMMAND
 )
 assert_eq 'shared command line without a command' "$expected_shared_shell." "$(tmux_cmd wt-test '' shared; printf '.')"
-end_scenario
+  end_scenario
+}
+scenario_tmux_commands
 
-test_relay_env() {
-  local PATH="$TEST_ROOT/bin:$PATH" TMUX=''
+with_relay_env() {
+  local PATH="$TEST_ROOT/bin:$PATH" TMUX=/tmp/fake
   local -x CMUX_SOCKET_PATH=127.0.0.1:1111 CMUX_WORKSPACE_ID=pane-workspace CMUX_SURFACE_ID=pane-surface
   local -x CMUX_PANEL_ID=pane-panel CMUX_TAB_ID=pane-tab CMUX_TERMINAL_LIFECYCLE_ID=pane-lifecycle
   local -x CMUX_TUI_SOCKET=/tmp/pane-native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -321,7 +348,12 @@ TMUX
   : > "$RELAY_TMUX_LOG"
   : > "$RELAY_TMUX_ENV"
 
-  begin_scenario 'relay identity without tmux'
+  "$@"
+}
+
+scenario_relay_without_tmux() {
+  begin_scenario 'relay identity without tmux' || return 0
+  TMUX=''
   assert_result 'a pane identity is usable outside tmux' yes relay_env relay_ident relay_tui_socket relay_tui_terminal
   assert_eq 'the pane supplies the native socket' /tmp/pane-native "$relay_tui_socket"
   assert_eq 'the pane supplies the native terminal' term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$relay_tui_terminal"
@@ -333,8 +365,11 @@ TMUX
   PATH="$TEST_ROOT/no-tmux" assert_result 'a missing tmux command keeps the pane identity' yes relay_env relay_ident relay_tui_socket relay_tui_terminal
   assert_eq 'a missing tmux command keeps the socket' /tmp/pane-native "$relay_tui_socket"
   end_scenario
+}
+with_relay_env scenario_relay_without_tmux
 
-  begin_scenario 'missing and unset session variables keep pane values'
+scenario_relay_missing_values() {
+  begin_scenario 'missing and unset session variables keep pane values' || return 0
   printf '%s\n' -CMUX_TUI_SOCKET CMUX_TUI_SESSION_ID=current-session > "$RELAY_TMUX_ENV"
   assert_result 'an unset session socket keeps the pane relay' yes relay_env relay_ident relay_tui_socket relay_tui_terminal
   assert_eq 'an unset variable keeps the pane value' /tmp/pane-native "$relay_tui_socket"
@@ -343,8 +378,11 @@ TMUX
   assert_eq 'one query reads the whole environment with an exact session target' \
     $'display-message -p #S\nshow-environment -t =task:identity' "$(cat "$RELAY_TMUX_LOG")"
   end_scenario
+}
+with_relay_env scenario_relay_missing_values
 
-  begin_scenario 'empty session values clear stale pane values and child values'
+scenario_relay_empty_values() {
+  begin_scenario 'empty session values clear stale pane values and child values' || return 0
   printf '%s\n' CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= CMUX_TUI_SOCKET= CMUX_TUI_TERMINAL_ID= CMUX_TUI_SESSION_ID= > "$RELAY_TMUX_ENV"
   assert_result 'cleared transports have no relay' no relay_env relay_ident relay_tui_socket relay_tui_terminal
   assert_eq 'the native socket is empty' '' "$relay_tui_socket"
@@ -354,8 +392,11 @@ TMUX
     "$(env CMUX_TUI_SOCKET=stale CMUX_TUI_TERMINAL_ID=stale CMUX_TUI_SESSION_ID=stale \
       "${relay_ident[@]}" "$BASH" -c 'printf "%s|%s|%s" "$CMUX_TUI_SOCKET" "$CMUX_TUI_TERMINAL_ID" "$CMUX_TUI_SESSION_ID"')"
   end_scenario
+}
+with_relay_env scenario_relay_empty_values
 
-  begin_scenario 'a native session overrides the pane identity'
+scenario_relay_session_identity() {
+  begin_scenario 'a native session overrides the pane identity' || return 0
   printf '%s\n' CMUX_SOCKET_PATH= CMUX_WORKSPACE_ID= CMUX_SURFACE_ID= CMUX_PANEL_ID= CMUX_TAB_ID= \
     CMUX_TERMINAL_LIFECYCLE_ID= CMUX_TUI_SOCKET=/tmp/current-native \
     CMUX_TUI_TERMINAL_ID=term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb CMUX_TUI_SESSION_ID=current-session > "$RELAY_TMUX_ENV"
@@ -369,8 +410,11 @@ TMUX
   assert_eq 'a native read makes only two tmux calls' \
     $'display-message -p #S\nshow-environment -t =task:identity' "$(cat "$RELAY_TMUX_LOG")"
   end_scenario
+}
+with_relay_env scenario_relay_session_identity
 
-  begin_scenario 'tmux query failures keep pane values'
+scenario_relay_query_failures() {
+  begin_scenario 'tmux query failures keep pane values' || return 0
   RELAY_TMUX_FAIL=display-message
   : > "$RELAY_TMUX_LOG"
   assert_result 'a failed session lookup keeps the pane relay' yes relay_env relay_ident relay_tui_socket relay_tui_terminal
@@ -380,8 +424,11 @@ TMUX
   assert_result 'a failed environment query keeps the pane relay' yes relay_env relay_ident relay_tui_socket relay_tui_terminal
   assert_eq 'a failed environment query keeps the pane socket' /tmp/pane-native "$relay_tui_socket"
   end_scenario
+}
+with_relay_env scenario_relay_query_failures
 
-  begin_scenario 'unset pane variables stay unset unless the session assigns them'
+scenario_relay_unset_values() {
+  begin_scenario 'unset pane variables stay unset unless the session assigns them' || return 0
   RELAY_TMUX_FAIL=''
   unset CMUX_TUI_SESSION_ID
   printf '%s\n' -CMUX_TUI_SESSION_ID > "$RELAY_TMUX_ENV"
@@ -401,6 +448,72 @@ TMUX
     "$(env -u CMUX_TUI_SESSION_ID "${relay_ident[@]}" "$BASH" -c 'printf "%s" "${CMUX_TUI_SESSION_ID-unset}"')"
   end_scenario
 }
-test_relay_env
+with_relay_env scenario_relay_unset_values
 
-lib_summary 268
+run_harness() {
+  local filter=$1 body=$2
+  HARNESS_RC=0
+  # shellcheck disable=SC2016  # The child shell expands its positional arguments.
+  HARNESS_OUT=$(ONLY="$filter" "$BASH" -eu -c 'source "$1"; eval "$2"; lib_summary' \
+    _ "$REPO/test/lib.sh" "$body" 2>&1) || HARNESS_RC=$?
+}
+
+scenario_assertion_guard() {
+  begin_scenario 'scenario assertion guard' || return 0
+  run_harness '' 'begin_scenario empty; end_scenario'
+  assert_eq 'an empty scenario fails' 1 "$HARNESS_RC"
+  assert_eq 'an empty scenario reports the cause' yes \
+    "$([[ $HARNESS_OUT == *'scenario made no assertions'* ]] && echo yes || echo no)"
+  run_harness '' 'begin_scenario first; pass; end_scenario; begin_scenario empty; end_scenario'
+  assert_eq 'a previous assertion cannot hide an empty scenario' 1 "$HARNESS_RC"
+  run_harness '' 'begin_scenario broken; assert_eq value expected actual; end_scenario; begin_scenario good; pass; end_scenario'
+  assert_eq 'a later pass cannot hide an earlier failure' 1 "$HARNESS_RC"
+  run_harness '' 'begin_scenario good; pass; pass; end_scenario'
+  assert_eq 'the summary derives the total' 0 "$HARNESS_RC"
+  assert_eq 'the summary reports the derived total' yes \
+    "$([[ $HARNESS_OUT == *'2 assertions: 2 passed, 0 failed'* ]] && echo yes || echo no)"
+  end_scenario
+}
+scenario_assertion_guard
+
+scenario_filter() {
+  begin_scenario 'scenario name filter' || return 0
+  local body
+  body=$(cat <<'BODY'
+first() { begin_scenario 'first scenario' || return 0; fail 'unselected scenario ran'; end_scenario; }
+second() { begin_scenario 'second scenario' || return 0; pass; end_scenario; }
+first
+second
+BODY
+)
+  local pattern
+  for pattern in second 'sec*scenario' '?econd scenario'; do
+    run_harness "$pattern" "$body"
+    assert_eq "$pattern selects one scenario" 0 "$HARNESS_RC"
+    assert_eq "$pattern skips the other assertions" yes \
+      "$([[ $HARNESS_OUT == *'1 assertions: 1 passed, 0 failed'* && $HARNESS_OUT != *'unselected scenario ran'* ]] && echo yes || echo no)"
+  done
+  run_harness missing "$body"
+  assert_eq 'an unmatched filter fails' 1 "$HARNESS_RC"
+  assert_eq 'an unmatched filter reports the cause' yes \
+    "$([[ $HARNESS_OUT == *'no scenarios matched ONLY=missing'* ]] && echo yes || echo no)"
+  run_harness '' "$body"
+  assert_eq 'an empty filter runs the failing scenario too' 1 "$HARNESS_RC"
+  end_scenario
+}
+scenario_filter
+
+scenario_poll_interval() {
+  begin_scenario 'poll interval defaults and overrides' || return 0
+  local out
+  out=$(unset WG_POLL_INTERVAL; sleep() { printf '%s' "$1"; }; wg_sleep)
+  assert_eq 'the production poll interval defaults to one second' 1 "$out"
+  out=$(WG_POLL_INTERVAL=0; sleep() { printf '%s' "$1"; }; wg_sleep)
+  assert_eq 'tests can select a zero interval' 0 "$out"
+  out=$(WG_POLL_INTERVAL=0.25; sleep() { printf '%s' "$1"; }; wg_sleep)
+  assert_eq 'the poll interval accepts fractional seconds' 0.25 "$out"
+  end_scenario
+}
+scenario_poll_interval
+
+lib_summary

@@ -33,6 +33,8 @@ PASS=0
 FAIL=0
 SCENARIO="(startup)"
 SCENARIO_FAILS=0
+SCENARIO_START=0
+SCENARIOS=0
 
 # lib_label <base> <rel>: how a base/rel pair is named in a failure message. See LIB_BASE_LABEL.
 lib_label() {
@@ -130,12 +132,21 @@ assert_grep() {
   pass
 }
 
+# ONLY selects scenario names by shell glob, with an implicit * on each side.
+# Call begin_scenario inside a function with `|| return 0` to skip an unmatched scenario.
 begin_scenario() {
+  # shellcheck disable=SC2053  # ONLY is a pattern, not a literal string.
+  [[ $1 == *${ONLY:-}* ]] || return 1
   SCENARIO="$1"
   SCENARIO_FAILS=0
+  SCENARIO_START=$((PASS + FAIL))
+  SCENARIOS=$((SCENARIOS + 1))
 }
 
 end_scenario() {
+  if [[ $((PASS + FAIL)) -eq $SCENARIO_START ]]; then
+    fail "scenario made no assertions"
+  fi
   if [[ $SCENARIO_FAILS -eq 0 ]]; then
     echo "ok   $SCENARIO"
   else
@@ -176,15 +187,11 @@ lib_cleanup() {
   rm -rf "$root"
 }
 
-# lib_summary <expected assertions>: prints the count line. It also catches the failure mode that a
-# pass/fail count cannot see: a scenario that stops asserting, instead of starting to fail. One mutation
-# silently took install-smoke.sh from 323 assertions to 318 that way, and every scenario stayed green. On
-# either kind of failure, lib_summary exits non-zero, so it is the last thing that a suite's main() runs.
+# Print the derived assertion total. Fail when assertions fail or the filter selects no scenarios.
 lib_summary() {
   echo "$((PASS + FAIL)) assertions: $PASS passed, $FAIL failed"
-  if [[ $((PASS + FAIL)) -ne $1 ]]; then
-    echo "FAIL: expected $1 assertions, ran $((PASS + FAIL)) — a scenario skipped its assertions" \
-         "instead of failing them, or one was added without updating FIXED_ASSERTIONS" >&2
+  if [[ $SCENARIOS -eq 0 ]]; then
+    echo "FAIL: no scenarios matched ONLY=${ONLY:-}" >&2
     exit 1
   fi
   if [[ $FAIL -gt 0 ]]; then

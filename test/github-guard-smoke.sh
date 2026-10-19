@@ -130,7 +130,8 @@ expect() {
 }
 nl() { printf '%s\n' "$@"; }   # nl <line>…: a multi-line command, one argument per line
 
-begin_scenario 'commands that only mention gh, git or wt get no answer'
+scenario_mentions() {
+  begin_scenario 'commands that only mention gh, git or wt get no answer' || return 0
 expect none 'ls -la'
 expect none 'git status'
 expect none 'git commit -m "note that git push, gh pr create and gh api are guarded"'
@@ -144,9 +145,12 @@ expect none 'gh pr checkout 5'
 expect none 'gh pr close 5'
 expect none 'gh repo view'
 expect none 'npm test && git push origin trunk'   # later in a compound: left to the permission lists
-end_scenario
+  end_scenario
+}
+scenario_mentions
 
-begin_scenario 'reads are approved'
+scenario_reads() {
+  begin_scenario 'reads are approved' || return 0
 expect allow 'gh api repos/{owner}/{repo}/pulls/5/comments'
 expect allow "gh api repos/acme/widgets/pulls/5/comments --paginate --jq '.[] | {path, line, body: .body}'"
 expect allow "gh api 'repos/acme/widgets/pulls?state=open&per_page=100'"
@@ -168,9 +172,12 @@ expect allow 'gh pr diff 5 --name-only'
 expect allow 'gh pr checks'
 expect allow 'gh pr list --author @me'
 expect allow 'gh pr status'
-end_scenario
+  end_scenario
+}
+scenario_reads
 
-begin_scenario 'anything that is not one clean command is denied'
+scenario_compound_commands() {
+  begin_scenario 'anything that is not one clean command is denied' || return 0
 expect deny "gh api repos/acme/widgets/pulls/5/comments | jq '.[].body'" '--jq'
 expect deny 'gh api repos/acme/widgets/pulls/5/comments > comments.json' 'one simple command'
 expect deny 'gh api user; rm -rf ~'
@@ -206,9 +213,12 @@ assert_eq 'a NUL in the command' deny "$(guard_payload \
 # …and inside quotes, where no segment rule would have refused it: any control character is a denial.
 assert_eq 'a control character inside quotes' deny "$(guard_payload \
   "{\"tool_input\":{\"command\":\"gh api user -q '.login\\u0007'\"},\"cwd\":\"$W\"}")"
-end_scenario
+  end_scenario
+}
+scenario_compound_commands
 
-begin_scenario 'gh api: comments, reviews and own edits in this repository'
+scenario_api_comments() {
+  begin_scenario 'gh api: comments, reviews and own edits in this repository' || return 0
 expect allow "gh api -X POST repos/{owner}/{repo}/pulls/5/comments/123/replies -f body='Fixed in 1a2b3c'"
 expect allow "gh api repos/acme/widgets/pulls/5/comments -f body='nit: rename' -f commit_id=abc123 -f path=src/a.ts -F line=12 -f side=RIGHT"
 expect allow 'gh api --method POST /repos/Acme/Widgets/pulls/5/comments/1/replies -f body=ok'
@@ -245,9 +255,12 @@ expect deny 'gh api -X PUT repos/acme/widgets/pulls/5/merge'
 expect deny 'gh api -X DELETE repos/acme/widgets/git/refs/heads/trunk'
 expect deny 'gh api -X post repos/acme/widgets/pulls/5/comments/1/replies -f body=x'
 expect deny 'gh api -X POST user/repos -f name=x'
-end_scenario
+  end_scenario
+}
+scenario_api_comments
 
-begin_scenario 'gh api: issues are opened, commented on and, when this login opened them, edited'
+scenario_api_issues() {
+  begin_scenario 'gh api: issues are opened, commented on and, when this login opened them, edited' || return 0
 expect allow "gh api repos/acme/widgets/issues -f title='Flaky test' -f body='Seen twice on trunk.' -f 'labels[]=bug' -f 'assignees[]=me' -F milestone=2" \
   'a new issue in this repository'
 expect allow "gh api -X POST repos/{owner}/{repo}/issues -f title='Flaky test'"
@@ -260,9 +273,12 @@ expect deny 'gh api -X PATCH repos/acme/widgets/issues/5 -f title=x' 'who wrote'
 expect deny 'gh api -X POST repos/evil/other/issues -f title=x' 'its own issues and pull requests'
 expect deny 'gh api -X POST repos/acme/widgets/issues/12/labels -f "labels[]=x"' 'not an approved write'
 expect deny 'gh api -X PUT repos/acme/widgets/issues/12/lock' 'not an approved write'
-end_scenario
+  end_scenario
+}
+scenario_api_issues
 
-begin_scenario 'gh api graphql: resolving review threads, and no other mutation'
+scenario_graphql() {
+  begin_scenario 'gh api graphql: resolving review threads, and no other mutation' || return 0
 expect allow "gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: \"PRRT_kwDOA1\"}) { thread { isResolved } } }'"
 # shellcheck disable=SC2016
 expect allow "$(nl "gh api graphql -F threadId=PRRT_kwDOA1 -f query='" \
@@ -289,9 +305,12 @@ expect deny "gh api graphql -f query='mutation { resolveReviewThread(input: {thr
   'could not read'
 expect deny "gh api graphql -f query='{ viewer { login } }' -f query='mutation { deleteRef(input: {refId: \"x\"}) { clientMutationId } }'" \
   'exactly one'
-end_scenario
+  end_scenario
+}
+scenario_graphql
 
-begin_scenario 'gh pr comment, review and create, and wt pr'
+scenario_pull_requests() {
+  begin_scenario 'gh pr comment, review and create, and wt pr' || return 0
 expect allow "gh pr comment 5 --body 'Addressed in 1a2b3c: renamed the prop.'"
 expect allow "gh pr comment --body='Done'"
 expect allow "$(printf "gh pr comment 5 -b 'First line.\n\nSecond paragraph.'")"
@@ -348,9 +367,12 @@ expect deny 'wt pr' 'needs the task name'
 expect deny 'wt pr -r /elsewhere label-prop'
 expect deny 'wt pr label-prop -r' 'not approved'
 expect deny 'wt pr label-prop other'
-end_scenario
+  end_scenario
+}
+scenario_pull_requests
 
-begin_scenario 'gh issue view, create, comment and edit'
+scenario_issues() {
+  begin_scenario 'gh issue view, create, comment and edit' || return 0
 expect allow 'gh issue view 12 --comments'
 expect allow "gh issue list --label bug --json number,title --jq '.[].title'"
 expect allow 'gh issue status'
@@ -395,9 +417,12 @@ expect none 'gh issue delete 12 --yes'
 expect none 'gh issue transfer 12 evil/repo'
 expect deny "gh issue comment 12 --body x | cat" 'one simple command'
 expect deny "cd /tmp && gh issue create --title x --body y" 'cd'
-end_scenario
+  end_scenario
+}
+scenario_issues
 
-begin_scenario 'gh writes only while gh itself points at this repository'
+scenario_repository_scope() {
+  begin_scenario 'gh writes only while gh itself points at this repository' || return 0
 GH_REPO=evil/other expect deny "gh api -X POST repos/{owner}/{repo}/issues/5/comments -f body=x" 'GH_REPO=evil/other'
 GH_REPO=evil/other expect deny 'gh api -X POST repos/acme/widgets/issues/5/comments -f body=x' 'GH_REPO'
 GH_REPO=evil/other expect deny 'gh pr comment 5 --body x' 'GH_REPO'
@@ -452,9 +477,12 @@ expect deny 'gh pr comment 5 --body x' 'set-default'
 git -C "$W" config remote.origin.gh-resolved base
 expect allow 'gh pr comment 5 --body x'
 git -C "$W" config --unset remote.origin.gh-resolved
-end_scenario
+  end_scenario
+}
+scenario_repository_scope
 
-begin_scenario 'git push: any branch but the default one, never forced'
+scenario_pushes() {
+  begin_scenario 'git push: any branch but the default one, never forced' || return 0
 : >"$TEST_ROOT/gh.log"
 expect allow 'git push origin HEAD' 'a push to wt/label-prop in acme/widgets'
 assert_grep 'the default branch is asked of GitHub' "$TEST_ROOT/gh.log" \
@@ -511,30 +539,36 @@ CWD="$TEST_ROOT/elsewhere" expect deny 'git push origin HEAD' 'not a remote'
 git -C "$W" checkout -q --detach
 expect deny 'git push origin HEAD' 'detached'
 git -C "$W" checkout -q wt/label-prop
-end_scenario
+  end_scenario
+}
+scenario_pushes
 
-begin_scenario 'a payload the guard cannot read gets no answer, never a block'
+scenario_unreadable_payload() {
+  begin_scenario 'a payload the guard cannot read gets no answer, never a block' || return 0
 assert_eq 'empty payload' none "$(guard_payload '')"
 assert_eq 'not JSON' none "$(guard_payload 'gh api user')"
 assert_eq 'no command' none "$(guard_payload '{"tool_input": {}}')"
-end_scenario
+  end_scenario
+}
+scenario_unreadable_payload
 
 # The guard needs bash 5. With no bash 5 to start, it must still exit 0 with no answer, so that it blocks
 # nothing. Only a Mac has an older /bin/bash, and only bin/github-guard has the prologue, so the scenario runs
 # only there. WORKGROVE_REEXEC=1 makes the prologue act as if no bash 5 existed.
-begin_scenario 'a guard that cannot start bash 5 gives no answer, never a block'
-OLD_BASH_ASSERTIONS=0
+scenario_missing_bash5() {
 # shellcheck disable=SC2016   # $BASH_VERSINFO is for /bin/bash to expand, not this one
-if [[ $GUARD == "$REPO/bin/github-guard" && $(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"') -lt 5 ]]; then
-  OLD_BASH_ASSERTIONS=1
+[[ $GUARD == "$REPO/bin/github-guard" && $(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"') -lt 5 ]] || return 0
+  begin_scenario 'a guard that cannot start bash 5 gives no answer, never a block' || return 0
   rc=0
   out=$(jq -cn --arg d "$CWD" '{tool_input: {command: "git push origin HEAD"}, cwd: $d}' \
           | env WORKGROVE_REEXEC=1 HOME="$TEST_ROOT/home" PATH="$TEST_ROOT/bin:$PATH" /bin/bash "$GUARD" 2>&1) || rc=$?
   assert_eq 'exit status and output without bash 5' 'exit 0, no output' "exit $rc, ${out:-no output}"
-fi
-end_scenario
+  end_scenario
+}
+scenario_missing_bash5
 
-begin_scenario 'settings.base.json wires the guard and leaves nothing that would override it'
+scenario_settings() {
+  begin_scenario 'settings.base.json wires the guard and leaves nothing that would override it' || return 0
 S="$REPO/home/.claude/settings.base.json"
 # shellcheck disable=SC2088   # the literal string settings.json holds; sh -c expands it, this file must not
 assert_eq 'PreToolUse runs the guard before every Bash command' '~/.local/bin/github-guard' \
@@ -546,6 +580,8 @@ assert_eq 'gh repo create stays denied' 'true' \
   "$(jq -r '.permissions.deny | index("Bash(gh repo create *)") != null' "$S")"
 assert_eq 'install.sh links the guard' 'yes' \
   "$(grep -Eq '^  for b in .*github-guard' "$REPO/install.sh" && echo yes || echo no)"
-end_scenario
+  end_scenario
+}
+scenario_settings
 
-lib_summary $((454 + OLD_BASH_ASSERTIONS))
+lib_summary

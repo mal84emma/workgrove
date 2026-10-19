@@ -41,7 +41,7 @@ git -C "$TEST_ROOT/project" worktree add -qb wt/task "$TEST_ROOT/project/.worktr
 
 test_require_wt() {
   local REPO="$TEST_ROOT/project" n=unchanged branch=unchanged
-  begin_scenario 'worktree outputs can use an internal local name'
+  begin_scenario 'worktree outputs can use an internal local name' || return 0
   if require_wt task n branch; then pass; else fail 'require_wt failed'; fi
   assert_eq 'the caller receives its path' "$TEST_ROOT/project/.worktrees/task" "$n"
   assert_eq 'the caller receives its branch' wt/task "$branch"
@@ -51,7 +51,7 @@ test_require_wt
 
 test_branch_landed() {
   local REPO="$TEST_ROOT/project" b=unchanged status=0
-  begin_scenario 'branch reasons can use an internal local name'
+  begin_scenario 'branch reasons can use an internal local name' || return 0
   branch_landed missing main b || status=$?
   assert_eq 'a missing branch fails the check' 1 "$status"
   assert_eq 'the caller receives the branch reason' 'missing has no common history with main' "$b"
@@ -63,7 +63,7 @@ test_rm_reasons() {
   local REPO="$TEST_ROOT/project" path="$TEST_ROOT/project/.worktrees/task"
   local dirty=(old)
   meta_get() { return 1; }
-  begin_scenario 'removal reasons fill and clear a caller array'
+  begin_scenario 'removal reasons fill and clear a caller array' || return 0
   printf 'unsaved\n' >"$path/scratch.txt"
   rm_reasons task "$path" wt/task missing dirty >"$TEST_ROOT/reasons-stdout"
   assert_eq 'the caller receives two reasons' 2 "${#dirty[@]}"
@@ -81,7 +81,7 @@ test_check_row_removal() {
   local c=unchanged id=unchanged ROW_AGENT=''
   rows_json() { printf '%s\n' '{"workspaces":[{"id":"row-1","title":"task","description":"@local · project"}]}'; }
   row_agent() { ROW_AGENT=self; }
-  begin_scenario 'row outputs can use internal local names'
+  begin_scenario 'row outputs can use internal local names' || return 0
   if check_row_removal task /repo/project c id; then pass; else fail 'check_row_removal failed'; fi
   assert_eq 'the caller receives its row' row-1 "$c"
   assert_eq 'the caller receives its ownership marker' self "$id"
@@ -96,7 +96,7 @@ test_row_shell_prompt() {
   row_remote_field() { printf connected; }
   vm_session_detached() { printf '%s' "$1" >"$TEST_ROOT/detached-host"; }
   send_tmux_line() { printf '%s|%s' "$1" "$2" >"$TEST_ROOT/sent-line"; }
-  begin_scenario 'screen and forwarded outputs can use internal local names'
+  begin_scenario 'screen and forwarded outputs can use internal local names' || return 0
   printf 'tester@machine %%\n' >"$NAMED_SCREEN"
   if row_shell_prompt row-1 screen; then pass; else fail 'row_shell_prompt failed'; fi
   assert_eq 'the caller receives the last screen line' 'tester@machine %' "$screen"
@@ -123,7 +123,7 @@ test_relay_env() {
   local -x CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   local value=unchanged native_terminal=unchanged socket=unchanged
   local identity=() relay_vars=(unchanged)
-  begin_scenario 'relay scalar and array outputs can use internal local names'
+  begin_scenario 'relay scalar and array outputs can use internal local names' || return 0
   if relay_env identity value native_terminal; then pass; else fail 'scalar relay output failed'; fi
   assert_eq 'the caller receives its scalar socket' /tmp/native "$value"
   assert_eq 'the caller receives its native terminal' term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$native_terminal"
@@ -135,4 +135,4 @@ test_relay_env() {
 }
 test_relay_env
 
-lib_summary 31
+lib_summary
