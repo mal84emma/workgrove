@@ -1925,7 +1925,7 @@ scenario_host_args() {
   # complaint about the argument that it asks about.
   for sub in attach open rm new; do
     assert_wt_ok "wt -H $h $sub -h prints usage" -H "$h" "$sub" -h
-    assert_has "…the usage, locally" "$WT_OUT" "wt new  [name]"
+    assert_has "…the command usage, locally" "$WT_OUT" "wt $sub"
   done
   end_scenario
 }

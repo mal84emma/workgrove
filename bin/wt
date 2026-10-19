@@ -5,6 +5,8 @@
 # Every command is safe to run from the main checkout or from inside any worktree.
 #
 # Usage:
+#   Use -- to end options. Give valued long options as --option=value or --option value.
+#   Use wt <command> -h for that command's help.
 #   wt new  [name] [-p|--prompt TEXT] [--prompt-stdin] [-b|--base REF] [--head]
 #           [-a|--agent claude|codex|none] [-m|--model MODEL] [--no-workspace] [-r|--repo PATH]
 #                                                             create a worktree and a cmux row that runs `wt run`.
@@ -47,9 +49,11 @@
 #   wt driver                                                 open (or select) the driver row (@local)
 #   wt update [--refresh-config]                              show what git pull would bring in. After you confirm,
 #                                                             wt pulls this repo and re-runs install.sh
-#   wt path <name> [-r PATH] | wt current | wt help
+#   wt path <name> [-r PATH]
+#   wt current
+#   wt help
 #
-#   wt -H <host> <new|attach|list|show|rm|path|open|repos|update|help> …
+#   @WT_REMOTE_USAGE@
 #                                                             run wt on that VM over ssh. The cmux row stays local.
 #                                                             show, rm, path, open and attach need -r.
 #                                                             new --no-workspace leaves the VM task unstarted.
@@ -61,6 +65,9 @@
 #                                                             focus, paste and extended-key terminal modes.
 #                                                             Otherwise, use --reattach.
 #                                                             --restart-agent starts over.
+#                                                             With -H, attach rejects -a/--agent and -p/--prompt.
+#                                                             Direct attach rejects --reattach and --restart-agent.
+#                                                             Direct attach can run on the Mac or inside a VM.
 #                                                             update asks you to confirm here, so run it from a terminal
 #
 # Where it runs: on the Mac, wt drives cmux directly. On a VM (see is_remote), wt only prepares worktrees and
@@ -167,24 +174,29 @@ if ! source "$WG_LIB_DIR/picker.sh" 2>/dev/null; then
   exit 1
 fi
 
+usage() { wt_usage; }
+
+cmd_help() { usage; }
+cmd_diff() {
+  [[ $# -gt 0 ]] || die "diff: worktree name required"
+  local WT_HELP_COMMAND=diff
+  cmd_show --diff "$@"
+}
+
 # ---------------------------------------------------------------- commands
 cmd_new() {
   local name="" prompt="" stdin_prompt=0 base="" from_head=0 agent="$DEFAULT_AGENT" model="" workspace=1 repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -p|--prompt) [[ $# -ge 2 ]] || die "new: $1 needs a brief"; prompt="$2"; shift 2 ;;
-      --prompt-stdin) stdin_prompt=1; shift ;;
-      -b|--base) [[ $# -ge 2 ]] || die "new: $1 needs a ref"; base="$2"; shift 2 ;;
-      --head) from_head=1; shift ;;
-      -a|--agent) [[ $# -ge 2 ]] || die "new: $1 needs an agent"; agent="$2"; shift 2 ;;
-      -m|--model) [[ $# -ge 2 ]] || die "new: $1 needs a model"; need_model "$2"; model="$2"; shift 2 ;;
-      --no-workspace) workspace=0; shift ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "new: $1 needs a repo"; repo="$2"; shift 2 ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "new: unknown option $1" ;;
-      *) if [[ -z "$name" ]]; then name="$1"; else die "new: unexpected argument $1"; fi; shift ;;
-    esac
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec new)" opts "$@"
+  name=${opts[name]-$name}
+  prompt=${opts[prompt]-$prompt}
+  stdin_prompt=${opts[stdin_prompt]-$stdin_prompt}
+  base=${opts[base]-$base}
+  from_head=${opts[from_head]-$from_head}
+  agent=${opts[agent]-$agent}
+  model=${opts[model]-$model}
+  workspace=${opts[workspace]-$workspace}
+  repo=${opts[repo]-$repo}
   if [[ $stdin_prompt -eq 1 ]]; then IFS= read -r -d '' prompt || true; fi
   resolve_repo "$repo"
   name=$(tidy_name "$name")
@@ -257,15 +269,10 @@ cmd_new() {
 
 cmd_run() { # run the task's agent here; cmux types this into the row's shell, which stays after the agent exits
   local name="" repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -r|--repo) [[ $# -ge 2 ]] || die "run: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "run: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "run: unexpected argument $1"; name="$1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec run)" opts "$@"
+  name=${opts[name]-$name}
+  repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "run: worktree name required (wt run <name> -r <repo>)"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "run"
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac
@@ -327,15 +334,10 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
 
 cmd_list() {
   local all=0 repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --all) all=1 ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "list: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      *) die "list: unknown option $1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec list)" opts "$@"
+  all=${opts[all]-$all}
+  repo=${opts[repo]-$repo}
   local repos=()
   if [[ $all -eq 1 ]]; then
     need_repos_dir
@@ -360,16 +362,11 @@ cmd_list() {
 
 cmd_show() {
   local name="" diff=0 repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --diff) diff=1 ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "show: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "show: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "show: unexpected argument $1"; name="$1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec show)" opts "$@"
+  name=${opts[name]-$name}
+  diff=${opts[diff]-$diff}
+  repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "show: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "show"
   IFS="$WT_FS" read -r nn br base ah be di last mg why <<<"$(wt_status_line "$name")"
@@ -402,15 +399,10 @@ cmd_show() {
 
 cmd_open() { # wt open [name] [-r PATH] — no name: the worktree holding $PWD
   local name="" repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -r|--repo) [[ $# -ge 2 ]] || die "open: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "open: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "open: unexpected argument $1"; name="$1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec open)" opts "$@"
+  name=${opts[name]-$name}
+  repo=${opts[repo]-$repo}
   if [[ -n "$name" ]]; then
     resolve_repo "$repo"
   else
@@ -426,17 +418,12 @@ cmd_open() { # wt open [name] [-r PATH] — no name: the worktree holding $PWD
 
 cmd_attach() {
   local name="" agent="" prompt="" repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -a|--agent) [[ $# -ge 2 ]] || die "attach: $1 needs an agent"; agent="$2"; shift ;;
-      -p|--prompt) [[ $# -ge 2 ]] || die "attach: $1 needs a brief"; prompt="$2"; shift ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "attach: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "attach: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "attach: unexpected argument $1"; name="$1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec attach)" opts "$@"
+  name=${opts[name]-$name}
+  agent=${opts[agent]-$agent}
+  prompt=${opts[prompt]-$prompt}
+  repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "attach: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "attach"
   if [[ -n "$agent" ]]; then
@@ -456,16 +443,11 @@ cmd_attach() {
 
 cmd_sync() {
   local name="" merge=0 repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --merge) merge=1 ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "sync: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "sync: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "sync: unexpected argument $1"; name="$1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec sync)" opts "$@"
+  name=${opts[name]-$name}
+  merge=${opts[merge]-$merge}
+  repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "sync: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "sync"
   local base; base=$(meta_get "$name" base 2>/dev/null || true); [[ -n "$base" ]] || base=$(default_base)
@@ -477,16 +459,11 @@ cmd_sync() {
 
 cmd_pr() {
   local name="" draft=() repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --draft) draft=(--draft) ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "pr: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "pr: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "pr: unexpected argument $1"; name="$1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec pr)" opts "$@"
+  name=${opts[name]-$name}
+  repo=${opts[repo]-$repo}
+  [[ ${opts[draft_flag]:-0} == 0 ]] || draft=(--draft)
   [[ -n "$name" ]] || die "pr: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "pr"; have gh || die "gh not installed"
   [[ -z "$(git -C "$path" status --porcelain)" ]] || die "worktree has uncommitted changes; commit first"
@@ -498,18 +475,13 @@ cmd_pr() {
 cmd_rm() {
   local discard_commits=0
   local name="" force=0 keep=0 repo="" self_remote=0 host="" session="" title="" native=0
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --force|-f) force=1 ;;
-      --keep-branch) keep=1 ;;
-      --discard-commits) discard_commits=1 ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "rm: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec rm)" opts "$@"
+  name=${opts[name]-$name}
+  force=${opts[force]-$force}
+  keep=${opts[keep]-$keep}
+  discard_commits=${opts[discard_commits]-$discard_commits}
+  repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "rm: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "rm"
   local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
@@ -614,15 +586,10 @@ cmd_rm() {
 
 cmd_prune() {
   local dry=0 repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --dry-run|-n) dry=1 ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "prune: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      *) die "prune: unknown option $1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec prune)" opts "$@"
+  dry=${opts[dry]-$dry}
+  repo=${opts[repo]-$repo}
   resolve_repo "$repo"
   local names n p base why
   local reasons=()
@@ -642,33 +609,25 @@ cmd_prune() {
 
 cmd_path() {
   local name="" repo=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -r|--repo) [[ $# -ge 2 ]] || die "path: $1 needs a repo"; repo="$2"; shift ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "path: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "path: unexpected argument $1"; name="$1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec path)" opts "$@"
+  name=${opts[name]-$name}
+  repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "path: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "path"; printf '%s\n' "$path"
   wt_result path found "$name" "$REPO"
 }
+# The table dispatcher passes arguments; the picker intentionally passes none.
+# shellcheck disable=SC2120
 cmd_repos()   { # wt repos [<name>] [--porcelain|--table]. No name: list every repo. Print a table (name, number
                 # of task worktrees, location) when stdout is a terminal, or with --table; `wt -H <host> repos`
                 # asks a VM for a table that way. Print "<name><tab><path>" per repo (the task picker's two
                 # columns) when piped or with --porcelain. A name or path: only that repo's path (also over ssh).
   local mode="" name=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -h|--help) usage; exit 0 ;;
-      --porcelain|--table) mode="${1#--}" ;;
-      -*) die "repos: unknown option $1 (wt repos [<name>] [--porcelain|--table])" ;;
-      *) [[ -z "$name" ]] || die "repos: one name at most (wt repos [<name>])"; name="$1" ;;   # the one resolution rule
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec repos)" opts "$@"
+  name=${opts[name]-$name}
+  mode=${opts[mode]-$mode}
   if [[ -n "$name" ]]; then lookup_repo "$name"; printf '%s\n' "$REPO"; return 0; fi
   need_repos_dir
   if [[ -z "$mode" ]]; then if [[ -t 1 ]]; then mode=table; else mode=porcelain; fi; fi
@@ -681,12 +640,8 @@ cmd_repos()   { # wt repos [<name>] [--porcelain|--table]. No name: list every r
   done < <(repo_dirs) | repo_menu table
 }
 cmd_current() {
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -h|--help) usage; exit 0 ;;
-      *) die "current: unexpected argument $1 (wt current takes none)" ;;
-    esac
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec current)" opts "$@"
   local root common
   root=$(git rev-parse --show-toplevel 2>/dev/null) || die "not in a git repo"
   common=$(main_root_of "$PWD") || die "not in a git repo"
@@ -697,12 +652,8 @@ cmd_current() {
 # ---------------------------------------------------------------- driver and self-update
 cmd_driver() { # the driver session, which starts tasks; its cwd is a repos folder, so `wt new` there needs -r
   # parse the args, do not ignore them: `wt driver -h` once created or selected the row instead of printing usage
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -h|--help) usage; exit 0 ;;
-      *) die "driver: unexpected argument $1 (wt driver takes none)" ;;
-    esac
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec driver)" opts "$@"
   mac_only driver
   cmux_ok || die "cmux is not running; start cmux, then: wt driver"
   local id out cwd
@@ -723,14 +674,9 @@ cmd_update() { # pull this repo and re-run its installer
   # Forward install.sh's own flags; do not reject them. The opt-ins are sticky, so a plain update keeps what
   # this machine chose. But a user must be able to opt IN later through the command that the docs name.
   local pass=()
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --refresh-config|--opinionated-config|--with-*) pass+=("$1") ;;
-      -h|--help) usage; exit 0 ;;
-      *) die "update: unknown option $1" ;;
-    esac
-    shift
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec update)" opts "$@"
+  wt_opt_args opts pass
   local s="$0" dir
   if [[ -L "$s" ]]; then s=$(readlink "$s"); fi            # ~/.local/bin/wt -> <repo>/bin/wt
   [[ "$s" == /* ]] || s="$(dirname "$0")/$s"
@@ -757,46 +703,26 @@ cmd_update() { # pull this repo and re-run its installer
 }
 
 cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac caches nothing about VMs
-  local host="$1" sub="${2:-}" args=() v scoped=0; shift 2
+  local host="$1" sub="${2:-}" args=(); shift 2
   valid_host "$host" || die "invalid host '$host' (an ssh alias: letters, digits, '.', '_' and '-')"
-  while [[ $# -gt 0 ]]; do   # normalize -r once: a trailing '/' would change repo_id, and so the identity
-    case "$1" in
-      -r|--repo) [[ $# -ge 2 ]] || die "$sub: $1 needs a repo"; v="$2"; while [[ "$v" == */ && "$v" != / ]]; do v="${v%/}"; done
-                 # a relative path means nothing on the VM, and its basename is not the repo's. host_rm would
-                 # then look for a row of repo '-' ('.' -> '-') and close a row that does not exist
-                 case "$v" in /*) ;; ""|.|..|*/*) die "$sub: -r must be an absolute path on $host, or a repo name there (wt -H $host repos lists them)" ;; esac
-                 args+=("$1" "$v"); shift 2 ;;
-      *) args+=("$1"); shift ;;
-    esac
-  done
+  wt_command "$sub" && [[ $WT_REMOTE != local ]] \
+    || die "wt -H: '$sub' does not run remotely ($(wt_remote_commands ' '))"
+  sub=$WT_COMMAND
+  wt_remote_args "$host" "$sub" args "$@"
   set -- "${args[@]}"
-  case "$sub" in
-    new)       host_new "$host" "$@" ;;
-    attach)    need_r "$host" "$sub" "$@"; host_attach "$host" "$@" ;;
-    open)      need_r "$host" "$sub" "$@"; host_open "$host" "$@" ;;
-    rm)        need_r "$host" "$sub" "$@"; host_rm "$host" "$@" ;;
-    list)      for v in "$@"; do case "$v" in -r|--repo) scoped=1 ;; esac; done
-               if [[ $scoped -eq 1 ]]; then remote_wt "$host" list "$@"
-               else remote_wt "$host" list --all "$@"; fi ;;
-    show|path) need_r "$host" "$sub" "$@"; remote_wt "$host" "$sub" "$@" ;;
-    repos)     if [[ -t 1 ]]; then case " $* " in *" --porcelain "*|*" --table "*) ;; *) set -- "$@" --table ;; esac; fi
-               remote_wt "$host" repos "$@" ;;     # ssh gives the VM no terminal, so ask for the table explicitly
-    update)    remote_wt_tty "$host" "$sub" "$@" ;;   # the VM asks before it installs, so it needs a terminal
-    help)      remote_wt "$host" "$sub" "$@" ;;
-    *) die "wt -H: '$sub' does not run remotely (new attach list show rm path open repos update help)" ;;
+  case "$WT_REMOTE" in
+    forward) remote_wt "$host" "$sub" "$@" ;;
+    'forward with -r') need_r "$host" "$sub" "$@"; remote_wt "$host" "$sub" "$@" ;;
+    host_*) "$WT_REMOTE" "$host" "$@" ;;
   esac
 }
 
 cmd_hosts() {
-  mac_only hosts
   local format=table records host f pid failed=0 files=() pids=()
-  case "${1:-}" in
-    "") ;;
-    --json) format=json; shift ;;
-    -h|--help) usage; return 0 ;;
-    *) die "hosts: usage: wt hosts [--json]" ;;
-  esac
-  [[ $# -eq 0 ]] || die "hosts: usage: wt hosts [--json]"
+  local -A opts=()
+  wt_opts "$(wt_spec hosts)" opts "$@"
+  format=${opts[format]-$format}
+  mac_only hosts
   while IFS= read -r host; do
     f=$(mktemp "${TMPDIR:-/tmp}/wt-host-record.XXXXXX") || die "hosts: could not create a temporary file"
     files+=("$f")
@@ -829,19 +755,16 @@ cmd_hosts() {
 }
 
 cmd_task() {
-  mac_only task
   local where="" kind="" repo="" name="" brief="" asked=1 id out
   local args=()
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --where) [[ $# -ge 2 ]] || die "task: $1 needs local or a host"; where="$2"; shift 2 ;;
-      -a|--agent) [[ $# -ge 2 ]] || die "task: $1 needs a kind"; kind="$2"; shift 2 ;;
-      -r|--repo) [[ $# -ge 2 ]] || die "task: $1 needs a repo"; repo="$2"; shift 2 ;;
-      -p|--prompt) [[ $# -ge 2 ]] || die "task: $1 needs a brief"; brief="$2"; asked=0; shift 2 ;;
-      -h|--help) usage; exit 0 ;;
-      *) die "task: unknown option $1" ;;
-    esac
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec task)" opts "$@"
+  where=${opts[where]-$where}
+  kind=${opts[kind]-$kind}
+  repo=${opts[repo]-$repo}
+  brief=${opts[brief]-$brief}
+  [[ ! -v opts[brief] ]] || asked=0
+  mac_only task
   on_exit task_exit
   have fzf || die "fzf not found (brew install fzf)"
 
@@ -866,6 +789,7 @@ cmd_task() {
   if [[ "$kind" != vm-shell && -z "$repo" ]]; then
     local list sel                               # "<name><tab><path>": two folders can hold the same basename,
     if [[ "$where" == local ]]; then             # so the path column, not the name, starts the task
+      # shellcheck disable=SC2119
       list=$(cmd_repos) || exit 1                # cmd_repos has already said what is wrong; do not repeat it
       [[ -n "$list" ]] || die "task: no repos in WT_REPOS_DIR ($REPOS_PATH); clone one, or pass -r <path>"
     else
@@ -912,6 +836,8 @@ cmd_task() {
 # silently becomes default_base(), the base that `wt rm` then judges "not merged" against. Or it can fail
 # halfway through `wt new`, after `git worktree add` has already registered a worktree. So refuse up front,
 # but keep `wt help` readable, so that the line that fixes the problem is still one command away.
+if [[ ${1:-} == --host=* ]]; then set -- --host "${1#*=}" "${@:2}"; fi
+if [[ ${1:-} == -- ]]; then shift; fi
 if [[ "${1:-}" == -H || "${1:-}" == --host ]]; then
   [[ $# -ge 3 ]] || die "usage: wt -H <host> <command> [args] (wt help)"
   host="$2"; shift 2
@@ -921,26 +847,5 @@ if [[ "${1:-}" == -H || "${1:-}" == --host ]]; then
 fi
 sub="${1:-help}"; shift || true
 case "$sub" in help|-h|--help) ;; *) need_jq ;; esac
-case "$sub" in
-  new)      cmd_new "$@" ;;
-  run)      cmd_run "$@" ;;
-  list|ls)  cmd_list "$@" ;;
-  show)     cmd_show "$@" ;;
-  open)     cmd_open "$@" ;;
-  diff)     [[ $# -gt 0 ]] || die "diff: worktree name required"; cmd_show "$@" --diff ;;   # appended, never
-                                                                  # spliced: "-r <path> <name>" starts with -r
-  attach)   cmd_attach "$@" ;;
-  sync)     cmd_sync "$@" ;;
-  pr)       cmd_pr "$@" ;;
-  rm|remove) cmd_rm "$@" ;;
-  prune)    cmd_prune "$@" ;;
-  path)     cmd_path "$@" ;;
-  repos)    cmd_repos "$@" ;;
-  hosts)    cmd_hosts "$@" ;;
-  task)     cmd_task "$@" ;;
-  driver)   cmd_driver "$@" ;;
-  update)   cmd_update "$@" ;;
-  current|cur) cmd_current "$@" ;;
-  help|-h|--help) usage ;;
-  *) die "unknown command '$sub' (wt help)" ;;
-esac
+wt_command "$sub" || die "unknown command '$sub' (wt help)"
+"cmd_$WT_COMMAND" "$@"

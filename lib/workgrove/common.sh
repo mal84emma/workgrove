@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
 #   WG_COMMON_LOADED, WG_PREFIX.
-# Requires no functions from other modules. Loads cmux.sh and task.sh.
+# Requires no functions from other modules. Loads cmux.sh, task.sh, and options.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
 # This file needs bash 5. Bash reads a sourced file one command at a time, so an older bash returns at
@@ -41,6 +41,9 @@ wg_on_exit() {
 
 # shellcheck source=lib/workgrove/task.sh
 source "${BASH_SOURCE[0]%/*}/task.sh" || return
+
+# shellcheck source=lib/workgrove/options.sh
+source "${BASH_SOURCE[0]%/*}/options.sh" || return
 
 # Prefix all internal locals with __ in functions that accept or forward output variable names.
 # This includes local -n references. Callers must not use __ for output variables.

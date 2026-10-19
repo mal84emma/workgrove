@@ -142,6 +142,8 @@ If you must change one, update every file that cites it in the same change.
 - Do not change lines 2–121 of `home/.zshrc`. They are the stock oh-my-zsh template, which is kept close
   to upstream so that upstream changes are easy to compare.
 - `usage()` in `bin/wt` and `bin/azml-ssh-host` prints the file's leading `#` block as the help text.
+  The `wt` renderer fills `@WT_REMOTE_USAGE@` from `WT_COMMANDS` in `lib/workgrove/options.sh`.
+  Command help selects that command's lines from the rendered block.
   Keep that block contiguous, and keep the syntax and alignment of each usage line.
   `test/wt-smoke.sh` checks for the text `wt new  [name]`, with two spaces.
 

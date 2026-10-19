@@ -3,6 +3,7 @@
 # Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
 # Requires common.sh: die, hook_safe_path, row_title, shell_join, tmux_cmd, usage, valid_name, warn,
 #   wt_read_result, wt_session.
+# Requires options.sh: wt_opt_args, wt_opts, wt_spec.
 # Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent.
 # ---------------------------------------------------------------- wt -H <host> …
 remote_sh_raw() { # keep SSH's exit status intact for callers that must tell a refusal from a dropped connection
@@ -43,18 +44,30 @@ remote_row() { # remote_row <host> <session> <title> <repo> <command> [shared] [
 }
 
 need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer the repo from, so -r is required.
-  # This tests presence only. cmd_host has already normalized the value and refused an empty, relative,
-  # '.' or '..' one. So nothing is left here that a command would have rejected for itself.
-  # -h wins over the requirement. A question about what a command takes must get an answer, not a complaint
-  # that an argument it asks about is missing. Each command's own parser then handles -h.
-  local host="$1" sub="$2" a; shift 2
-  for a in "$@"; do
-    case "$a" in
-      -h|--help) return 0 ;;
-      -r|--repo) return 0 ;;
-    esac
-  done
+  local host="$1" sub="$2"; shift 2
+  local -A opts=()
+  wt_opts "$(wt_spec "$sub" remote)" opts "$@"
+  [[ ! -v opts[repo] ]] || return 0
   die "$sub: -r <repo> is required with -H (wt -H $host repos lists them)"
+}
+
+# Normalize every repository value before forwarding or using it as a row identity.
+wt_remote_args() {
+  local __host=$1 __sub=$2 __output=$3 __i __value
+  shift 3
+  local -A __parsed=()
+  wt_opts "$(wt_spec "$__sub" remote)" __parsed "$@"
+  for ((__i=0; __i<${__parsed[@count]}; __i++)); do
+    [[ ${__parsed[@key:$__i]} == repo ]] || continue
+    __value=${__parsed[@value:$__i]}
+    while [[ $__value == */ && $__value != / ]]; do __value=${__value%/}; done
+    case "$__value" in
+      /*) ;;
+      ""|.|..|*/*) die "$__sub: -r must be an absolute path on $__host, or a repo name there (wt -H $__host repos lists them)" ;;
+    esac
+    __parsed[@value:$__i]=$__value
+  done
+  wt_opt_args __parsed "$__output"
 }
 
 host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
@@ -65,17 +78,20 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   local host="$1" prompt="" repo_request="" requested_agent="" inspect="" no_workspace=0 args=(); shift
   # Consume both ways of giving a brief HERE, and relay them the same way. A forwarded --prompt-stdin would
   # read nothing locally and pipe an empty prompt into ssh. The VM would then create the task with no brief.
-  while [[ $# -gt 0 ]]; do case "$1" in
-    -p|--prompt) [[ $# -ge 2 ]] || die "new: $1 needs a brief"; prompt="$2"; shift 2 ;;
-    --prompt-stdin) IFS= read -r -d '' prompt || true; shift ;;
-    -r|--repo) [[ $# -ge 2 ]] || die "new: $1 needs a repo"; repo_request="$2"; args+=("$1" "$2"); shift 2 ;;
-    -a|--agent) [[ $# -ge 2 ]] || die "new: $1 needs an agent"; requested_agent="$2"; valid_agent "$requested_agent"; args+=("$1" "$2"); shift 2 ;;
-    -m|--model) [[ $# -ge 2 ]] || die "new: $1 needs a model"; need_model "$2"; args+=("$1" "$2"); shift 2 ;;
-    --no-workspace) no_workspace=1; shift ;;
-    --model=*|-m?*) die "new: unknown option $1 (use -m <model>)" ;;
-    -h|--help) usage; exit 0 ;;
-    *) args+=("$1"); shift ;;
-  esac; done
+  local -A opts=()
+  wt_opts "$(wt_spec new remote)" opts "$@"
+  local i
+  for ((i=0; i<${opts[@count]}; i++)); do
+    case ${opts[@key:$i]} in
+      prompt) prompt=${opts[@value:$i]} ;;
+      stdin_prompt) IFS= read -r -d '' prompt || true ;;
+    esac
+  done
+  repo_request=${opts[repo]-$repo_request}
+  requested_agent=${opts[agent]-$requested_agent}
+  [[ ! -v opts[agent] ]] || valid_agent "$requested_agent"
+  [[ ${opts[workspace]:-1} == 1 ]] || no_workspace=1
+  wt_opt_args opts args prompt stdin_prompt workspace
   if [[ $no_workspace -eq 0 ]]; then
     cmux_ok || die "cmux is not running; start cmux before creating a task on $host"
   fi
@@ -83,7 +99,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   inspect="wt -H $host list"
   [[ -z "$repo_request" ]] || inspect+=" -r $(shell_join "$repo_request")"
   local out name repo session rc result result_rc=0
-  if out=$(printf '%s' "$prompt" | remote_wt_result_raw "$host" new "${args[@]}" --no-workspace --prompt-stdin 2>&1); then
+  if out=$(printf '%s' "$prompt" | remote_wt_result_raw "$host" new --no-workspace --prompt-stdin "${args[@]}" 2>&1); then
     :
   else
     rc=$?
@@ -138,14 +154,11 @@ agent_on_vm() { # agent_on_vm <host> <session> — use the Mac's checked probe, 
 
 host_open() { # VS Code Remote-SSH on a VM worktree
   local host="$1" name="" repo=""; shift
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -r|--repo) [[ $# -ge 2 ]] || die "open: $1 needs a repo"; repo="$2"; shift 2 ;;
-      -h|--help) usage; exit 0 ;;
-      -*) die "open: unknown option $1" ;;
-      *) [[ -z "$name" ]] || die "open: unexpected argument $1"; name="$1"; shift ;;
-    esac
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec open)" opts "$@"
+  name=${opts[name]-$name}
+  repo=${opts[repo]-$repo}
+  need_r "$host" open "$@"
   [[ -n "$name" ]] || die "open: worktree name required (wt -H $host open -r <repo> <name>)"
   local p; p=$(remote_wt "$host" path "$name" -r "$repo")
   hook_safe_path "$p" || die "open: refusing an unsafe path from $host ($p)"
@@ -154,14 +167,12 @@ host_open() { # VS Code Remote-SSH on a VM worktree
 
 host_rm() { # remove on the VM, close the row, then kill the session (closing first stops cmux recreating it)
   local host="$1" name="" repo="" args=(); shift
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -r|--repo) [[ $# -ge 2 ]] || die "rm: $1 needs a repo"; repo="$2"; shift 2 ;;
-      -h|--help) usage; exit 0 ;;
-      -*) args+=("$1"); shift ;;
-      *) [[ -z "$name" ]] || die "rm: unexpected argument $1"; name="$1"; shift ;;
-    esac
-  done
+  local -A opts=()
+  wt_opts "$(wt_spec rm)" opts "$@"
+  name=${opts[name]-$name}
+  repo=${opts[repo]-$repo}
+  need_r "$host" rm "$@"
+  wt_opt_args opts args
   [[ -n "$name" ]] || die "rm: worktree name required (wt -H $host rm -r <repo> <name>)"
   # The row's identity comes from -r. cmd_host has already refused -r unless it is an absolute path or
   # a plain repo name. A relative '.' or '..' would make repo_id '-', and close_row would close nothing.
@@ -175,7 +186,25 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
     1) ;;
     *) die "cannot check the agent in tmux session $session on $host; kept the worktree" ;;
   esac
-  remote_wt "$host" rm "$name" -r "$repo" "${args[@]}"
+  remote_wt "$host" rm "${args[@]}"
   cmux_require close_row "$(cmux_row_field "$title" "$repo" id "$host")"
   remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
 }
+
+host_list() {
+  local host=$1; shift
+  local -A opts=()
+  wt_opts "$(wt_spec list)" opts "$@"
+  if [[ -v opts[repo] ]]; then remote_wt "$host" list "$@"
+  else remote_wt "$host" list --all "$@"; fi
+}
+
+host_repos() {
+  local host=$1; shift
+  local -A opts=()
+  wt_opts "$(wt_spec repos)" opts "$@"
+  if [[ -t 1 && ! -v opts[mode] ]]; then set -- --table "$@"; fi
+  remote_wt "$host" repos "$@"
+}
+
+host_update() { remote_wt_tty "$1" update "${@:2}"; }

@@ -126,6 +126,7 @@ workgrove/
 │   └── workgrove/
 │       ├── common.sh          shared helpers that bin/wt, cmux-hook and agent-notify load
 │       ├── task.sh            repository context, sidecars, task identity, and cleanup
+│       ├── options.sh         wt command table, option parser, and command help
 │       ├── automation.sh      installer support for the native notification rule
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
@@ -455,6 +456,8 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   failure states, with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
+- **`bash test/options-smoke.sh`** checks command help, aliases, option values, repeated flags, and `--` boundaries.
+  It checks remote forwarding and command-table extension with scratch fixtures and no real SSH calls.
 - **`bash test/named-outputs-smoke.sh`** checks output variables whose names match internal locals, including arrays and forwarded outputs.
 - **`bash test/lib-smoke.sh`** checks the shared functions in `lib/workgrove/common.sh` and the scenario filter.
   It checks versioned task results, malformed records, duplicate records, and the text fallback.
@@ -559,6 +562,17 @@ steps to recover a VM row.
 | Clean up | `wt rm <name>`, `wt -H <vm> rm -r <repo> <name>`, `wt prune` |
 | Update a machine | `wt update`, `wt -H <vm> update`. Add `--refresh-config` only after you review a `.base` change |
 | Add an Azure ML compute instance | Run `azml-ssh-host add <instance>`, or say "add compute instance X to my ssh config". After that, the instance is a VM like any other ([docs/azml-compute.md](docs/azml-compute.md)) |
+
+Use `wt <command> -h` to show that command's help.
+Use `--` to end options before a positional argument.
+Valued long options accept both `--repo=PATH` and `--repo PATH`.
+Repeated options use their last value.
+
+Direct `wt attach` accepts `-a`/`--agent` and `-p`/`--prompt` to update the saved agent and brief.
+Direct invocation can run on the Mac or inside a VM.
+The `wt -H <vm> attach` form rejects those options.
+It accepts `--reattach` and `--restart-agent` for VM session recovery.
+Direct invocation rejects those recovery options.
 
 ### Task names
 
