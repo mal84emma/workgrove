@@ -91,7 +91,6 @@ scenario_native_identity
 
 scenario_reattachment() {
   begin_scenario 'reattachment replaces the previous transport and repeated requests survive content suppression' || return 0
-  eval "$(sed -n '/^notify_mac()/,/^}/p' "$REPO/bin/wt")"
   cmux_bin() { printf '%s' "$TEST_ROOT/bin/cmux"; }
   warn() { printf '%s\n' "$*" >&2; }
   export RELAY_STATE="$TEST_ROOT/session-env" RELAY_REQUESTS="$TEST_ROOT/requests.jsonl" RELAY_DELIVERED="$TEST_ROOT/delivered.jsonl"
@@ -295,14 +294,14 @@ scenario_notification_budget() {
 scenario_notification_budget
 
 setup_automation() {
-# Load only the merge function. Do not run install.sh or its main function.
-eval "$(sed -n '/^hook_cmux_automation()/,/^}/p' "$REPO/install.sh")"
-# shellcheck disable=SC2034  # read by the extracted installation function
+# shellcheck source=lib/workgrove/automation.sh
+source "$REPO/lib/workgrove/automation.sh"
+# shellcheck disable=SC2034  # read by the installation module
 OS=Darwin
-# shellcheck disable=SC2034  # read by the extracted installation function
+# shellcheck disable=SC2034  # read by the installation module
 R=$REPO
 BK="$TEST_ROOT/backup"
-# shellcheck disable=SC2034  # read by the extracted installation function
+# shellcheck disable=SC2034  # read by the installation module
 TMPFILES=()
 stash() { mkdir -p "$BK/$(dirname "${1#"$HOME"/}")"; mv "$1" "$BK/${1#"$HOME"/}"; }
 config="$HOME/.cmuxterm/automations.json"
@@ -330,7 +329,7 @@ scenario_automation_merge() {
   ln -s "$TEST_ROOT/managed.json" "$config"
   hook_cmux_automation >/dev/null
   assert_eq 'managed configuration keeps its symlink' "$TEST_ROOT/managed.json" "$(readlink "$config")"
-  # shellcheck disable=SC2034  # read by the extracted installation function
+  # shellcheck disable=SC2034  # read by the installation module
   OS=Linux
   rm "$config"
   hook_cmux_automation >/dev/null

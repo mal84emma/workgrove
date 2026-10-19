@@ -1,4 +1,9 @@
 # shellcheck shell=bash
+# Reads globals: CMUX_ROW_EXISTING, HOME, WG_LIB_DIR.
+# Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
+# Requires common.sh: die, hook_safe_path, row_title, shell_join, tmux_cmd, usage, valid_name, warn,
+#   wt_read_result, wt_session.
+# Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent.
 # ---------------------------------------------------------------- wt -H <host> …
 remote_sh_raw() { # keep SSH's exit status intact for callers that must tell a refusal from a dropped connection
   ssh -o BatchMode=yes -o ConnectTimeout=5 "$1" "$2"
@@ -173,35 +178,4 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   remote_wt "$host" rm "$name" -r "$repo" "${args[@]}"
   cmux_require close_row "$(cmux_row_field "$title" "$repo" id "$host")"
   remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
-}
-
-cmd_host() { # wt -H <host> <sub> … — a stateless ssh passthrough; the Mac caches nothing about VMs
-  local host="$1" sub="${2:-}" args=() v scoped=0; shift 2
-  valid_host "$host" || die "invalid host '$host' (an ssh alias: letters, digits, '.', '_' and '-')"
-  while [[ $# -gt 0 ]]; do   # normalize -r once: a trailing '/' would change repo_id, and so the identity
-    case "$1" in
-      -r|--repo) [[ $# -ge 2 ]] || die "$sub: $1 needs a repo"; v="$2"; while [[ "$v" == */ && "$v" != / ]]; do v="${v%/}"; done
-                 # a relative path means nothing on the VM, and its basename is not the repo's. host_rm would
-                 # then look for a row of repo '-' ('.' -> '-') and close a row that does not exist
-                 case "$v" in /*) ;; ""|.|..|*/*) die "$sub: -r must be an absolute path on $host, or a repo name there (wt -H $host repos lists them)" ;; esac
-                 args+=("$1" "$v"); shift 2 ;;
-      *) args+=("$1"); shift ;;
-    esac
-  done
-  set -- "${args[@]}"
-  case "$sub" in
-    new)       host_new "$host" "$@" ;;
-    attach)    need_r "$host" "$sub" "$@"; host_attach "$host" "$@" ;;
-    open)      need_r "$host" "$sub" "$@"; host_open "$host" "$@" ;;
-    rm)        need_r "$host" "$sub" "$@"; host_rm "$host" "$@" ;;
-    list)      for v in "$@"; do case "$v" in -r|--repo) scoped=1 ;; esac; done
-               if [[ $scoped -eq 1 ]]; then remote_wt "$host" list "$@"
-               else remote_wt "$host" list --all "$@"; fi ;;
-    show|path) need_r "$host" "$sub" "$@"; remote_wt "$host" "$sub" "$@" ;;
-    repos)     if [[ -t 1 ]]; then case " $* " in *" --porcelain "*|*" --table "*) ;; *) set -- "$@" --table ;; esac; fi
-               remote_wt "$host" repos "$@" ;;     # ssh gives the VM no terminal, so ask for the table explicitly
-    update)    remote_wt_tty "$host" "$sub" "$@" ;;   # the VM asks before it installs, so it needs a terminal
-    help)      remote_wt "$host" "$sub" "$@" ;;
-    *) die "wt -H: '$sub' does not run remotely (new attach list show rm path open repos update help)" ;;
-  esac
 }

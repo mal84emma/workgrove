@@ -1,13 +1,46 @@
 # shellcheck shell=bash
+# Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
+#   WG_COMMON_LOADED, WG_PREFIX.
+# Requires no functions from other modules. Loads cmux.sh and task.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
 # This file needs bash 5. Bash reads a sourced file one command at a time, so an older bash returns at
 # the next line before it parses the rest, and its source fails cleanly.
-# After the version check, this file loads the cmux adapter and defines shared functions.
+# After the version check, this file loads the cmux adapter and task core, and defines shared functions.
 # It sets no shell options, so it works under the "set -euo pipefail" of bin/wt and the "set -u" of the hooks.
 if ((BASH_VERSINFO[0] < 5)); then return 1; fi
+# Repeated loads must preserve registered cleanup callbacks and module state.
+if [[ ${WG_COMMON_LOADED:-0} == 1 ]]; then return 0; fi
+WT_FS=$'\x1f'   # the status line's field separator: git allows '|' in a branch name, and a base like
+                # 'feat|x' used to shift every field of the line right, so the branch column printed the base
+
 # shellcheck source=lib/workgrove/cmux.sh
 source "${BASH_SOURCE[0]%/*}/cmux.sh" || return
+
+die()  { printf '%s: %s\n' "${WG_PREFIX:-wt}" "$*" >&2; exit 1; }
+warn() { printf '%s: %s\n' "${WG_PREFIX:-wt}" "$*" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+usage() { awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; }
+shell_join() { local out="" a; for a in "$@"; do printf -v a '%q' "$a"; out="${out:+$out }$a"; done; printf '%s' "$out"; }
+need_jq() { have jq || die "jq not found (brew install jq, or sudo apt-get install -y jq)"; }
+
+# Each callback receives the original exit status, in registration order.
+WG_EXIT_HANDLERS=()
+on_exit() {
+  WG_EXIT_HANDLERS+=("$1")
+  trap 'wg_on_exit "$?"' EXIT
+}
+wg_on_exit() {
+  local handler
+  # Callbacks cannot change the positional arguments of this dispatcher.
+  for handler in "${WG_EXIT_HANDLERS[@]}"; do
+    "$handler" "$1" || true
+  done
+  return "$1"
+}
+
+# shellcheck source=lib/workgrove/task.sh
+source "${BASH_SOURCE[0]%/*}/task.sh" || return
 
 # Prefix all internal locals with __ in functions that accept or forward output variable names.
 # This includes local -n references. Callers must not use __ for output variables.
@@ -22,7 +55,7 @@ valid_host() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 hook_safe_path() { [[ "$1" == /* && "$1" != *$'\n'* && "$1" != *//* && "$1" != */ && "$1" != *'/../'* && "$1" != */.. && "$1" != *[\'\"\`\$\\\;]* ]]; }
 
 # Identity. bin/wt and bin/cmux-hook take a task's row title, repo id and tmux session from these functions.
-# A row's title tells which task it is. Its description (row_tag in bin/wt) tells which machine
+# A row's title tells which task it is. Its description (row_tag in task.sh) tells which machine
 # and which repo. Two repos can have tasks with the same name, so the title alone does not identify a row.
 # attach_row in bin/cmux-hook writes the description of the rows that it relays in the same format as
 # row_tag, so keep the two byte-compatible.
@@ -125,3 +158,5 @@ tmux_cmd() { # tmux_cmd <session> [command] [shared] [reinit]
     printf "for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=%s' \"\$v\" \"\$(printenv \"\$v\")\"; done; %sexec tmux attach -d -t '=%s'" "$1" "$native_mark" "$1"
   fi
 }
+
+WG_COMMON_LOADED=1

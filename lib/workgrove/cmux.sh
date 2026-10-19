@@ -1,4 +1,8 @@
 # shellcheck shell=bash
+# Reads globals: CMUX_BUNDLED_CLI_PATH, CMUX_ROWS, CMUX_ROWS_FULL, CMUX_ROWS_JSON, CMUX_RUN,
+#   CMUX_WORKSPACE_ID, DEADLINE, HOME, REPO, ROW_AGENT, ROW_JQ, ROW_SEP, WS_JSON, WS_RC, WT_FS.
+# Requires common.sh: relay_env, repo_id, shell_join, tmux_cmd, wg_sleep.
+# Requires task.sh: meta_set, path_within, physical_dir, row_tag, task_title, wt_path.
 # The shared adapter owns cmux commands and row identity queries.
 # CMUX_ERROR holds a diagnostic; callers choose whether to stop or log it.
 # Callers read the exported diagnostics and creation state.

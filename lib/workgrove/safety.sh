@@ -1,4 +1,7 @@
 # shellcheck shell=bash
+# Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WT_BASE_FETCHES, WT_DIRNAME, WT_MERGE_TREE, WT_TMPFILES.
+# Requires common.sh: have, warn.
+# Requires task.sh: meta_get.
 file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shasum, Linux sha256sum)
   local h=""
   if have shasum; then h=$(shasum -a 256 "$1" 2>/dev/null) || h=""
@@ -228,13 +231,13 @@ fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as or
   WT_BASE_FETCHES[$base]=failed; return 1
 }
 
-RM_DISCARD_COMMITS=0   # `wt rm --discard-commits`: waive the unmerged-commit reason, and only that one
-rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
+rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array> [discard commits]
   # Every commit check is about the BRANCH, never the worktree's HEAD. Under `git bisect`, `git checkout <sha>`
   # or `--detach`, the HEAD is usually an ancestor of the base. A HEAD-based check then reads "clean, 0 ahead,
   # merged". But `branch -D` still destroys every commit that the branch holds, and its reflog too. $__b
   # resolves whether or not it is checked out. The worktree shares its refs with the main checkout, so ask
   # $REPO about it.
+  local __discard_commits=${6:-0}
   local -n __reasons=$5
   local __n="$1" __p="$2" __b="$3" __base="$4" __dirty __ahead=0 __merged=0 __base_ok=0 __head_ref __f __why="" __rc __landed_reason
   __reasons=()
@@ -252,7 +255,7 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
     # remote base and check once more. With --discard-commits, check neither: the reason is waived whatever
     # the answer, so there is nothing to go online for.
     if git -C "$REPO" merge-base --is-ancestor "$__b" "$__base" 2>/dev/null; then __merged=1
-    elif [[ $RM_DISCARD_COMMITS -eq 1 ]]; then __merged=0
+    elif [[ $__discard_commits -eq 1 ]]; then __merged=0
     elif branch_landed "$__b" "$__base" __landed_reason; then __merged=1
     else
       __why=" ($__landed_reason)"
@@ -265,7 +268,7 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
     __ahead=$(git -C "$REPO" rev-list --count "$__base..$__b" 2>/dev/null || echo 0)
   fi
   [[ $__base_ok -eq 1 ]] || __reasons+=("base '$__base' cannot be compared with $__b (gone, or the literal HEAD)")
-  if [[ "$__ahead" -gt 0 && $__merged -eq 0 && $RM_DISCARD_COMMITS -eq 0 ]] && ! branch_pushed "$__b"; then
+  if [[ "$__ahead" -gt 0 && $__merged -eq 0 && $__discard_commits -eq 0 ]] && ! branch_pushed "$__b"; then
     __reasons+=("$__ahead commit(s) on $__b not merged into $__base and not on a remote$__why")
   fi
   # The checks above use $__b. A different HEAD adds a reason of its own.
