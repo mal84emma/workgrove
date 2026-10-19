@@ -189,8 +189,8 @@ meta_load() { # meta_load <name> <associative output> — 1: missing, 2: unreada
   local -n __meta_out=$2
   local __file __temp __key
   __file=$(wt_meta "$1")
-  __meta_out=()
   if [[ $WT_META_FILE != "$__file" ]]; then
+    __meta_out=()
     WT_META_FILE='' WT_META_JSON='{}' WT_META=()
     if [[ ! -e $__file ]]; then return 1; fi
     __temp=$(mktemp "${TMPDIR:-/tmp}/wt-meta.XXXXXX") || return 2
@@ -202,15 +202,16 @@ meta_load() { # meta_load <name> <associative output> — 1: missing, 2: unreada
     rm -f "$__temp"
     WT_META_FILE=$__file
   fi
-  # shellcheck disable=SC2004  # The output names an associative array.
-  for __key in "${!WT_META[@]}"; do __meta_out[$__key]=${WT_META[$__key]}; done
+  if [[ ${!__meta_out} != WT_META ]]; then
+    __meta_out=()
+    # shellcheck disable=SC2004  # The output names an associative array.
+    for __key in "${!WT_META[@]}"; do __meta_out[$__key]=${WT_META[$__key]}; done
+  fi
 }
 
 meta_require() { # Missing metadata uses command defaults; unreadable metadata stops the command.
-  # shellcheck disable=SC2034  # meta_load fills the cache and this temporary output.
-  local -A loaded=()
   local rc=0
-  meta_load "$1" loaded || rc=$?
+  meta_load "$1" WT_META || rc=$?
   [[ $rc != 2 ]] || die "could not read $(wt_meta "$1")"
 }
 
@@ -221,12 +222,12 @@ meta_set() { # meta_set <name> key=value key:=json ... — update strings or typ
   f=$(wt_meta "$1"); shift
   mkdir -p "$(dirname "$f")"; t="$f.new.$$"
   WT_TMPFILES+=("$t")
-  if ! jq -jn --argjson current "$WT_META_JSON" '
-       reduce ($ARGS.positional[]) as $kv ($current;
+  if ! jq -j '
+       reduce ($ARGS.positional[]) as $kv (.;
          ($kv | index("=")) as $i
          | if $i == null then .[$kv] = ""
            elif $kv[$i-1:$i] == ":" then .[$kv[0:$i-1]] = ($kv[$i+1:] | fromjson)
-           else .[$kv[0:$i]] = $kv[$i+1:] end) | '"$WT_META_FILTER" --args "$@" >"$t"; then
+           else .[$kv[0:$i]] = $kv[$i+1:] end) | '"$WT_META_FILTER" --args "$@" <<<"$WT_META_JSON" >"$t"; then
     rm -f "$t"; die "could not write $f"
     return 1
   fi

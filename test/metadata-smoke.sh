@@ -61,6 +61,29 @@ assert_eq 'legacy includes still read' $'.env:abc\nfolder/other:def' "${values[i
 assert_eq 'legacy setup still reads' $'lock:123\nother:456' "${values[setup]}"
 end_scenario
 
+begin_scenario 'cache-output aliases preserve metadata on fresh and cached reads'
+WT_META_FILE=''
+meta_load typed WT_META
+assert_eq 'a fresh cache output retains its base' main "${WT_META[base]}"
+meta_load typed WT_META
+assert_eq 'a cached output retains its base' main "${WT_META[base]}"
+declare -n cache_alias=WT_META
+meta_load typed cache_alias
+assert_eq 'an indirect cache alias retains its fields' none "${cache_alias[agent]}"
+meta_require typed
+assert_eq 'requiring metadata preserves the cache' main "${WT_META[base]}"
+end_scenario
+
+begin_scenario 'large cached sidecars update without process argument limits'
+jq -n '{base:"main", payload:("x" * 1100000)}' >"$REPO/.git/wt/large.json"
+: >"$META_READS"
+meta_set large title=updated
+assert_eq 'a large sidecar is read once' 1 "$(wc -l <"$META_READS" | tr -d ' ')"
+assert_eq 'the large payload remains intact' 1100000 "$(jq '.payload | length' "$REPO/.git/wt/large.json")"
+assert_eq 'the update preserves other fields' true "$(jq '.base == "main" and .title == "updated"' "$REPO/.git/wt/large.json")"
+assert_eq 'the cache receives the committed update' updated "${WT_META[title]}"
+end_scenario
+
 begin_scenario 'JSON status has stable fields and reads each sidecar once'
 invoke new first --no-workspace -a none -p $'brief "quoted"\nsecond line'
 assert_eq 'creation succeeds' 0 "$(cat "$TEST_ROOT/status")"
