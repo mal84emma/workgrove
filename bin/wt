@@ -375,7 +375,8 @@ require_wt() { # require_wt <name> <path output> <branch output> requires a regi
   __wt_path=$(wt_path "$__n"); __wt_branch=$(wt_branch "$__n")
   local __registered
   __registered=$(git -C "$REPO" worktree list --porcelain) || die "cannot list worktrees in $REPO"
-  if printf '%s\n' "$__registered" | grep -qxF "worktree $__wt_path"; then
+  # A pipe to grep -q can fail under pipefail when a long list causes SIGPIPE.
+  if grep -qxF "worktree $__wt_path" <<<"$__registered"; then
     # A registration whose directory was deleted outside wt (rm -rf, a lost VM disk) still has a branch and
     # metadata. Only `wt rm` can clear them, so let it through. The other commands find no files there.
     [[ -d "$__wt_path" ]] || warn "$__wt_path is registered but missing (deleted outside wt?); clean it up with: wt rm $__n"

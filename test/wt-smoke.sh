@@ -213,7 +213,7 @@ assert_branch() {
 assert_registered() {
   local p have=no
   p="$1/.worktrees/$2"
-  if fixture_git "$1" worktree list --porcelain | grep -qxF "worktree $p"; then have=yes; fi
+  if fixture_git "$1" worktree list --porcelain | grep -xF "worktree $p" >/dev/null; then have=yes; fi
   assert_eq "$2 is registered in $(basename "$1")" "$3" "$have"
 }
 
@@ -866,6 +866,25 @@ scenario_list_show_path() {
   assert_wt_fails 1 'cannot list worktrees' path nosuch -r "$ra"
   assert_lacks "a failed listing cannot prove absence" "$WT_OUT" 'WT_RESULT'
   WT_PATH_PREFIX=''
+
+  local padded_git="$TEST_ROOT/padded-worktree-list" real_git
+  real_git=$(command -v git)
+  mkdir -p "$padded_git"
+  cat >"$padded_git/git" <<'SHIM'
+#!/usr/bin/env bash
+if [[ ${3:-} == worktree && ${4:-} == list && ${5:-} == --porcelain ]]; then
+  "$REGISTRATION_REAL_GIT" "$@" || exit $?
+  printf 'prunable %1048576s\n' ''
+else
+  exec "$REGISTRATION_REAL_GIT" "$@"
+fi
+SHIM
+  chmod +x "$padded_git/git"
+  WT_PATH_PREFIX="$padded_git" WT_RELAY_ENV=("REGISTRATION_REAL_GIT=$real_git")
+  assert_wt_ok 'a large registration list still finds the worktree' path a1 -r "$ra"
+  assert_eq 'a large registration list reports found' found "$(wt_read_result "$WT_OUT" path | jq -r .status)"
+  PATH="$padded_git:$PATH" REGISTRATION_REAL_GIT="$real_git" assert_registered "$ra" a1 yes
+  WT_PATH_PREFIX='' WT_RELAY_ENV=()
   unset WT_MACHINE
   assert_wt_fails 1 "show: worktree name required" show -r "$ra"
   assert_wt_fails 1 "not inside a git repo" list
