@@ -1,4 +1,6 @@
 # shellcheck shell=bash
+# Reads globals: TMPDIR, WG_HOST_PROBE_TIMEOUT, WG_LIB_DIR.
+# Requires common.sh: valid_host.
 probe_host() { # one SSH login proves remote-command access and gathers Linux hardware
   local out_file err_file ssh_pid rc=0 tick timeout=${WG_HOST_PROBE_TIMEOUT:-20}
   # Ten ticks per second must fit in signed 64-bit arithmetic.
@@ -75,45 +77,4 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
        memory_mib:(if $mem != null and $mem > 0 then ($mem / 1024 | floor) else null end),
        gpu_status:$gpu_status,gpus:$gpus,
        error:(if $cpu == null or $cpu == 0 or $mem == null or $mem == 0 then "incomplete CPU/RAM report" else null end)}'
-}
-
-cmd_hosts() {
-  mac_only hosts
-  local format=table records host f pid failed=0 files=() pids=()
-  case "${1:-}" in
-    "") ;;
-    --json) format=json; shift ;;
-    -h|--help) usage; return 0 ;;
-    *) die "hosts: usage: wt hosts [--json]" ;;
-  esac
-  [[ $# -eq 0 ]] || die "hosts: usage: wt hosts [--json]"
-  while IFS= read -r host; do
-    f=$(mktemp "${TMPDIR:-/tmp}/wt-host-record.XXXXXX") || die "hosts: could not create a temporary file"
-    files+=("$f")
-    WT_TMPFILES+=("$f")
-    (host_record "$host" >"$f") &
-    pids+=("$!")
-  done < <(ssh_hosts)
-  for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
-  if [[ $failed -ne 0 ]]; then
-    rm -f "${files[@]}"
-    die "hosts: one or more probes could not be recorded"
-  fi
-  records=""
-  if [[ ${#files[@]} -gt 0 ]]; then records=$(cat "${files[@]}"); fi
-  rm -f "${files[@]}"
-  if [[ $format == json ]]; then
-    printf '%s\n' "$records" | jq -s '.'
-  else
-    printf '%s\n' "$records" | jq -sr '
-      (["HOST","SSH","CPU","RAM GiB","GPU","ERROR"],
-       (.[] | [ .host, .status, (.cpu_logical // "?" | tostring),
-         (if .memory_mib == null then "?" else (.memory_mib / 1024 * 10 | round / 10 | tostring) end),
-         (if .gpu_status == "none" then "none" elif .gpu_status != "ok" then "unknown"
-          elif (.gpus | length) == 0 then "none"
-          else (.gpus | map(if .memory_mib == null then "\(.name) (memory unknown)"
-                            else "\(.name) (\(.memory_mib) MiB)" end) | join("; ")) end),
-         (.error // "") ])) | @tsv' \
-      | { if have column; then column -t -s $'\t'; else cat; fi; }
-  fi
 }

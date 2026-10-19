@@ -125,6 +125,8 @@ workgrove/
 ├── lib/
 │   └── workgrove/
 │       ├── common.sh          shared helpers that bin/wt, cmux-hook and agent-notify load
+│       ├── task.sh            repository context, sidecars, task identity, and cleanup
+│       ├── automation.sh      installer support for the native notification rule
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
 │       └── vm/                scripts that bin/wt sends to a VM on SSH standard input

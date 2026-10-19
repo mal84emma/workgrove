@@ -46,6 +46,7 @@ if ! source "$wg_lib" 2>/dev/null; then
   exit 0                              # a hook must never block the agent
 fi
 unset wg_lib
+WG_PREFIX=agent-notify
 
 : "${HOME:?agent-notify: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
 [[ -t 0 ]] && payload= || payload=$(cat)

@@ -17,8 +17,6 @@ source "$REPO/lib/workgrove/safety.sh"
 source "$REPO/lib/workgrove/recovery.sh"
 trap lib_cleanup EXIT
 
-eval "$(sed -n '/^require_wt()/,/^}/p' "$REPO/bin/wt")"
-eval "$(sed -n '/^cmux_require()/,/^}/p' "$REPO/bin/wt")"
 
 die() { printf '%s\n' "$*" >&2; return 1; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -73,6 +71,15 @@ test_rm_reasons() {
   rm "$path/scratch.txt"
   rm_reasons task "$path" wt/task main dirty
   assert_eq 'a safe worktree clears earlier reasons' 0 "${#dirty[@]}"
+  printf 'tracked\n' >"$path/tracked.txt"
+  git -C "$path" add tracked.txt
+  git -C "$path" -c user.name=Test -c user.email=test@example.com commit -qm change
+  rm_reasons task "$path" wt/task main dirty
+  assert_eq 'unmerged commits require a reason' 1 "${#dirty[@]}"
+  rm_reasons task "$path" wt/task main dirty 1
+  assert_eq 'the argument waives the commit reason' 0 "${#dirty[@]}"
+  rm_reasons task "$path" wt/task main dirty
+  assert_eq 'the waiver does not affect the next call' 1 "${#dirty[@]}"
   end_scenario
 }
 test_rm_reasons

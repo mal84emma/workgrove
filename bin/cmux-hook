@@ -38,6 +38,7 @@ if ! source "$wg_lib" 2>/dev/null; then
   exit 0
 fi
 unset wg_lib
+WG_PREFIX=cmux-hook
 [[ $mode == --event ]] || exit 0
 
 : "${HOME:?cmux-hook: HOME is not set}"   # name the script; bash alone says only "HOME: unbound variable"
