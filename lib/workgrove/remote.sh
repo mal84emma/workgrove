@@ -28,63 +28,13 @@ remote_run_cmd() {
   printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"
 }
 
-row_ids() { # row_ids — one row id per line, from the full row list. It fails when any window's list fails,
-            # because then new_row would take an older row that the partial list left out for a new one.
-  local rows; rows=$(rows_json checked) || return 1
-  printf '%s' "$rows" | jq -r '.workspaces[] | .id'
-}
-
-tag_row() { # tag_row <workspace ref or ""> <title> <repo> <host> [row ids before the create, or "-"] — write the description
-  # A 5th argument marks a row that the caller has just created. "-" means that the list before the create
-  # was unreadable.
-  # A new row has no description yet, so a lookup by repo cannot find it. So when the create printed no ref,
-  # take the row that new_row in ROW_JQ names. That needs the full list from before the create. Without it,
-  # an older row with this title and no repo, such as the user's own `cmux ssh` row, would look new.
-  # A task row's description holds the repo, so it is part of the row's identity. If it cannot be written on
-  # a new task row, no later lookup finds that row, and the next attach builds a second row beside it. So
-  # close that row and fail. A row with no repo (a shell row) is found by its title and host, so it stays.
-  local ref="$1" tag; tag=$(row_tag "$4" "$3")
-  [[ -n "$ref" || "${5:-}" != - ]] \
-    || die "cmux printed no ref for the new row '$2' on $4, and the row list from before the create was unreadable; close that row in cmux"
-  for _ in 1 2 3; do                    # no workspace:N in the output: the row list lags ~1s behind a create
-    [[ -n "$ref" ]] && break
-    wg_sleep
-    ref=$(rows_json | jq -r --arg t "$2" --arg h "$4" --arg before "${5:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
-      first((.workspaces? // .)[] | select(new_row($t; $h; $before | split("\n"); $sep)) | .id // empty) // empty' \
-      2>/dev/null || true)
-  done
-  [[ -n "$ref" ]] || die "cmux reported no row '$2' on $4; if cmux shows a new row '$2' with no repo on its second line, close it"
-  CMUX_QUIET=1 "$(cmux_bin)" workspace-action --workspace "$ref" --action set-description --description "$tag" >/dev/null 2>&1 \
-    && return 0
-  [[ $# -ge 5 && -n "$3" ]] || die "cmux workspace-action failed; run: cmux workspace-action --workspace $ref --action set-description --description '$tag'"
-  close_row "$ref" new || die "cmux could not write '$tag' on the new row $2, and wt could not close that row; close it in cmux"
-  die "cmux could not write '$tag' on the new row $2, so wt closed that row"
-}
-
-remote_row() { # remote_row <host> <session> <title> <repo> <command> [shared] [cmux flags…] — the local ssh row
-               # for a VM tmux session. <repo> is "" for a row with no repo. One row per title, repo and host.
-               # A row that is already there is re-tagged and (unless --no-focus) selected. It is never typed
-               # into, because its pane may hold a running agent whose prompt would swallow the tmux line.
-               # Only host_attach's detached branch sends.
-  local host="$1" session="$2" title="$3" repo="$4" cmd="$5" shared="" c id line out before; shift 5
-  if [[ "${1:-}" == shared ]]; then shared=shared; shift; fi
+remote_row() { # remote_row <host> <session> <title> <repo> <command> [shared] [cmux flags…]
+  local host=$1 session=$2 title=$3 repo=$4 cmd=$5 shared='' line; shift 5
+  if [[ ${1:-} == shared ]]; then shared=shared; shift; fi
   cmux_ok || die "cmux is not running; start cmux, then re-run this command"
-  c=$(cmux_bin)
-  id=$(cmux_row_field "$title" "$repo" id "$host")
-  if [[ -n "$id" ]]; then
-    tag_row "$id" "$title" "$repo" "$host"
-    case " $* " in
-      *" --no-focus "*) ;;
-      *) CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id" ;;
-    esac
-    printf 'row: %s %s (already open)\n' "$title" "$(row_tag "$host" "$repo")"
-    return 0
-  fi
-  before=$(row_ids) || before=-          # "-" tells tag_row that it cannot know which row is new
   line=$(tmux_cmd "$session" "$cmd" "$shared")
-  out=$(CMUX_QUIET=1 "$c" ssh "$host" --name "$title" "$@" --command "$line" 2>&1) || die "cmux ssh failed: $out"
-  tag_row "$(printf '%s' "$out" | grep -oE 'workspace:[0-9]+' | head -1 || true)" "$title" "$repo" "$host" "$before"
-  printf 'row: %s %s\n' "$title" "$(row_tag "$host" "$repo")"
+  cmux_require cmux_row_open_ssh "$host" "$title" "$(row_tag "$host" "$repo")" "$line" "$@"
+  printf 'row: %s %s%s\n' "$title" "$(row_tag "$host" "$repo")" "${CMUX_ROW_EXISTING:+ (already open)}"
 }
 
 need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer the repo from, so -r is required.
@@ -212,7 +162,7 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   # a plain repo name. A relative '.' or '..' would make repo_id '-', and close_row would close nothing.
   local session title; session=$(wt_session "$name" "$repo"); title=$(row_title "$name")
   local _row _self
-  check_row_removal "$title" "$repo" _row _self "$host"
+  cmux_require check_row_removal "$title" "$repo" _row _self "$host"
   local agent_rc=0
   agent_on_vm "$host" "$session" || agent_rc=$?
   case $agent_rc in
@@ -221,7 +171,7 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
     *) die "cannot check the agent in tmux session $session on $host; kept the worktree" ;;
   esac
   remote_wt "$host" rm "$name" -r "$repo" "${args[@]}"
-  close_row "$(cmux_row_field "$title" "$repo" id "$host")"
+  cmux_require close_row "$(cmux_row_field "$title" "$repo" id "$host")"
   remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
 }
 

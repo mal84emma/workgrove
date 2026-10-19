@@ -346,7 +346,7 @@ set_line() {
 # Each of those characters is a way for a shell to mangle a string that it must only carry.
 PROMPT_FIXTURE=$'first "line": $HOME `date` \'quoted\' back\\slash\nsecond line: café — ünïcode ✓'
 
-# stub_cmux dead|alive: cmux_bin in bin/wt prefers $CMUX_BUNDLED_CLI_PATH when it is executable. So
+# stub_cmux dead|alive: cmux_bin prefers $CMUX_BUNDLED_CLI_PATH when it is executable. So
 # this setting alone decides what cmux_ok believes. "dead" logs its argv and exits 1, like a cmux that is not
 # running. "alive" answers ping with 0 and serves $WT_ROWS for `workspace list --json`. Both truncate the
 # log, so assert_cmux_calls always reads the calls of one scenario only.
@@ -384,10 +384,10 @@ if [ "$1" = top ]; then
   printf '{"caller":{"workspace_id":"%s"},"coding_agents":[{"resources":{"process_count":%s}}]}\n' "${CMUX_STUB_CALLER:-other-row}" "$n"
   exit 0
 fi
-if [ "$1" = list-windows ]; then
+if [ "$1 ${2:-}" = "--json list-windows" ]; then
   if [ "${CMUX_STUB_FAIL_WINDOWS:-}" = 1 ]; then exit 1; fi
   if [ "${CMUX_STUB_BAD_WINDOWS:-}" = 1 ]; then echo 'unrecognized window output'; exit 0; fi
-  if [ -s "$CMUX_STUB_WINDOWS" ]; then cat "$CMUX_STUB_WINDOWS"; fi
+  if [ -s "$CMUX_STUB_WINDOWS" ]; then cat "$CMUX_STUB_WINDOWS"; else echo '[]'; fi
   exit 0
 fi
 if [ "$1" = workspace ] && [ "$2" = list ]; then
@@ -437,19 +437,14 @@ stub_cmux() {
 
 # stub_windows <window uuid…>: writes what `cmux list-windows` prints, in cmux's own format, and an empty
 # row list for each window that it names. A scenario then fills "$WT_ROWS_DIR/<uuid>.json" for the window
-# that it tests. Call it after stub_cmux, because stub_cmux resets this. Without a call, list-windows prints
-# nothing, and rows_json falls back to the single-window call that it made before windows were merged. So
-# every other scenario sees the same cmux that it always saw. The uuids must LOOK like uuids, because
-# rows_json takes only uuid-shaped fields from that output. That filter is there so that rows_json treats a
-# cmux that prints something else entirely as a cmux that cannot be enumerated.
+# that it tests. Call it after stub_cmux, because stub_cmux resets this.
+# Without a call, the JSON window list is empty, so rows_json uses the single-window fallback.
+# The window IDs must have UUID format, because the adapter validates them before querying each window.
 stub_windows() {
-  local u i=0 marker
-  : >"$WT_WINDOWS"
+  local u
+  printf '%s\n' "$@" | jq -Rsc 'split("\n")[:-1] | to_entries | map({id:.value, index:.key})' >"$WT_WINDOWS"
   for u in "$@"; do
-    marker=' '; [[ $i -ne 0 ]] || marker='*'
-    printf '%s %d: %s selected_workspace=%s workspaces=0\n' "$marker" "$i" "$u" "$u" >>"$WT_WINDOWS"
     printf '{"workspaces":[]}\n' >"$WT_ROWS_DIR/$u.json"
-    i=$((i + 1))
   done
 }
 

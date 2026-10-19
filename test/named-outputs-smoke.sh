@@ -18,7 +18,7 @@ source "$REPO/lib/workgrove/recovery.sh"
 trap lib_cleanup EXIT
 
 eval "$(sed -n '/^require_wt()/,/^}/p' "$REPO/bin/wt")"
-eval "$(sed -n '/^check_row_removal()/,/^}/p' "$REPO/bin/wt")"
+eval "$(sed -n '/^cmux_require()/,/^}/p' "$REPO/bin/wt")"
 
 die() { printf '%s\n' "$*" >&2; return 1; }
 warn() { printf '%s\n' "$*" >&2; }

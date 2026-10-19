@@ -123,7 +123,7 @@ ROW_TWO='{"id":"row-two","title":"task","description":"@test-vm · repo","remote
 ROW_EXPECTED="{\"workspaces\":[$ROW_ONE,$ROW_TWO]}"
 
 row_cmux_reset() {
-  ROW_WINDOWS="* 0: $ROW_WINDOW_ONE"
+  ROW_WINDOWS="[{\"id\":\"$ROW_WINDOW_ONE\",\"index\":0,\"key\":\"0\"}]"
   ROW_WINDOWS_RC=0 ROW_ONE_RC=0 ROW_TWO_RC=0 ROW_FALLBACK_RC=0
   ROW_ONE_LIST="[$ROW_ONE]"
   ROW_TWO_LIST="{\"workspaces\":[$ROW_TWO]}"
@@ -134,7 +134,7 @@ row_cmux_reset() {
 row_cmux() {
   printf '%s\n' "$*" >>"$TEST_ROOT/row-calls"
   case "$*" in
-    list-windows) printf '%s' "$ROW_WINDOWS"; return "$ROW_WINDOWS_RC" ;;
+    '--json list-windows') printf '%s' "$ROW_WINDOWS"; return "$ROW_WINDOWS_RC" ;;
     "workspace list --json --window $ROW_WINDOW_ONE") printf '%s' "$ROW_ONE_LIST"; return "$ROW_ONE_RC" ;;
     "workspace list --json --window $ROW_WINDOW_TWO") printf '%s' "$ROW_TWO_LIST"; return "$ROW_TWO_RC" ;;
     "workspace list --json --window $ROW_WINDOW_THREE") printf '[]' ;;
@@ -162,10 +162,10 @@ scenario_row_windows() {
     check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 1
     ROW_ONE_LIST="{\"workspaces\":[$ROW_ONE]}"
     check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 1
-    ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"
+    ROW_WINDOWS="${ROW_WINDOWS%]},{\"id\":\"$ROW_WINDOW_TWO\"}]"
     check_rows_load "$policy" 0 "$ROW_EXPECTED" 1
     assert_eq "$policy queries windows by UUID" \
-      "$(printf 'list-windows\nworkspace list --json --window %s\nworkspace list --json --window %s' "$ROW_WINDOW_ONE" "$ROW_WINDOW_TWO")" \
+      "$(printf -- '--json list-windows\nworkspace list --json --window %s\nworkspace list --json --window %s' "$ROW_WINDOW_ONE" "$ROW_WINDOW_TWO")" \
       "$(tail -3 "$TEST_ROOT/row-calls")"
   done
   end_scenario
@@ -176,7 +176,7 @@ scenario_row_failures() {
   begin_scenario 'cmux window failures and older versions' || return 0
   for policy in skip stop checked; do
     row_cmux_reset
-    ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"$'\n'"  2: $ROW_WINDOW_THREE"
+    ROW_WINDOWS="${ROW_WINDOWS%]},{\"id\":\"$ROW_WINDOW_TWO\"},{\"id\":\"$ROW_WINDOW_THREE\"}]"
     ROW_TWO_RC=142
     if [[ $policy == skip ]]; then
       check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
@@ -189,10 +189,10 @@ scenario_row_failures() {
     ROW_WINDOWS='' ROW_WINDOWS_RC=1
     if [[ $policy == checked ]]; then
       check_rows_load "$policy" 1 '' 0
-      assert_eq 'checked requires successful enumeration' list-windows "$(cat "$TEST_ROOT/row-calls")"
+      assert_eq 'checked requires successful enumeration' '--json list-windows' "$(cat "$TEST_ROOT/row-calls")"
     else
       check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
-      assert_eq "$policy falls back without list-windows" $'list-windows\nworkspace list --json' "$(cat "$TEST_ROOT/row-calls")"
+      assert_eq "$policy falls back without --json list-windows" $'--json list-windows\nworkspace list --json' "$(cat "$TEST_ROOT/row-calls")"
     fi
   done
   row_cmux_reset
@@ -200,12 +200,12 @@ scenario_row_failures() {
   check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
   check_rows_load checked 1 '' 0
   row_cmux_reset
-  ROW_WINDOWS+=$'\n'"  1: unrecognized-window"
+  ROW_WINDOWS="${ROW_WINDOWS%]}"',{ "id":"unrecognized-window"}]'
   check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
   check_rows_load checked 1 '' 0
   row_cmux_reset
-  ROW_WINDOWS=''
-  check_rows_load checked 0 "{\"workspaces\":[$ROW_ONE]}" 0
+  ROW_WINDOWS='[]'
+  check_rows_load checked 0 "{\"workspaces\":[$ROW_ONE]}" 1
   ROW_FALLBACK_RC=142
   check_rows_load stop 142 '' 0
   check_rows_load checked 142 '' 0
@@ -231,7 +231,7 @@ scenario_row_validation() {
   ROW_ONE_LIST='{"workspaces":['
   assert_result 'the hook rejects invalid JSON' no cmux_rows_load stop row_cmux
   row_cmux_reset
-  ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"
+  ROW_WINDOWS="${ROW_WINDOWS%]},{\"id\":\"$ROW_WINDOW_TWO\"}]"
   ROW_TWO_LIST=''
   check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
   check_rows_load checked 1 '' 0

@@ -34,8 +34,18 @@ printf '%s\n' "$*" >>"$CMUX_LOG"
 row() { printf '{"id":"%s","title":"%s","description":"%s","remote":{"enabled":true,"destination":"fakevm"}}' "$1" "$2" "$3"; }
 case "$1" in
   ping) [ "$CMUX_MODE" != down ] ;;
-  list-windows) ;;
-  workspace) case "$CMUX_MODE" in
+  --json) if [ "$CMUX_MODE" = partial-window ]; then
+            echo '[{"id":"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"}]'
+            exit 0
+          fi
+          echo '[{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"}]' ;;
+  workspace) if [ "$CMUX_MODE" = partial-window ] && [ "${5:-}" = AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA ]; then exit 1; fi
+             if [ "$CMUX_MODE" = no-ref-late ] && [ -e "$CMUX_LOG.created" ]; then
+               echo lookup >>"$CMUX_LOG.after-create"
+               echo '{"workspaces":[]}'
+               exit 0
+             fi
+             case "$CMUX_MODE" in
                existing) printf '{"workspaces":[%s]}\n' "$(row workspace:123 task '@fakevm · repo')" ;;
                legacy) printf '{"workspaces":[%s]}\n' "$(row workspace:123 repo:task @fakevm)" ;;
                other-repo) printf '{"workspaces":[%s]}\n' "$(row other-row task '@fakevm · other')" ;;
@@ -332,20 +342,36 @@ TMUX
   CMUX_MODE=no-ref-blind
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude
-  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'row list from before the create was unreadable'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && ! grep -qF -- 'workspace-action' "$TEST_ROOT/cmux.log" && echo yes)" 'with no list from before the create, wt guessed which row was new'
+  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'not creating a row on a lookup that failed'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && ! grep -qF -- 'workspace-action' "$TEST_ROOT/cmux.log" && echo yes)" 'with no list from before the create, wt guessed which row was new'
   rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
+
+  # One failed window must stop attach before a partial snapshot can cause a duplicate row.
+  CMUX_MODE=alive
+  run_wt wt-demo claude
+  CMUX_MODE=partial-window
+  : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
+  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'not creating a row on a lookup that failed'* ]] && ! grep -q '^ssh ' "$TEST_ROOT/cmux.log" && echo yes)" 'attach created a row after one window failed'
+  rm "$TEST_ROOT/remote-new"
+
+  # A missing ref gets one lookup after creation, even when the new row remains absent.
+  CMUX_MODE=no-ref-late
+  : >"$TEST_ROOT/cmux.log"
+  run_wt wt-demo claude
+  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux reported no row'* && $(wc -l <"$TEST_ROOT/cmux.log.after-create") -eq 1 ]] && echo yes)" 'a missing ref did not use exactly one fallback lookup'
+  rm "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
 
   # The description holds the repo, so a new row without it would be found by no later lookup. wt closes the
   # row and fails, and the recovery advice applies to the task as it is.
   CMUX_MODE=tag-fail
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude
-  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'so wt closed that row'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && grep -qxF -- 'workspace close workspace:123 --force' "$TEST_ROOT/cmux.log" && echo yes)" 'a new row without its description was left open'
+  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'so it was closed'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && grep -qxF -- 'workspace close workspace:123 --force' "$TEST_ROOT/cmux.log" && echo yes)" 'a new row without its description was left open'
   rm "$TEST_ROOT/remote-new"
-  # A shell row has no repo, and a lookup finds it by its title and host. So a failed write leaves it open.
+  # A new shell row also needs its description before a later lookup can identify it.
   : >"$TEST_ROOT/cmux.log"
   invoke_wt task --where fakevm -a vm-shell </dev/null
-  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux workspace-action failed; run:'* ]] && grep -qF -- 'ssh fakevm --name shell ' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'workspace close' "$TEST_ROOT/cmux.log" && echo yes)" 'a new shell row was closed for a failed description'
+  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'so it was closed'* ]] && grep -qF -- 'ssh fakevm --name shell ' "$TEST_ROOT/cmux.log" && grep -qF -- 'workspace close' "$TEST_ROOT/cmux.log" && echo yes)" 'a new shell row without its description was left open'
 
   # A row that a lookup found is never closed, even when its description cannot be rewritten. Here attach's
   # own lookup finds no row, and remote_row's lookup finds the row that appeared since.
@@ -354,7 +380,7 @@ TMUX
   CMUX_MODE=race
   : >"$TEST_ROOT/cmux.log"
   invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
-  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux workspace-action failed; run:'* ]] && grep -qF -- 'workspace-action --workspace race-row ' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'workspace close' "$TEST_ROOT/cmux.log" && echo yes)" 'a row that a lookup found was closed for a failed description'
+  check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'set-description @fakevm · repo failed for race-row'* ]] && grep -qF -- 'workspace-action --workspace race-row ' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'workspace close' "$TEST_ROOT/cmux.log" && echo yes)" 'a row that a lookup found was closed for a failed description'
   rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.listed"
   CMUX_MODE=alive
   end_scenario

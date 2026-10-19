@@ -1,36 +1,4 @@
 # shellcheck shell=bash
-row_remote_field() { # row_remote_field <id> <field>… — this row's current remote fields (such as state) from one
-                     # rows_json read, joined by $WT_FS. Never a tab: read would collapse it when a field is empty.
-  local id="$1"; shift
-  rows_json | jq -r --arg id "$id" --arg fs "$WT_FS" \
-    'first((.workspaces? // .)[] | select(.id == $id) | .remote as $r
-       | [$ARGS.positional[] as $k | ($r[$k] // "") | tostring] | join($fs)) // empty' --args "$@" 2>/dev/null || true
-}
-
-row_shell_prompt() { # row_shell_prompt <id> <last line output>
-  # Return 0 when the last nonblank line is a shell prompt that names user@host.
-  # Accept a lone $, #, or % below a line that names user@host for two-line prompts.
-  # A prompt must end in $, #, or %. A TUI footer such as `Context 100%` names no user@host.
-  # Return 2 when the screen is unavailable.
-  local -n __shell_last=$2
-  local __id="$1" __c __screen __lines __above="" __nl=$'\n' __who='[[:alnum:]_.-]+@[[:alnum:]_.-]+' __end='[$#%]$' __bare='^[$#%]$'
-  __shell_last=""
-  __c=$(cmux_bin) || return 2
-  __screen=$(CMUX_QUIET=1 "$__c" read-screen --workspace "$__id" 2>/dev/null) || return 2
-  __lines=$(printf '%s\n' "$__screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -2)
-  __shell_last=${__lines##*"$__nl"}
-  [[ "$__lines" != *"$__nl"* ]] || __above=${__lines%%"$__nl"*}
-  [[ "$__shell_last" =~ $__end ]] || return 1
-  [[ "$__shell_last" =~ $__who ]] || { [[ "$__shell_last" =~ $__bare && "$__above" =~ $__who ]]; }
-}
-
-send_tmux_line() { # send_tmux_line <id> <session> — type the row's tmux attach line into it and press return
-  local c; c=$(cmux_bin)
-  CMUX_QUIET=1 "$c" send --workspace "$1" "$(tmux_cmd "$2")" >/dev/null 2>&1 \
-    || die "cmux send failed for $1; type this in the row instead: tmux attach -d -t '=$2'"
-  CMUX_QUIET=1 "$c" send-key --workspace "$1" enter >/dev/null 2>&1 \
-    || die "cmux send-key failed for $1; press return in the row to finish the attach"
-}
 
 vm_session_detached() { # vm_session_detached <host> <session> — 0 only when the VM has that tmux session and lists no
                         # client on it. One ssh call; any failure, ssh's own included, counts as "not proven"
@@ -48,11 +16,11 @@ reattach_shell_row() { # reattach_shell_row <id> <session> <last line output> [h
     [[ "$(row_remote_field "$__id" state)" == connected ]] || return 1
     vm_session_detached "$__host" "$__session" || return 1
   fi
-  send_tmux_line "$__id" "$__session"
+  cmux_require send_tmux_line "$__id" "$__session"
 }
 
 reinit_task_client() { # reinit_task_client <host> <id> <session> — restart this task row's attached tmux client
-  local host="$1" id="$2" session="$3" line screen_rc=0 nonce proof screen c _last
+  local host="$1" id="$2" session="$3" line screen_rc=0 nonce proof screen _last
   [[ "$(row_remote_field "$id" state)" == connected ]] || return 2
   row_shell_prompt "$id" _last || screen_rc=$?
   [[ $screen_rc -eq 1 ]] || return 2   # skip a shell or an unreadable screen
@@ -63,8 +31,7 @@ reinit_task_client() { # reinit_task_client <host> <id> <session> — restart th
   proof=$(remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "$nonce")" <"$WG_LIB_DIR/vm/reinit-client-proof.sh" 2>/dev/null) || return $?
   proof=${proof##*$'\n'}
   [[ "$proof" =~ ^[0-9]+[[:space:]]+/dev/pts/[0-9]+$ ]] || return 2
-  c=$(cmux_bin) || return 1
-  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 2
+  screen=$(cmux_screen "$id" 2>/dev/null) || return 2
   [[ "$screen" == *"$nonce"* && "$(row_remote_field "$id" state)" == connected ]] || return 2
   # -E replaces the client process on its own pty. A fresh attach sends every terminal mode again.
   # If that attach fails, the row's shell gets its prompt back. Recheck the client after the screen proof.
@@ -73,7 +40,7 @@ reinit_task_client() { # reinit_task_client <host> <id> <session> — restart th
   # is visible there before reporting that its terminal modes were restored.
   nonce="WT_REINIT_${RANDOM}_${RANDOM}_$$_$(date +%s)"
   remote_sh_raw "$host" "bash -s -- $(shell_join "=$session" "${proof#* }" "$nonce")" <"$WG_LIB_DIR/vm/reinit-client-confirm.sh" >/dev/null 2>&1 || return 1
-  screen=$(CMUX_QUIET=1 "$c" read-screen --workspace "$id" 2>/dev/null) || return 1
+  screen=$(cmux_screen "$id" 2>/dev/null) || return 1
   [[ "$screen" == *"$nonce"* && "$(row_remote_field "$id" state)" == connected ]] || return 1
 }
 
@@ -91,7 +58,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   done
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
-  local out session state title id path c what=selected result result_rc=0
+  local out session state title id path what=selected result result_rc=0
   out=$(remote_wt_result "$host" show "$name" -r "$repo")
   result=$(wt_read_result "$out" show) || result_rc=$?
   case $result_rc in
@@ -107,16 +74,15 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   [[ -n "$session" && -n "$path" ]] || die "$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))"
   valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$path")" ]] || die "unexpected output from $host"
   title=$(row_title "$name")
-  id=$(cmux_row_field "$title" "$path" id "$host")
+  id=$(cmux_row_field "$title" "$path" id "$host" checked) || die "cannot list cmux rows; not creating a row on a lookup that failed"
   if [[ $reattach -eq 1 ]]; then
     # The flag confirms that the user sees a shell, even if the VM still lists its abandoned client.
     # Check the screen before sending the tmux line, so an agent prompt cannot receive it.
     [[ -n "$id" ]] || die "no row $title $(row_tag "$host" "$path") is open; wt -H $host attach -r $(shell_join "$repo") $name opens one"
-    c=$(cmux_bin)
     local shell_last
     reattach_shell_row "$id" "$session" shell_last \
       || die "$title $(row_tag "$host" "$path") does not end at a shell prompt naming user@host, on its own line or the one above (last line: ${shell_last:-empty}); it is probably still attached to tmux, or its prompt names no user@host. Select the row and look, then re-run, or attach by hand there: tmux attach -d -t '=$session'"
-    CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
+    cmux_require cmux_select "$id"
     printf 'row: %s %s (re-attached)\n' "$title" "$(row_tag "$host" "$path")"
     return 0
   fi
@@ -129,7 +95,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
       *) die "cannot check the agent in tmux session $session on $host; kept the session" ;;
     esac
     remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
-    close_row "$(cmux_row_field "$title" "$path" id "$host")"
+    cmux_require close_row "$(cmux_row_field "$title" "$path" id "$host")"
     for _ in 1 2 3; do                     # remote_row creates a row only when no row is left, so wait for that
       [[ -n "$(cmux_row_field "$title" "$path" id "$host")" ]] || break
       wg_sleep
@@ -153,7 +119,6 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   esac
   [[ -n "$id" ]] || { remote_row "$host" "$session" "$title" "$path" ""; return 0; }
   local _last
-  c=$(cmux_bin)
   if [[ "$state" == *detached ]]; then   # show may be stale; prove the prompt and detached session again
     if reattach_shell_row "$id" "$session" _last "$host"; then what=re-attached
     else warn "did not re-attach $title $(row_tag "$host" "$path"); inspect the row, then use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
@@ -167,7 +132,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     else warn "could not confirm $session's replacement client on $host; inspect the row, then re-run attach; for a bare shell use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
     fi
   fi
-  CMUX_QUIET=1 "$c" workspace select "$id" >/dev/null 2>&1 || die "cmux workspace select failed for $id"
+  cmux_require cmux_select "$id"
   printf 'row: %s %s (%s)\n' "$title" "$(row_tag "$host" "$path")" "$what"
   if [[ "$what" == re-initialized ]]; then
     printf 'if the replacement attach fails, the row returns to its shell prompt; recover with: wt -H %s attach --reattach -r %s %s\n' "$host" "$(shell_join "$repo")" "$name"
