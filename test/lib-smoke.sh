@@ -15,33 +15,33 @@ trap lib_cleanup EXIT
 
 scenario_results() {
   begin_scenario 'versioned wt results' || return 0
-record=$(WG_MACHINE_RESULT=1 wt_result new created task '/repos/two words' wt-two-words-task)
-assert_eq 'result round trip' 'created|task|/repos/two words|wt-two-words-task' \
-  "$(wt_read_result "$record" new | jq -r '[.status,.name,.repo,.session] | join("|" )')"
-assert_eq 'ordinary commands do not emit records' '' "$(WG_MACHINE_RESULT='' wt_result new created task /repos/project)"
-for sample in text empty malformed duplicate blank-duplicate version command control missing duplicate-status duplicate-name duplicate-repo duplicate-version escaped-key nested multiple-objects; do
-  rc=0
-  case $sample in
-    text) output='created task'; expected=2 ;;
-    empty) output=$'WT_RESULT\t'; expected=1 ;;
-    malformed) output=$'WT_RESULT\t{broken'; expected=1 ;;
-    duplicate) output="$record"$'\n'"$record"; expected=1 ;;
-    blank-duplicate) output=$'WT_RESULT\t\n'"$record"; expected=1 ;;
-    version) output=${record/\"version\":1/\"version\":2}; expected=1 ;;
-    command) output=${record/\"new\"/\"show\"}; expected=1 ;;
-    control) output=${record/task/task\\n}; expected=1 ;;
-    missing) output=$'WT_RESULT\t{"version":1,"command":"new"}'; expected=1 ;;
-    duplicate-status) output=${record/\"status\":/\"status\":\"found\",\"status\":}; expected=1 ;;
-    duplicate-name) output=${record/\"name\":/\"name\":\"other\",\"name\":}; expected=1 ;;
-    duplicate-repo) output=${record/\"repo\":/\"repo\":\"\/other\",\"repo\":}; expected=1 ;;
-    duplicate-version) output=${record/\"version\":/\"version\":2,\"version\":}; expected=1 ;;
-    escaped-key) output=${record/\"status\":/\"st\\u0061tus\":\"found\",\"status\":}; expected=1 ;;
-    nested) output=${record/\"status\":/\"extra\":\{\"value\":1\},\"status\":}; expected=1 ;;
-    multiple-objects) output=$'WT_RESULT\t{"version":1} {"command":"new","status":"created","name":"task","repo":"/repo","session":"session","state":""}'; expected=1 ;;
-  esac
-  wt_read_result "$output" new >/dev/null || rc=$?
-  assert_eq "$sample result status" "$expected" "$rc"
-done
+  record=$(WG_MACHINE_RESULT=1 wt_result new created task '/repos/two words' wt-two-words-task)
+  assert_eq 'result round trip' 'created|task|/repos/two words|wt-two-words-task' \
+    "$(wt_read_result "$record" new | jq -r '[.status,.name,.repo,.session] | join("|" )')"
+  assert_eq 'ordinary commands do not emit records' '' "$(WG_MACHINE_RESULT='' wt_result new created task /repos/project)"
+  for sample in text empty malformed duplicate blank-duplicate version command control missing duplicate-status duplicate-name duplicate-repo duplicate-version escaped-key nested multiple-objects; do
+    rc=0
+    case $sample in
+      text) output='created task'; expected=2 ;;
+      empty) output=$'WT_RESULT\t'; expected=1 ;;
+      malformed) output=$'WT_RESULT\t{broken'; expected=1 ;;
+      duplicate) output="$record"$'\n'"$record"; expected=1 ;;
+      blank-duplicate) output=$'WT_RESULT\t\n'"$record"; expected=1 ;;
+      version) output=${record/\"version\":1/\"version\":2}; expected=1 ;;
+      command) output=${record/\"new\"/\"show\"}; expected=1 ;;
+      control) output=${record/task/task\\n}; expected=1 ;;
+      missing) output=$'WT_RESULT\t{"version":1,"command":"new"}'; expected=1 ;;
+      duplicate-status) output=${record/\"status\":/\"status\":\"found\",\"status\":}; expected=1 ;;
+      duplicate-name) output=${record/\"name\":/\"name\":\"other\",\"name\":}; expected=1 ;;
+      duplicate-repo) output=${record/\"repo\":/\"repo\":\"\/other\",\"repo\":}; expected=1 ;;
+      duplicate-version) output=${record/\"version\":/\"version\":2,\"version\":}; expected=1 ;;
+      escaped-key) output=${record/\"status\":/\"st\\u0061tus\":\"found\",\"status\":}; expected=1 ;;
+      nested) output=${record/\"status\":/\"extra\":\{\"value\":1\},\"status\":}; expected=1 ;;
+      multiple-objects) output=$'WT_RESULT\t{"version":1} {"command":"new","status":"created","name":"task","repo":"/repo","session":"session","state":""}'; expected=1 ;;
+    esac
+    wt_read_result "$output" new >/dev/null || rc=$?
+    assert_eq "$sample result status" "$expected" "$rc"
+  done
   end_scenario
 }
 scenario_results
@@ -55,35 +55,35 @@ assert_result() { # <what> <expected: yes|no> <function> <argument>
 
 scenario_aliases() {
   begin_scenario 'SSH alias syntax' || return 0
-assert_result 'letter first' yes valid_host alpha
-assert_result 'digit first and punctuation later' yes valid_host '9a._-'
-assert_result 'capital letter' yes valid_host Alpha
-assert_result 'hyphen first' no valid_host -alpha
-assert_result 'dot first' no valid_host .alpha
-assert_result 'slash' no valid_host alpha/beta
-assert_result 'space' no valid_host 'alpha beta'
-assert_result 'empty alias' no valid_host ''
+  assert_result 'letter first' yes valid_host alpha
+  assert_result 'digit first and punctuation later' yes valid_host '9a._-'
+  assert_result 'capital letter' yes valid_host Alpha
+  assert_result 'hyphen first' no valid_host -alpha
+  assert_result 'dot first' no valid_host .alpha
+  assert_result 'slash' no valid_host alpha/beta
+  assert_result 'space' no valid_host 'alpha beta'
+  assert_result 'empty alias' no valid_host ''
   end_scenario
 }
 scenario_aliases
 
 scenario_paths() {
   begin_scenario 'paths accepted by the Mac hook' || return 0
-assert_result 'absolute path' yes hook_safe_path '/tmp/task name/.hidden'
-assert_result 'single component' yes hook_safe_path '/task'
-assert_result 'root path' no hook_safe_path /
-assert_result 'relative path' no hook_safe_path 'tmp/task'
-assert_result 'trailing slash' no hook_safe_path '/tmp/task/'
-assert_result 'newline' no hook_safe_path $'/tmp/a\nb'
-assert_result 'single quote' no hook_safe_path "/tmp/a'b"
-assert_result 'double quote' no hook_safe_path '/tmp/a"b'
-assert_result 'backtick' no hook_safe_path '/tmp/a`b'
-assert_result 'dollar sign' no hook_safe_path "/tmp/a\$b"
-assert_result 'backslash' no hook_safe_path '/tmp/a\b'
-assert_result 'semicolon' no hook_safe_path '/tmp/a;b'
-assert_result 'double slash' no hook_safe_path '/tmp//task'
-assert_result 'parent component' no hook_safe_path '/tmp/../task'
-assert_result 'final parent component' no hook_safe_path '/tmp/..'
+  assert_result 'absolute path' yes hook_safe_path '/tmp/task name/.hidden'
+  assert_result 'single component' yes hook_safe_path '/task'
+  assert_result 'root path' no hook_safe_path /
+  assert_result 'relative path' no hook_safe_path 'tmp/task'
+  assert_result 'trailing slash' no hook_safe_path '/tmp/task/'
+  assert_result 'newline' no hook_safe_path $'/tmp/a\nb'
+  assert_result 'single quote' no hook_safe_path "/tmp/a'b"
+  assert_result 'double quote' no hook_safe_path '/tmp/a"b'
+  assert_result 'backtick' no hook_safe_path '/tmp/a`b'
+  assert_result 'dollar sign' no hook_safe_path "/tmp/a\$b"
+  assert_result 'backslash' no hook_safe_path '/tmp/a\b'
+  assert_result 'semicolon' no hook_safe_path '/tmp/a;b'
+  assert_result 'double slash' no hook_safe_path '/tmp//task'
+  assert_result 'parent component' no hook_safe_path '/tmp/../task'
+  assert_result 'final parent component' no hook_safe_path '/tmp/..'
   end_scenario
 }
 scenario_paths
@@ -101,16 +101,16 @@ check_identity() { # <name> <repo id> <valid: yes|no>
 
 scenario_identities() {
   begin_scenario 'task and repository identities' || return 0
-check_identity task task yes
-check_identity 'two words' two-words no
-check_identity 'has.dot' has-dot no
-check_identity Upper Upper no
-check_identity "$name63" "$name63" yes
-check_identity "$name64" "$name64" no
-assert_eq 'repo id uses only the last path component' final "$(repo_id '/repos/other/final')"
-assert_result 'underscore after the first character' yes valid_name task_2
-assert_result 'underscore first' no valid_name _task
-assert_result 'empty task name' no valid_name ''
+  check_identity task task yes
+  check_identity 'two words' two-words no
+  check_identity 'has.dot' has-dot no
+  check_identity Upper Upper no
+  check_identity "$name63" "$name63" yes
+  check_identity "$name64" "$name64" no
+  assert_eq 'repo id uses only the last path component' final "$(repo_id '/repos/other/final')"
+  assert_result 'underscore after the first character' yes valid_name task_2
+  assert_result 'underscore first' no valid_name _task
+  assert_result 'empty task name' no valid_name ''
   end_scenario
 }
 scenario_identities
@@ -157,110 +157,110 @@ check_rows_load() {
 
 scenario_row_windows() {
   begin_scenario 'cmux row lists across windows' || return 0
-for policy in skip stop checked; do
-  row_cmux_reset
-  check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 1
-  ROW_ONE_LIST="{\"workspaces\":[$ROW_ONE]}"
-  check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 1
-  ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"
-  check_rows_load "$policy" 0 "$ROW_EXPECTED" 1
-  assert_eq "$policy queries windows by UUID" \
-    "$(printf 'list-windows\nworkspace list --json --window %s\nworkspace list --json --window %s' "$ROW_WINDOW_ONE" "$ROW_WINDOW_TWO")" \
-    "$(tail -3 "$TEST_ROOT/row-calls")"
-done
+  for policy in skip stop checked; do
+    row_cmux_reset
+    check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 1
+    ROW_ONE_LIST="{\"workspaces\":[$ROW_ONE]}"
+    check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 1
+    ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"
+    check_rows_load "$policy" 0 "$ROW_EXPECTED" 1
+    assert_eq "$policy queries windows by UUID" \
+      "$(printf 'list-windows\nworkspace list --json --window %s\nworkspace list --json --window %s' "$ROW_WINDOW_ONE" "$ROW_WINDOW_TWO")" \
+      "$(tail -3 "$TEST_ROOT/row-calls")"
+  done
   end_scenario
 }
 scenario_row_windows
 
 scenario_row_failures() {
   begin_scenario 'cmux window failures and older versions' || return 0
-for policy in skip stop checked; do
+  for policy in skip stop checked; do
+    row_cmux_reset
+    ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"$'\n'"  2: $ROW_WINDOW_THREE"
+    ROW_TWO_RC=142
+    if [[ $policy == skip ]]; then
+      check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
+      assert_grep 'display lookups continue after a failed window' "$TEST_ROOT/row-calls" "$ROW_WINDOW_THREE"
+    else
+      check_rows_load "$policy" 142 '' 0
+      assert_eq "$policy stops at the failing window" "workspace list --json --window $ROW_WINDOW_TWO" "$(tail -1 "$TEST_ROOT/row-calls")"
+    fi
+    row_cmux_reset
+    ROW_WINDOWS='' ROW_WINDOWS_RC=1
+    if [[ $policy == checked ]]; then
+      check_rows_load "$policy" 1 '' 0
+      assert_eq 'checked requires successful enumeration' list-windows "$(cat "$TEST_ROOT/row-calls")"
+    else
+      check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
+      assert_eq "$policy falls back without list-windows" $'list-windows\nworkspace list --json' "$(cat "$TEST_ROOT/row-calls")"
+    fi
+  done
   row_cmux_reset
-  ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"$'\n'"  2: $ROW_WINDOW_THREE"
-  ROW_TWO_RC=142
-  if [[ $policy == skip ]]; then
-    check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
-    assert_grep 'display lookups continue after a failed window' "$TEST_ROOT/row-calls" "$ROW_WINDOW_THREE"
-  else
-    check_rows_load "$policy" 142 '' 0
-    assert_eq "$policy stops at the failing window" "workspace list --json --window $ROW_WINDOW_TWO" "$(tail -1 "$TEST_ROOT/row-calls")"
-  fi
+  ROW_WINDOWS='a window line in a new format'
+  check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
+  check_rows_load checked 1 '' 0
   row_cmux_reset
-  ROW_WINDOWS='' ROW_WINDOWS_RC=1
-  if [[ $policy == checked ]]; then
-    check_rows_load "$policy" 1 '' 0
-    assert_eq 'checked requires successful enumeration' list-windows "$(cat "$TEST_ROOT/row-calls")"
-  else
-    check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
-    assert_eq "$policy falls back without list-windows" $'list-windows\nworkspace list --json' "$(cat "$TEST_ROOT/row-calls")"
-  fi
-done
-row_cmux_reset
-ROW_WINDOWS='a window line in a new format'
-check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
-check_rows_load checked 1 '' 0
-row_cmux_reset
-ROW_WINDOWS+=$'\n'"  1: unrecognized-window"
-check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
-check_rows_load checked 1 '' 0
-row_cmux_reset
-ROW_WINDOWS=''
-check_rows_load checked 0 "{\"workspaces\":[$ROW_ONE]}" 0
-ROW_FALLBACK_RC=142
-check_rows_load stop 142 '' 0
-check_rows_load checked 142 '' 0
+  ROW_WINDOWS+=$'\n'"  1: unrecognized-window"
+  check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
+  check_rows_load checked 1 '' 0
+  row_cmux_reset
+  ROW_WINDOWS=''
+  check_rows_load checked 0 "{\"workspaces\":[$ROW_ONE]}" 0
+  ROW_FALLBACK_RC=142
+  check_rows_load stop 142 '' 0
+  check_rows_load checked 142 '' 0
   end_scenario
 }
 scenario_row_failures
 
 scenario_row_validation() {
   begin_scenario 'cmux checked row validation' || return 0
-row_cmux_reset
-ROW_ONE_LIST='[]'
-check_rows_load checked 0 '{"workspaces":[]}' 1
-for invalid in '' ' ' 'not json' '{}' 'null' '{"workspaces":{}}' \
-  '[{"title":"task"}]' '[{"id":"","title":"task"}]' '[{"id":4,"title":"task"}]' \
-  '[{"id":"row"}]' '[{"id":"row","title":4}]' '[{"id":"row","title":"task","description":4}]' \
-  '[{"id":"row","title":"task","remote":false}]' \
-  '[{"id":"row","title":"task","remote":{"enabled":"true"}}]' \
-  '[{"id":"row","title":"task","remote":{"destination":4}}]'; do
-  ROW_ONE_LIST=$invalid
-  assert_result "checked rejects $invalid" no cmux_rows_load checked row_cmux
-  assert_eq 'a failed validation clears the previous snapshot' '' "$CMUX_ROWS_JSON"
-done
-ROW_ONE_LIST='{"workspaces":['
-assert_result 'the hook rejects invalid JSON' no cmux_rows_load stop row_cmux
-row_cmux_reset
-ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"
-ROW_TWO_LIST=''
-check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
-check_rows_load checked 1 '' 0
+  row_cmux_reset
+  ROW_ONE_LIST='[]'
+  check_rows_load checked 0 '{"workspaces":[]}' 1
+  for invalid in '' ' ' 'not json' '{}' 'null' '{"workspaces":{}}' \
+    '[{"title":"task"}]' '[{"id":"","title":"task"}]' '[{"id":4,"title":"task"}]' \
+    '[{"id":"row"}]' '[{"id":"row","title":4}]' '[{"id":"row","title":"task","description":4}]' \
+    '[{"id":"row","title":"task","remote":false}]' \
+    '[{"id":"row","title":"task","remote":{"enabled":"true"}}]' \
+    '[{"id":"row","title":"task","remote":{"destination":4}}]'; do
+    ROW_ONE_LIST=$invalid
+    assert_result "checked rejects $invalid" no cmux_rows_load checked row_cmux
+    assert_eq 'a failed validation clears the previous snapshot' '' "$CMUX_ROWS_JSON"
+  done
+  ROW_ONE_LIST='{"workspaces":['
+  assert_result 'the hook rejects invalid JSON' no cmux_rows_load stop row_cmux
+  row_cmux_reset
+  ROW_WINDOWS+=$'\n'"  1: $ROW_WINDOW_TWO"
+  ROW_TWO_LIST=''
+  check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
+  check_rows_load checked 1 '' 0
   end_scenario
 }
 scenario_row_validation
 
 scenario_row_lookup() {
   begin_scenario 'cmux row lookup by title, repository and host' || return 0
-ROW_LOOKUP="[$ROW_TWO,{\"id\":\"other-repo\",\"title\":\"task\",\"description\":\"@local · other\"},$ROW_ONE,\
+  ROW_LOOKUP="[$ROW_TWO,{\"id\":\"other-repo\",\"title\":\"task\",\"description\":\"@local · other\"},$ROW_ONE,\
 {\"id\":\"legacy\",\"title\":\"repo:old-task\"},\
 {\"id\":\"description-host\",\"title\":\"task\",\"description\":\"@other-vm · repo\",\"remote\":{\"enabled\":true,\"destination\":\"user@other-vm\"}},\
 {\"id\":\"disabled-remote\",\"title\":\"local-task\",\"description\":\"@test-vm · repo\",\"remote\":{\"enabled\":false,\"destination\":\"test-vm\"}},\
 {\"id\":\"no-repo\",\"title\":\"driver\"}]"
-assert_eq 'a local lookup ignores remote and other repository rows' row-one "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id)"
-assert_eq 'an object list finds the remote row' row-two "$(printf '{\"workspaces\":%s}' "$ROW_LOOKUP" | cmux_find_row task repo id test-vm)"
-assert_eq 'a lookup can return another field' '@local · repo' "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo description)"
-assert_eq 'an older title still matches' legacy "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row old-task repo id)"
-assert_eq 'the description can identify the host' description-host "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id other-vm)"
-assert_eq 'a row with remote disabled is local' disabled-remote "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row local-task repo id)"
-assert_eq 'a row can have no repository' no-repo "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row driver '' id)"
-assert_eq 'a missing field prints an empty string' '' "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo current_directory)"
-rc=0
-out=$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id missing-vm) || rc=$?
-assert_eq 'a missing host prints nothing' '' "$out"
-assert_eq 'a missing host returns a failure' 4 "$rc"
-assert_result 'a remote description alone cannot enable a remote row' no cmux_find_row local-task repo id test-vm <<<"$ROW_LOOKUP"
-assert_result 'another repository does not match' no cmux_find_row task absent id <<<"$ROW_LOOKUP"
-assert_eq 'the first matching row wins' row-one "$(printf '[%s,{"id":"later-row","title":"task","description":"@local · repo"}]' "$ROW_ONE" | cmux_find_row task repo id)"
+  assert_eq 'a local lookup ignores remote and other repository rows' row-one "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id)"
+  assert_eq 'an object list finds the remote row' row-two "$(printf '{\"workspaces\":%s}' "$ROW_LOOKUP" | cmux_find_row task repo id test-vm)"
+  assert_eq 'a lookup can return another field' '@local · repo' "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo description)"
+  assert_eq 'an older title still matches' legacy "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row old-task repo id)"
+  assert_eq 'the description can identify the host' description-host "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id other-vm)"
+  assert_eq 'a row with remote disabled is local' disabled-remote "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row local-task repo id)"
+  assert_eq 'a row can have no repository' no-repo "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row driver '' id)"
+  assert_eq 'a missing field prints an empty string' '' "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo current_directory)"
+  rc=0
+  out=$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id missing-vm) || rc=$?
+  assert_eq 'a missing host prints nothing' '' "$out"
+  assert_eq 'a missing host returns a failure' 4 "$rc"
+  assert_result 'a remote description alone cannot enable a remote row' no cmux_find_row local-task repo id test-vm <<<"$ROW_LOOKUP"
+  assert_result 'another repository does not match' no cmux_find_row task absent id <<<"$ROW_LOOKUP"
+  assert_eq 'the first matching row wins' row-one "$(printf '[%s,{"id":"later-row","title":"task","description":"@local · repo"}]' "$ROW_ONE" | cmux_find_row task repo id)"
   end_scenario
 }
 scenario_row_lookup
@@ -296,31 +296,31 @@ test_ssh_hosts
 
 scenario_tmux_commands() {
   begin_scenario 'exact tmux command lines' || return 0
-expected_task=$(cat <<'COMMAND'
+  expected_task=$(cat <<'COMMAND'
 tmux new-session -d -s 'wt-test' echo\ task\ ready\;\ exec\ bash 2>/dev/null; for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=wt-test' "$v" "$(printenv "$v")"; done; tmux set-environment -t '=wt-test' WT_CMUX_CLOSE_ON_EXIT 1; exec tmux attach -d -t '=wt-test'
 COMMAND
-)
-assert_eq 'task command line with a command' "$expected_task." "$(tmux_cmd wt-test 'echo task ready'; printf '.')"
-expected_shared=$(cat <<'COMMAND'
+  )
+  assert_eq 'task command line with a command' "$expected_task." "$(tmux_cmd wt-test 'echo task ready'; printf '.')"
+  expected_shared=$(cat <<'COMMAND'
 tmux new-session -d -s 'wt-test' echo\ task\ ready\;\ exec\ bash 2>/dev/null; tmux attach -t '=wt-test'
 COMMAND
-)
-assert_eq 'shared command line with a command' "$expected_shared." "$(tmux_cmd wt-test 'echo task ready' shared; printf '.')"
-expected_reinit=$(cat <<'COMMAND'
+  )
+  assert_eq 'shared command line with a command' "$expected_shared." "$(tmux_cmd wt-test 'echo task ready' shared; printf '.')"
+  expected_reinit=$(cat <<'COMMAND'
 tmux new-session -d -s 'wt-test'  2>/dev/null; for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=wt-test' "$v" "$(printenv "$v")"; done; exec tmux attach -d -t '=wt-test'
 COMMAND
-)
-assert_eq 'replacement command line' "$expected_reinit." "$(tmux_cmd wt-test '' '' reinit; printf '.')"
-expected_task_shell=$(cat <<'COMMAND'
+  )
+  assert_eq 'replacement command line' "$expected_reinit." "$(tmux_cmd wt-test '' '' reinit; printf '.')"
+  expected_task_shell=$(cat <<'COMMAND'
 tmux new-session -d -s 'wt-test'  2>/dev/null; for v in CMUX_SOCKET_PATH CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_PANEL_ID CMUX_TAB_ID CMUX_TERMINAL_LIFECYCLE_ID; do export "$v="; tmux set-environment -t '=wt-test' "$v" ''; done; for v in CMUX_TUI_SOCKET CMUX_TUI_TERMINAL_ID CMUX_TUI_SESSION_ID; do tmux set-environment -t '=wt-test' "$v" "$(printenv "$v")"; done; tmux set-environment -t '=wt-test' WT_CMUX_CLOSE_ON_EXIT 1; exec tmux attach -d -t '=wt-test'
 COMMAND
-)
-assert_eq 'task command line without a command' "$expected_task_shell." "$(tmux_cmd wt-test; printf '.')"
-expected_shared_shell=$(cat <<'COMMAND'
+  )
+  assert_eq 'task command line without a command' "$expected_task_shell." "$(tmux_cmd wt-test; printf '.')"
+  expected_shared_shell=$(cat <<'COMMAND'
 tmux new-session -d -s 'wt-test'  2>/dev/null; tmux attach -t '=wt-test'
 COMMAND
-)
-assert_eq 'shared command line without a command' "$expected_shared_shell." "$(tmux_cmd wt-test '' shared; printf '.')"
+  )
+  assert_eq 'shared command line without a command' "$expected_shared_shell." "$(tmux_cmd wt-test '' shared; printf '.')"
   end_scenario
 }
 scenario_tmux_commands

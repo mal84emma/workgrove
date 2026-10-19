@@ -115,51 +115,51 @@ run_stubbed_probe() (
 
 scenario_records() {
   begin_scenario 'records, errors and concurrent order' || return 0
-json=$(run_wt hosts --json)
-assert_eq 'aliases and order' 'true' "$(printf '%s' "$json" | jq -r 'map(.host) == ["alpha","beta","broken","down","nogpu","slow1","slow2","unified"]')"
-assert_eq 'two valid GPUs' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .gpu_status == "ok" and (.gpus | length) == 2 and .memory_mib == 32768')"
-assert_eq 'invalid GPU field' 'true' "$(printf '%s' "$json" | jq -r '.[2] | .gpu_status == "unknown" and .gpus == [] and .cpu_logical == null')"
-assert_eq 'SSH failure reason' 'true' "$(printf '%s' "$json" | jq -r '.[3] | .status == "unavailable" and (.error | contains("Permission denied"))')"
-assert_eq 'confirmed absence' 'true' "$(printf '%s' "$json" | jq -r '.[4] | .gpu_status == "none" and .gpus == []')"
-assert_eq 'unknown VRAM retained' 'true' "$(printf '%s' "$json" | jq -r '.[7] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
-assert_eq 'only literal aliases contacted' '8' "$(wc -l <"$TEST_ROOT/ssh.log" | tr -d ' ')"
-assert_eq 'strict SSH and keepalives' 'true' "$(awk '/StrictHostKeyChecking=yes/ && /ServerAliveInterval=5/ && /ServerAliveCountMax=2/ {found=1} END {print found ? "true" : "false"}' "$TEST_ROOT/ssh.log")"
-assert_eq 'parallel probes met' 'true' "$([[ -e "$TEST_ROOT/slow1.start" && -e "$TEST_ROOT/slow2.start" ]] && echo true || echo false)"
-table=$(run_wt hosts)
-assert_eq 'table shows failure reason' 'true' "$([[ "$table" == *'Permission denied'* && "$table" == *'ERROR'* ]] && echo true || echo false)"
-assert_eq 'help succeeds' '0' "$(run_wt hosts --help >/dev/null; echo $?)"
+  json=$(run_wt hosts --json)
+  assert_eq 'aliases and order' 'true' "$(printf '%s' "$json" | jq -r 'map(.host) == ["alpha","beta","broken","down","nogpu","slow1","slow2","unified"]')"
+  assert_eq 'two valid GPUs' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .gpu_status == "ok" and (.gpus | length) == 2 and .memory_mib == 32768')"
+  assert_eq 'invalid GPU field' 'true' "$(printf '%s' "$json" | jq -r '.[2] | .gpu_status == "unknown" and .gpus == [] and .cpu_logical == null')"
+  assert_eq 'SSH failure reason' 'true' "$(printf '%s' "$json" | jq -r '.[3] | .status == "unavailable" and (.error | contains("Permission denied"))')"
+  assert_eq 'confirmed absence' 'true' "$(printf '%s' "$json" | jq -r '.[4] | .gpu_status == "none" and .gpus == []')"
+  assert_eq 'unknown VRAM retained' 'true' "$(printf '%s' "$json" | jq -r '.[7] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
+  assert_eq 'only literal aliases contacted' '8' "$(wc -l <"$TEST_ROOT/ssh.log" | tr -d ' ')"
+  assert_eq 'strict SSH and keepalives' 'true' "$(awk '/StrictHostKeyChecking=yes/ && /ServerAliveInterval=5/ && /ServerAliveCountMax=2/ {found=1} END {print found ? "true" : "false"}' "$TEST_ROOT/ssh.log")"
+  assert_eq 'parallel probes met' 'true' "$([[ -e "$TEST_ROOT/slow1.start" && -e "$TEST_ROOT/slow2.start" ]] && echo true || echo false)"
+  table=$(run_wt hosts)
+  assert_eq 'table shows failure reason' 'true' "$([[ "$table" == *'Permission denied'* && "$table" == *'ERROR'* ]] && echo true || echo false)"
+  assert_eq 'help succeeds' '0' "$(run_wt hosts --help >/dev/null; echo $?)"
   end_scenario
 }
 scenario_records
 
 scenario_hardware_probe() {
   begin_scenario 'execute the real probe script with fake hardware commands' || return 0
-PROBE_MODE=actual
-cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
+  PROBE_MODE=actual
+  cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
 Host warning numericwarning duplicate empty unified stuck pci
 CONFIG
-json=$(run_wt hosts --json)
-assert_eq 'warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "warning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1 and .gpus[0].name == "Tesla V100-SXM2-16GB"')"
-assert_eq 'numeric warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "numericwarning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1')"
-assert_eq 'duplicate GPU index cannot inflate count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "duplicate")][0] | .gpu_status == "unknown" and (.gpus | length) == 2')"
-assert_eq 'successful empty query is no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "empty")][0] | .gpu_status == "none" and .gpus == []')"
-assert_eq 'PCI scan confirms no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "pci")][0] | .gpu_status == "none" and .gpus == []')"
-assert_eq 'N/A VRAM from probe' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "unified")][0] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
-assert_eq 'stalled nvidia-smi fails closed' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "stuck")][0] | .gpu_status == "none"')"
-assert_eq 'nvidia-smi has a kill deadline' '7' "$(wc -l <"$TEST_ROOT/timeout.log" | tr -d ' ')"
+  json=$(run_wt hosts --json)
+  assert_eq 'warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "warning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1 and .gpus[0].name == "Tesla V100-SXM2-16GB"')"
+  assert_eq 'numeric warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "numericwarning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1')"
+  assert_eq 'duplicate GPU index cannot inflate count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "duplicate")][0] | .gpu_status == "unknown" and (.gpus | length) == 2')"
+  assert_eq 'successful empty query is no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "empty")][0] | .gpu_status == "none" and .gpus == []')"
+  assert_eq 'PCI scan confirms no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "pci")][0] | .gpu_status == "none" and .gpus == []')"
+  assert_eq 'N/A VRAM from probe' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "unified")][0] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
+  assert_eq 'stalled nvidia-smi fails closed' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "stuck")][0] | .gpu_status == "none"')"
+  assert_eq 'nvidia-smi has a kill deadline' '7' "$(wc -l <"$TEST_ROOT/timeout.log" | tr -d ' ')"
   end_scenario
 }
 scenario_hardware_probe
 
 scenario_probe_deadline() {
   begin_scenario 'client deadline bounds an unresponsive SSH session' || return 0
-cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
+  cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
 Host hang
 CONFIG
-local start=$SECONDS
-json=$(WG_HOST_PROBE_TIMEOUT=1 run_wt hosts --json)
-assert_eq 'deadline returns within five seconds' 1 "$((SECONDS - start < 5))"
-assert_eq 'hung SSH probe returns unavailable' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .host == "hang" and .status == "unavailable" and (.error | contains("timed out after 1 seconds"))')"
+  local start=$SECONDS
+  json=$(WG_HOST_PROBE_TIMEOUT=1 run_wt hosts --json)
+  assert_eq 'deadline returns within five seconds' 1 "$((SECONDS - start < 5))"
+  assert_eq 'hung SSH probe returns unavailable' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .host == "hang" and .status == "unavailable" and (.error | contains("timed out after 1 seconds"))')"
   end_scenario
 }
 scenario_probe_deadline
