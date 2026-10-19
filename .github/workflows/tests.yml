@@ -1,13 +1,14 @@
-# Runs shellcheck and every suite in test/ on each push and each pull request.
+# Run ShellCheck and every suite in test/ for pull requests and pushes to main.
 # The workflow uses no secrets. Its token can only read the repository, and checkout does not
 # store the token in .git/config. So the suites have no token for the GitHub API.
 name: Tests
 
 on:
   push:
+    branches: [main]
   pull_request:
 
-# Keep branch pushes and pull-request merge checks in separate cancellation groups.
+# Keep main pushes and pull-request merge checks in separate cancellation groups.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

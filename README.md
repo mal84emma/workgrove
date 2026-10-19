@@ -337,9 +337,13 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
 
 ### Tests
 
-GitHub Actions runs [`.github/workflows/tests.yml`](.github/workflows/tests.yml) on every push and every
-pull request. A new run cancels older runs for the same branch or pull request.
-Branch pushes and pull-request merge checks use separate cancellation groups.
+GitHub Actions runs [`.github/workflows/tests.yml`](.github/workflows/tests.yml) when a pull request opens,
+reopens, or receives new commits. It also runs on pushes to `main`, including merges.
+Other branch pushes and tag pushes do not start the workflow.
+Other branches receive no cloud checks before a pull request opens.
+A new run cancels older runs for the same branch or pull request.
+Main pushes and pull-request merge checks use separate cancellation groups.
+
 The workflow makes these checks:
 
 - On `ubuntu-24.04`, `shellcheck -x` checks `bin/*`, `lib/workgrove/*.sh`, `lib/workgrove/vm/*.sh`,
