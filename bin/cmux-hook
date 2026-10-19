@@ -133,7 +133,7 @@ attach_row() { # attach_row <host> <session> <title> <repo id> <command> — bri
       if [[ $full != 1 ]]; then
         out="$out (the row list from before the create was not complete)"
       else
-        sleep 1
+        wg_sleep
         if ws_load fresh; then
           ref=$(printf '%s' "$WS_JSON" | jq -r --arg t "$3" --arg h "$1" --arg before "$before" --arg sep "$ROW_SEP" "$ROW_JQ"'
             first((.workspaces? // .)[] | select(new_row($t; $h; $before | split("\n"); $sep)) | .id // empty) // empty' \
@@ -184,7 +184,7 @@ case $t in
     # worst of both.
     if [[ -x $CODE ]] && valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && hook_safe_path "$p"; then
       "$CODE" --folder-uri "vscode-remote://ssh-remote+$h$p/" >/dev/null 2>&1 &
-      pid=$!; sleep 1                      # the code CLI hands the folder to the app and exits 0 well inside
+      pid=$!; wg_sleep                      # the code CLI hands the folder to the app and exits 0 well inside
       if kill -0 "$pid" 2>/dev/null; then  # a second, so both "still running" and "exited 0" mean it launched;
         quiet                              # only a non-zero exit is a failure, and that one keeps its banner
       elif wait "$pid"; then

@@ -126,8 +126,8 @@ begin_scenario 'client deadline bounds an unresponsive SSH session'
 cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
 Host hang
 CONFIG
-json=$(run_wt hosts --json)
-assert_eq 'hung SSH probe returns unavailable' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .host == "hang" and .status == "unavailable" and (.error | contains("timed out after 20 seconds"))')"
+json=$(WG_HOST_PROBE_TIMEOUT=1 run_wt hosts --json)
+assert_eq 'hung SSH probe returns unavailable' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .host == "hang" and .status == "unavailable" and (.error | contains("timed out after 1 seconds"))')"
 end_scenario
 
 : >"$TEST_ROOT/home/.ssh/config"

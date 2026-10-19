@@ -48,7 +48,7 @@ tag_row() { # tag_row <workspace ref or ""> <title> <repo> <host> [row ids befor
     || die "cmux printed no ref for the new row '$2' on $4, and the row list from before the create was unreadable; close that row in cmux"
   for _ in 1 2 3; do                    # no workspace:N in the output: the row list lags ~1s behind a create
     [[ -n "$ref" ]] && break
-    sleep 1
+    wg_sleep
     ref=$(rows_json | jq -r --arg t "$2" --arg h "$4" --arg before "${5:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
       first((.workspaces? // .)[] | select(new_row($t; $h; $before | split("\n"); $sep)) | .id // empty) // empty' \
       2>/dev/null || true)

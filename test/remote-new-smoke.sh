@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Exercise remote creation failures with scratch ssh and cmux stubs. The suite contacts no real host.
 set -euo pipefail
+export WG_POLL_INTERVAL=0
 
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/wt-remote-new.XXXXXX")

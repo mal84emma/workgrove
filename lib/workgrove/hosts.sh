@@ -1,6 +1,10 @@
 # shellcheck shell=bash
 probe_host() { # one SSH login proves remote-command access and gathers Linux hardware
-  local out_file err_file ssh_pid rc=0 tick
+  local out_file err_file ssh_pid rc=0 tick timeout=${WG_HOST_PROBE_TIMEOUT:-20}
+  if [[ ! $timeout =~ ^[1-9][0-9]*$ ]]; then
+    printf 'WG_HOST_PROBE_TIMEOUT must be a positive integer in seconds\n' >&2
+    return 1
+  fi
   out_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stdout.XXXXXX") || return 1
   err_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stderr.XXXXXX") || { rm -f "$out_file"; return 1; }
   # The remote timeout limits an nvidia-smi that ignores TERM. The client deadline also limits a remote
@@ -10,13 +14,14 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
       -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=5 \
       -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" <"$WG_LIB_DIR/vm/probe-host.sh" &
   ssh_pid=$!
-  for ((tick=0; tick<200; tick++)); do
+  for ((tick=0; tick<timeout*10; tick++)); do
     kill -0 "$ssh_pid" 2>/dev/null || break
     sleep 0.1
   done
   if kill -0 "$ssh_pid" 2>/dev/null; then
     kill -KILL "$ssh_pid" 2>/dev/null || true
-    printf 'SSH probe timed out after 20 seconds\n' >&2
+    wait "$ssh_pid" 2>/dev/null || true
+    printf 'SSH probe timed out after %s seconds\n' "$timeout" >&2
     rc=124
   else
     wait "$ssh_pid" || rc=$?

@@ -47,6 +47,7 @@
 # a pass/fail count. It exits non-zero if any assertion failed. The suite also asserts the count itself,
 # against expected_assertions below, because a scenario that silently stops checking still prints "ok".
 set -euo pipefail
+export WG_POLL_INTERVAL=0
 
 # Plain redirection creates the fixtures, so their modes come from the ambient umask, unless a scenario sets
 # a mode on purpose. Ubuntu with user-private groups defaults to 002, and macOS defaults to 022. So the two
