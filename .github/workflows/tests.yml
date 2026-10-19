@@ -89,8 +89,7 @@ jobs:
             exit 1
           fi
 
-      # Each suite checks its own assertion total, which differs between macOS and Linux.
-      # The loop includes lib-smoke.sh, runs every suite after a failure, and names each suite that failed.
+      # Run every suite concurrently. Print each log after its suite finishes, including failures.
       - name: Run the suites
         env:
           # install-smoke.sh runs install.sh with this bash. An empty value selects the bash on PATH.
@@ -98,13 +97,25 @@ jobs:
           # git in the suites can reach only local repositories.
           GIT_ALLOW_PROTOCOL: file
         run: |
-          failed=()
-          for suite in test/*-smoke.sh; do
+          logs=$(mktemp -d)
+          trap 'rm -rf "$logs"' EXIT
+          suites=(test/*-smoke.sh)
+          pids=()
+          for suite in "${suites[@]}"; do
+            bash "$suite" >"$logs/${suite##*/}.log" 2>&1 &
+            pids+=("$!")
+          done
+          failed=0
+          for i in "${!pids[@]}"; do
+            suite=${suites[$i]}
+            rc=0
+            wait "${pids[$i]}" || rc=$?
             echo "::group::$suite"
-            bash "$suite" || failed+=("$suite")
+            cat "$logs/${suite##*/}.log"
             echo "::endgroup::"
+            if ((rc != 0)); then
+              echo "::error::$suite failed (exit $rc)"
+              failed=1
+            fi
           done
-          for suite in "${failed[@]}"; do
-            echo "::error::$suite failed"
-          done
-          ((${#failed[@]} == 0))
+          exit "$failed"
