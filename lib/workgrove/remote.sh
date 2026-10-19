@@ -3,6 +3,7 @@
 # Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
 # Requires common.sh: die, hook_safe_path, row_title, shell_join, tmux_cmd, usage, valid_name, warn,
 #   wt_read_result, wt_session.
+# Requires options.sh: wt_opt_args, wt_opts, wt_spec.
 # Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent.
 # ---------------------------------------------------------------- wt -H <host> …
 remote_sh_raw() { # keep SSH's exit status intact for callers that must tell a refusal from a dropped connection
@@ -50,6 +51,25 @@ need_r() { # need_r <host> <sub> <args…> — a remote call has no cwd to infer
   die "$sub: -r <repo> is required with -H (wt -H $host repos lists them)"
 }
 
+# Normalize every repository value before forwarding or using it as a row identity.
+wt_remote_args() {
+  local __host=$1 __sub=$2 __output=$3 __i __value
+  shift 3
+  local -A __parsed=()
+  wt_opts "$(wt_spec "$__sub" remote)" __parsed "$@"
+  for ((__i=0; __i<${__parsed[@count]}; __i++)); do
+    [[ ${__parsed[@key:$__i]} == repo ]] || continue
+    __value=${__parsed[@value:$__i]}
+    while [[ $__value == */ && $__value != / ]]; do __value=${__value%/}; done
+    case "$__value" in
+      /*) ;;
+      ""|.|..|*/*) die "$__sub: -r must be an absolute path on $__host, or a repo name there (wt -H $__host repos lists them)" ;;
+    esac
+    __parsed[@value:$__i]=$__value
+  done
+  wt_opt_args __parsed "$__output"
+}
+
 host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
   remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" <"$WG_LIB_DIR/vm/host-new-preflight.sh"
 }
@@ -59,16 +79,19 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   # Consume both ways of giving a brief HERE, and relay them the same way. A forwarded --prompt-stdin would
   # read nothing locally and pipe an empty prompt into ssh. The VM would then create the task with no brief.
   local -A opts=()
-  local spec
-  spec=$(wt_spec new)
-  spec=${spec/'--prompt-stdin|stdin_prompt|=1'/'--prompt-stdin|prompt|@stdin'}
-  wt_opts "$spec" opts "$@"
-  prompt=${opts[prompt]-$prompt}
+  wt_opts "$(wt_spec new remote)" opts "$@"
+  local i
+  for ((i=0; i<${opts[@count]}; i++)); do
+    case ${opts[@key:$i]} in
+      prompt) prompt=${opts[@value:$i]} ;;
+      stdin_prompt) IFS= read -r -d '' prompt || true ;;
+    esac
+  done
   repo_request=${opts[repo]-$repo_request}
   requested_agent=${opts[agent]-$requested_agent}
   [[ ! -v opts[agent] ]] || valid_agent "$requested_agent"
   [[ ${opts[workspace]:-1} == 1 ]] || no_workspace=1
-  wt_opt_args opts args prompt workspace
+  wt_opt_args opts args prompt stdin_prompt workspace
   if [[ $no_workspace -eq 0 ]]; then
     cmux_ok || die "cmux is not running; start cmux before creating a task on $host"
   fi

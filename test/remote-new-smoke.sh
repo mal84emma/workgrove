@@ -388,6 +388,29 @@ TMUX
 }
 scenario_preflight_recovery
 
+scenario_prompt_order() {
+  begin_scenario 'remote briefs preserve explicit and stdin argument order' || return 0
+  local order expected args=()
+  CMUX_MODE=down SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  for order in stdin-first stdin-last repeated interleaved; do
+    case $order in
+      stdin-first) args=(--prompt-stdin -p explicit); expected=explicit ;;
+      stdin-last) args=(-p explicit --prompt-stdin); expected='stdin brief' ;;
+      repeated) args=(--prompt-stdin --prompt-stdin); expected='second brief' ;;
+      interleaved) args=(--prompt-stdin -p explicit --prompt-stdin); expected='second brief' ;;
+    esac
+    printf 'stdin brief\0second brief\0' >"$TEST_ROOT/brief-input"
+    invoke_wt -H fakevm new task -r wt-demo --no-workspace "${args[@]}" <"$TEST_ROOT/brief-input"
+    assert_eq "$order creation status" 0 "$WT_RC"
+    assert_eq "$order saved brief" "$expected" "$(cat "$TEST_ROOT/remote/repo/.git/wt/task.prompt")"
+    assert_eq "$order forwards one stdin option" 1 "$(grep -xcF -- '--prompt-stdin' "$TEST_ROOT/remote-new.args")"
+    check "$(if ! grep -qxE -- '-p|--prompt' "$TEST_ROOT/remote-new.args"; then echo yes; fi)" "$order forwarded an explicit prompt option"
+  done
+  CMUX_MODE=alive
+  end_scenario
+}
+scenario_prompt_order
+
 scenario_interrupted_setup() {
   begin_scenario 'interrupted setup retains the brief, agent and model' || return 0
   SCRATCH_REPO="$TEST_ROOT/local-repo"

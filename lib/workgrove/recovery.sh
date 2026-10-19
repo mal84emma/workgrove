@@ -4,6 +4,7 @@
 #   row_remote_field, row_shell_prompt, send_tmux_line.
 # Requires common.sh: die, row_title, shell_join, tmux_cmd, usage, valid_name, warn, wg_sleep,
 #   wt_read_result, wt_session.
+# Requires options.sh: wt_opts, wt_spec.
 # Requires remote.sh: agent_on_vm, remote_row, remote_run_cmd, remote_sh, remote_sh_raw,
 #   remote_wt_result.
 # Requires task.sh: cmux_require, row_tag.

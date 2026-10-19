@@ -55,6 +55,8 @@ contains 'global help keeps new alignment' "$OUTPUT" 'wt new  [name]'
 contains 'global remote usage' "$OUTPUT" "wt -H <host> <$(wt_remote_commands '|')>"
 invoke attach -h
 contains 'direct attach rejects recovery flags' "$OUTPUT" 'Direct attach rejects --reattach and --restart-agent.'
+contains 'remote attach requires its repository option' "$OUTPUT" 'wt -H <host> attach <name> -r REPO [--reattach|--restart-agent]'
+absent 'remote attach does not mark repo optional' "$OUTPUT" '[-r REPO]'
 contains 'remote attach rejects updates' "$OUTPUT" 'With -H, attach rejects -a/--agent and -p/--prompt.'
 end_scenario
 
@@ -74,6 +76,14 @@ for command in current driver hosts list prune task update; do
   wt_opts "$(wt_spec "$command")" parsed --
   assert_eq "$command accepts empty delimiter" 0 "${parsed[@count]}"
 done
+WT_OPT_HOST=ambient wt_opts "$(wt_spec new)" parsed --repo=relative/path
+assert_eq 'generic parsing has no ambient remote policy' relative/path "${parsed[repo]}"
+STATUS=0
+OUTPUT=$(wt_opts $'probe|name\n-x*|@error|use --value' parsed -xlegacy 2>&1) || STATUS=$?
+assert_eq 'declared rejection status' 1 "$STATUS"
+contains 'declared rejection keeps its hint' "$OUTPUT" 'probe: unknown option -xlegacy (use --value)'
+wt_opts "$(wt_spec new remote)" parsed -- -mfable
+assert_eq 'declared rejection respects the positional boundary' -mfable "${parsed[name]}"
 invoke diff --bad
 contains 'diff keeps show error text' "$OUTPUT" 'show: unknown option --bad'
 invoke diff --repo

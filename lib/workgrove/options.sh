@@ -3,9 +3,9 @@
 # Remote modes are local, forward, forward with -r, or a host_* function.
 # Option specs start with a positional key or a ! policy that preserves existing error messages.
 # Semicolons separate options. Colons separate aliases, output key, value noun, and optional validator.
-# A flag uses =VALUE instead of a value noun. Remote new uses @stdin to read its brief in argument order.
-# Each option gives aliases, an output key, and a value noun or flag assignment.
-WT_COMMANDS='new||host_new|Create a task.|name;-p,--prompt:prompt:a brief;--prompt-stdin:stdin_prompt:=1;-b,--base:base:a ref;--head:from_head:=1;-a,--agent:agent:an agent;-m,--model:model:a model:need_model;--no-workspace:workspace:=0;-r,--repo:repo:a repo|
+# A flag uses =VALUE instead of a value noun. An @error key rejects a spelling with a diagnostic hint.
+# Remote overrides beginning with +; append rules to the direct specification.
+WT_COMMANDS='new||host_new|Create a task.|name;-p,--prompt:prompt:a brief;--prompt-stdin:stdin_prompt:=1;-b,--base:base:a ref;--head:from_head:=1;-a,--agent:agent:an agent;-m,--model:model:a model:need_model;--no-workspace:workspace:=0;-r,--repo:repo:a repo|+;-m?*:@error:use -m <model>
 attach||host_attach|Open or recover a task row.|name;-a,--agent:agent:an agent;-p,--prompt:prompt:a brief;-r,--repo:repo:a repo|name;--restart-agent:restart:=1;--reattach:reattach:=1;-r,--repo:repo:a repo
 list|ls|host_list|List tasks.|!unknown;--all:all:=1;-r,--repo:repo:a repo|
 show||forward with -r|Show task status.|name;--diff:diff:=1;-r,--repo:repo:a repo|
@@ -40,7 +40,10 @@ wt_command() {
 wt_spec() {
   wt_command "$1" || return
   local spec=$WT_SPEC
-  [[ ${2:-} != remote ]] || spec=$WT_REMOTE_SPEC
+  if [[ ${2:-} == remote ]]; then
+    if [[ $WT_REMOTE_SPEC == '+;'* ]]; then spec+=${WT_REMOTE_SPEC:1}
+    else spec=$WT_REMOTE_SPEC; fi
+  fi
   printf '%s|%s\n' "$WT_COMMAND" "${spec//;/$'\n'}" | tr ':' '|'
 }
 
@@ -67,7 +70,7 @@ wt_command_help() {
     selected {print}')
   if [[ -n $text ]]; then printf '%s\n' "$text"; else printf '#   wt %s    %s\n' "$WT_COMMAND" "$WT_SUMMARY"; fi
   if [[ $WT_COMMAND == attach ]]; then
-    printf '%s\n' '#   wt -H <host> attach <name> [-r REPO] [--reattach|--restart-agent]' \
+    printf '%s\n' '#   wt -H <host> attach <name> -r REPO [--reattach|--restart-agent]' \
       '#     With -H, attach rejects -a/--agent and -p/--prompt.' \
       '#     Direct attach rejects --reattach and --restart-agent.' \
       '#     Direct attach can run on the Mac or inside a VM.'
@@ -113,23 +116,16 @@ wt_opts() {
       done
     fi
     if [[ $__found == 1 ]]; then
-      if [[ $__kind == =* || $__kind == @stdin ]]; then
+      [[ $__key != @error ]] || die "$__command: unknown option $__original ($__kind)"
+      if [[ $__kind == =* ]]; then
         [[ $__equal == 0 ]] || die "$__command: unknown option $__original"
-        if [[ $__kind == @stdin ]]; then IFS= read -r -d '' __value || true
-        else __value=${__kind#=}; fi
+        __value=${__kind#=}
       else
         if [[ $__equal == 0 ]]; then
           [[ $# -ge 2 ]] || die "$__command: $__option needs $__kind"
           __value=$2; shift
         fi
         [[ -z $__check ]] || "$__check" "$__value"
-        if [[ $__key == repo && -n ${WT_OPT_HOST:-} ]]; then
-          while [[ $__value == */ && $__value != / ]]; do __value=${__value%/}; done
-          case "$__value" in
-            /*) ;;
-            ""|.|..|*/*) die "$__command: -r must be an absolute path on $WT_OPT_HOST, or a repo name there (wt -H $WT_OPT_HOST repos lists them)" ;;
-          esac
-        fi
       fi
       # The output nameref names an associative array.
       # shellcheck disable=SC2004
@@ -139,9 +135,6 @@ wt_opts() {
     else
       __unknown="$__command: unknown option $__original"
       __unexpected="$__command: unexpected argument $__original"
-      if [[ -n ${WT_OPT_HOST:-} && $__command == new && $__original == -m?* ]]; then
-        die "$__unknown (use -m <model>)"
-      fi
       case "$__position" in
         '!hosts') die 'hosts: usage: wt hosts [--json]' ;;
         '!none') die "$__unexpected (wt $__command takes none)" ;;
@@ -182,18 +175,9 @@ wt_opt_args() {
     if [[ -z $__option ]]; then __positions+=("${__opts[@value:$__i]}")
     else
       __args+=("$__option")
-      [[ $__kind == =* || $__kind == @stdin ]] || __args+=("${__opts[@value:$__i]}")
+      [[ $__kind == =* ]] || __args+=("${__opts[@value:$__i]}")
     fi
   done
   [[ ! -v __opts[@delimiter] ]] || __args+=(--)
   __args+=("${__positions[@]}")
-}
-
-wt_remote_args() {
-  local WT_OPT_HOST=$1
-  local __sub=$2 __output=$3
-  shift 3
-  local -A __parsed=()
-  wt_opts "$(wt_spec "$__sub" remote)" __parsed "$@"
-  wt_opt_args __parsed "$__output"
 }
