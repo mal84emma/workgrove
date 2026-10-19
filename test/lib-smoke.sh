@@ -48,6 +48,26 @@ SHELL
 }
 scenario_fake_ssh
 
+close_row_result() (
+  local reply=$1 status=$2 rc=0
+  cmux_call() { printf '%s' "$reply"; return "$status"; }
+  CMUX_ERROR=''
+  close_row row-test || rc=$?
+  printf '%s\n%s' "$rc" "$CMUX_ERROR"
+)
+
+scenario_close_row() {
+  begin_scenario 'closing a row tolerates only an already-closed row' || return 0
+  assert_eq 'a successful close is silent' 0 "$(close_row_result '' 0)"
+  assert_eq 'a row closed during the request is already gone' 0 \
+    "$(close_row_result 'Error: not_found: Workspace not found' 1)"
+  assert_eq 'other close failures retain the error and recovery command' \
+    $'1\ncould not close cmux row row-test: Permission denied\non the Mac: cmux workspace close row-test' \
+    "$(close_row_result 'Permission denied' 1)"
+  end_scenario
+}
+scenario_close_row
+
 scenario_results() {
   begin_scenario 'versioned wt results' || return 0
   record=$(WG_MACHINE_RESULT=1 wt_result new created task '/repos/two words' wt-two-words-task)
