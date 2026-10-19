@@ -148,6 +148,11 @@ workgrove/
 │   ├── settings-snippet.jsonc six keys to paste; Settings Sync owns the rest
 │   └── extensions.txt
 ├── test/
+│   ├── run.sh                 the shared local and CI runner with bounded workers and timings
+│   ├── runner-smoke.sh        runner scheduling, filters, failure logs, and interruption cleanup
+│   ├── runner-git.sh          optional resolution of Apple's Git launcher for test workers
+│   ├── runner-git-smoke.sh    Git selection, fallback, and fixture precedence
+│   ├── wt-scenarios.sh        the wt scenario IDs and names shared by discovery and execution
 │   ├── lib.sh                 the assertion functions shared by the suites
 │   ├── lib-smoke.sh           unit tests for every shared shell function
 │   ├── named-outputs-smoke.sh caller-named outputs that match internal local names
@@ -353,29 +358,28 @@ Then run these commands in bash from the repository root:
 ```bash
 export PATH="$(brew --prefix)/bin:$PATH"
 shellcheck -x bin/* lib/workgrove/*.sh lib/workgrove/vm/*.sh install.sh test/*.sh
-logs=$(mktemp -d)
-suites=(test/*-smoke.sh)
-pids=()
-for suite in "${suites[@]}"; do
-  GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash "$suite" >"$logs/${suite##*/}.log" 2>&1 &
-  pids+=("$!")
-done
-failed=0
-for i in "${!pids[@]}"; do
-  suite=${suites[$i]}
-  wait "${pids[$i]}" || { echo "FAILED: $suite"; failed=1; }
-  cat "$logs/${suite##*/}.log"
-done
-rm -rf "$logs"
-(exit "$failed")
+GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash test/run.sh
 ```
 
+By default, the runner limits execution to four workers across suites and intact `wt-smoke.sh` scenarios.
+Set `JOBS=1` for a serial run or `JOBS=8` to allow more workers.
+To select suites, pass their paths: `bash test/run.sh test/wt-smoke.sh`.
+The runner prints each task's complete log, waits for all tasks, and fails if any task failed.
+It keeps runner logs after a failure. Set `KEEP=1` to keep logs after a successful run.
+
 Each suite reports its assertions and exits nonzero on failure.
-The loop waits for every suite, prints each log, and reports failures.
+Scenario and task times show individual durations in seconds.
+Each suite's elapsed span runs from its first worker's start to its last worker's finish.
+Total wall time includes discovery, Git selection, execution, and task log output.
+On the Mac, the runner resolves Apple's Git launcher once when `/usr/bin/git` is selected.
+It preserves custom Git selections and uses the original Git if resolution or version checks fail.
 
 Set `ONLY` to select scenario names with a shell glob pattern. The filter matches substrings too.
 For example, `ONLY='11.*' bash test/wt-smoke.sh` runs scenario 11.
+For a filtered runner invocation, select one suite: `ONLY='11.*' bash test/run.sh test/wt-smoke.sh`.
 A filter that matches no scenario exits nonzero.
+Direct suite invocations remain serial. `wt-smoke.sh --list-scenarios` lists exact scenario IDs and names.
+Use `bash test/wt-smoke.sh --scenario scenario_shared_helpers` to run an exact scenario.
 Set `KEEP=1` to keep scratch files for inspection.
 
 `wt-smoke.sh` and `remote-new-smoke.sh` set `WG_POLL_INTERVAL=0` to shorten production poll waits.

@@ -89,33 +89,12 @@ jobs:
             exit 1
           fi
 
-      # Run every suite concurrently. Print each log after its suite finishes, including failures.
+      # The shared runner limits workers and reports scenario, task, suite, and total times.
       - name: Run the suites
         env:
+          JOBS: "4"
           # install-smoke.sh runs install.sh with this bash. An empty value selects the bash on PATH.
           INSTALL_BASH: ${{ runner.os == 'macOS' && '/bin/bash' || '' }}
-          # git in the suites can reach only local repositories.
+          # Git in the suites can reach only local repositories.
           GIT_ALLOW_PROTOCOL: file
-        run: |
-          logs=$(mktemp -d)
-          trap 'rm -rf "$logs"' EXIT
-          suites=(test/*-smoke.sh)
-          pids=()
-          for suite in "${suites[@]}"; do
-            bash "$suite" >"$logs/${suite##*/}.log" 2>&1 &
-            pids+=("$!")
-          done
-          failed=0
-          for i in "${!pids[@]}"; do
-            suite=${suites[$i]}
-            rc=0
-            wait "${pids[$i]}" || rc=$?
-            echo "::group::$suite"
-            cat "$logs/${suite##*/}.log"
-            echo "::endgroup::"
-            if ((rc != 0)); then
-              echo "::error::$suite failed (exit $rc)"
-              failed=1
-            fi
-          done
-          exit "$failed"
+        run: bash test/run.sh
