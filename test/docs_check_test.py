@@ -78,6 +78,55 @@ class DocsCheckTests(unittest.TestCase):
         self.assertEqual(["README.md:1: dead link: missing.md"], self.links('<a href="missing.md">go</a>\n'))
         self.assertEqual(["README.md:1: missing anchor: docs/target.md#missing"], self.links('<a href="docs/target.md#missing">go</a>\n'))
 
+    def test_rendered_heading_text(self):
+        text = "[emphasis](#the-agent) [entity](#a--b) [code](#_literal_)\n# The _agent_\n# A &amp; B\n# `_literal_`\n"
+        self.assertEqual([], self.links(text))
+        self.assertEqual("file_name", docs_check.heading_text("__file_name__"))
+        self.assertEqual("a_b_c", docs_check.heading_text("a_b_c"))
+        self.assertEqual("_literal_", docs_check.heading_text(r"\_literal\_"))
+
+    def test_heading_slug_collisions_reserve_emitted_ids(self):
+        text = "[one](#a) [two](#a-1) [three](#a-1-1) [four](#a-2)\n# A\n# A\n# A-1\n# A\n"
+        self.assertEqual([], self.links(text))
+        self.assertEqual({"a", "a-1", "a-1-1", "a-2"}, docs_check.anchors(self.root / "README.md"))
+
+    def test_escaped_brackets_are_literal(self):
+        text = r"\[example](missing.md)" + "\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:2: dead link: visible-missing.md"], self.links(text))
+        self.assertEqual(["README.md:1: dead link: missing.md"], self.links(r"\\[go](missing.md)"))
+
+    def test_indented_code_preserves_later_live_links(self):
+        text = "    [example](missing.md)\n    <!--\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:3: dead link: visible-missing.md"], self.links(text))
+        text = "1. Item.\n\n       [example](missing.md)\n\n   [go](visible-missing.md)\n"
+        self.assertEqual(["README.md:5: dead link: visible-missing.md"], self.links(text))
+
+    def test_indented_paragraph_and_list_links_remain_live(self):
+        text = "Paragraph.\n    [go](missing.md)\n"
+        self.assertEqual(["README.md:2: dead link: missing.md"], self.links(text))
+        text = "- Item.\n  - Nested item.\n    [go](missing.md)\n"
+        self.assertEqual(["README.md:3: dead link: missing.md"], self.links(text))
+
+    def test_inline_comments_preserve_paragraph_indentation(self):
+        text = "Paragraph. <!-- note -->\n    [go](missing.md)\n"
+        self.assertEqual(["README.md:2: dead link: missing.md"], self.links(text))
+        text = "- Item. <!-- note -->\n      [go](missing.md)\n"
+        self.assertEqual(["README.md:2: dead link: missing.md"], self.links(text))
+        text = "<!-- note --> Paragraph.\n    [go](missing.md)\n"
+        self.assertEqual(["README.md:2: dead link: missing.md"], self.links(text))
+
+    def test_standalone_comments_allow_indented_code(self):
+        text = "Paragraph.\n<!-- note -->\n    [example](missing.md)\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:4: dead link: visible-missing.md"], self.links(text))
+        text = "<!-- note\nmore note -->\n    [example](missing.md)\n[go](visible-missing.md)\n"
+        self.assertEqual(["README.md:4: dead link: visible-missing.md"], self.links(text))
+
+    def test_html_and_markdown_images_use_destination_checks(self):
+        self.write("docs/image.png", "fixture")
+        self.assertEqual([], self.links('<img src="docs/image.png" alt="Example">\n'))
+        self.assertEqual(["README.md:1: dead link: missing.png"], self.links('<img src="missing.png" alt="Example">\n'))
+        self.assertEqual(["README.md:1: dead link: missing.png"], self.links('![Example](missing.png)\n'))
+
     def test_external_links_are_skipped(self):
         self.assertEqual([], self.links('[web](https://example.com/missing#missing)\n<a href="mailto:test@example.com">mail</a>\n'))
 

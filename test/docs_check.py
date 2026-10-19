@@ -1,10 +1,12 @@
 """Check tracked Layout files, required citations, and local documentation links."""
 
 import argparse
+from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 import re
 import shlex
+import string
 import subprocess
 from urllib.parse import unquote, urlsplit
 
@@ -22,17 +24,89 @@ def inline_prose(text):
     return re.sub(r"(`+).*?\1", lambda match: blank(match[0]), text)
 
 
+class IndentedCode:
+    """Distinguish code indentation from list and paragraph continuations."""
+
+    def __init__(self):
+        self.list_indents = []
+        self.paragraph = False
+        self.active = False
+
+    def mask(self, line):
+        if not line.strip():
+            self.paragraph = False
+            return line
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip(" "))
+        while self.list_indents and indent < self.list_indents[-1]:
+            self.list_indents.pop()
+        base = self.list_indents[-1] if self.list_indents else 0
+        if indent >= base + 4 and (self.active or not self.paragraph):
+            self.active = True
+            return blank(line)
+        self.active = False
+        item = re.match(r"^ *(?:[-+*]|[0-9]+[.)]) +", expanded)
+        if item:
+            self.list_indents.append(item.end())
+        self.observe(expanded)
+        return line
+
+    def observe(self, line):
+        self.paragraph = not re.match(r"^ *(?:#{1,6} |<!--|(?:[-*_] *){3,}$)", line)
+
+
+def mask_escaped_brackets(text):
+    # Consume escaped backslashes in pairs before considering an escaped bracket.
+    return re.sub(r"\\[\\\[]", lambda match: blank(match[0]), text)
+
+
+def heading_text(title):
+    """Use displayed text while preserving punctuation inside code and escapes."""
+    literals = []
+
+    def protect(match):
+        literals.append(match[2] if match[1] else match[3])
+        return f"\x00{len(literals) - 1}\x00"
+
+    pattern = r"(`+)(.*?)\1|\\([" + re.escape(string.punctuation) + r"])"
+    title = re.sub(pattern, protect, title)
+    title = re.sub(r"!?\[([^]]+)\]\([^)]*\)", r"\1", title)
+    title = re.sub(r"<[^>]+>", "", title)
+    previous = None
+    while title != previous:
+        previous = title
+        title = re.sub(r"(?<!\w)(_+)(?=\S)(.+?)(?<=\S)\1(?!\w)", r"\2", title)
+    title = unescape(title)
+    return re.sub(r"\x00([0-9]+)\x00", lambda match: literals[int(match[1])], title)
+
+
+def unique_slug(title, emitted):
+    title = heading_text(title).lower()
+    slug = "".join(c for c in title if c.isalnum() or c in "_- ").replace(" ", "-")
+    candidate = slug
+    suffix = 0
+    while candidate in emitted:
+        suffix += 1
+        candidate = f"{slug}-{suffix}"
+    emitted.add(candidate)
+    return candidate
+
+
 def prose(text):
     lines = []
     fence = None
     in_comment = False
+    indented = IndentedCode()
     for line in text.splitlines(keepends=True):
         if fence:
             marker = re.match(r"^\s*([`~]+)\s*$", line)
             if marker and set(marker[1]) == {fence[0]} and len(marker[1]) >= len(fence):
                 fence = None
+                indented.paragraph = False
             lines.append(blank(line))
             continue
+        if not in_comment:
+            line = indented.mask(line)
         visible = ""
         remaining = line
         while remaining:
@@ -56,6 +130,8 @@ def prose(text):
         if marker:
             fence = marker[1]
             visible = blank(visible)
+        elif visible.strip():
+            indented.observe(visible)
         lines.append(visible)
     return "".join(lines)
 
@@ -76,8 +152,9 @@ class HtmlTargets(HTMLParser):
             self.anchors.add(attrs["id"])
         if tag == "a" and attrs.get("name"):
             self.anchors.add(attrs["name"])
-        if attrs.get("href"):
-            self.links.append((self.getpos()[0], attrs["href"]))
+        for attribute in ("href", "src") if tag == "img" else ("href",):
+            if attrs.get(attribute):
+                self.links.append((self.getpos()[0], attrs[attribute]))
 
     handle_startendtag = handle_starttag
 
@@ -85,7 +162,7 @@ class HtmlTargets(HTMLParser):
 def anchors(path):
     text = prose(path.read_text())
     found = HtmlTargets(inline_prose(text)).anchors
-    counts = {}
+    emitted = set()
     lines = text.splitlines()
     for index, line in enumerate(lines):
         heading = re.match(r"^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?$", line)
@@ -95,12 +172,7 @@ def anchors(path):
             title = line.strip()
         else:
             continue
-        title = re.sub(r"\[([^]]+)\]\([^)]*\)", r"\1", title)
-        title = re.sub(r"<[^>]+>", "", title).lower()
-        slug = "".join(c for c in title if c.isalnum() or c in "_- ").replace(" ", "-")
-        count = counts.get(slug, 0)
-        counts[slug] = count + 1
-        found.add(slug + (f"-{count}" if count else ""))
+        found.add(unique_slug(title, emitted))
     return found
 
 
@@ -108,6 +180,7 @@ def document_links(path):
     text = prose(path.read_text())
     text = inline_prose(text)
     links = HtmlTargets(text).links
+    text = mask_escaped_brackets(text)
     references = {}
     pattern = r"^ {0,3}\[([^]\n]+)\]:[ \t]*<?(\S+?)>?(?:[ \t]+.*)?$"
     for match in re.finditer(pattern, text, re.M):
