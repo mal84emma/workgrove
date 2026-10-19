@@ -38,15 +38,10 @@
 #   - cmux itself (a stub answers for it), tmux, the `wt task`/`wt driver` pickers, `wt pr`, `wt sync`,
 #     `wt update`, and VS Code (`wt open` runs a stub `code`)
 #
-# is_remote() is true on any machine that is not a Mac. Unlike install.sh, bin/wt has no FORCE_OS to fake
-# that result, and adding one would change the code under test. So the $OS check guards the assertions
-# that depend on the Mac side of the ssh, and DARWIN_ASSERTIONS counts them. The comment there says what
-# that leaves uncovered on Linux.
-#
-# An assertion is silent when it holds and loud when it fails. The script prints one line per scenario and
-# a pass/fail count. It exits non-zero if any assertion failed. The suite also asserts the count itself,
-# against expected_assertions below, because a scenario that silently stops checking still prints "ok".
+# Scenario 8 uses a uname shim to check Mac row handling on every platform.
+# Each scenario must make an assertion. The suite prints its derived assertion total and fails on any failure.
 set -euo pipefail
+export WG_POLL_INTERVAL=0
 
 # Plain redirection creates the fixtures, so their modes come from the ambient umask, unless a scenario sets
 # a mode on purpose. Ubuntu with user-private groups defaults to 002, and macOS defaults to 022. So the two
@@ -56,12 +51,39 @@ set -euo pipefail
 # with chmod themselves.
 umask 022
 
-REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
+SOURCE_DIR=${BASH_SOURCE[0]%/*}
+[[ $SOURCE_DIR != "${BASH_SOURCE[0]}" ]] || SOURCE_DIR=.
+REPO="$(cd "$SOURCE_DIR/.." && pwd -P)"
+# shellcheck source=test/lib.sh
+. "$REPO/test/lib.sh"
+# shellcheck source=test/wt-scenarios.sh
+. "$REPO/test/wt-scenarios.sh"
+
+WT_SCENARIO_ID=''
+WT_LIST_SCENARIOS=0
+case ${1:-} in
+  --list-scenarios) [[ $# -eq 1 ]] || exit 2; WT_LIST_SCENARIOS=1 ;;
+  --scenario) [[ $# -eq 2 && -n $2 ]] || exit 2; WT_SCENARIO_ID=$2 ;;
+  '') [[ $# -eq 0 ]] || exit 2 ;;
+  *) echo 'usage: wt-smoke.sh [--list-scenarios | --scenario <id>]' >&2; exit 2 ;;
+esac
+
+wt_select_scenario() {
+  [[ -z $WT_SCENARIO_ID || $1 == "$WT_SCENARIO_ID" ]] || return 0
+  scenario_matches "$2" || return 0
+  WT_SELECTED_SCENARIOS=$((WT_SELECTED_SCENARIOS + 1))
+  if [[ $WT_LIST_SCENARIOS == 1 ]]; then printf '%s\t%s\n' "$1" "$2"; fi
+}
+WT_SELECTED_SCENARIOS=0
+wt_scenarios wt_select_scenario
+if [[ $WT_SELECTED_SCENARIOS -eq 0 ]]; then
+  echo "FAIL: no scenarios matched scenario=${WT_SCENARIO_ID:-any} ONLY=${ONLY:-}" >&2
+  exit 1
+fi
+[[ $WT_LIST_SCENARIOS == 0 ]] || exit 0
 OS="$(uname -s)"
 WT="$REPO/bin/wt"
 KEEP_LABEL="scratch repos"           # lib_cleanup's name for what KEEP=1 leaves behind
-# shellcheck source=test/lib.sh
-. "$REPO/test/lib.sh"
 # shellcheck source=lib/workgrove/common.sh
 source "$REPO/lib/workgrove/common.sh"
 
@@ -191,7 +213,7 @@ assert_branch() {
 assert_registered() {
   local p have=no
   p="$1/.worktrees/$2"
-  if fixture_git "$1" worktree list --porcelain | grep -qxF "worktree $p"; then have=yes; fi
+  if fixture_git "$1" worktree list --porcelain | grep -xF "worktree $p" >/dev/null; then have=yes; fi
   assert_eq "$2 is registered in $(basename "$1")" "$3" "$have"
 }
 
@@ -546,7 +568,7 @@ merged_of() {
 # 0. The guard comes first, because every other scenario trusts it. Each branch is provoked in a subshell,
 # because the guard aborts the run. So a caller that wants to see it refuse cannot be in the same shell.
 scenario_guard() {
-  begin_scenario "0. guard_scratch_root refuses anything outside this run's scratch root"
+  begin_scenario "$1" || return 0
   local out rc
   mkdir -p "$TEST_ROOT/fakehome/inner"
 
@@ -570,7 +592,7 @@ scenario_guard() {
 
 # 1. What `wt new` makes, and the sidecar that every later command reads back.
 scenario_new_and_sidecar() {
-  begin_scenario "1. wt new: the worktree, the branch, the sidecar and the brief"
+  begin_scenario "$1" || return 0
   local r id p
   r="$(new_repo new)"
   id="$(basename "$r")"
@@ -612,7 +634,7 @@ scenario_new_and_sidecar() {
 }
 
 scenario_task_model() {
-  begin_scenario "1b. a task model persists and wins on every agent launch"
+  begin_scenario "$1" || return 0
   local r sidecar
   r="$(new_repo model)"
   sidecar="$r/.git/wt/chosen.json"
@@ -694,7 +716,7 @@ scenario_task_model() {
 # re-resolves in every worktree to that worktree's own tip compares a worktree with itself. Then rm and
 # prune read the result as "nothing to lose". Nothing checked this until now.
 scenario_base_resolution() {
-  begin_scenario "2. wt new: the base is canonicalised, so rm and prune can trust it"
+  begin_scenario "$1" || return 0
   local r sha
   r="$(new_repo base)"
   sha="$(fixture_git "$r" rev-parse main)"
@@ -753,7 +775,7 @@ scenario_base_resolution() {
 
 # 3. Names: what is tidied, what is generated, what is refused, and what is already taken.
 scenario_names_and_collisions() {
-  begin_scenario "3. wt new: tidied names, generated names, refused names, taken names"
+  begin_scenario "$1" || return 0
   local r name long
   r="$(new_repo names)"
   stub_cmux dead
@@ -796,7 +818,7 @@ scenario_names_and_collisions() {
 # 4. The read-only commands. Commit b317fbc removed --json, so wt must now refuse it like any other unknown
 # option, not ignore it silently.
 scenario_list_show_path() {
-  begin_scenario "4. wt list / show / path / open"
+  begin_scenario "$1" || return 0
   local saved="$REPOS_DIR" ra rb base
   REPOS_DIR="$TEST_ROOT/two-repos"        # --all walks every repo on the search path, so give it exactly two
   mkdir -p "$REPOS_DIR"
@@ -844,6 +866,25 @@ scenario_list_show_path() {
   assert_wt_fails 1 'cannot list worktrees' path nosuch -r "$ra"
   assert_lacks "a failed listing cannot prove absence" "$WT_OUT" 'WT_RESULT'
   WT_PATH_PREFIX=''
+
+  local padded_git="$TEST_ROOT/padded-worktree-list" real_git
+  real_git=$(command -v git)
+  mkdir -p "$padded_git"
+  cat >"$padded_git/git" <<'SHIM'
+#!/usr/bin/env bash
+if [[ ${3:-} == worktree && ${4:-} == list && ${5:-} == --porcelain ]]; then
+  "$REGISTRATION_REAL_GIT" "$@" || exit $?
+  printf 'prunable %1048576s\n' ''
+else
+  exec "$REGISTRATION_REAL_GIT" "$@"
+fi
+SHIM
+  chmod +x "$padded_git/git"
+  WT_PATH_PREFIX="$padded_git" WT_RELAY_ENV=("REGISTRATION_REAL_GIT=$real_git")
+  assert_wt_ok 'a large registration list still finds the worktree' path a1 -r "$ra"
+  assert_eq 'a large registration list reports found' found "$(wt_read_result "$WT_OUT" path | jq -r .status)"
+  PATH="$padded_git:$PATH" REGISTRATION_REAL_GIT="$real_git" assert_registered "$ra" a1 yes
+  WT_PATH_PREFIX='' WT_RELAY_ENV=()
   unset WT_MACHINE
   assert_wt_fails 1 "show: worktree name required" show -r "$ra"
   assert_wt_fails 1 "not inside a git repo" list
@@ -909,7 +950,7 @@ scenario_list_show_path() {
 
 # 5. The two per-repo hooks.
 scenario_include_and_setup() {
-  begin_scenario "5. .wt-include copies ignored files; .wt-setup runs in the new worktree"
+  begin_scenario "$1" || return 0
   local r p
   r="$(new_repo hooks)"
   printf '%s\n' '.env' '*.log' >"$r/.gitignore"
@@ -971,7 +1012,7 @@ scenario_include_and_setup() {
 # --force` would take without a word. If one of these stops firing, that is a data-loss regression: the
 # test is right and the code is wrong.
 scenario_rm_refusals() {
-  begin_scenario "6. wt rm refuses to destroy work, and --force is the one way past it"
+  begin_scenario "$1" || return 0
   local r ri p side
   r="$(new_repo rm)"
   stub_cmux dead
@@ -1061,7 +1102,7 @@ scenario_rm_refusals() {
 # yes and no. Each squash happens on a second clone, the "editor", and the repo under test has not fetched.
 # Its origin/main is from before the merge, as it is when the user types `wt rm` right after merging a PR.
 scenario_squash_merge() {
-  begin_scenario "6b. wt rm after a squash merge: work that landed is not a reason, work that did not still is"
+  begin_scenario "$1" || return 0
   local r e stale fresh dry n verdict want shim hunks=no
   r="$(new_repo squash)"
   stub_cmux dead
@@ -1247,7 +1288,7 @@ scenario_squash_merge() {
 
 # 7. wt rm and wt prune use the same removal reasons.
 scenario_prune_agrees() {
-  begin_scenario "7. wt prune --dry-run keeps exactly what wt rm refuses"
+  begin_scenario "$1" || return 0
   local r n verdict want
   r="$(new_repo prune)"
   stub_cmux dead
@@ -1286,7 +1327,7 @@ scenario_prune_agrees() {
 # Native rows with the cleanup marker end through tmux. Other native rows request cleanup from the Mac hook.
 # Refusals leave both alone. All paths here are scratch fixtures.
 scenario_self_rm_vm() {
-  begin_scenario "7b. a VM task can remove itself after changing to its main checkout"
+  begin_scenario "$1" || return 0
   local r fake session probe
   r="$(new_repo self-rm)"
   stub_cmux dead
@@ -1421,16 +1462,15 @@ STUB
   end_scenario
 }
 
-# 8. cmux. DARWIN-ONLY, all of it: is_remote() is true on any machine that is not a Mac. On that side,
-# `wt new` asks the Mac for a row through the relay and does not talk to cmux at all. There, check_identity
-# asks tmux, not the row list. See DARWIN_ASSERTIONS.
+# Scenario 8 simulates the Mac so every platform checks its row ownership rules.
 scenario_cmux() {
-  begin_scenario "8. a cmux that is not running, and one that is"
-  if [[ $OS != Darwin ]]; then
-    end_scenario
-    return 0
-  fi
+  begin_scenario "$1" || return 0
   local r id
+  local mac_bin="$TEST_ROOT/mac-bin"
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  local PATH="$mac_bin:$PATH"
   r="$(new_repo cmux)"
   id="$(basename "$r")"
 
@@ -1864,7 +1904,7 @@ ROWS
 # BEFORE it reaches remote_sh. So no host has to exist, and nothing is sent anywhere. The host name is a
 # .invalid one, so that a case that ever did reach ssh would fail this suite instead of dialing out.
 scenario_host_args() {
-  begin_scenario "9. wt -H: the checks that happen before any ssh"
+  begin_scenario "$1" || return 0
   local h=smoke.invalid sub
   stub_cmux dead
 
@@ -1900,7 +1940,7 @@ scenario_host_args() {
 tmux_sends() { grep -c '^send --workspace remote-row ' "$CMUX_LOG" || true; }
 
 scenario_connected_attach() {
-  begin_scenario "10. wt -H attach checks connected clients and shell prompts"
+  begin_scenario "$1" || return 0
   local fake="$TEST_ROOT/remote-bin" screen shape
   mkdir -p "$fake" "$SCRATCH_HOME/.local/bin"
   cat >"$fake/ssh" <<'STUB'
@@ -2121,7 +2161,7 @@ ROWS
 # The library unit tests cover row lists, row lookup, and exact tmux command output.
 # On the Mac, /bin/bash is 3.2.57, so the prologue starts Homebrew's bash.
 scenario_shared_helpers() {
-  begin_scenario "11. bash startup, shared library loading, and tmux launch behavior"
+  begin_scenario "$1" || return 0
   local a b sys=/bin/bash out rc sys_major env_file="$TEST_ROOT/bash-env" log="$TEST_ROOT/bash-versions"
   # Each non-interactive bash sources $BASH_ENV when it starts. So each bash that runs bin/wt adds one line
   # to the log, and the last line is the bash that printed the help.
@@ -2188,7 +2228,7 @@ STUB
 # were wrong, nothing outside the scratch root is so much as named.
 # shellcheck disable=SC2016   # the $1 in the bash -c program is for THAT bash to expand, not this file
 scenario_cleanup_guard() {
-  begin_scenario "12. lib_cleanup refuses a scratch root it must not remove"
+  begin_scenario "$1" || return 0
   local bad="$TEST_ROOT/cleanup-bad" good="$TEST_ROOT/cleanup-good" out
   mkdir -p "$bad/home/inner" "$good/inner"
   guard_scratch_root "$bad"
@@ -2212,50 +2252,20 @@ scenario_cleanup_guard() {
 
 # ---------------------------------------------------------------------------- main
 
-# expected_assertions: the count that a complete run makes. Asserting the TOTAL catches the failure mode that
-# a pass/fail count cannot see: a scenario that stops asserting instead of failing. The same guard in
-# test/install-smoke.sh once caught a mutation that took that suite from 323 assertions to 318, with every
-# scenario still green.
-expected_assertions() {
-  local n=$FIXED_ASSERTIONS
-  if [[ $OS == Darwin ]]; then n=$((n + DARWIN_ASSERTIONS)); fi
-  echo "$n"
+wt_run_scenario() {
+  [[ -z $WT_SCENARIO_ID || $1 == "$WT_SCENARIO_ID" ]] || return 0
+  local function=$1
+  shift
+  "$function" "$@"
 }
-
-# All assertions that are not Darwin-only. Change this count in the same commit as the assertion you add.
-FIXED_ASSERTIONS=592
-# The assertions that only a Mac can make, counted apart so that the total is right on both platforms.
-# is_remote() in bin/wt is true on any machine that is not a Darwin one. install.sh has a FORCE_OS to
-# fake that result, but adding the equivalent to bin/wt would change the code under test. So on Linux:
-#   - Scenario 8 is skipped whole. There, `wt new` without --no-workspace asks the Mac for a row over the
-#     relay and never consults cmux. check_identity asks tmux, not the row list. So neither the "row
-#     belongs to another repo" refusal nor cmux_row_field's local-row preference is reachable.
-#   - Scenario 4 does not assert that `wt show` prints no session: line, because there it prints one.
-#   - Scenario 4 does not run `wt open`, which there asks the Mac over the relay instead of running `code`.
-DARWIN_ASSERTIONS=243
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
   echo "wt smoke test: repo $REPO, scratch root $TEST_ROOT"
   echo "  this suite under bash ${BASH_VERSION}; bin/wt under $WT_BASH" \
        "($("$WT_BASH" -c 'echo "$BASH_VERSION"'))"
-  scenario_guard
-  scenario_new_and_sidecar
-  scenario_task_model
-  scenario_base_resolution
-  scenario_names_and_collisions
-  scenario_list_show_path
-  scenario_include_and_setup
-  scenario_rm_refusals
-  scenario_squash_merge
-  scenario_prune_agrees
-  scenario_self_rm_vm
-  scenario_cmux
-  scenario_host_args
-  scenario_connected_attach
-  scenario_shared_helpers
-  scenario_cleanup_guard
-  lib_summary "$(expected_assertions)"
+  wt_scenarios wt_run_scenario
+  lib_summary
 }
 
 main "$@"

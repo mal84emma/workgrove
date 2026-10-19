@@ -148,6 +148,11 @@ workgrove/
 │   ├── settings-snippet.jsonc six keys to paste; Settings Sync owns the rest
 │   └── extensions.txt
 ├── test/
+│   ├── run.sh                 the shared local and CI runner with bounded workers and timings
+│   ├── runner-smoke.sh        runner scheduling, filters, failure logs, and interruption cleanup
+│   ├── runner-git.sh          optional resolution of Apple's Git launcher for test workers
+│   ├── runner-git-smoke.sh    Git selection, fallback, and fixture precedence
+│   ├── wt-scenarios.sh        the wt scenario IDs and names shared by discovery and execution
 │   ├── lib.sh                 the assertion functions shared by the suites
 │   ├── lib-smoke.sh           unit tests for every shared shell function
 │   ├── named-outputs-smoke.sh caller-named outputs that match internal local names
@@ -332,13 +337,20 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
 
 ### Tests
 
-GitHub Actions runs [`.github/workflows/tests.yml`](.github/workflows/tests.yml) on every push and every
-pull request. The workflow makes these checks:
+GitHub Actions runs [`.github/workflows/tests.yml`](.github/workflows/tests.yml) when a pull request opens,
+reopens, or receives new commits. It also runs on pushes to `main`, including merges.
+Other branch pushes and tag pushes do not start the workflow.
+Other branches receive no cloud checks before a pull request opens.
+A new run cancels older runs for the same branch or pull request.
+Main pushes and pull-request merge checks use separate cancellation groups.
 
-- On `macos-latest`, `shellcheck -x` checks `bin/*`, `lib/workgrove/*.sh`, `lib/workgrove/vm/*.sh`,
-  `install.sh`, and `test/*.sh`. It uses Homebrew's shellcheck, as `Brewfile` does on the Mac.
-- Every suite in `test/` runs on `macos-latest`, `ubuntu-22.04` and `ubuntu-24.04`. Each suite checks the
-  assertion total for its platform.
+The workflow makes these checks:
+
+- On `ubuntu-24.04`, `shellcheck -x` checks `bin/*`, `lib/workgrove/*.sh`, `lib/workgrove/vm/*.sh`,
+  `install.sh`, and `test/*.sh`. The job downloads ShellCheck 0.11.0 from its official release
+  and verifies the archive's SHA-256 checksum.
+- The suites in `test/` run in parallel on `macos-latest`, `ubuntu-22.04`, and `ubuntu-24.04`.
+  Each scenario must make at least one assertion.
   - On macOS, Homebrew's bash is first on `PATH`. `install-smoke.sh` runs `install.sh` with
     `INSTALL_BASH=/bin/bash`, and `bash5-smoke.sh` tests the `/bin/bash` 3.2 handoffs.
   - On Ubuntu, the job stops when `tmux` is missing, because every VM has tmux. Without tmux, `wt rm` on a
@@ -348,18 +360,43 @@ pull request. The workflow makes these checks:
   `GIT_ALLOW_PROTOCOL=file` limits git in the suites to local repositories.
 
 To make the same checks on the Mac, install bash, jq and shellcheck first. `Brewfile` installs all three.
-Then run these commands from the repository root:
+Then run these commands in bash from the repository root:
 
 ```bash
 export PATH="$(brew --prefix)/bin:$PATH"
 shellcheck -x bin/* lib/workgrove/*.sh lib/workgrove/vm/*.sh install.sh test/*.sh
-for suite in test/*-smoke.sh; do
-  GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash "$suite" || echo "FAILED: $suite"
-done
+GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash test/run.sh
 ```
 
-Each suite ends with a count line of the form `<n> assertions: <n> passed, 0 failed`.
-A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path.
+By default, the runner limits execution to four workers across suites and intact `wt-smoke.sh` scenarios.
+Set `JOBS=1` for a serial run or `JOBS=8` to allow more workers.
+To select suites, pass their paths: `bash test/run.sh test/wt-smoke.sh`.
+The runner prints each task's complete log, waits for all tasks, and fails if any task failed.
+It keeps runner logs after a failure. Set `KEEP=1` to keep logs after a successful run.
+
+Each suite reports its assertions and exits nonzero on failure.
+Scenario and task times show individual durations in seconds.
+Each suite's elapsed span runs from its first worker's start to its last worker's finish.
+Total wall time includes discovery, Git selection, execution, and task log output.
+On the Mac, the runner resolves Apple's Git launcher once when `/usr/bin/git` is selected.
+A temporary shell wrapper preserves Git's helper and template paths.
+The runner preserves custom Git selections and uses the original Git if resolution or version checks fail.
+
+Set `ONLY` to select scenario names with a shell glob pattern. The filter matches substrings too.
+For example, `ONLY='11.*' bash test/wt-smoke.sh` runs scenario 11.
+For a filtered runner invocation, select one suite: `ONLY='11.*' bash test/run.sh test/wt-smoke.sh`.
+A filter that matches no scenario exits nonzero.
+Direct suite invocations remain serial. `wt-smoke.sh --list-scenarios` lists exact scenario IDs and names.
+Use `bash test/wt-smoke.sh --scenario scenario_shared_helpers` to run an exact scenario.
+Set `KEEP=1` to keep scratch files for inspection.
+
+`wt-smoke.sh` and `remote-new-smoke.sh` set `WG_POLL_INTERVAL=0` to shorten production poll waits.
+Other suites keep the default one-second interval for checks that need real waits.
+`WG_POLL_INTERVAL` passes directly to `sleep`. Invalid values produce a sleep error; no fallback interval replaces them.
+An unset or empty value uses one second.
+
+The host probe defaults to 20 seconds. `WG_HOST_PROBE_TIMEOUT` accepts decimal integers from 1 through 922337203685477580 seconds.
+Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for its deadline check.
 
 - **`bash test/install-smoke.sh`** checks installation across seventeen scenario groups.
   Each run uses its own throwaway `$HOME` with no network.
@@ -376,8 +413,8 @@ A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path
     Ubuntu's umask, 002, made a `~/.bashrc` group-writable, and `install.sh` declines to rewrite such a file.
     So a scenario that meant to test the rewrite tested the refusal instead, and only on the VM.
     `install-smoke.sh` and `wt-smoke.sh` now both pin `umask 022`.
-- **`bash test/wt-smoke.sh`** makes 835 assertions over sixteen groups against throwaway git repos. Because
-  the suite stubs out cmux, it needs no cmux, no network, and no VM. It covers:
+- **`bash test/wt-smoke.sh`** checks `wt` against throwaway git repos with stub cmux commands.
+  It needs no cmux, network, or VM. It covers:
   - What `wt` records in a sidecar, including a task model passed to Claude and Codex on later launches.
   - How a base is pinned: `@`, `HEAD^0`, and `--head` on a detached checkout. Without the pin, these
     spellings would compare a worktree with itself.
@@ -409,18 +446,14 @@ A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path
     root inside the real home before they arm the trap that calls it. The group exists because nobody knows that
     a branch is broken when nothing exercises it.
 
-  On a VM, the suite makes 592 assertions, because scenario 8 is about the Mac's row list. `bin/wt` has no
-  `FORCE_OS` that could fake the result of `is_remote()`. So on a VM, `wt new` asks the Mac for a row over the
-  relay and never consults cmux at all.
-- **Both `install-smoke.sh` and `wt-smoke.sh`** carry an expected-total guard, because a green run hides a
-  scenario that silently skips its assertions. The SSH and cmux recovery checks use fakes. Neither suite
-  covers a live VM reconnect.
+  Scenario 8 uses a `uname` shim to check the Mac's row handling on every platform.
+  The SSH and cmux recovery checks use fakes. The suite does not cover a live VM reconnect.
 - **`bash test/hosts-smoke.sh`** checks the SSH inventory's JSON, table, alias filtering, concurrent probes, and
   failure states, with a fake `ssh` on a scratch `PATH`. It also executes the probe script against fake
   hardware commands, including malformed GPU output. It verifies the client deadline against a hanging SSH
   process. It does not contact any configured host.
 - **`bash test/named-outputs-smoke.sh`** checks output variables whose names match internal locals, including arrays and forwarded outputs.
-- **`bash test/lib-smoke.sh`** makes 268 assertions about all fourteen functions in `lib/workgrove/common.sh`.
+- **`bash test/lib-smoke.sh`** checks the shared functions in `lib/workgrove/common.sh` and the scenario filter.
   It checks versioned task results, malformed records, duplicate records, and the text fallback.
   It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.
   Fixed cmux responses cover row lists across windows, failure policies, checked validation, command wrappers, and lookup by title, repo, and host.
@@ -433,8 +466,8 @@ A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path
   - a row failure after worktree creation
   - an SSH disconnect after creation but before the Mac receives the result
   - that a brief, agent, and model survive an interrupted `.wt-setup`
-- **`bash test/github-guard-smoke.sh`** runs 455 assertions on the Mac and 454 on a VM through `bin/github-guard`. The
-  suite stubs `gh`. The stub answers `gh api` from fixtures by running the guard's own `--jq` filter over them.
+- **`bash test/github-guard-smoke.sh`** checks `bin/github-guard` with a stub `gh`.
+  The stub answers `gh api` from fixtures by running the guard's own `--jq` filter over them.
   Set `GUARD_BASH=/bin/bash` to start the guard with bash 3.2, which hands it to bash 5. The suite checks these
   results:
   - A command that only mentions `gh api` or `git push` (a commit message, a heredoc, a `grep`) gets no answer.
@@ -461,7 +494,6 @@ A failed suite exits nonzero, and the loop prints `FAILED:` and the suite's path
   `agent-notify` drains its payload.
   `cmux-hook` reads its event from the environment and leaves standard input unread.
   Through a relative link to an absolute link, the suite checks that each script finds `lib/` from another folder.
-  The suite makes 139 assertions on the Mac and 31 on a VM.
 
 ### Uninstall
 

@@ -10,6 +10,9 @@ if ((BASH_VERSINFO[0] < 5)); then return 1; fi
 # Prefix all internal locals with __ in functions that accept or forward output variable names.
 # This includes local -n references. Callers must not use __ for output variables.
 
+# Tests can shorten poll waits. Production waits one second unless WG_POLL_INTERVAL is set.
+wg_sleep() { sleep "${WG_POLL_INTERVAL:-1}"; }
+
 # valid_host <alias> — an ssh alias: letters, digits, '.', '_' and '-', with a letter or digit first.
 valid_host() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
 

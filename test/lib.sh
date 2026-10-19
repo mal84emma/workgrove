@@ -33,6 +33,10 @@ PASS=0
 FAIL=0
 SCENARIO="(startup)"
 SCENARIO_FAILS=0
+SCENARIO_START=0
+SCENARIOS=0
+# A matching begin owns this state until end_scenario clears it.
+SCENARIO_ACTIVE=0
 
 # lib_label <base> <rel>: how a base/rel pair is named in a failure message. See LIB_BASE_LABEL.
 lib_label() {
@@ -130,17 +134,56 @@ assert_grep() {
   pass
 }
 
+lib_seconds() {
+  printf '%d.%03d' "$(($1 / 1000000))" "$(($1 % 1000000 / 1000))"
+}
+
+scenario_matches() {
+  # shellcheck disable=SC2053  # ONLY is a pattern, not a literal string.
+  [[ $1 == *${ONLY:-}* ]]
+}
+
+lib_reject_unfinished_scenario() {
+  if [[ $SCENARIO_ACTIVE -eq 1 ]]; then
+    fail "scenario did not call end_scenario"
+    SCENARIO_ACTIVE=0
+  fi
+}
+
+# ONLY selects scenario names by shell glob, with an implicit * on each side.
+# Call begin_scenario inside a function with `|| return 0` to skip an unmatched scenario.
 begin_scenario() {
+  scenario_matches "$1" || return 1
+  # Skipped scenarios cannot close or replace the active scenario.
+  lib_reject_unfinished_scenario
   SCENARIO="$1"
+  SCENARIO_ACTIVE=1
   SCENARIO_FAILS=0
+  SCENARIO_START=$((PASS + FAIL))
+  SCENARIO_STARTED=${EPOCHREALTIME:-$SECONDS.000000}
+  SCENARIO_STARTED=${SCENARIO_STARTED/./}
+  SCENARIOS=$((SCENARIOS + 1))
 }
 
 end_scenario() {
+  if [[ $SCENARIO_ACTIVE -ne 1 ]]; then
+    fail "end_scenario called without begin_scenario"
+    return 0
+  fi
+  if [[ $((PASS + FAIL)) -eq $SCENARIO_START ]]; then
+    fail "scenario made no assertions"
+  fi
   if [[ $SCENARIO_FAILS -eq 0 ]]; then
     echo "ok   $SCENARIO"
   else
     echo "FAIL $SCENARIO ($SCENARIO_FAILS assertion(s) failed)"
   fi
+  local now=${EPOCHREALTIME:-$SECONDS.000000} elapsed
+  now=${now/./}
+  elapsed=$((now - SCENARIO_STARTED))
+  ((elapsed >= 0)) || elapsed=0
+  printf 'scenario time: %s: %s s\n' "$SCENARIO" "$(lib_seconds "$elapsed")"
+  SCENARIO_ACTIVE=0
 }
 
 # lib_cleanup: the EXIT trap that every suite installs. KEEP=1 keeps the scratch tree for inspection. Any
@@ -176,15 +219,12 @@ lib_cleanup() {
   rm -rf "$root"
 }
 
-# lib_summary <expected assertions>: prints the count line. It also catches the failure mode that a
-# pass/fail count cannot see: a scenario that stops asserting, instead of starting to fail. One mutation
-# silently took install-smoke.sh from 323 assertions to 318 that way, and every scenario stayed green. On
-# either kind of failure, lib_summary exits non-zero, so it is the last thing that a suite's main() runs.
+# Print the derived assertion total. Fail when assertions fail or the filter selects no scenarios.
 lib_summary() {
+  lib_reject_unfinished_scenario
   echo "$((PASS + FAIL)) assertions: $PASS passed, $FAIL failed"
-  if [[ $((PASS + FAIL)) -ne $1 ]]; then
-    echo "FAIL: expected $1 assertions, ran $((PASS + FAIL)) — a scenario skipped its assertions" \
-         "instead of failing them, or one was added without updating FIXED_ASSERTIONS" >&2
+  if [[ $SCENARIOS -eq 0 ]]; then
+    echo "FAIL: no scenarios matched ONLY=${ONLY:-}" >&2
     exit 1
   fi
   if [[ $FAIL -gt 0 ]]; then

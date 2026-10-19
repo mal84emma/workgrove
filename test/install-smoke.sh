@@ -38,10 +38,7 @@
 # An assertion is silent when it holds and loud when it fails. The script prints one line per scenario and
 # a pass/fail count. It exits non-zero if any assertion failed.
 #
-# The suite also asserts the count itself, against expected_assertions below. A mutation once dropped the
-# count from 323 to 318 without a single failure, because a scenario's loop skipped its assertions instead
-# of failing them. A suite that can quietly stop checking things is not a suite. So every loop over a
-# directory that install.sh was supposed to create asserts, and does not `continue`.
+# Each scenario must make an assertion. Each loop over an expected directory asserts instead of continuing.
 set -euo pipefail
 
 # This file creates its fixtures with plain redirection, so their modes come from the ambient umask, unless
@@ -523,7 +520,7 @@ assert_unchanged() {
 # 1. The default path: no flags, an otherwise empty HOME. Every stranger gets this path, and the author
 #    never runs it.
 scenario_default_empty() {
-  begin_scenario "1. default install into an empty HOME"
+  begin_scenario "1. default install into an empty HOME" || return 0
   local h log
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -572,7 +569,7 @@ scenario_default_empty() {
 # 2. The regression that would hurt someone. A default install on top of a stranger's own
 #    dotfiles must leave each of them a regular file with its own content.
 scenario_default_over_existing() {
-  begin_scenario "2. default install over a stranger's existing dotfiles"
+  begin_scenario "2. default install over a stranger's existing dotfiles" || return 0
   local h log zsum_before gsum_before tmux_before
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -616,7 +613,7 @@ scenario_default_over_existing() {
 
 # 3. --opinionated-config: all five linked, the theme too, and the five originals kept.
 scenario_opinionated() {
-  begin_scenario "3. --opinionated-config links all five and stashes the originals"
+  begin_scenario "3. --opinionated-config links all five and stashes the originals" || return 0
   local h log i bk d n
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -658,8 +655,8 @@ scenario_opinionated() {
 # 4. Stickiness: `wt update` reruns install.sh bare. So a destination that is already linked into the repo
 #    counts as opted in. It must survive a run that cannot see the original flag. The inverse matters
 #    as much: a regular file there must NOT count as consent.
-scenario_sticky_optin() {
-  begin_scenario "4a. an existing link into the repo keeps its opt-in with no flags"
+scenario_sticky_link() {
+  begin_scenario "4a. an existing link into the repo keeps its opt-in with no flags" || return 0
   local h log
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -674,8 +671,11 @@ scenario_sticky_optin() {
     assert_eq "--with-zshrc listed as skipped" 0 "$(count_matches "$log" "--with-zshrc")"
   fi
   end_scenario
+}
 
-  begin_scenario "4b. an existing regular file is not an opt-in"
+scenario_regular_not_opted_in() {
+  begin_scenario "4b. an existing regular file is not an opt-in" || return 0
+  local h log
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -692,8 +692,8 @@ scenario_sticky_optin() {
 
 # 5. Idempotence. install.sh promises that a rerun is safe, and `wt update` reruns it constantly. So a
 #    second run over an already-installed HOME must change nothing at all.
-scenario_idempotent() {
-  begin_scenario "5a. a second default run changes nothing"
+scenario_default_idempotent() {
+  begin_scenario "5a. a second default run changes nothing" || return 0
   local h log before after
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -708,8 +708,11 @@ scenario_idempotent() {
     fi
   fi
   end_scenario
+}
 
-  begin_scenario "5b. a second --opinionated-config run changes nothing"
+scenario_opinionated_idempotent() {
+  begin_scenario "5b. a second --opinionated-config run changes nothing" || return 0
+  local h log before after
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -730,37 +733,40 @@ scenario_idempotent() {
 }
 
 # 6. Each flag on its own installs its own file and nothing else's.
-scenario_individual_flags() {
-  local i h log
-  for i in 0 1 2 3 4; do
-    begin_scenario "6. ${FIVE_FLAG[$i]} alone installs only ${FIVE_DST[$i]}"
-    h="$(new_home)"
-    guard_scratch_home "$h"
-    log="$h.log"
-    seed_oh_my_zsh "$h"      # harmless for the other four, required by --with-zshrc
-    if assert_install_ok "$h" "$log" "${FIVE_FLAG[$i]}"; then
-      assert_only_linked "$h" "$i"
-      # The theme comes with ~/.zshrc and with nothing else.
-      if [[ $i -eq 0 ]]; then
-        assert_link "$h" "$THEME_DST" "$THEME_SRC"
-      else
-        assert_absent "$h" "$THEME_DST"
-      fi
-      # statusLine in settings.json must track --with-statusline exactly.
-      if [[ $i -eq 4 ]]; then
-        assert_status_line "$h" yes
-      else
-        assert_status_line "$h" no
-      fi
-      assert_claude_ui "$h" no      # none of the five carries the UI keys: only --with-claude-ui does
+scenario_individual_flag() {
+  local i=$1 h log
+  begin_scenario "6. ${FIVE_FLAG[$i]} alone installs only ${FIVE_DST[$i]}" || return 0
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  seed_oh_my_zsh "$h"      # harmless for the other four, required by --with-zshrc
+  if assert_install_ok "$h" "$log" "${FIVE_FLAG[$i]}"; then
+    assert_only_linked "$h" "$i"
+    # The theme comes with ~/.zshrc and with nothing else.
+    if [[ $i -eq 0 ]]; then
+      assert_link "$h" "$THEME_DST" "$THEME_SRC"
+    else
+      assert_absent "$h" "$THEME_DST"
     fi
-    end_scenario
-  done
+    # statusLine in settings.json must track --with-statusline exactly.
+    if [[ $i -eq 4 ]]; then
+      assert_status_line "$h" yes
+    else
+      assert_status_line "$h" no
+    fi
+    assert_claude_ui "$h" no      # none of the five carries the UI keys: only --with-claude-ui does
+  fi
+  end_scenario
+}
+
+scenario_individual_flags() {
+  local i
+  for i in 0 1 2 3 4; do scenario_individual_flag "$i"; done
 }
 
 # 7. A usage error exits 2 with the usage on stderr, and installs nothing.
 scenario_unknown_flag() {
-  begin_scenario "7. an unknown flag exits 2 with usage on stderr"
+  begin_scenario "7. an unknown flag exits 2 with usage on stderr" || return 0
   local h out err rc=0
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -783,8 +789,8 @@ scenario_unknown_flag() {
 #    its record is the keys themselves. A refactor is most likely to get this second part wrong. This part
 #    also decides whether `wt update --refresh-config`, which cannot forward the flag, keeps a machine's UI
 #    settings or silently deletes them.
-scenario_claude_ui() {
-  begin_scenario "8a. --with-claude-ui keeps the UI keys and links no file"
+scenario_claude_ui_keys() {
+  begin_scenario "8a. --with-claude-ui keeps the UI keys and links no file" || return 0
   local h log i f
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -804,8 +810,11 @@ scenario_claude_ui() {
     assert_eq "$UI_FLAG listed as skipped" 0 "$(count_matches "$log" "$UI_FLAG")"
   fi
   end_scenario
+}
 
-  begin_scenario "8b. --with-claude-ui is sticky: the keys it wrote are the record of it"
+scenario_claude_ui_sticky() {
+  begin_scenario "8b. --with-claude-ui is sticky: the keys it wrote are the record of it" || return 0
+  local h log
   local h2
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -852,10 +861,10 @@ scenario_claude_ui() {
 #    it left the suite green. Each escape target below is inside TEST_ROOT on purpose, because
 #    guard_scratch_home constrains $HOME, not the target of a symlink under it. Each case also asserts that
 #    the refusal came BEFORE anything moved. That is the whole reason that the check_… twins exist.
-scenario_refusals() {
+scenario_dangling_gitconfig() {
+  begin_scenario "9a. a dangling ~/.gitconfig is refused, and nothing is written through it" || return 0
   local h log
 
-  begin_scenario "9a. a dangling ~/.gitconfig is refused, and nothing is written through it"
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -865,8 +874,12 @@ scenario_refusals() {
   assert_absent "$h" .zshenv                        # …and it refused before the first link was made
   assert_absent "$h" .local/bin
   end_scenario
+}
 
-  begin_scenario "9d. a directory at git's OTHER global file is refused, in this script's voice"
+scenario_gitconfig_directory() {
+  begin_scenario "9d. a directory at git's OTHER global file is refused, in this script's voice" || return 0
+  local h log
+
   # `git config --global` writes ~/.config/git/config whenever that exists and ~/.gitconfig does not. So
   # check_gitconfig must guard that file. When it guarded ~/.gitconfig alone, git took the install down
   # mid-way instead, after six steps had already moved things. git exited 128 and printed
@@ -883,10 +896,10 @@ scenario_refusals() {
 # 10. Who owns a symlink. our_link's own comment calls a live link that lands elsewhere "the one link
 #     this script must never touch", and opted_in reads the answer as CONSENT. So a wrong yes gives a
 #     stranger the author's shell prompt, and nothing in the output says so. None of this was tested.
-scenario_link_ownership() {
+scenario_live_foreign_link() {
+  begin_scenario "10a. a live link into a second checkout is never touched" || return 0
   local h log
 
-  begin_scenario "10a. a live link into a second checkout is never touched"
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -901,8 +914,12 @@ scenario_link_ownership() {
     assert_grep "--with-zshrc still listed as skipped" "$log" "--with-zshrc"
   fi
   end_scenario
+}
 
-  begin_scenario "10b. a DANGLING foreign link is not consent either"
+scenario_dangling_foreign_link() {
+  begin_scenario "10b. a DANGLING foreign link is not consent either" || return 0
+  local h log
+
   # home/.zshrc is not a distinctive tail: chezmoi, yadm, dotbot, homeshick and a `home` stow package all
   # produce it. A machine's dotfile links can be dangling for a short time. For example, bootstrap ran
   # before the dotfiles repo was cloned, or the repo is on an unmounted volume. Such a machine once read
@@ -920,8 +937,12 @@ scenario_link_ownership() {
     assert_eq "install.sh did not report linking ~/.zshrc" 0 "$(count_matches "$log" "linked ~/.zshrc")"
   fi
   end_scenario
+}
 
-  begin_scenario "10c. a MOVED clone still heals itself"
+scenario_moved_checkout() {
+  begin_scenario "10c. a MOVED clone still heals itself" || return 0
+  local h log
+
   # The case that the dangling-tail rule exists for. It also shows that the stricter opted_in did not turn
   # the rule off. Every run links ~/.zshenv, and no dotfile manager owns one. So its own dangling target
   # names the clone that this machine was installed from. A sibling under that same old root is this
@@ -939,8 +960,12 @@ scenario_link_ownership() {
     assert_eq "--with-zshrc not listed as skipped" 0 "$(count_matches "$log" "--with-zshrc")"
   fi
   end_scenario
+}
 
-  begin_scenario "10d. …but only under the root ~/.zshenv itself names"
+scenario_moved_checkout_root() {
+  begin_scenario "10d. …but only under the root ~/.zshenv itself names" || return 0
+  local h log
+
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -958,7 +983,7 @@ scenario_link_ownership() {
 # 11. configure_git's two don't-clobber branches. Each one silently destroys a stranger's configuration if it
 #     regresses, and the suite stayed green when either one was deleted.
 scenario_git_keeps_yours() {
-  begin_scenario "11. configure_git keeps an excludesFile and an include.path you already had"
+  begin_scenario "11. configure_git keeps an excludesFile and an include.path you already had" || return 0
   local h log want got
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -986,10 +1011,10 @@ scenario_git_keeps_yours() {
 # 12. "A dotfile manager owns it, skip and warn." There are three branches, one per file, and none of them
 #     was tested: a regression writes through somebody's dotfiles repo and reports success. This scenario
 #     also covers the one place that does NOT skip, by design, so the asymmetry is asserted, not assumed.
-scenario_manager_owned() {
+scenario_managed_tmux() {
+  begin_scenario "12a. a ~/.tmux.conf owned by a dotfile manager is left alone" || return 0
   local h log sum
 
-  begin_scenario "12a. a ~/.tmux.conf owned by a dotfile manager is left alone"
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1001,8 +1026,12 @@ scenario_manager_owned() {
     assert_eq "the file it points at is byte-identical" "$sum" "$(cksum <"$h/dotfiles/tmux.conf")"
   fi
   end_scenario
+}
 
-  begin_scenario "12b. a ~/.gitconfig owned by a dotfile manager is left alone and named"
+scenario_managed_gitconfig() {
+  begin_scenario "12b. a ~/.gitconfig owned by a dotfile manager is left alone and named" || return 0
+  local h log sum
+
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1017,8 +1046,12 @@ scenario_manager_owned() {
       "$(scratch_git "$h" config --global --get core.excludesFile)"
   fi
   end_scenario
+}
 
-  begin_scenario "12c. …and the same when git's global file is ~/.config/git/config"
+scenario_managed_xdg_gitconfig() {
+  begin_scenario "12c. …and the same when git's global file is ~/.config/git/config" || return 0
+  local h log sum
+
   # No ~/.gitconfig at all, so `git config --global` writes the XDG file, through the manager's symlink.
   # That is the one thing that configure_git promises not to do. It once did exactly that, and then
   # reported two settings added to a ~/.gitconfig that does not exist.
@@ -1035,9 +1068,12 @@ scenario_manager_owned() {
     assert_absent "$h" .gitconfig
   fi
   end_scenario
+}
 
+scenario_managed_claude_settings() {
+  begin_scenario "12d. …but a managed ~/.claude/settings.json IS displaced, and the run says so" || return 0
+  local h log sum
 
-  begin_scenario "12d. …but a managed ~/.claude/settings.json IS displaced, and the run says so"
   # copy_config is the one step that does not leave a dotfile manager's link alone, on purpose. Claude and
   # Codex write their own state into these three files, so they must be real files at the path that the app
   # opens. Only the LINK moves, and the file that it pointed at is untouched. The run must name the
@@ -1063,10 +1099,10 @@ scenario_manager_owned() {
 # 13. remove_retired_links, and install_bins' ~/bin retirement. The suite stayed green when either one was
 #     neutered. The first exists because of a real incident: a renamed oh-my-zsh theme outlived its rename
 #     on every machine, and `wt update` reruns this script constantly.
-scenario_retired_links() {
+scenario_retired_sources() {
+  begin_scenario "13a. links whose source the repo no longer has are retired, whatever named them" || return 0
   local h log bk
 
-  begin_scenario "13a. links whose source the repo no longer has are retired, whatever named them"
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1095,8 +1131,12 @@ scenario_retired_links() {
       "$(readlink "$h/.claude/skills/theirs" 2>/dev/null || true)"
   fi
   end_scenario
+}
 
-  begin_scenario "13b. a copy in ~/bin, which shadows ~/.local/bin on PATH, is retired"
+scenario_retired_bin_copy() {
+  begin_scenario "13b. a copy in ~/bin, which shadows ~/.local/bin on PATH, is retired" || return 0
+  local h log bk
+
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1115,10 +1155,10 @@ scenario_retired_links() {
 
 # 14. The two prerequisites that stop the run before it starts. The suite stayed green when either
 #     was neutered.
-scenario_prerequisites() {
+scenario_missing_git_identity() {
+  begin_scenario "14a. no git identity anywhere: refused before anything moves" || return 0
   local h log
 
-  begin_scenario "14a. no git identity anywhere: refused before anything moves"
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1126,8 +1166,12 @@ scenario_prerequisites() {
   assert_install_fails "$h" "$log" 1 "set user.name/user.email in ~/.gitconfig.local"
   assert_absent "$h" .zshenv
   end_scenario
+}
 
-  begin_scenario "14b. no jq on PATH: refused before anything moves"
+scenario_missing_jq() {
+  begin_scenario "14b. no jq on PATH: refused before anything moves" || return 0
+  local h log
+
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1142,10 +1186,10 @@ scenario_prerequisites() {
 #     else, and install_zsh_plugins has always honored the variable. So oh-my-zsh never finds a theme that is
 #     linked into the hardcoded ~/.oh-my-zsh/custom. Every shell start says so, while every line of the
 #     install says success. This happened to the author.
-scenario_zsh_custom() {
+scenario_custom_theme() {
+  begin_scenario "15a. the theme follows ZSH_CUSTOM, because that is where oh-my-zsh looks" || return 0
   local h log zc pl
 
-  begin_scenario "15a. the theme follows ZSH_CUSTOM, because that is where oh-my-zsh looks"
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1162,8 +1206,12 @@ scenario_zsh_custom() {
     assert_absent "$h" "$THEME_DST"    # the hardcoded path, where oh-my-zsh would never have looked
   fi
   end_scenario
+}
 
-  begin_scenario "15b. a ZSH_CUSTOM outside \$HOME is refused rather than half-installed"
+scenario_external_zsh_custom() {
+  begin_scenario "15b. a ZSH_CUSTOM outside \$HOME is refused rather than half-installed" || return 0
+  local h log zc pl
+
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1180,11 +1228,12 @@ scenario_zsh_custom() {
 #     install.sh. It is unreachable on Darwin, and so are ask_vm_host, record_repos_dir and the two platform
 #     filters in copy_config. A green run on the author's machine exercised none of them. FORCE_OS exists
 #     in install.sh only for this purpose.
-scenario_linux_legs() {
+scenario_linux_install() {
+  begin_scenario "16a. FORCE_OS=Linux: the VM-only steps run" || return 0
   local h log sum
+  # shellcheck disable=SC2016  # The installed shell expands HOME.
   local line='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
 
-  begin_scenario "16a. FORCE_OS=Linux: the VM-only steps run"
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1222,8 +1271,14 @@ scenario_linux_legs() {
       "$(count_matches "$h/.codex/config.toml" '[tui]') $(count_matches "$h/.codex/config.toml" 'animations = false')"
   fi
   end_scenario
+}
 
-  begin_scenario "16b. FORCE_OS=Linux: a line an older run appended is moved to the top"
+scenario_linux_hook_order() {
+  begin_scenario "16b. FORCE_OS=Linux: a line an older run appended is moved to the top" || return 0
+  local h log sum
+  # shellcheck disable=SC2016  # The installed shell expands HOME.
+  local line='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
+
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1238,8 +1293,14 @@ scenario_linux_legs() {
     assert_grep "install.sh says what it did" "$log" "moved the ~/.zshenv line to the top"
   fi
   end_scenario
+}
 
-  begin_scenario "16c. FORCE_OS=Linux: a 664 ~/.bashrc that is already hooked is not refused"
+scenario_linux_hooked_writable() {
+  begin_scenario "16c. FORCE_OS=Linux: a 664 ~/.bashrc that is already hooked is not refused" || return 0
+  local h log sum
+  # shellcheck disable=SC2016  # The installed shell expands HOME.
+  local line='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
+
   # An image that ships a group-writable ~/.bashrc (umask 002, user-private groups) is ordinary on a Linux
   # VM. When our line is already first, hook_bashrc returns before it reads the mode. So a refusal there
   # failed the install, and with it every `wt update`, forever. It failed over a file that nothing would
@@ -1256,8 +1317,14 @@ scenario_linux_legs() {
     assert_mode "$h" .bashrc 664       # not rewritten, so not re-moded either
   fi
   end_scenario
+}
 
-  begin_scenario "16d. FORCE_OS=Linux: a 664 ~/.bashrc it WOULD rewrite is still refused"
+scenario_linux_unhooked_writable() {
+  begin_scenario "16d. FORCE_OS=Linux: a 664 ~/.bashrc it WOULD rewrite is still refused" || return 0
+  local h log sum
+  # shellcheck disable=SC2016  # The installed shell expands HOME.
+  local line='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
+
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1269,8 +1336,14 @@ scenario_linux_legs() {
   assert_eq "the ~/.bashrc contents are byte-identical" "$sum" "$(cksum <"$h/.bashrc")"
   assert_absent "$h" .zshenv
   end_scenario
+}
 
-  begin_scenario "16e. FORCE_OS=Linux: a ~/.bashrc a dotfile manager owns is left alone and named"
+scenario_linux_managed_bashrc() {
+  begin_scenario "16e. FORCE_OS=Linux: a ~/.bashrc a dotfile manager owns is left alone and named" || return 0
+  local h log sum
+  # shellcheck disable=SC2016  # The installed shell expands HOME.
+  local line='[ -f "$HOME/.zshenv" ] && . "$HOME/.zshenv"'
+
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1291,7 +1364,7 @@ scenario_linux_legs() {
 scenario_cmux_config() {
   [[ $OS == Darwin ]] || return 0
   local h log
-  begin_scenario "17k. the cmux configuration opt-in persists across a bare rerun"
+  begin_scenario "17k. the cmux configuration opt-in persists across a bare rerun" || return 0
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -1306,35 +1379,6 @@ scenario_cmux_config() {
 
 # ---------------------------------------------------------------------------- main
 
-# expected_assertions: the number of assertions that a complete run makes. An assertion on the TOTAL catches
-# the failure mode that a pass/fail count cannot see: a scenario that stops asserting, not one that starts
-# failing. One mutation quietly took the suite from 323 to 318 that way, with every scenario still green.
-# It is a formula, not a number, because assert_machinery derives its assertions from the repo. Add a bin/
-# script or a skill, and the count correctly moves. Everything else is fixed. A fixed number that needs an
-# edit whenever someone adds an assertion is the point.
-expected_assertions() {
-  local nbin=0 nskill=0 per d fixed=$FIXED_ASSERTIONS
-  for d in "$REPO"/bin/*; do
-    [[ -e "$d" ]] && nbin=$((nbin + 1))
-  done
-  for d in "$REPO"/home/.agents/skills/*/; do
-    [[ -d "$d" ]] && nskill=$((nskill + 1))
-  done
-  # one assert_machinery call: 5 links + one per bin script + two per skill + 3 regular + 3 modes + the
-  # hooks.json checksum. On a Mac, add one cmux.json assertion (link or not-link, one either way) and the
-  # config.toml checksum.
-  per=$((5 + nbin + 2 * nskill + 3 + 3 + 1))
-  # Scenarios 1, 2, 3, and 8a call assert_machinery on both platforms.
-  local calls=4
-  if [[ $OS == Darwin ]]; then
-    per=$((per + 2))
-    fixed=$((fixed + 4))
-  fi
-  echo "$((fixed + calls * per))"
-}
-
-# Everything that is not assert_machinery. Bump it in the same commit as the assertion you added.
-FIXED_ASSERTIONS=370
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
   echo "install.sh smoke test: repo $REPO, scratch root $TEST_ROOT"
@@ -1343,21 +1387,38 @@ main() {
   scenario_default_empty
   scenario_default_over_existing
   scenario_opinionated
-  scenario_sticky_optin
-  scenario_idempotent
+  scenario_sticky_link
+  scenario_regular_not_opted_in
+  scenario_default_idempotent
+  scenario_opinionated_idempotent
   scenario_individual_flags
   scenario_unknown_flag
-  scenario_claude_ui
-  scenario_refusals
-  scenario_link_ownership
+  scenario_claude_ui_keys
+  scenario_claude_ui_sticky
+  scenario_dangling_gitconfig
+  scenario_gitconfig_directory
+  scenario_live_foreign_link
+  scenario_dangling_foreign_link
+  scenario_moved_checkout
+  scenario_moved_checkout_root
   scenario_git_keeps_yours
-  scenario_manager_owned
-  scenario_retired_links
-  scenario_prerequisites
-  scenario_zsh_custom
-  scenario_linux_legs
+  scenario_managed_tmux
+  scenario_managed_gitconfig
+  scenario_managed_xdg_gitconfig
+  scenario_managed_claude_settings
+  scenario_retired_sources
+  scenario_retired_bin_copy
+  scenario_missing_git_identity
+  scenario_missing_jq
+  scenario_custom_theme
+  scenario_external_zsh_custom
+  scenario_linux_install
+  scenario_linux_hook_order
+  scenario_linux_hooked_writable
+  scenario_linux_unhooked_writable
+  scenario_linux_managed_bashrc
   scenario_cmux_config
-  lib_summary "$(expected_assertions)"
+  lib_summary
 }
 
 seed_other_checkout

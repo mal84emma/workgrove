@@ -90,46 +90,150 @@ run_wt() {
     PATH="$TEST_ROOT/bin:$PATH" "${WT_BASH:-bash}" "$REPO/bin/wt" "$@"
 }
 
-begin_scenario 'records, errors and concurrent order'
-json=$(run_wt hosts --json)
-assert_eq 'aliases and order' 'true' "$(printf '%s' "$json" | jq -r 'map(.host) == ["alpha","beta","broken","down","nogpu","slow1","slow2","unified"]')"
-assert_eq 'two valid GPUs' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .gpu_status == "ok" and (.gpus | length) == 2 and .memory_mib == 32768')"
-assert_eq 'invalid GPU field' 'true' "$(printf '%s' "$json" | jq -r '.[2] | .gpu_status == "unknown" and .gpus == [] and .cpu_logical == null')"
-assert_eq 'SSH failure reason' 'true' "$(printf '%s' "$json" | jq -r '.[3] | .status == "unavailable" and (.error | contains("Permission denied"))')"
-assert_eq 'confirmed absence' 'true' "$(printf '%s' "$json" | jq -r '.[4] | .gpu_status == "none" and .gpus == []')"
-assert_eq 'unknown VRAM retained' 'true' "$(printf '%s' "$json" | jq -r '.[7] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
-assert_eq 'only literal aliases contacted' '8' "$(wc -l <"$TEST_ROOT/ssh.log" | tr -d ' ')"
-assert_eq 'strict SSH and keepalives' 'true' "$(awk '/StrictHostKeyChecking=yes/ && /ServerAliveInterval=5/ && /ServerAliveCountMax=2/ {found=1} END {print found ? "true" : "false"}' "$TEST_ROOT/ssh.log")"
-assert_eq 'parallel probes met' 'true' "$([[ -e "$TEST_ROOT/slow1.start" && -e "$TEST_ROOT/slow2.start" ]] && echo true || echo false)"
-table=$(run_wt hosts)
-assert_eq 'table shows failure reason' 'true' "$([[ "$table" == *'Permission denied'* && "$table" == *'ERROR'* ]] && echo true || echo false)"
-assert_eq 'help succeeds' '0' "$(run_wt hosts --help >/dev/null; echo $?)"
-end_scenario
+run_stubbed_probe() (
+  # Shell functions model a client that survives KILL without starting a stuck process.
+  local stub_mode=$1 stub_rc=${3:-0}
+  WG_LIB_DIR="$REPO/lib/workgrove"
+  TMPDIR="$TEST_ROOT"
+  if [[ -n $2 ]]; then WG_HOST_PROBE_TIMEOUT=$2; else unset WG_HOST_PROBE_TIMEOUT; fi
+  # shellcheck source=lib/workgrove/hosts.sh
+  source "$REPO/lib/workgrove/hosts.sh"
+  : >"$TEST_ROOT/probe-calls"
+  ssh() { return "$stub_rc"; }
+  sleep() { printf 'sleep %s\n' "$*" >>"$TEST_ROOT/probe-calls"; }
+  kill() {
+    printf 'kill %s\n' "$*" >>"$TEST_ROOT/probe-calls"
+    [[ $stub_mode == running ]]
+  }
+  # shellcheck disable=SC2329
+  wait() {
+    printf 'wait %s\n' "$*" >>"$TEST_ROOT/probe-calls"
+    builtin wait "$@"
+  }
+  probe_host alpha
+)
 
-begin_scenario 'execute the real probe script with fake hardware commands'
-PROBE_MODE=actual
-cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
+scenario_records() {
+  begin_scenario 'records, errors and concurrent order' || return 0
+  json=$(run_wt hosts --json)
+  assert_eq 'aliases and order' 'true' "$(printf '%s' "$json" | jq -r 'map(.host) == ["alpha","beta","broken","down","nogpu","slow1","slow2","unified"]')"
+  assert_eq 'two valid GPUs' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .gpu_status == "ok" and (.gpus | length) == 2 and .memory_mib == 32768')"
+  assert_eq 'invalid GPU field' 'true' "$(printf '%s' "$json" | jq -r '.[2] | .gpu_status == "unknown" and .gpus == [] and .cpu_logical == null')"
+  assert_eq 'SSH failure reason' 'true' "$(printf '%s' "$json" | jq -r '.[3] | .status == "unavailable" and (.error | contains("Permission denied"))')"
+  assert_eq 'confirmed absence' 'true' "$(printf '%s' "$json" | jq -r '.[4] | .gpu_status == "none" and .gpus == []')"
+  assert_eq 'unknown VRAM retained' 'true' "$(printf '%s' "$json" | jq -r '.[7] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
+  assert_eq 'only literal aliases contacted' '8' "$(wc -l <"$TEST_ROOT/ssh.log" | tr -d ' ')"
+  assert_eq 'strict SSH and keepalives' 'true' "$(awk '/StrictHostKeyChecking=yes/ && /ServerAliveInterval=5/ && /ServerAliveCountMax=2/ {found=1} END {print found ? "true" : "false"}' "$TEST_ROOT/ssh.log")"
+  assert_eq 'parallel probes met' 'true' "$([[ -e "$TEST_ROOT/slow1.start" && -e "$TEST_ROOT/slow2.start" ]] && echo true || echo false)"
+  table=$(run_wt hosts)
+  assert_eq 'table shows failure reason' 'true' "$([[ "$table" == *'Permission denied'* && "$table" == *'ERROR'* ]] && echo true || echo false)"
+  assert_eq 'help succeeds' '0' "$(run_wt hosts --help >/dev/null; echo $?)"
+  end_scenario
+}
+scenario_records
+
+scenario_hardware_probe() {
+  begin_scenario 'execute the real probe script with fake hardware commands' || return 0
+  PROBE_MODE=actual
+  cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
 Host warning numericwarning duplicate empty unified stuck pci
 CONFIG
-json=$(run_wt hosts --json)
-assert_eq 'warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "warning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1 and .gpus[0].name == "Tesla V100-SXM2-16GB"')"
-assert_eq 'numeric warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "numericwarning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1')"
-assert_eq 'duplicate GPU index cannot inflate count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "duplicate")][0] | .gpu_status == "unknown" and (.gpus | length) == 2')"
-assert_eq 'successful empty query is no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "empty")][0] | .gpu_status == "none" and .gpus == []')"
-assert_eq 'PCI scan confirms no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "pci")][0] | .gpu_status == "none" and .gpus == []')"
-assert_eq 'N/A VRAM from probe' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "unified")][0] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
-assert_eq 'stalled nvidia-smi fails closed' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "stuck")][0] | .gpu_status == "none"')"
-assert_eq 'nvidia-smi has a kill deadline' '7' "$(wc -l <"$TEST_ROOT/timeout.log" | tr -d ' ')"
-end_scenario
+  json=$(run_wt hosts --json)
+  assert_eq 'warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "warning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1 and .gpus[0].name == "Tesla V100-SXM2-16GB"')"
+  assert_eq 'numeric warning cannot inflate GPU count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "numericwarning")][0] | .gpu_status == "unknown" and (.gpus | length) == 1')"
+  assert_eq 'duplicate GPU index cannot inflate count' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "duplicate")][0] | .gpu_status == "unknown" and (.gpus | length) == 2')"
+  assert_eq 'successful empty query is no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "empty")][0] | .gpu_status == "none" and .gpus == []')"
+  assert_eq 'PCI scan confirms no GPU' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "pci")][0] | .gpu_status == "none" and .gpus == []')"
+  assert_eq 'N/A VRAM from probe' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "unified")][0] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
+  assert_eq 'stalled nvidia-smi fails closed' 'true' "$(printf '%s' "$json" | jq -r '[.[] | select(.host == "stuck")][0] | .gpu_status == "none"')"
+  assert_eq 'nvidia-smi has a kill deadline' '7' "$(wc -l <"$TEST_ROOT/timeout.log" | tr -d ' ')"
+  end_scenario
+}
+scenario_hardware_probe
 
-begin_scenario 'client deadline bounds an unresponsive SSH session'
-cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
+scenario_probe_deadline() {
+  begin_scenario 'client deadline bounds an unresponsive SSH session' || return 0
+  cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
 Host hang
 CONFIG
-json=$(run_wt hosts --json)
-assert_eq 'hung SSH probe returns unavailable' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .host == "hang" and .status == "unavailable" and (.error | contains("timed out after 20 seconds"))')"
-end_scenario
+  local start=$SECONDS
+  json=$(WG_HOST_PROBE_TIMEOUT=1 run_wt hosts --json)
+  assert_eq 'deadline returns within five seconds' 1 "$((SECONDS - start < 5))"
+  assert_eq 'hung SSH probe returns unavailable' 'true' "$(printf '%s' "$json" | jq -r '.[0] | .host == "hang" and .status == "unavailable" and (.error | contains("timed out after 1 seconds"))')"
+  end_scenario
+}
+scenario_probe_deadline
 
-: >"$TEST_ROOT/home/.ssh/config"
-assert_eq 'no aliases' '[]' "$(run_wt hosts --json)"
-lib_summary 21
+scenario_probe_cleanup() {
+  begin_scenario 'client deadline skips wait after KILL and preserves completed status' || return 0
+  local rc=0
+  run_stubbed_probe running 1 >"$TEST_ROOT/probe-out" 2>"$TEST_ROOT/probe-err" || rc=$?
+  assert_eq 'unkillable client times out' 124 "$rc"
+  assert_eq 'deadline polls ten times per second' 10 \
+    "$(awk '$1 == "sleep" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  assert_grep 'deadline sends KILL' "$TEST_ROOT/probe-calls" 'kill -KILL '
+  assert_eq 'deadline never waits for an unkillable client' 0 \
+    "$(awk '$1 == "wait" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  assert_grep 'deadline reports its duration' "$TEST_ROOT/probe-err" 'timed out after 1 seconds'
+  assert_eq 'deadline removes temporary output files' 0 \
+    "$(find "$TEST_ROOT" -name 'wt-host-std*' | wc -l | tr -d ' ')"
+
+  rc=0
+  run_stubbed_probe running '' >"$TEST_ROOT/probe-out" 2>"$TEST_ROOT/probe-err" || rc=$?
+  assert_eq 'default deadline times out' 124 "$rc"
+  assert_eq 'default deadline remains twenty seconds' 200 \
+    "$(awk '$1 == "sleep" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  assert_grep 'default deadline reports twenty seconds' "$TEST_ROOT/probe-err" 'timed out after 20 seconds'
+
+  local status
+  for status in 0 42 255; do
+    rc=0
+    run_stubbed_probe finished 1 "$status" >"$TEST_ROOT/probe-out" 2>"$TEST_ROOT/probe-err" || rc=$?
+    assert_eq "completed SSH retains exit $status" "$status" "$rc"
+    assert_eq "completed SSH with exit $status is reaped" 1 \
+      "$(awk '$1 == "wait" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  done
+  end_scenario
+}
+scenario_probe_cleanup
+
+scenario_empty_config() {
+  begin_scenario 'no SSH aliases' || return 0
+  : >"$TEST_ROOT/home/.ssh/config"
+  assert_eq 'no aliases' '[]' "$(run_wt hosts --json)"
+  end_scenario
+}
+scenario_empty_config
+
+scenario_invalid_timeout() {
+  begin_scenario 'invalid host probe timeout' || return 0
+  printf 'Host alpha\n' >"$TEST_ROOT/home/.ssh/config"
+  local timeout json
+  : >"$TEST_ROOT/ssh.log"
+  for timeout in 0 -1 1.5 invalid 01 020 922337203685477581 9223372036854775807 \
+      18446744073709551617 99999999999999999999999999999999999999999999999999; do
+    json=$(WG_HOST_PROBE_TIMEOUT=$timeout run_wt hosts --json)
+    assert_eq "$timeout timeout fails without probing" true \
+      "$(jq -r '.[0] | .status == "unavailable" and (.error | contains("must be a positive integer in seconds"))' <<<"$json")"
+  done
+  assert_eq 'invalid timeouts never start SSH' 0 "$(wc -l <"$TEST_ROOT/ssh.log" | tr -d ' ')"
+  end_scenario
+}
+scenario_invalid_timeout
+
+scenario_timeout_boundary() {
+  begin_scenario 'maximum host probe timeout is accepted without waiting' || return 0
+  local timeout rc
+  for timeout in 1 922337203685477579 922337203685477580; do
+    rc=0
+    run_stubbed_probe finished "$timeout" >"$TEST_ROOT/probe-out" 2>"$TEST_ROOT/probe-err" || rc=$?
+    assert_eq "$timeout timeout accepts a completed SSH probe" 0 "$rc"
+    assert_eq "$timeout timeout does not sleep" 0 \
+      "$(awk '$1 == "sleep" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+    assert_eq "$timeout timeout reaps the completed probe" 1 \
+      "$(awk '$1 == "wait" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
+  done
+  end_scenario
+}
+scenario_timeout_boundary
+lib_summary

@@ -132,7 +132,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     close_row "$(cmux_row_field "$title" "$path" id "$host")"
     for _ in 1 2 3; do                     # remote_row creates a row only when no row is left, so wait for that
       [[ -n "$(cmux_row_field "$title" "$path" id "$host")" ]] || break
-      sleep 1
+      wg_sleep
     done
     [[ -z "$(cmux_row_field "$title" "$path" id "$host")" ]] \
       || die "row $(row_label "$title" "$path" "$host") is still open; close it in cmux, then re-run: wt -H $host attach --restart-agent -r $(shell_join "$repo") $name"
