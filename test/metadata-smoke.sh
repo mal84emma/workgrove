@@ -91,6 +91,31 @@ assert_eq 'the conflict produces no stdout' '' "$(cat "$TEST_ROOT/out")"
 assert_eq 'the conflict reads no sidecar' '' "$(cat "$META_READS")"
 end_scenario
 
+begin_scenario 'failed metadata publication preserves the file and cache'
+cp "$REPO/.git/wt/first.json" "$TEST_ROOT/before.json"
+for failure in serialize rename invalid_json; do
+  rc=0
+  bash -c '
+    source "$1/lib/workgrove/common.sh"
+    REPO=$2 failure=$3
+    meta_require first
+    saved=$WT_META_JSON
+    die() { builtin printf "%s\n" "$*" >&2; return 1; }
+    printf() {
+      if [[ $failure == serialize && $1 == "%s\n" && ${2:-} == \{* ]]; then return 1; fi
+      builtin printf "$@"
+    }
+    mv() { [[ $failure != rename ]] || return 1; command mv "$@"; }
+    update=base=changed
+    [[ $failure != invalid_json ]] || update="base:=["
+    if meta_set first "$update"; then exit 2; fi
+    [[ $WT_META_JSON == "$saved" && ${WT_META[base]} == main ]] || exit 3
+  ' bash "$SOURCE_REPO" "$REPO" "$failure" >"$TEST_ROOT/write-out" 2>"$TEST_ROOT/write-err" || rc=$?
+  assert_eq "$failure reports failure and preserves the cache" 0 "$rc"
+  assert_eq "$failure preserves the sidecar" "$(cat "$TEST_ROOT/before.json")" "$(cat "$REPO/.git/wt/first.json")"
+done
+end_scenario
+
 begin_scenario 'human commands reuse metadata and retain their exit statuses'
 for command in 'show first' 'list' 'run first'; do
   read -r -a args <<<"$command"
@@ -158,6 +183,22 @@ before=${#WT_TMPFILES[@]}
 wt_status first n
 if ((${#WT_TMPFILES[@]} > before)); then pass; else fail 'status lost the temporary index registration'; fi
 assert_eq 'unmerged status includes its reason' no "${n[merged]}"
+end_scenario
+
+begin_scenario 'named JSON fields tolerate schema additions without shifting records'
+saved_fields=$WT_STATUS_FIELDS
+WT_STATUS_FIELDS+=' future'
+n[future]=$'new value\nwith a newline'
+n[title]=first n[task]='brief' n[model]=''
+records=()
+wt_status_args n records show
+assert_eq 'new common fields preserve show fields' true "$(wt_status_json show "${records[@]}" | jq '.future == "new value\nwith a newline" and .title == "first" and .task == "brief" and .model == ""')"
+records=()
+wt_status_args n records
+n[name]=other n[future]='' n[why]=''
+wt_status_args n records
+assert_eq 'empty values preserve record boundaries' true "$(wt_status_json list "${records[@]}" | jq 'length == 2 and .[0].name == "first" and .[1].name == "other" and .[1].future == "" and .[1].why == ""')"
+WT_STATUS_FIELDS=$saved_fields
 end_scenario
 
 begin_scenario 'empty JSON lists remain arrays'

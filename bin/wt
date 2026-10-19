@@ -359,7 +359,6 @@ cmd_list() {
     while IFS= read -r n; do
       wt_status "$n" status
       if [[ $format == json ]]; then
-        status[last_commit_at]=$(git -C "${status[path]}" log -1 --format=%cI 2>/dev/null || true)
         wt_status_args status records
       else
         nn=${status[name]} br=${status[human_branch]} base=${status[base]}
@@ -386,9 +385,9 @@ cmd_show() {
   wt_status "$name" status
   if [[ $format == json ]]; then
     local records=()
-    status[last_commit_at]=$(git -C "$path" log -1 --format=%cI 2>/dev/null || true)
-    wt_status_args status records
-    records+=("$(task_title "$name" "${WT_META[title]-}")" "$(prompt_line "$name")" "${WT_META[model]-}")
+    status[title]=$(task_title "$name" "${WT_META[title]-}")
+    status[task]=$(prompt_line "$name") status[model]=${WT_META[model]-}
+    wt_status_args status records show
     wt_status_json show "${records[@]}"
     return
   fi

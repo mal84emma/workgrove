@@ -170,15 +170,17 @@ WT_META_FILTER='
         elif type == "array" and ($entry.key == "includes" or $entry.key == "setup") then join("\n")
         else tojson end))) + "\u0000"'
 
-meta_decode() { # meta_decode <stream file> — install a successful jq result in the cache.
+meta_decode() { # meta_decode <stream file> <associative output> <JSON output>
   # The empty key carries the complete JSON object for later writes.
+  local -n __decoded=$2 __json=$3
   local __key __value
-  WT_META=()
+  __decoded=()
   {
     IFS= read -r -d '' __key
-    IFS= read -r -d '' WT_META_JSON
+    IFS= read -r -d '' __json
     while IFS= read -r -d '' __key && IFS= read -r -d '' __value; do
-      WT_META[$__key]=$__value
+      # shellcheck disable=SC2004  # The output names an associative array.
+      __decoded[$__key]=$__value
     done
   } <"$1"
 }
@@ -196,7 +198,7 @@ meta_load() { # meta_load <name> <associative output> — 1: missing, 2: unreada
     if ! jq -j -s 'if length == 1 then .[0] else error("expected one object") end | '"$WT_META_FILTER" "$__file" >"$__temp" 2>/dev/null; then
       rm -f "$__temp"; return 2
     fi
-    meta_decode "$__temp"
+    meta_decode "$__temp" WT_META WT_META_JSON
     rm -f "$__temp"
     WT_META_FILE=$__file
   fi
@@ -205,14 +207,16 @@ meta_load() { # meta_load <name> <associative output> — 1: missing, 2: unreada
 }
 
 meta_require() { # Missing metadata uses command defaults; unreadable metadata stops the command.
-  local -A __loaded=()
-  local __rc=0
-  meta_load "$1" __loaded || __rc=$?
-  [[ $__rc != 2 ]] || die "could not read $(wt_meta "$1")"
+  # shellcheck disable=SC2034  # meta_load fills the cache and this temporary output.
+  local -A loaded=()
+  local rc=0
+  meta_load "$1" loaded || rc=$?
+  [[ $rc != 2 ]] || die "could not read $(wt_meta "$1")"
 }
 
 meta_set() { # meta_set <name> key=value key:=json ... — update strings or typed JSON values.
-  local f t
+  local f t json key
+  local -A next=()
   meta_require "$1"
   f=$(wt_meta "$1"); shift
   mkdir -p "$(dirname "$f")"; t="$f.new.$$"
@@ -224,11 +228,16 @@ meta_set() { # meta_set <name> key=value key:=json ... — update strings or typ
            elif $kv[$i-1:$i] == ":" then .[$kv[0:$i-1]] = ($kv[$i+1:] | fromjson)
            else .[$kv[0:$i]] = $kv[$i+1:] end) | '"$WT_META_FILTER" --args "$@" >"$t"; then
     rm -f "$t"; die "could not write $f"
+    return 1
   fi
-  meta_decode "$t"
-  printf '%s\n' "$WT_META_JSON" >"$t"
-  if ! mv "$t" "$f"; then rm -f "$t"; die "could not write $f"; fi
-  WT_META_FILE=$f
+  meta_decode "$t" next json
+  if ! printf '%s\n' "$json" >"$t" || ! mv "$t" "$f"; then
+    rm -f "$t"; die "could not write $f"
+    return 1
+  fi
+  WT_META=()
+  for key in "${!next[@]}"; do WT_META[$key]=${next[$key]}; done
+  WT_META_JSON=$json WT_META_FILE=$f
 }
 
 prompt_line() { local f; f=$(wt_prompt "$1"); if [[ -f "$f" ]]; then head -1 "$f"; fi; }
@@ -348,7 +357,8 @@ tmux_agent() { # tmux_agent <session> — 0 for a running agent, 1 for absent or
 wt_status() { # wt_status <name> <associative output> — keep merge caches and cleanup in this shell.
   local -n __status=$2
   __status=()
-  local __n="$1" __p __b __base __ahead __behind __dirty __last __merged='?' __why=""
+  local __n="$1" __p __b __base __ahead __behind __dirty __last __merged='?'
+  __status["why"]=''
   __p=$(wt_path "$__n"); __b=$(wt_branch "$__n")
   meta_require "$__n"
   __base=${WT_META[base]-}; [[ -n "$__base" ]] || __base=$(default_base)
@@ -360,7 +370,10 @@ wt_status() { # wt_status <name> <associative output> — keep merge caches and 
   if __porcelain=$(git -C "$__p" status --porcelain 2>/dev/null); then
     if [[ -z $__porcelain ]]; then __dirty=0; else __dirty=$(printf '%s\n' "$__porcelain" | wc -l | tr -d ' '); fi
   else __dirty='?'; fi
-  __last=$(git -C "$__p" log -1 --format='%cr' 2>/dev/null || echo '-')
+  local __log __commit_at=''
+  if __log=$(git -C "$__p" log -1 --format='%cr%n%cI' 2>/dev/null); then
+    __last=${__log%%$'\n'*} __commit_at=${__log#*$'\n'}
+  else __last='-'; fi
   local __cur; __cur=$(git -C "$__p" branch --show-current 2>/dev/null || true)   # empty, exit 0, on a detached HEAD
   local __checkout=$__cur
   [[ -n "$__cur" ]] || __cur="$__b (HEAD detached)"
@@ -377,7 +390,7 @@ wt_status() { # wt_status <name> <associative output> — keep merge caches and 
   # shows "?" here, as it is a refusal in rm_reasons.
   if [[ "$__base" != HEAD && "$__ahead" =~ ^[0-9]+$ ]]; then
     if [[ "$__ahead" -eq 0 ]]; then __merged=yes
-    elif branch_landed "$__b" "$__base" __why; then __merged=squash
+    elif branch_landed "$__b" "$__base" "${2}[why]"; then __merged=squash
     else __merged=no; fi
   fi
   [[ $__ahead =~ ^[0-9]+$ ]] || __ahead='?'
@@ -387,33 +400,40 @@ wt_status() { # wt_status <name> <associative output> — keep merge caches and 
   [[ $__dirty != '?' ]] || __status["human_dirty"]=0
   __status["name"]=$__n __status["branch"]=$__b __status["human_branch"]=$__cur __status["base"]=$__base
   __status["checkout_branch"]=$__checkout __status["ahead"]=$__ahead __status["behind"]=$__behind
-  __status["dirty"]=$__dirty __status["last"]=$__last __status["merged"]=$__merged __status["why"]=$__why
-  __status["repo"]=$REPO __status["path"]=$__p
+  __status["dirty"]=$__dirty __status["last"]=$__last __status["merged"]=$__merged
+  __status["repo"]=$REPO __status["path"]=$__p __status["last_commit_at"]=$__commit_at
 }
 
-wt_status_args() { # wt_status_args <status array> <argument array> — encode every record in one final jq call.
+# One schema supplies field selection and JSON types for both renderers.
+WT_STATUS_FIELDS='name repo path branch checkout_branch:optional base ahead:count behind:count dirty:count last_commit_at:optional merged why'
+WT_SHOW_FIELDS='title task model'
+
+wt_status_args() { # wt_status_args <status array> <record array> [list|show]
   local -n __record=$1 __args=$2
-  local __key
-  for __key in name repo path branch checkout_branch base ahead behind dirty last_commit_at merged why; do
-    __args+=("${__record[$__key]-}")
+  local __field __key __fields=$WT_STATUS_FIELDS
+  [[ ${3:-list} != show ]] || __fields+=" $WT_SHOW_FIELDS"
+  for __field in $__fields; do
+    __key=${__field%%:*}
+    __args+=("$__key" "${__record[$__key]-}")
   done
+  # An empty key ends a record. Empty values remain ordinary key/value pairs.
+  __args+=('' '')
 }
 
-wt_status_json() { # wt_status_json <list|show> <record values...>
-  local command=$1; shift
-  { if (($#)); then printf '%s\0' "$@"; fi; } | jq -Rs --arg command "$command" '
+wt_status_json() { # wt_status_json <list|show> <record pairs...>
+  local command=$1 fields=$WT_STATUS_FIELDS; shift
+  [[ $command != show ]] || fields+=" $WT_SHOW_FIELDS"
+  { if (($#)); then printf '%s\0' "$@"; fi; } | jq -Rs --arg command "$command" --arg fields "$fields" '
     def count: if test("^[0-9]+$") then tonumber else null end;
     def optional: if . == "" then null else . end;
-    (split("\u0000") | .[:-1]) as $values
-    | (if $command == "show" then 15 else 12 end) as $width
-    | [range(0; $values | length; $width) as $i
-       | $values[$i:$i+$width] as $v
-       | {name:$v[0], repo:$v[1], path:$v[2], branch:$v[3],
-          checkout_branch:($v[4] | optional), base:$v[5],
-          ahead:($v[6] | count), behind:($v[7] | count), dirty:($v[8] | count),
-          last_commit_at:($v[9] | optional), merged:$v[10], why:$v[11]}
-         + (if $command == "show" then {title:$v[12], task:$v[13], model:$v[14]} else {} end)]
-    | if $command == "show" then .[0] else . end'
+    ($fields | split(" ") | map(split(":") | {key:.[0], value:(.[1] // "string")}) | from_entries) as $types
+    | (split("\u0000") | .[:-1]) as $values
+    | reduce range(0; $values | length; 2) as $i ({records:[], current:{}};
+        $values[$i] as $key | $values[$i+1] as $value
+        | if $key == "" then .records += [.current] | .current = {}
+          else .current[$key] = ($value | if $types[$key] == "count" then count
+            elif $types[$key] == "optional" then optional else . end) end)
+    | if $command == "show" then .records[0] else .records end'
 }
 
 list_names() { # registered worktrees under the wt root
