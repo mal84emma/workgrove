@@ -14,7 +14,7 @@ source "$REPO/test/runner-git.sh"
 trap lib_cleanup EXIT
 
 mkdir -p "$TEST_ROOT/tools" "$TEST_ROOT/no-xcrun" "$TEST_ROOT/Developer Tools" "$TEST_ROOT/shim"
-for tool in mkdir ln rmdir; do
+for tool in mkdir chmod rm rmdir; do
   ln -s "$(command -v "$tool")" "$TEST_ROOT/tools/$tool"
   ln -s "$(command -v "$tool")" "$TEST_ROOT/no-xcrun/$tool"
 done
@@ -29,6 +29,11 @@ cat >"$TEST_ROOT/Developer Tools/git" <<'SH'
 if [ "$1" = --version ]; then
   printf '%s\n' "$GIT_TEST_VERSION"
   exit "${GIT_TEST_VERSION_STATUS:-0}"
+fi
+if [ "$1" = --args ]; then
+  shift
+  printf '%s|%s|%s|%s\n' "$#" "$1" "$2" "$3"
+  exit 0
 fi
 printf 'resolved Git\n'
 SH
@@ -50,10 +55,73 @@ scenario_resolve() {
   result=$(PATH="$TEST_ROOT/tools" DEVELOPER_DIR="$selected_developer" runner_git_dir Darwin /usr/bin/git "$scratch")
   assert_eq 'the helper returns its Git directory' "$scratch/git-bin" "$result"
   assert_eq 'the helper leaves the caller PATH unchanged' "$original_path" "$PATH"
-  assert_eq 'the symlink preserves the candidate path with spaces' "$GIT_TEST_CANDIDATE" "$(readlink "$result/git")"
+  assert_regular "$scratch" git-bin/git
   assert_grep 'xcrun receives its arguments and selected developer directory' "$GIT_TEST_LOG" "--find git|$selected_developer"
   assert_eq 'the resolved Git runs first' 'resolved Git' "$(PATH="$result:$PATH" git fixture)"
   assert_eq 'a later fixture shim retains precedence' 'fixture Git' "$(PATH="$TEST_ROOT/shim:$result:$PATH" git fixture)"
+  end_scenario
+}
+
+scenario_path_quoting() {
+  begin_scenario 'resolved Git preserves quoted paths and argument boundaries' || return 0
+  local odd_directory=$TEST_ROOT/$'Developer\'s Tools\n$(exit 99)' scratch=$TEST_ROOT/quoted result
+  local original_candidate=$GIT_TEST_CANDIDATE
+  mkdir -p "$odd_directory" "$scratch"
+  cp "$GIT_TEST_CANDIDATE" "$odd_directory/git"
+  GIT_TEST_CANDIDATE=$odd_directory/git
+  result=$(PATH="$TEST_ROOT/tools" runner_git_dir Darwin /usr/bin/git "$scratch")
+  assert_eq 'a quoted candidate path still executes' 'resolved Git' "$("$result/git" fixture)"
+  assert_eq 'the wrapper preserves spaces, empty arguments, and globs' '3|two words||*' \
+    "$("$result/git" --args 'two words' '' '*')"
+  GIT_TEST_CANDIDATE=$original_candidate
+  end_scenario
+}
+
+scenario_runtime_paths() {
+  begin_scenario 'Apple Git keeps its installed helpers and templates' || return 0
+  if [[ $(uname -s) != Darwin ]]; then
+    pass
+    end_scenario
+    return 0
+  fi
+  local scratch=$TEST_ROOT/runtime result original_output resolved_output original_rc=0 resolved_rc=0
+  local GIT_OBJECT_DIRECTORY=$scratch/ambient-objects GIT_INDEX_FILE=$scratch/ambient-index
+  local XDG_CONFIG_HOME=$scratch/ambient-config
+  export GIT_OBJECT_DIRECTORY GIT_INDEX_FILE XDG_CONFIG_HOME
+  local runtime_env=(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_EXEC_PATH -u GIT_TEMPLATE_DIR
+    -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_INDEX_FILE -u GIT_SHALLOW_FILE -u GIT_NAMESPACE
+    -u GIT_CONFIG -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS
+    "HOME=$scratch/home" "XDG_CONFIG_HOME=$scratch/home/.config" GIT_CONFIG_NOSYSTEM=1)
+  mkdir -p "$scratch/home" "$scratch/ambient-config/git" "$scratch/ambient-template"
+  printf 'ambient template\n' >"$scratch/ambient-template/ambient-marker"
+  printf '[init]\n\ttemplateDir = %s\n' "$scratch/ambient-template" >"$scratch/ambient-config/git/config"
+  result=$(runner_git_dir Darwin /usr/bin/git "$scratch")
+  if [[ -z $result ]]; then
+    fail 'Apple Git resolution did not produce a wrapper'
+    end_scenario
+    return 0
+  fi
+  assert_eq 'the helper directory stays unchanged' \
+    "$("${runtime_env[@]}" /usr/bin/git --exec-path)" "$("${runtime_env[@]}" "$result/git" --exec-path)"
+  assert_eq 'the documentation directory stays unchanged' \
+    "$("${runtime_env[@]}" /usr/bin/git --html-path)" "$("${runtime_env[@]}" "$result/git" --html-path)"
+  "${runtime_env[@]}" /usr/bin/git submodule -h >/dev/null 2>&1 || original_rc=$?
+  "${runtime_env[@]}" "$result/git" submodule -h >/dev/null 2>&1 || resolved_rc=$?
+  assert_eq 'submodule help keeps the selected Git status' "$original_rc" "$resolved_rc"
+  original_output=$("${runtime_env[@]}" /usr/bin/git -c init.defaultBranch=main \
+    init -q "$scratch/original" 2>&1)
+  resolved_rc=0
+  resolved_output=$("${runtime_env[@]}" "$result/git" -c init.defaultBranch=main \
+    init -q "$scratch/resolved" 2>&1) || resolved_rc=$?
+  assert_eq 'resolved Git initializes a repository' 0 "$resolved_rc"
+  assert_eq 'initialization keeps the selected Git diagnostics' "$original_output" "$resolved_output"
+  assert_eq 'initialization keeps the selected Git templates' \
+    "$([[ -f $scratch/original/.git/hooks/pre-commit.sample ]] && echo yes || echo no)" \
+    "$([[ -f $scratch/resolved/.git/hooks/pre-commit.sample ]] && echo yes || echo no)"
+  assert_absent "$scratch" ambient-objects
+  assert_absent "$scratch" ambient-index
+  assert_absent "$scratch/original" .git/ambient-marker
+  assert_absent "$scratch/resolved" .git/ambient-marker
   end_scenario
 }
 
@@ -78,7 +146,7 @@ scenario_fallback() {
   begin_scenario 'invalid resolver results preserve the original Git' || return 0
   local kind scratch result status
   local valid_candidate=$GIT_TEST_CANDIDATE valid_version=$GIT_TEST_VERSION
-  for kind in missing-xcrun failing-xcrun relative missing nonexecutable directory launcher version-failure version-mismatch empty-version blocked-directory blocked-link colon-directory; do
+  for kind in missing-xcrun failing-xcrun relative missing nonexecutable directory launcher version-failure version-mismatch empty-version blocked-directory blocked-write blocked-mode colon-directory; do
     scratch=$TEST_ROOT/fallback-$kind
     mkdir "$scratch"
     GIT_TEST_CANDIDATE=$valid_candidate
@@ -97,9 +165,11 @@ scenario_fallback() {
       version-mismatch) GIT_TEST_VERSION='git version other' ;;
       empty-version) GIT_TEST_VERSION='' ;;
       blocked-directory) mkdir "$scratch/git-bin" ;;
-      blocked-link)
-        # Fail only link creation, after the helper has made its directory.
-        ln() { return 1; }
+      blocked-write)
+        printf() { return 1; }
+        ;;
+      blocked-mode)
+        chmod() { return 1; }
         ;;
       colon-directory) scratch=$scratch:colon; mkdir "$scratch" ;;
     esac
@@ -107,7 +177,8 @@ scenario_fallback() {
     result=$(PATH="$test_path" runner_git_dir Darwin /usr/bin/git "$scratch") || status=$?
     assert_eq "$kind returns success" 0 "$status"
     assert_eq "$kind leaves Git unchanged" '' "$result"
-    [[ $kind != blocked-link ]] || unset -f ln
+    [[ $kind != blocked-write ]] || unset -f printf
+    [[ $kind != blocked-mode ]] || unset -f chmod
   done
   GIT_TEST_CANDIDATE=$valid_candidate
   GIT_TEST_VERSION=$valid_version
@@ -115,6 +186,8 @@ scenario_fallback() {
 }
 
 scenario_resolve
+scenario_path_quoting
+scenario_runtime_paths
 scenario_bypass
 scenario_fallback
 lib_summary

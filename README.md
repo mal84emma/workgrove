@@ -379,7 +379,8 @@ Scenario and task times show individual durations in seconds.
 Each suite's elapsed span runs from its first worker's start to its last worker's finish.
 Total wall time includes discovery, Git selection, execution, and task log output.
 On the Mac, the runner resolves Apple's Git launcher once when `/usr/bin/git` is selected.
-It preserves custom Git selections and uses the original Git if resolution or version checks fail.
+A temporary shell wrapper preserves Git's helper and template paths.
+The runner preserves custom Git selections and uses the original Git if resolution or version checks fail.
 
 Set `ONLY` to select scenario names with a shell glob pattern. The filter matches substrings too.
 For example, `ONLY='11.*' bash test/wt-smoke.sh` runs scenario 11.

@@ -4,7 +4,7 @@
 # runner_git_dir <os> <selected-git-path> <scratch-dir> prints an optional directory for PATH.
 # The caller owns the scratch directory and removes it after all workers finish.
 runner_git_dir() {
-  local candidate selected_version candidate_version directory
+  local candidate selected_version candidate_version directory quoted_candidate
   [[ $1 == Darwin && $2 == /usr/bin/git ]] || return 0
   candidate=$(xcrun --find git 2>/dev/null) || return 0
   [[ $candidate == /* && $candidate != /usr/bin/git && -f $candidate && -x $candidate ]] || return 0
@@ -15,7 +15,13 @@ runner_git_dir() {
   [[ $3 != *:* ]] || return 0
   directory=$3/git-bin
   mkdir "$directory" 2>/dev/null || return 0
-  if ! ln -s "$candidate" "$directory/git" 2>/dev/null; then
+  # Git finds its helpers and templates relative to its executable path. A symlink changes that path.
+  # Single quotes preserve spaces, apostrophes, and newlines in a POSIX shell script.
+  quoted_candidate=${candidate//\'/\'\\\'\'}
+  quoted_candidate="'$quoted_candidate'"
+  if ! { printf '#!/bin/sh\nexec %s "$@"\n' "$quoted_candidate" >"$directory/git" &&
+         chmod +x "$directory/git"; } 2>/dev/null; then
+    rm -f "$directory/git" 2>/dev/null || true
     rmdir "$directory" 2>/dev/null || true
     return 0
   fi
