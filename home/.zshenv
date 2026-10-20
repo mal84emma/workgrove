@@ -13,6 +13,14 @@ export GH_PROMPT_DISABLED=1
 # Node toolchain, if installed.
 [ -d "$HOME/.volta/bin" ] && export VOLTA_HOME="$HOME/.volta" PATH="$HOME/.volta/bin:$PATH"
 
+# cmux's Mac wrappers run these agent CLIs instead of searching PATH. A mise shim for a tool that no mise config
+# activates falls back to the next one on PATH, the cmux wrapper. Without these paths, the two start each other
+# in a loop.
+if [ "$(uname -s)" = Darwin ]; then
+  [ -x "$HOME/.local/bin/codex" ] && export CMUX_CUSTOM_CODEX_PATH="$HOME/.local/bin/codex"
+  [ -x "$HOME/.local/bin/claude" ] && export CMUX_CUSTOM_CLAUDE_PATH="$HOME/.local/bin/claude"
+fi
+
 if [ -f "$HOME/.zshenv.local" ]; then
   . "$HOME/.zshenv.local"
 fi

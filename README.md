@@ -287,7 +287,9 @@ Shift+Enter, and focus events. It also makes the mouse wheel scroll instead of t
 `~/.zshenv` and `~/.gitignore_global` are not opt-in config. They are the contract that the tools rely on, not
 personal preference:
 
-- `~/.zshenv` puts `~/.local/bin` on `PATH` and carries `WT_HOST` and `WT_REPOS_DIR`.
+- `~/.zshenv` puts `~/.local/bin` on `PATH` and carries `WT_HOST` and `WT_REPOS_DIR`. On a Mac, it also points
+  cmux at the `claude` and `codex` in `~/.local/bin`
+  (see [Block 4 of the Mac setup](docs/new-mac.md#block-4-agents-codex-hooks-and-logins)).
 - `~/.gitignore_global` is the file that git-ignores `.worktrees/`.
 
 Every `install.sh` run ends with a summary of skips and follow-up actions.
