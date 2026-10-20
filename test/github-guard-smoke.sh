@@ -603,4 +603,18 @@ scenario_new_api_form() {
 }
 scenario_new_api_form
 
+# A copied form changes only the compound matcher. The normal command checker stays unchanged.
+scenario_generated_prefixes() {
+  begin_scenario 'compound command matching follows checker forms' || return 0
+  local GUARD="$TEST_ROOT/changed-form-guard"
+  sed 's/^PR_CREATE_FORM="approved form: gh pr create /PR_CREATE_FORM="approved form: gh pr propose /' \
+    "$REPO/bin/github-guard" >"$GUARD"
+  expect deny 'gh pr propose --fill | cat' 'gh pr propose is approved only as one simple command'
+  expect deny 'cd /tmp && gh pr propose --fill' 'gh pr propose is approved only as one simple command'
+  expect none 'gh pr create --fill | cat'
+  expect none 'gh pr proposed --fill | cat'
+  end_scenario
+}
+scenario_generated_prefixes
+
 lib_summary

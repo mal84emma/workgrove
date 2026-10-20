@@ -659,15 +659,14 @@ check_wt_pr() {   # wt pr <name> [--draft]: check the push and the gh target in 
 
 # Generate help and command prefixes from the same forms that the checkers use.
 GH_API_FORMS="approved gh api forms: a read, $API_READ_FORM; and, in this repository, "
-API_WRITE_FORMS=()
 for row in "${GH_API_WRITES[@]}"; do
   GH_API_FORMS+=${row##*~}
-  API_WRITE_FORMS+=("gh api ${row##*~}")
 done
 GH_API_FORMS+="and $API_GRAPHQL_FORM"
+# The API prefix covers reads, GraphQL, and every write row. Match it once.
 GUARDED='('
 separator=''
-for form in "${API_WRITE_FORMS[@]}" "$API_READ_FORM" "$API_GRAPHQL_FORM" "$PR_READ_FORM" "$ISSUE_READ_FORM" \
+for form in "$API_READ_FORM" "$PR_READ_FORM" "$ISSUE_READ_FORM" \
   "$COMMENT_FORM" "${COMMENT_FORM/gh pr/gh issue}" "$PR_REVIEW_FORM" "$PR_CREATE_FORM" \
   "$ISSUE_CREATE_FORM" "$ISSUE_EDIT_FORM" "$PUSH_FORM" "$WT_PR_FORM"; do
   form=${form#approved form: }
