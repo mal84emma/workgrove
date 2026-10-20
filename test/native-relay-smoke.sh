@@ -440,6 +440,25 @@ scenario_automation_merge() {
 }
 scenario_automation_merge
 
+scenario_numeric_schema_versions() {
+  begin_scenario 'equivalent numeric schema versions remain supported' || return 0
+  setup_automation
+  mkdir -p "${config%/*}"
+  local version sum
+  for version in 1.0 1e0; do
+    printf '{"version":%s,"rules":[{"id":"user-rule"}]}\n' "$version" > "$config"
+    sum=$(cksum < "$config")
+    hook_cmux_automation > "$TEST_ROOT/numeric.out" 2> "$TEST_ROOT/numeric.err"
+    assert_eq "$version retains user rules and installs the relay" 'user-rule wt-native-relay' "$(jq -r '.rules | map(.id) | join(" ")' "$config")"
+    assert_eq "$version does not report an unknown version" '' "$(cat "$TEST_ROOT/numeric.err")"
+    has "$TEST_ROOT/numeric.out" 'cmux automation reload'
+    assert_eq "$version backs up the original file" "$sum" "$(cksum < "$BK/.cmuxterm/automations.json")"
+  done
+  rm "$config"
+  end_scenario
+}
+scenario_numeric_schema_versions
+
 scenario_automation_updates() {
   begin_scenario 'automation updates replace stale rules and preserve explicit disabling' || return 0
   setup_automation

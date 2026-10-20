@@ -290,6 +290,8 @@ personal preference:
 Every `install.sh` run ends with a summary of skips and follow-up actions.
 Empty groups show `none`, including on failed runs.
 The summary lists each refresh command once and retains the required opt-in flags.
+It separates file opt-ins from settings that require a refresh.
+The summary still prints if temporary-file cleanup fails. Cleanup failures retain their exit status.
 
 ### Fallbacks that edit your own files
 

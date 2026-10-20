@@ -17,8 +17,8 @@ hook_cmux_automation() {
   tmp=$(mktemp "${rc}.new.XXXXXX") || return 1
   TMPFILES+=("$tmp")
   if [[ -e $rc ]]; then
-    version=$(jq -c '.version' "$rc" 2>/dev/null || true)
-    if [[ -n $version && $version != 1 ]]; then
+    version=$(jq -c 'select(.version != 1) | .version' "$rc" 2>/dev/null || true)
+    if [[ -n $version ]]; then
       rm -f "$tmp"
       echo "skipped ~/$dst: unknown automations.json version $version" >&2
       # shellcheck disable=SC2088  # The summary prints a home-relative path.

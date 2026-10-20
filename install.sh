@@ -271,8 +271,11 @@ link() {
 
 # Keep one refresh action with the flags that a kept copy cannot record yet.
 refresh_config_action() {
-  local command="Run: install.sh" action
-  if [[ $WITH_CLAUDE_UI -eq 1 ]]; then command="$command --with-claude-ui"; fi
+  local command="Run: install.sh" action flag
+  for flag in "$@"; do command="$command $flag"; done
+  if [[ $WITH_CLAUDE_UI -eq 1 && " $* " != *' --with-claude-ui '* ]]; then
+    command="$command --with-claude-ui"
+  fi
   command="$command --refresh-config"
   for action in ${SUMMARY_ACTIONS[@]+"${SUMMARY_ACTIONS[@]}"}; do
     [[ $action != "$command" ]] || return 0
@@ -902,9 +905,10 @@ configure_git() {
 #      finished run does. finish_install passes the exit status to report.
 #      A failure gets a failure message instead of "done." under the error message.
 report() {
-  local rc=$1
+  local rc=$1 cleanup_rc=0
   if [[ ${#TMPFILES[@]} -gt 0 ]]; then
-    rm -f "${TMPFILES[@]}"             # already moved into place: rm -f on a gone path is a no-op
+    rm -f "${TMPFILES[@]}" || cleanup_rc=$?
+    if [[ $cleanup_rc -ne 0 ]]; then rc=$cleanup_rc; fi
   fi
   if [[ $rc -ne 0 ]]; then
     if [[ -d "$BK" ]]; then
@@ -912,7 +916,7 @@ report() {
     else
       echo "install.sh stopped part-way (exit $rc): nothing had been backed up" >&2
     fi
-    return 0                           # a return does not change the status the script is exiting with
+    return "$cleanup_rc"
   fi
   if [[ -d "$BK" ]]; then
     echo "done. backups in $BK"
@@ -923,7 +927,8 @@ report() {
 
 # Report optional config that this run left alone.
 report_skipped() {
-  local f=""
+  local f="" files="" flag
+  local settings=()
   opted_in "$WITH_ZSHRC"       .zshrc                          || f="$f --with-zshrc"
   opted_in "$WITH_GITCONFIG"   .gitconfig                      || f="$f --with-gitconfig"
   opted_in "$WITH_TMUX_CONF"   .tmux.conf                      || f="$f --with-tmux-conf"
@@ -935,7 +940,21 @@ report_skipped() {
   claude_ui_opted_in                                           || f="$f --with-claude-ui"
   if [[ -n $f ]]; then
     SUMMARY_SKIPS+=("Optional config was not selected:$f")
-    SUMMARY_ACTIONS+=("Run: install.sh$f (or install.sh --opinionated-config)")
+    # These flags are fixed names. Split them to separate file links from settings changes.
+    for flag in $f; do
+      case $flag in
+        --with-claude-ui) settings+=("$flag") ;;
+        --with-statusline)
+          if jq -e 'has("statusLine")' "$HOME/.claude/settings.json" >/dev/null 2>&1; then
+            files="$files $flag"
+          else
+            settings+=("$flag")
+          fi ;;
+        *) files="$files $flag" ;;
+      esac
+    done
+    if [[ -n $files ]]; then SUMMARY_ACTIONS+=("Run: install.sh$files"); fi
+    if [[ ${#settings[@]} -gt 0 ]]; then refresh_config_action "${settings[@]}"; fi
     echo "left alone (the author's own taste, not machinery):$f"
     echo "rerun with those flags, or --opinionated-config for all of them, to install them"
   fi
@@ -943,8 +962,9 @@ report_skipped() {
 
 finish_install() {
   local rc=$?
-  if (( REPORT_ACTIVE )); then report "$rc"; fi
+  if (( REPORT_ACTIVE )); then report "$rc" || rc=$?; fi
   if [[ $rc -eq 0 ]]; then print_summary; else print_summary >&2; fi
+  exit "$rc"
 }
 
 # Print the accumulated actions after the final status, including early refusals.
