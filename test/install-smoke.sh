@@ -1679,7 +1679,7 @@ scenario_refresh_hook_documents() {
   for kind in empty whitespace multiple; do
     h=$(new_home)
     log="$h.log"
-    if assert_install_ok "$h" "$log"; then
+    if assert_install_ok "$h" "$log" --with-claude-ui; then
       for relative in .claude/settings.json .codex/hooks.json; do
         cp "$h/$relative" "$h/$relative.expected"
         case $kind in
@@ -1694,7 +1694,7 @@ scenario_refresh_hook_documents() {
             mv "$h/expected.json" "$h/$relative.expected" ;;
         esac
       done
-      if assert_install_ok "$h" "$log.refresh" --refresh-config; then
+      if assert_install_ok "$h" "$log.refresh" --refresh-config --with-claude-ui; then
         for relative in .claude/settings.json .codex/hooks.json; do
           assert_eq "$kind refresh writes one document to $relative" 1 "$(jq -s length "$h/$relative")"
           assert_eq "$kind refresh preserves the original merge behavior for $relative" \
