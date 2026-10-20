@@ -139,17 +139,17 @@ codex             # /hooks -> review and trust the five portable hook events, ru
 ```
 
 Both installers put the agent CLIs in `~/.local/bin`. On a Mac, `~/.zshenv` sets `CMUX_CUSTOM_CLAUDE_PATH` and
-`CMUX_CUSTOM_CODEX_PATH` to these copies, so cmux's wrappers run them. If the environment already sets either
-variable, `~/.zshenv` leaves it unchanged. `~/.zshenv` looks for the binaries only when a shell starts. So open a
-new row after you install them. To use other copies, set the two variables in `~/.zshenv.local`.
+`CMUX_CUSTOM_CODEX_PATH` to these agent CLIs, so cmux's wrappers run them. If the environment already sets either
+variable, `~/.zshenv` leaves it unchanged. `~/.zshenv` looks for the agent CLIs only when a shell starts. So open
+a new row after you install them. To run other agent CLIs, set the two variables in `~/.zshenv.local`.
 
-A repo whose mise config pins `claude` or `codex` changes this. `mise install` in that repo creates global
-`claude` and `codex` shims. `mise activate` puts the shims ahead of cmux's wrappers on `PATH`. Inside that repo,
-the shim runs the pinned version directly, so cmux's wrapper does not run.
+A repo whose mise config pins Claude Code (`claude` or `claude-code`) or `codex` changes this. `mise install` in
+that repo creates a global shim for each pinned agent CLI. `mise activate` puts the shims ahead of cmux's wrappers
+on `PATH`. Inside that repo, the shim runs the pinned version directly, so cmux's wrapper does not run.
 
-In any other repo, the shim has no active version, so it runs the next `claude` or `codex` on `PATH`. Without the
-two variables, that is cmux's wrapper, which starts the shim again. The Codex row then loops without output. The
-Claude row can loop too, or stop with `cmux: stopped a possible infinite claude shim loop`.
+In any other repo, the shim has no active version, so it runs the next agent CLI of that name on `PATH`. Without
+the two variables, that is cmux's wrapper, which starts the shim again. The Codex row and the Claude row both loop
+without output. cmux's Claude wrapper has a loop guard, but the guard treats a mise shim as a real binary.
 
 `cmux hooks codex install --yes` merges cmux's generated Codex lifecycle handlers into `~/.codex/hooks.json`,
 next to the portable ones. It is a Mac-only step. Run it again after every `install.sh --refresh-config`.

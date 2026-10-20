@@ -1384,6 +1384,37 @@ scenario_cmux_config() {
   end_scenario
 }
 
+# zshenv_paths <shell> <home> <os> [VAR=value ...]: source home/.zshenv with <shell> under set -eu, with a
+# stub uname that prints <os>. Print the two cmux agent path variables, or "unset" for each one that is empty.
+zshenv_paths() {
+  local shell=$1 h=$2 os=$3
+  mkdir -p "$h.stub"
+  printf '#!/bin/sh\necho %s\n' "$os" >"$h.stub/uname"
+  chmod +x "$h.stub/uname"
+  # shellcheck disable=SC2016  # The child shell expands these.
+  env -i HOME="$h" PATH="$h.stub:/usr/bin:/bin" "${@:4}" "$shell" -euc \
+    '. "$1"; echo "${CMUX_CUSTOM_CODEX_PATH:-unset} ${CMUX_CUSTOM_CLAUDE_PATH:-unset}"' zshenv "$REPO/home/.zshenv"
+}
+
+# On a Mac, ~/.zshenv points cmux's agent wrappers at the agent CLIs in ~/.local/bin. The stub uname tests
+# both platforms on either runner. The scratch home has only codex, so CMUX_CUSTOM_CLAUDE_PATH must stay unset.
+scenario_zshenv_cmux_paths() {
+  begin_scenario "18. ~/.zshenv sets the cmux agent paths only on a Mac, and keeps a preset value" || return 0
+  local h shell
+  h="$(new_home)"
+  mkdir -p "$h/.local/bin"
+  printf '#!/bin/sh\n' >"$h/.local/bin/codex"
+  chmod +x "$h/.local/bin/codex"
+  for shell in sh bash; do
+    assert_eq "$shell on a Mac sets only the installed CLI" "$h/.local/bin/codex unset" \
+      "$(zshenv_paths "$shell" "$h" Darwin)"
+    assert_eq "$shell on a Mac keeps a preset value" "/preset unset" \
+      "$(zshenv_paths "$shell" "$h" Darwin CMUX_CUSTOM_CODEX_PATH=/preset)"
+    assert_eq "$shell on Linux sets neither variable" "unset unset" "$(zshenv_paths "$shell" "$h" Linux)"
+  done
+  end_scenario
+}
+
 scenario_automation_summaries() {
   begin_scenario "complete installs summarize automation updates and skips" || return 0
   local kind h log config summary original backup
@@ -1660,6 +1691,7 @@ main() {
   scenario_linux_unhooked_writable
   scenario_linux_managed_bashrc
   scenario_cmux_config
+  scenario_zshenv_cmux_paths
   lib_summary
 }
 
