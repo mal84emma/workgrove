@@ -814,7 +814,7 @@ scenario_claude_ui_keys() {
 
 scenario_claude_ui_sticky() {
   begin_scenario "8b. --with-claude-ui is sticky: the keys it wrote are the record of it" || return 0
-  local h log
+  local h log command
   local h2
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -826,9 +826,15 @@ scenario_claude_ui_sticky() {
     if assert_install_ok "$h" "$log.2" "$UI_FLAG"; then
       assert_claude_ui "$h" no
       assert_grep "the kept-copy warning names $UI_FLAG" "$log.2" "$UI_FLAG changed nothing"
+      command=$(sed -n '/^Install summary:/,$p' "$log.2" | sed -n 's/^    Run: \(install.sh .*--refresh-config\)$/\1/p')
+      assert_eq "the UI recovery command retains its opt-in" "install.sh $UI_FLAG --refresh-config" "$command"
+      assert_eq "the summary has one refresh command" 1 "$(sed -n '/^Install summary:/,$p' "$log.2" | grep -cF -- '--refresh-config' || true)"
     fi
     # --refresh-config rewrites the copy, and only then do the keys arrive.
-    if assert_install_ok "$h" "$log.3" "$UI_FLAG" --refresh-config; then
+    # Execute the summary's command, including the required opt-in flag.
+    local recovery_args=()
+    read -r -a recovery_args <<<"$command"
+    if assert_install_ok "$h" "$log.3" "${recovery_args[@]:1}"; then
       assert_claude_ui "$h" yes
     fi
     # …and a LATER refresh with no flag keeps them. This is the stickiness rule of scenario 4a, in the one
@@ -1377,6 +1383,61 @@ scenario_cmux_config() {
   end_scenario
 }
 
+scenario_automation_summaries() {
+  begin_scenario "complete installs summarize automation updates and skips" || return 0
+  local kind h log config summary original backup
+  for kind in changed disabled managed unknown; do
+    h="$(new_home)"
+    config="$h/.cmuxterm/automations.json"
+    log="$h.log"
+    summary="$h.summary"
+    original="$h.original"
+    mkdir -p "${config%/*}"
+    case $kind in
+      changed|disabled)
+        jq --arg kind "$kind" '
+          .rules[0].then[0].command = "old-hook" |
+          if $kind == "disabled" then .rules[0].enabled = false else . end' \
+          "$REPO/home/.cmuxterm/automations.json" > "$config" ;;
+      managed)
+        cp "$REPO/home/.cmuxterm/automations.json" "$h/managed.json"
+        ln -s "$h/managed.json" "$config" ;;
+      unknown) printf '%s\n' '{"version":99,"rules":[]}' > "$config" ;;
+    esac
+    cp "$config" "$original"
+    RUN_EXTRA_ENV=(FORCE_OS=Darwin)
+    if assert_install_ok "$h" "$log"; then
+      assert_eq "$kind prints one final summary" 1 "$(count_matches "$log" 'Install summary:')"
+      sed -n '/^Install summary:/,$p' "$log" > "$summary"
+      assert_eq "$kind finishes before its summary" 0 "$(count_matches "$summary" 'done.')"
+      case $kind in
+        changed|disabled)
+          assert_grep "$kind summary retains the reload command" "$summary" 'Run: cmux automation reload'
+          assert_eq "$kind summary prints reload once" 1 "$(count_matches "$summary" 'cmux automation reload')"
+          # shellcheck disable=SC2088  # The rule stores the literal home-relative command.
+          assert_eq "$kind installs the current command" '~/.local/bin/cmux-hook --event' "$(jq -r '.rules[0].then[0].command' "$config")"
+          for backup in "$h"/.workgrove-backup/*/.cmuxterm/automations.json; do
+            assert_same_bytes "$kind backs up the previous rule" "$original" "$backup"
+          done
+          if [[ $kind == disabled ]]; then
+            assert_eq "the updated rule remains disabled" false "$(jq -r '.rules[0].enabled' "$config")"
+          fi ;;
+        managed)
+          # shellcheck disable=SC2088  # The summary prints a home-relative path.
+          assert_grep "managed summary names the skipped file" "$summary" '~/.cmuxterm/automations.json is managed externally'
+          assert_grep "managed summary retains the manual action" "$summary" "Merge home/.cmuxterm/automations.json's wt-native-relay rule into the managed file."
+          assert_eq "the managed symlink stays intact" "$h/managed.json" "$(readlink "$config")"
+          assert_same_bytes "the managed file stays unchanged" "$original" "$config" ;;
+        unknown)
+          # shellcheck disable=SC2088  # The summary prints a home-relative path.
+          assert_grep "unknown version summary names the skip" "$summary" '~/.cmuxterm/automations.json has unknown automations.json version 99'
+          assert_same_bytes "the unknown version stays unchanged" "$original" "$config" ;;
+      esac
+    fi
+  done
+  end_scenario
+}
+
 scenario_install_summary() {
   begin_scenario "install summaries cover successful runs and early refusals" || return 0
   local h log summary
@@ -1389,6 +1450,9 @@ scenario_install_summary() {
     assert_grep "the summary names optional skips" "$summary" 'Optional config was not selected:'
     assert_grep "the summary names follow-up actions" "$summary" '  Follow-up actions:'
     assert_grep "the summary gives the install command" "$summary" 'Run: install.sh'
+    if [[ $OS != Darwin ]]; then
+      assert_grep "the summary includes the repository directory action" "$summary" 'If repositories live elsewhere, edit WT_REPOS_DIR in ~/.zshenv.local.'
+    fi
   fi
   assert_install_fails "$h" "$log.2" 2 'usage: install.sh' --unknown
   assert_eq "an early refusal prints one summary" 1 "$(count_matches "$log.2" 'Install summary:')"
@@ -1408,6 +1472,7 @@ main() {
   echo "  this suite under bash ${BASH_VERSION}; install.sh under $INSTALL_BASH" \
        "($("$INSTALL_BASH" -c 'echo "$BASH_VERSION"'))"
   scenario_install_summary
+  scenario_automation_summaries
   scenario_default_empty
   scenario_default_over_existing
   scenario_opinionated

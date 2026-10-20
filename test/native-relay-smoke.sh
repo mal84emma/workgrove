@@ -35,7 +35,7 @@ case "$1 ${2:-}" in
     fi
     printf '%s\n' "$rows" ;;
   '--json list-notifications') cat "$RECORD_FILE" ;;
-  'ssh test-vm') echo workspace:99 ;;
+  'ssh test-vm') [[ ${CMUX_SSH_FAIL:-0} == 0 ]] || exit "$CMUX_SSH_FAIL"; echo workspace:99 ;;
   'workspace-action --workspace') [[ ${CMUX_TAG_FAIL:-0} == 0 ]] || exit 1 ;;
 esac
 exit 0
@@ -227,6 +227,10 @@ scenario_event_diagnostics() {
 .workspace = .workspace_id | del(.workspace_id)	missing or invalid workspace id
 .payload.notification_id = "bad"	malformed notification id
 .workspace_id = "bad"	malformed workspace id
+.payload.notification_id = "------------------------------------"	malformed notification id
+.workspace_id = "------------------------------------"	malformed workspace id
+.payload.notification_id = "AAAAAAAAA-AAA-4AAA-8AAA-AAAAAAAAAAAA"	malformed notification id
+.workspace_id = "BBBBBBBBB-BBB-4BBB-8BBB-BBBBBBBBBBBB"	malformed workspace id
 CASES
   end_scenario
 }
@@ -275,6 +279,37 @@ CASES
   end_scenario
 }
 scenario_record_diagnostics
+
+scenario_request_execution_diagnostics() {
+  begin_scenario 'unavailable VS Code and failed attach requests keep notifications' || return 0
+  local out rc=0
+  record wt-open '{"host":"test-vm","path":"/vm/repos/repo"}'
+  : > "$XDG_STATE_HOME/cmux-hook.log"
+  # An exported function resolves to a name without an executable file, on every test machine.
+  out=$(
+    # shellcheck disable=SC2329  # command -v inspects this exported function.
+    code() { return 1; }
+    export -f code
+    hook
+  ) || rc=$?
+  assert_eq 'unavailable VS Code exits zero' 0 "$rc"
+  assert_eq 'unavailable VS Code prints no response' '' "$out"
+  has "$XDG_STATE_HOME/cmux-hook.log" 'ignored wt-open: VS Code executable unavailable'
+  lacks "$CODE_LOG" '--folder-uri'
+  lacks "$CMUX_LOG" 'dismiss-notification'
+
+  record wt-attach '{"host":"test-vm","repo":"/vm/repos/child","task":"child"}'
+  : > "$XDG_STATE_HOME/cmux-hook.log"
+  rc=0
+  out=$(CMUX_SSH_FAIL=7 hook) || rc=$?
+  assert_eq 'failed attach exits zero' 0 "$rc"
+  assert_eq 'failed attach prints no response' '' "$out"
+  has "$XDG_STATE_HOME/cmux-hook.log" 'ignored wt-attach: could not attach row for workspace'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'cmux ssh failed:'
+  lacks "$CMUX_LOG" 'dismiss-notification'
+  end_scenario
+}
+scenario_request_execution_diagnostics
 
 scenario_native_open() {
   begin_scenario 'native open uses the recorded ID and validates the sending row' || return 0

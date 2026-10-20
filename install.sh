@@ -269,6 +269,17 @@ link() {
   echo "linked ~/$2"
 }
 
+# Keep one refresh action with the flags that a kept copy cannot record yet.
+refresh_config_action() {
+  local command="Run: install.sh" action
+  if [[ $WITH_CLAUDE_UI -eq 1 ]]; then command="$command --with-claude-ui"; fi
+  command="$command --refresh-config"
+  for action in ${SUMMARY_ACTIONS[@]+"${SUMMARY_ACTIONS[@]}"}; do
+    [[ $action != "$command" ]] || return 0
+  done
+  SUMMARY_ACTIONS+=("$command")
+}
+
 # copy_config <repo-relative .base> <home-relative dst> <claude|codex|plain>: install one machine-local copy.
 # It keeps an existing real file unless --refresh-config was given.
 #   Kind "claude" drops the voice keys on a VM, because a VM has no local microphone. It drops the UI keys
@@ -292,7 +303,7 @@ copy_config() {
   if [[ -e "$dst" && ! -L "$dst" && $REFRESH -eq 0 ]]; then
     # shellcheck disable=SC2088  # The summary prints a home-relative path.
     SUMMARY_SKIPS+=("~/$2 already exists; the machine-local copy was kept")
-    SUMMARY_ACTIONS+=("To replace ~/$2, run: install.sh --refresh-config")
+    refresh_config_action
     echo "kept ~/$2 (install.sh --refresh-config replaces it)"
     # A kept file also keeps the filter decision that the FIRST install made. So --with-statusline on a machine
     # that is already installed links the script, but leaves settings.json without the key that names it. The
@@ -301,7 +312,7 @@ copy_config() {
        && ! jq -e 'has("statusLine")' "$dst" >/dev/null 2>&1; then
       # shellcheck disable=SC2088  # The summary prints a home-relative path.
       SUMMARY_SKIPS+=("~/$2 has no statusLine key")
-      SUMMARY_ACTIONS+=("Run: install.sh --refresh-config")
+      refresh_config_action
       echo "…but the kept ~/$2 has no statusLine key, so the status line will not appear:" >&2
       echo "rerun with --refresh-config to rewrite it (the old copy goes to the backup dir)" >&2
     fi
@@ -312,7 +323,7 @@ copy_config() {
        && ! jq -e 'has("tui")' "$dst" >/dev/null 2>&1; then
       # shellcheck disable=SC2088  # The summary prints a home-relative path.
       SUMMARY_SKIPS+=("~/$2 has no tui key")
-      SUMMARY_ACTIONS+=("Run: install.sh --refresh-config")
+      refresh_config_action
       echo "…but the kept ~/$2 has no tui key, so --with-claude-ui changed nothing:" >&2
       echo "rerun with --refresh-config to rewrite it (the old copy goes to the backup dir)" >&2
     fi
@@ -592,6 +603,7 @@ record_repos_dir() {
     return 0
   fi
   append_line "$HOME/.zshenv.local" 'export WT_REPOS_DIR="$HOME"'
+  SUMMARY_ACTIONS+=("If repositories live elsewhere, edit WT_REPOS_DIR in ~/.zshenv.local.")
   echo 'WT_REPOS_DIR=$HOME written to ~/.zshenv.local (edit the line if repos live elsewhere)'
 }
 

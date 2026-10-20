@@ -98,8 +98,9 @@ case $mode in
     [[ $event_name == notification.created ]] || exit 0
     nid=$(printf '%s' "$event" | jq -er '.payload.notification_id | strings' 2>/dev/null) || { log "missing or invalid notification id"; exit 0; }
     ws=$(printf '%s' "$event" | jq -er '.workspace_id | strings' 2>/dev/null) || { log "missing or invalid workspace id"; exit 0; }
-    [[ $nid =~ ^[A-Fa-f0-9-]{36}$ ]] || { log "malformed notification id"; exit 0; }
-    [[ $ws =~ ^[A-Fa-f0-9-]{36}$ ]] || { log "malformed workspace id"; exit 0; }
+    uuid_pattern='^[A-Fa-f0-9]{8}(-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$'
+    [[ $nid =~ $uuid_pattern ]] || { log "malformed notification id"; exit 0; }
+    [[ $ws =~ $uuid_pattern ]] || { log "malformed workspace id"; exit 0; }
     ws_load || { log "$CMUX_ERROR"; exit 0; }
     row=$(printf '%s' "$WS_JSON" | jq -ec --arg w "$ws" 'first(.workspaces[] | select(.id == $w))' 2>/dev/null) || { log "workspace $ws not found in row list"; exit 0; }
     printf '%s' "$row" | jq -e '.remote.enabled' >/dev/null 2>&1 || exit 0

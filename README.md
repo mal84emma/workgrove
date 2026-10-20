@@ -289,6 +289,7 @@ personal preference:
 
 Every `install.sh` run ends with a summary of skips and follow-up actions.
 Empty groups show `none`, including on failed runs.
+The summary lists each refresh command once and retains the required opt-in flags.
 
 ### Fallbacks that edit your own files
 
@@ -326,6 +327,8 @@ flag. So a later `--refresh-config` keeps those keys instead of stripping them.
 
 If you give `--with-claude-ui` on its own (without `--refresh-config`) on a machine whose copy was written
 without it, the flag changes nothing. The run says so instead of reporting success.
+Run `install.sh --with-claude-ui --refresh-config` to add the UI keys.
+The summary includes both flags because the existing copy cannot remember the requested opt-in.
 
 ### File classes
 
