@@ -154,6 +154,7 @@ case $t in
         if [[ $rc -eq 1 ]]; then
           if [[ $result_rc -eq 0 ]]; then
             if jq -e --arg n "$n" --arg r "$r" '.status == "missing" and .name == $n and .repo == $r' <<<"$result" >/dev/null; then missing=1; fi
+          # WT_COMPAT: Remove when every VM emits protocol 1 path results.
           elif [[ $result_rc -eq 2 && $gone == *"no worktree named '$n' in $r"* ]]; then missing=1; fi
         fi
         if [[ $missing -ne 1 ]]; then

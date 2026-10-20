@@ -187,6 +187,7 @@ workgrove/
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── bash5-smoke.sh         all five bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
+│   ├── update-smoke.sh        version reporting and updates with scratch clones
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with a fake gh
 │   ├── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
@@ -679,8 +680,8 @@ the saved task later with plain `attach`.
 
 ### VM command results
 
-The Mac requests machine-readable results with `WT_MACHINE=1` for VM task creation,
-task recovery, and the Mac hook's worktree absence check.
+The Mac sets `WT_MACHINE` to the highest record version it accepts, currently `1`.
+This applies to VM task creation, task recovery, and the Mac hook's worktree absence check.
 The VM keeps its human-readable output and adds one line beginning with `WT_RESULT`
 and a tab, followed by a compact JSON object.
 The VM consumes the request at startup so setup hooks and nested commands keep their ordinary output.
@@ -697,18 +698,36 @@ The object has these fields:
 
 The record goes to standard output, except that a missing `path` record goes to
 standard error with exit status `1`.
-Readers require exactly one record with the expected version, command, and string fields.
+The VM emits the lower of the requested version and its own version.
+Protocol 1 VMs accept every positive integer request and emit version 1.
+Readers require exactly one record with a supported version, the expected command, and string fields.
+Readers keep unknown scalar keys. New fields are additive.
+A new version number means that a field changed its meaning.
+An unsupported result version stops creation or recovery and names `wt update` on the Mac.
 The object must have unique keys and scalar values, with no nested objects or arrays.
 String fields must not contain control characters.
 Readers use the text format only when no record is present.
 An invalid record causes creation or recovery to stop and keeps the row during a close check.
 
+`wt version` and `wt -H <vm> version` print JSON with `commit` and `protocol` fields.
+The commit is the short repository commit, or `unknown` for a seeded copy without `.git`.
+Host probes and creation preflight checks call the VM's `wt version`.
+`wt hosts --json` includes the VM's `wt_commit` and `wt_protocol`, or null when unavailable.
+
+Updates print JSON records before and after the pull, alongside their existing output.
+Each record has `event: "wt_update"`, `stage`, `side`, `commit`, and `protocol`.
+Local updates use side `local`; remote updates report sides `Mac` and `VM`.
+Stages are `before` and `after`. Older VMs without `wt version` have null values.
+A failed update can stop before the `after` records.
+See [the JSON contracts](docs/wt-json.md) for details.
+
 The close check also requires exit status `1`, status `missing`, and the requested task and repository.
 A failed worktree listing cannot produce a missing record.
 
 The environment request avoids an unsupported flag and requires no creation retry.
-Older VMs ignore the request and supply the text fallback.
-Older Macs do not request records, so newer VMs keep their previous output.
+VMs without result records ignore the request and supply the text fallback.
+Older Macs that send `WT_MACHINE=1` continue to receive protocol 1 records.
+Macs that send no request continue to receive ordinary output.
 An ordinary `wt path` therefore still prints only its path.
 
 ### Remove a task
@@ -841,7 +860,7 @@ This table lists configuration variables, test overrides, and repository setting
 | `WT_HOST` | No default. The VM's alias in the Mac's `~/.ssh/config`; the VM installer records it. |
 | `WT_AGENT` | `claude`. Selects the default agent for new tasks. |
 | `WT_AGENT_ARGS` | Empty. Adds shell-split agent arguments. |
-| `WT_MACHINE` | Unset. `1` enables versioned results for supported commands. The Mac sets it for VM requests. |
+| `WT_MACHINE` | Unset. The highest accepted record version enables versioned results for supported commands. The Mac sets it for VM requests. |
 | `WT_CMUX_TUI_HOOK` | Internal helper path for the hook wrapper. `wt run` sets it from `CMUX_TUI_HOOK` or the cmux-tui data folder. |
 | `WT_CLOSE_WAIT_SECONDS` | `22`. Sets the wait for older VM rows to close during self-removal. |
 | `WT_STATUS_LEASE_SECONDS` | Retired with the TCP status paths. Current code ignores it. |

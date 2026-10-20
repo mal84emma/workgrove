@@ -66,15 +66,17 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
   local out session state title id path what=selected result result_rc=0
   out=$(remote_wt_result "$host" show "$name" -r "$repo")
-  result=$(wt_read_result "$out" show) || result_rc=$?
+  result=$(wt_read_result "$out" show 2>/dev/null) || result_rc=$?
   case $result_rc in
     0)
       [[ $(jq -r .status <<<"$result") == found && $(jq -r .name <<<"$result") == "$name" ]] || die "unexpected output from $host"
       session=$(jq -r .session <<<"$result"); path=$(jq -r .repo <<<"$result"); state=$(jq -r .state <<<"$result") ;;
+    # WT_COMPAT: Remove when every VM emits protocol 1 task results.
     2)
       session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
       path=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
       state="${session#*(}"; state="${state%)}"; session="${session%% *}" ;;
+    3) die "unsupported result protocol from $host; run wt update on the Mac" ;;
     *) die "unexpected output from $host" ;;
   esac
   [[ -n "$session" && -n "$path" ]] || die "$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))"

@@ -57,6 +57,7 @@ cmux_row_field() {
   printf '%s' "$rows" | cmux_find_row "$1" "$repo" "$3" "${4:-}" || true
 }
 
+# WT_COMPAT: Remove when no row retains a repository-prefixed title.
 row_label() { # row_label <title> <repo> [host] — the matching row as the sidebar shows it. An older wt's row
   # keeps its old title, so this reads the row's own title and description. A row that is gone by then
   # reads as the label that wt would give it.
@@ -244,6 +245,7 @@ ROW_SEP=' · '
 # An empty repo ID matches a row with no repo.
 # new_row finds a created row when cmux ssh prints no ref. It excludes known IDs and descriptions with a repo.
 # unclaimed_row finds descriptions that wt does not write. wt rm checks these rows for agents because users can edit descriptions.
+# WT_COMPAT: Remove when no row retains a repository-prefixed title.
 # shellcheck disable=SC2016
 ROW_JQ='
   def desc($sep): (.description | if type == "string" then . else "" end) | split($sep);

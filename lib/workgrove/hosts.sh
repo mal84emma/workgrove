@@ -42,7 +42,7 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
 host_record() { # stable JSON for agents; unknown hardware never becomes a false zero
   local host="$1" report="" rc=0 err_file err=""
   if ! valid_host "$host"; then
-    jq -nc --arg host "$host" '{host:$host,status:"unavailable",cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:"invalid SSH alias"}'
+    jq -nc --arg host "$host" '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:"invalid SSH alias"}'
     return
   fi
   err_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-error.XXXXXX") || return 1
@@ -51,7 +51,7 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
     err=$(sed -n '1p' "$err_file" | LC_ALL=C tr -d '\r' | cut -c1-180)
     rm -f "$err_file"
     jq -nc --arg host "$host" --arg error "SSH probe failed (exit $rc)${err:+: $err}" \
-      '{host:$host,status:"unavailable",cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:$error}'
+      '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:$error}'
     return
   fi
   rm -f "$err_file"
@@ -59,6 +59,7 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
     def field($rows; $key): [ $rows[] | select(.[0] == $key) | .[1] ][0] // "";
     def unsigned: if type == "string" and test("^[0-9]+$") then tonumber else null end;
     [split("\n")[] | select(length > 0) | split("\t")] as $rows
+    | (field($rows; "wt_version") | (fromjson? // {}) | if type == "object" then . else {} end) as $version
     | (field($rows; "cpu") | unsigned) as $cpu
     | (field($rows; "mem_kib") | unsigned) as $mem
     | [ $rows[] | select(.[0] == "gpu") ] as $raw_gpus
@@ -73,7 +74,10 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
        then (if ($gpus | length) == 0 then "none" else "ok" end)
        elif field($rows; "gpu_status") == "none" and ($raw_gpus | length) == 0
        then "none" else "unknown" end) as $gpu_status
-    | {host:$host,status:"available",cpu_logical:(if $cpu != null and $cpu > 0 then $cpu else null end),
+    | {host:$host,status:"available",
+       wt_commit:(if ($version.commit | type) == "string" then $version.commit else null end),
+       wt_protocol:(if ($version.protocol | type) == "number" and $version.protocol >= 1 and ($version.protocol | floor) == $version.protocol
+                    then $version.protocol else null end),cpu_logical:(if $cpu != null and $cpu > 0 then $cpu else null end),
        memory_mib:(if $mem != null and $mem > 0 then ($mem / 1024 | floor) else null end),
        gpu_status:$gpu_status,gpus:$gpus,
        error:(if $cpu == null or $cpu == 0 or $mem == null or $mem == 0 then "incomplete CPU/RAM report" else null end)}'
