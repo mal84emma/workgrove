@@ -617,4 +617,24 @@ scenario_generated_prefixes() {
 }
 scenario_generated_prefixes
 
+# Keep complete denial text stable when forms move between rows.
+scenario_denial_text() {
+  begin_scenario 'generated help and compound denial text stay unchanged' || return 0
+  local expected
+  expected=$(cat <<'REASON'
+github-guard: gh api -X DELETE repos/acme/widgets/issues/1 is not an approved write; approved gh api forms: a read, gh api <endpoint> (--jq '<expr>' to filter, --paginate for every page, -X GET -f key=value for query parameters, gh api graphql -f query='…' for a GraphQL query); and, in this repository, -X POST repos/{owner}/{repo}/issues (-f title= -f body=, -f 'labels[]=…' -f 'assignees[]=…' -F milestone=), .../issues/<n>/comments, .../pulls/<n>/comments (an inline comment: -f body= -f commit_id= -f path= -F line=), .../pulls/<n>/comments/<id>/replies, .../pulls/<n>/reviews (-f event=COMMENT|REQUEST_CHANGES, inline comments as -f 'comments[][path]=…' -F 'comments[][line]=…' -f 'comments[][body]=…'), .../pulls/<n>/reviews/<id>/events; on your own, -X PATCH .../issues/<n> with the fields an issue is opened with, and -X PATCH .../pulls/comments/<id> or .../issues/comments/<id> and -X PUT .../pulls/<n>/reviews/<id> with -f body=; and gh api graphql with a resolveReviewThread or unresolveReviewThread mutation
+REASON
+  )
+  expect deny 'gh api -X DELETE repos/acme/widgets/issues/1'
+  assert_eq 'complete denial reason' "$expected" "$(cat "$TEST_ROOT/reason")"
+  expected=$(cat <<'REASON'
+github-guard: gh pr create is approved only as one simple command: no pipe, redirect, && or ;, no $(...), backticks or $VARIABLES, no globs, and no cd in front (run the cd as its own command first: the directory carries over, and this hook reads it). Filter output with gh's own --jq '<expr>' rather than | jq, pass long text with --body-file, and quote any argument with ? or & in it.
+REASON
+  )
+  expect deny 'gh pr create --fill | cat'
+  assert_eq 'complete denial reason' "$expected" "$(cat "$TEST_ROOT/reason")"
+  end_scenario
+}
+scenario_denial_text
+
 lib_summary

@@ -222,8 +222,9 @@ body_file() {
 ISSUE_FIELDS='title body labels[] assignees[] milestone'   # not state: closing and reopening stay out
 GH_API_WRITES=(
   "^POST issues$~$ISSUE_FIELDS~title~~~a new issue~-X POST repos/{owner}/{repo}/issues (-f title= -f body=, -f 'labels[]=…' -f 'assignees[]=…' -F milestone=), "
-  "^POST (issues/[0-9]+/comments|pulls/[0-9]+/comments/[0-9]+/replies)$~body~body~~~a comment~.../issues/<n>/comments, "
-  "^POST pulls/[0-9]+/comments$~body commit_id path line side start_line start_side in_reply_to subject_type position~body~~~an inline review comment~.../pulls/<n>/comments (an inline comment: -f body= -f commit_id= -f path= -F line=), .../pulls/<n>/comments/<id>/replies, "
+  "^POST issues/[0-9]+/comments$~body~body~~~a comment~.../issues/<n>/comments, "
+  "^POST pulls/[0-9]+/comments$~body commit_id path line side start_line start_side in_reply_to subject_type position~body~~~an inline review comment~.../pulls/<n>/comments (an inline comment: -f body= -f commit_id= -f path= -F line=), "
+  "^POST pulls/[0-9]+/comments/[0-9]+/replies$~body~body~~~a comment~.../pulls/<n>/comments/<id>/replies, "
   "^POST pulls/[0-9]+/reviews$~body event commit_id comments[][path] comments[][line] comments[][side] comments[][start_line] comments[][start_side] comments[][body] comments[][position]~~~optional~a review~.../pulls/<n>/reviews (-f event=COMMENT|REQUEST_CHANGES, inline comments as -f 'comments[][path]=…' -F 'comments[][line]=…' -f 'comments[][body]=…'), "
   "^POST pulls/[0-9]+/reviews/[0-9]+/events$~body event~body~~required~submitting a pending review~.../pulls/<n>/reviews/<id>/events; "
   "^PATCH issues/[0-9]+$~$ISSUE_FIELDS~~own~~an edit of its own issue~on your own, -X PATCH .../issues/<n> with the fields an issue is opened with, and "
