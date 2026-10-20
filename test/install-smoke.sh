@@ -790,6 +790,10 @@ scenario_unknown_flag() {
       "$INSTALL_BASH" "$REPO/install.sh" --no-such-flag >"$out" 2>"$err" </dev/null || rc=$?
   assert_eq "exit status for an unknown flag" 2 "$rc"
   assert_grep "usage printed on stderr" "$err" "usage: install.sh"
+  assert_eq "usage retains its flags and line breaks" 'usage: install.sh [--refresh-config] [--opinionated-config]
+                  [--with-zshrc] [--with-gitconfig] [--with-tmux-conf]
+                  [--with-keybindings] [--with-statusline] [--with-claude-ui]
+                  [--with-cmux-config]' "$(head -4 "$err")"
   assert_eq "bytes written to stdout" 0 "$(wc -c <"$out" | tr -d ' ')"
   # parse_args runs before anything moves, so the HOME must be untouched.
   assert_absent "$h" .zshenv
@@ -1208,23 +1212,24 @@ scenario_missing_jq() {
 #     install says success. This happened to the author.
 scenario_custom_theme() {
   begin_scenario "15a. the theme follows ZSH_CUSTOM, because that is where oh-my-zsh looks" || return 0
-  local h log zc pl
-
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  seed_oh_my_zsh "$h"
-  zc="$h/.config/omz-custom"
-  mkdir -p "$zc/themes"
-  for pl in zsh-autosuggestions zsh-syntax-highlighting; do
-    mkdir -p "$zc/plugins/$pl"         # pre-created here too, or install_zsh_plugins would hit the network
+  local h log zc pl relative
+  for relative in .config/omz-custom 'custom|zsh'; do
+    h="$(new_home)"
+    guard_scratch_home "$h"
+    log="$h.log"
+    seed_oh_my_zsh "$h"
+    zc="$h/$relative"
+    mkdir -p "$zc/themes"
+    for pl in zsh-autosuggestions zsh-syntax-highlighting; do
+      mkdir -p "$zc/plugins/$pl"
+    done
+    RUN_EXTRA_ENV=(ZSH_CUSTOM="$zc")
+    if assert_install_ok "$h" "$log" --with-zshrc; then
+      assert_link "$h" .zshrc home/.zshrc
+      assert_link "$h" "$relative/themes/workgrove.zsh-theme" "$THEME_SRC"
+      assert_absent "$h" "$THEME_DST"
+    fi
   done
-  RUN_EXTRA_ENV=(ZSH_CUSTOM="$zc")
-  if assert_install_ok "$h" "$log" --with-zshrc; then
-    assert_link "$h" .zshrc home/.zshrc
-    assert_link "$h" .config/omz-custom/themes/workgrove.zsh-theme "$THEME_SRC"
-    assert_absent "$h" "$THEME_DST"    # the hardcoded path, where oh-my-zsh would never have looked
-  fi
   end_scenario
 }
 
@@ -1422,10 +1427,136 @@ scenario_zshenv_cmux_paths() {
   end_scenario
 }
 
+scenario_failed_symlink_refresh() {
+  begin_scenario "failed hook refreshes do not report replacing untouched symlinks" || return 0
+  local h log relative target
+  for relative in .claude/settings.json .codex/hooks.json; do
+    h=$(new_home)
+    log="$h.log"
+    target="$h/managed.json"
+    mkdir -p "$h/$(dirname "$relative")"
+    printf '%s\n' 'invalid hook JSON' > "$target"
+    cp "$target" "$h/original.json"
+    ln -s "$target" "$h/$relative"
+    assert_install_fails "$h" "$log" 1 "jq failed on $relative" --refresh-config
+    assert_eq "the failed refresh keeps the symlink" "$target" "$(readlink "$h/$relative")"
+    assert_same_bytes "the failed refresh keeps its target" "$h/original.json" "$target"
+    assert_eq "the failed refresh reports no replacement" 0 "$(count_matches "$log" "replaced the symlink at ~/$relative")"
+    assert_eq "the failed refresh reports no installation" 0 "$(count_matches "$log" "installed ~/$relative")"
+  done
+  end_scenario
+}
+
+scenario_json_merge_relative_paths() {
+  begin_scenario "JSON merge creates and updates relative destinations" || return 0
+  local h script relative rc
+  script="$TEST_ROOT/merge-relative.sh"
+  cat > "$script" <<'SCRIPT'
+set -euo pipefail
+source "$1/lib/workgrove/install-files.sh"
+cd "$2"
+TMPFILES=()
+trap 'if [[ ${#TMPFILES[@]} -gt 0 ]]; then rm -f "${TMPFILES[@]}"; fi' EXIT
+stash() { mkdir -p "backup/$(dirname "$1")"; mv "$1" "backup/$1"; }
+json_merge "$3" true '.created = true'
+json_merge "$3" true '.updated = true'
+SCRIPT
+  for relative in config.json 'nested dir/config.json'; do
+    h=$(new_home)
+    rc=0
+    "$INSTALL_BASH" "$script" "$REPO" "$h" "$relative" > "$h.log" 2>&1 || rc=$?
+    assert_eq "$relative merges succeed" 0 "$rc"
+    if [[ $rc -eq 0 ]]; then
+      assert_regular "$h" "$relative"
+      assert_eq "$relative retains both merged fields" '{"created":true,"updated":true}' "$(jq -cS . "$h/$relative")"
+      assert_eq "$relative backs up its previous contents" '{"created":true}' "$(jq -cS . "$h/backup/$relative")"
+    fi
+  done
+  end_scenario
+}
+
+scenario_json_merge_failures() {
+  begin_scenario "JSON merge failures preserve the destination without backups" || return 0
+  local h script kind rc
+  h=$(new_home)
+  script="$TEST_ROOT/merge-failure.sh"
+  cat > "$script" <<'SCRIPT'
+set -euo pipefail
+source "$1/lib/workgrove/install-files.sh"
+HOME=$2
+BK="$HOME/backup"
+TMPFILES=()
+trap 'if [[ ${#TMPFILES[@]} -gt 0 ]]; then rm -f "${TMPFILES[@]}"; fi' EXIT
+stash() { mkdir -p "$BK"; mv "$1" "$BK/original.json"; }
+json_merge "$HOME/config.json" "$3" "$4"
+SCRIPT
+  for kind in validation merge; do
+    printf '%s\n' '{"user":"preserved"}' > "$h/config.json"
+    cp "$h/config.json" "$h/original.json"
+    rc=0
+    if [[ $kind == validation ]]; then
+      "$INSTALL_BASH" "$script" "$REPO" "$h" false '.changed = true' > "$h.log" 2>&1 || rc=$?
+      assert_eq "validation failure returns 2" 2 "$rc"
+    else
+      "$INSTALL_BASH" "$script" "$REPO" "$h" true 'error("merge fixture")' > "$h.log" 2>&1 || rc=$?
+      assert_eq "merge failure returns 1" 1 "$rc"
+    fi
+    assert_same_bytes "$kind failure preserves the destination" "$h/original.json" "$h/config.json"
+    assert_absent "$h" backup
+    assert_eq "$kind failure leaves no temporary files" 0 "$(find "$h" -name 'config.json.*' | wc -l | tr -d ' ')"
+  done
+  end_scenario
+}
+
+scenario_install_tables() {
+  begin_scenario "new links and opt-in flags need one table row" || return 0
+  local fixture="$TEST_ROOT/table-repo" h log
+  mkdir -p "$fixture"
+  cp -R "$REPO/install.sh" "$REPO/lib" "$REPO/home" "$REPO/bin" "$fixture/"
+  printf 'linked fixture\n' > "$fixture/home/.table-link"
+  printf 'optional fixture\n' > "$fixture/home/.table-source"
+  printf 'binary fixture\n' > "$fixture/bin/table-bin"
+  awk '
+    { print }
+    /^OPTIN=\(/ { print "  \047--with-table|WITH_TABLE|home/.table-source|.table-optin|all|link|7\047" }
+    /^LINKS=\(/ { print "  \047home/.table-link|.table-link|\047" }
+  ' "$fixture/install.sh" > "$fixture/install.new"
+  mv "$fixture/install.new" "$fixture/install.sh"
+  local REPO
+  REPO=$(cd "$fixture" && pwd -P)
+  h=$(new_home)
+  log="$h.log"
+  if assert_install_ok "$h" "$log"; then
+    assert_link "$h" .table-link home/.table-link
+    assert_link "$h" .local/bin/table-bin bin/table-bin
+    assert_absent "$h" .table-optin
+    assert_grep "the new flag appears in skipped config" "$log" --with-table
+    assert_install_fails "$h" "$log.usage" 2 '[--with-table]' --unknown
+    if assert_install_ok "$h" "$log.selected" --with-table; then
+      assert_link "$h" .table-optin home/.table-source
+    fi
+    if assert_install_ok "$h" "$log.sticky"; then
+      assert_link "$h" .table-optin home/.table-source
+    fi
+    h=$(new_home)
+    seed_oh_my_zsh "$h"
+    if assert_install_ok "$h" "$log.all" --opinionated-config; then
+      assert_link "$h" .table-optin home/.table-source
+    fi
+    mv "$fixture" "$fixture-moved"
+    REPO=$(cd "$fixture-moved" && pwd -P)
+    if assert_install_ok "$h" "$log.moved"; then
+      assert_link "$h" .table-optin home/.table-source
+      assert_eq "the moved checkout retains the new opt-in" 0 "$(count_matches "$log.moved" --with-table)"
+    fi
+  fi
+  end_scenario
+}
+
 scenario_automation_summaries() {
   begin_scenario "complete installs summarize automation updates and skips" || return 0
   local kind h log config summary original backup
-  for kind in changed disabled managed unknown; do
+  for kind in new invalid changed disabled managed unknown; do
     h="$(new_home)"
     config="$h/.cmuxterm/automations.json"
     log="$h.log"
@@ -1433,6 +1564,8 @@ scenario_automation_summaries() {
     original="$h.original"
     mkdir -p "${config%/*}"
     case $kind in
+      new) ;;
+      invalid) printf '%s\n' '{"version":1,"rules":{}}' > "$config" ;;
       changed|disabled)
         jq --arg kind "$kind" '
           .rules[0].then[0].command = "old-hook" |
@@ -1443,13 +1576,23 @@ scenario_automation_summaries() {
         ln -s "$h/managed.json" "$config" ;;
       unknown) printf '%s\n' '{"version":99,"rules":[]}' > "$config" ;;
     esac
-    cp "$config" "$original"
+    if [[ -e $config ]]; then cp "$config" "$original"; fi
     RUN_EXTRA_ENV=(FORCE_OS=Darwin)
     if assert_install_ok "$h" "$log"; then
       assert_eq "$kind prints one final summary" 1 "$(count_matches "$log" 'Install summary:')"
       sed -n '/^Install summary:/,$p' "$log" > "$summary"
       assert_eq "$kind finishes before its summary" 0 "$(count_matches "$summary" 'done.')"
       case $kind in
+        new)
+          assert_eq "a new install gets the complete automation rule" "$(jq -cS . "$REPO/home/.cmuxterm/automations.json")" "$(jq -cS . "$config")"
+          assert_mode "$h" .cmuxterm/automations.json 600
+          RUN_EXTRA_ENV=(FORCE_OS=Darwin)
+          assert_install_ok "$h" "$log.2"
+          assert_grep "a rerun keeps the existing rule" "$log.2" "kept ~/.cmuxterm/automations.json's existing wt-native-relay rule"
+          assert_eq "a rerun preserves the automation rule" "$(jq -cS . "$REPO/home/.cmuxterm/automations.json")" "$(jq -cS . "$config")" ;;
+        invalid)
+          assert_grep "invalid automation has a shape warning" "$log" 'expected a version-1 object with a rules array'
+          assert_same_bytes "invalid automation stays unchanged" "$original" "$config" ;;
         changed|disabled)
           assert_grep "$kind summary retains the reload command" "$summary" 'Run: cmux automation reload'
           assert_eq "$kind summary prints reload once" 1 "$(count_matches "$summary" 'cmux automation reload')"
@@ -1558,6 +1701,39 @@ scenario_install_summary() {
 }
 
 # Refresh both platforms without touching the real home directory.
+scenario_refresh_hook_documents() {
+  begin_scenario "hook refreshes accept empty files and read only the first existing document" || return 0
+  local h log kind relative
+  for kind in empty whitespace multiple; do
+    h=$(new_home)
+    log="$h.log"
+    if assert_install_ok "$h" "$log" --with-claude-ui; then
+      for relative in .claude/settings.json .codex/hooks.json; do
+        cp "$h/$relative" "$h/$relative.expected"
+        case $kind in
+          empty) : > "$h/$relative" ;;
+          whitespace) printf ' \n\t\n' > "$h/$relative" ;;
+          multiple)
+            printf '%s\n' \
+              '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"first-hook"}]}]}}' \
+              '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"second-hook"}]}]}}' > "$h/$relative"
+            jq '.hooks.Stop += [{"hooks":[{"type":"command","command":"first-hook"}]}]' \
+              "$h/$relative.expected" > "$h/expected.json"
+            mv "$h/expected.json" "$h/$relative.expected" ;;
+        esac
+      done
+      if assert_install_ok "$h" "$log.refresh" --refresh-config --with-claude-ui; then
+        for relative in .claude/settings.json .codex/hooks.json; do
+          assert_eq "$kind refresh writes one document to $relative" 1 "$(jq -s length "$h/$relative")"
+          assert_eq "$kind refresh preserves the original merge behavior for $relative" \
+            "$(jq -cS . "$h/$relative.expected")" "$(jq -cS . "$h/$relative")"
+        done
+      fi
+    fi
+  done
+  end_scenario
+}
+
 scenario_refresh_foreign_hooks() {
   begin_scenario "refresh keeps foreign hooks and prints platform follow-ups" || return 0
   local platform h log rel base command summary before
@@ -1659,11 +1835,16 @@ main() {
   echo "  this suite under bash ${BASH_VERSION}; install.sh under $INSTALL_BASH" \
        "($("$INSTALL_BASH" -c 'echo "$BASH_VERSION"'))"
   scenario_refresh_foreign_hooks
+  scenario_refresh_hook_documents
   scenario_refresh_hook_upgrade
   scenario_install_summary
   scenario_optional_summary_commands
   scenario_cleanup_summary
   scenario_automation_summaries
+  scenario_install_tables
+  scenario_json_merge_failures
+  scenario_json_merge_relative_paths
+  scenario_failed_symlink_refresh
   scenario_default_empty
   scenario_default_over_existing
   scenario_opinionated

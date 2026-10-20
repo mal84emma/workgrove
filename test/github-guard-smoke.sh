@@ -578,8 +578,9 @@ scenario_settings() {
     "$(jq -r '(.permissions.deny + .permissions.ask // [])[] | select(test("^Bash\\((gh api|git push|gh pr|gh issue|wt pr)"))' "$S")"
   assert_eq 'gh repo create stays denied' 'true' \
     "$(jq -r '.permissions.deny | index("Bash(gh repo create *)") != null' "$S")"
+  # shellcheck disable=SC2016  # Match the installer source literally.
   assert_eq 'install.sh links the guard' 'yes' \
-    "$(grep -Eq '^  for b in .*github-guard' "$REPO/install.sh" && echo yes || echo no)"
+    "$(grep -Fq 'for path in "$R"/bin/*; do' "$REPO/install.sh" && echo yes || echo no)"
   end_scenario
 }
 scenario_settings

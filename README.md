@@ -128,6 +128,7 @@ workgrove/
 │       ├── task.sh            repository context, sidecars, task identity, and cleanup
 │       ├── options.sh         wt command table, option parser, and command help
 │       ├── automation.sh      installer support for the native notification rule
+│       ├── install-files.sh   installer file replacement and JSON merge helpers
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
 │       ├── version.sh         shared validation for installation version reports

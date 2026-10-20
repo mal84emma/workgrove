@@ -395,6 +395,8 @@ scenario_notification_budget() {
 scenario_notification_budget
 
 setup_automation() {
+# shellcheck source=lib/workgrove/install-files.sh
+source "$REPO/lib/workgrove/install-files.sh"
 # shellcheck source=lib/workgrove/automation.sh
 source "$REPO/lib/workgrove/automation.sh"
 # shellcheck disable=SC2034  # read by the installation module
