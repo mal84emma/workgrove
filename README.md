@@ -350,8 +350,12 @@ A refresh keeps each foreign command with its matcher and other group settings.
 For a mixed group, it keeps only the foreign commands.
 Commands present in the base use the base's groups and matchers.
 The comparison uses the complete command string, including its arguments.
+
 When a base command changes, refresh preserves its previous command string as foreign.
 Remove obsolete entries from machine-local copies after you review the backup.
+This release changes bare `agent-notify` commands to `~/.local/bin/agent-notify`.
+A refresh keeps the old bare commands alongside the new commands.
+After you check the backup, remove the old bare commands from both JSON files to prevent duplicate notifications.
 
 The machine-local copies leave out these keys:
 

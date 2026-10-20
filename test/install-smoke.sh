@@ -1574,6 +1574,45 @@ scenario_refresh_foreign_hooks() {
   end_scenario
 }
 
+# Old bare commands remain foreign under the complete-command comparison.
+scenario_refresh_hook_upgrade() {
+  begin_scenario "refresh preserves previous bare hook commands beside the new base" || return 0
+  local platform h log rel base attempt
+  for platform in Darwin Linux; do
+    h="$(new_home)"
+    guard_scratch_home "$h"
+    log="$h.log"
+    mkdir -p "$h/.claude" "$h/.codex"
+    for rel in .claude/settings .codex/hooks; do
+      jq '
+        .hooks |= with_entries(.value |= map(.hooks |= map(
+          if .command | endswith(" ~/.local/bin/agent-notify") then
+            .command |= sub(" ~/.local/bin/agent-notify$"; " agent-notify")
+          else . end)))
+        | .hooks.Stop += [{matcher: "foreign", hooks: [{type: "command", command: "foreign-helper"}]}]
+      ' "$REPO/home/$rel.base.json" >"$h/$rel.json"
+      cp "$h/$rel.json" "$h/${rel##*/}.old"
+    done
+    for attempt in 1 2; do
+      RUN_EXTRA_ENV=("FORCE_OS=$platform")
+      if assert_install_ok "$h" "$log.$attempt" --refresh-config; then
+        for rel in .claude/settings .codex/hooks; do
+          base="$REPO/home/$rel.base.json"
+          if jq -e --slurpfile base "$base" --slurpfile old "$h/${rel##*/}.old" '
+            .hooks == (reduce ($old[0].hooks | to_entries[]) as $event ($base[0].hooks;
+              .[$event.key] += [$event.value[] | select(any(.hooks[]; .command != "~/.local/bin/github-guard"))]))
+          ' "$h/$rel.json" >/dev/null; then
+            pass
+          else
+            fail "$platform: $rel upgrade $attempt lost or duplicated hook groups"
+          fi
+        done
+      fi
+    done
+  done
+  end_scenario
+}
+
 # ---------------------------------------------------------------------------- main
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
@@ -1582,6 +1621,7 @@ main() {
   echo "  this suite under bash ${BASH_VERSION}; install.sh under $INSTALL_BASH" \
        "($("$INSTALL_BASH" -c 'echo "$BASH_VERSION"'))"
   scenario_refresh_foreign_hooks
+  scenario_refresh_hook_upgrade
   scenario_install_summary
   scenario_optional_summary_commands
   scenario_cleanup_summary
