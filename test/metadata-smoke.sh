@@ -159,7 +159,7 @@ end_scenario
 
 begin_scenario 'corrupt sidecars fail safely without partial JSON'
 invoke new second --no-workspace -a none
-for corrupt in '{' '' '[]' '{} {}' '{"base":"main\u0000suffix"}' '{"":"value"}'; do
+for corrupt in '{' '' '[]' '{} {}' '{"base":"main\u0000suffix"}' '{"key\u0000suffix":"value"}' '{"includes":["a\u0000b"]}' '{"":"value"}'; do
   printf '%s' "$corrupt" >"$REPO/.git/wt/second.json"
   WT_META_FILE=''; local_status=0
   meta_load second values || local_status=$?
@@ -221,6 +221,10 @@ wt_status_args n records
 n[name]=other n[future]='' n[why]=''
 wt_status_args n records
 assert_eq 'empty values preserve record boundaries' true "$(wt_status_json list "${records[@]}" | jq 'length == 2 and .[0].name == "first" and .[1].name == "other" and .[1].future == "" and .[1].why == ""')"
+records=()
+n[model]=$'model\n'
+wt_status_args n records show
+assert_eq 'framing preserves a final value newline' true "$(wt_status_json show "${records[@]}" | jq '.model == "model\n"')"
 WT_STATUS_FIELDS=$saved_fields
 end_scenario
 

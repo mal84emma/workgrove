@@ -158,11 +158,12 @@ default_base() {
 declare -A WT_META=()
 WT_META_FILE=''
 WT_META_JSON='{}'
+# Use index because jq 1.6 treats NUL as an empty substring in contains.
 # shellcheck disable=SC2016  # jq expressions use their own variables.
 WT_META_FILTER='
   if type != "object" then error("expected an object") else . end
-  | if any(to_entries[]; .key == "" or (.key | contains("\u0000"))
-         or (.value | any(.. | strings; contains("\u0000"))))
+  | if any(to_entries[]; .key == "" or (.key | index("\u0000") != null)
+         or (.value | any(.. | strings; index("\u0000") != null)))
     then error("unsupported NUL or empty key") else . end
   | ("", tojson, (to_entries[] | .key,
       (. as $entry | .value | if . == null then ""
@@ -424,11 +425,12 @@ wt_status_args() { # wt_status_args <status array> <record array> [list|show]
 wt_status_json() { # wt_status_json <list|show> <record pairs...>
   local command=$1 fields=$WT_STATUS_FIELDS; shift
   [[ $command != show ]] || fields+=" $WT_SHOW_FIELDS"
-  { if (($#)); then printf '%s\0' "$@"; fi; } | jq -Rs --arg command "$command" --arg fields "$fields" '
+  # jq 1.6 drops trailing NUL bytes from raw input. A final newline preserves the record terminator.
+  { if (($#)); then printf '%s\0' "$@"; fi; printf '\n'; } | jq -Rs --arg command "$command" --arg fields "$fields" '
     def count: if test("^[0-9]+$") then tonumber else null end;
     def optional: if . == "" then null else . end;
     ($fields | split(" ") | map(split(":") | {key:.[0], value:(.[1] // "string")}) | from_entries) as $types
-    | (split("\u0000") | .[:-1]) as $values
+    | (.[:-1] | split("\u0000") | .[:-1]) as $values
     | reduce range(0; $values | length; 2) as $i ({records:[], current:{}};
         $values[$i] as $key | $values[$i+1] as $value
         | if $key == "" then .records += [.current] | .current = {}
