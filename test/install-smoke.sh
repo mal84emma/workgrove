@@ -1447,6 +1447,34 @@ scenario_failed_symlink_refresh() {
   end_scenario
 }
 
+scenario_json_merge_relative_paths() {
+  begin_scenario "JSON merge creates and updates relative destinations" || return 0
+  local h script relative rc
+  script="$TEST_ROOT/merge-relative.sh"
+  cat > "$script" <<'SCRIPT'
+set -euo pipefail
+source "$1/lib/workgrove/install-files.sh"
+cd "$2"
+TMPFILES=()
+trap 'if [[ ${#TMPFILES[@]} -gt 0 ]]; then rm -f "${TMPFILES[@]}"; fi' EXIT
+stash() { mkdir -p "backup/$(dirname "$1")"; mv "$1" "backup/$1"; }
+json_merge "$3" true '.created = true'
+json_merge "$3" true '.updated = true'
+SCRIPT
+  for relative in config.json 'nested dir/config.json'; do
+    h=$(new_home)
+    rc=0
+    "$INSTALL_BASH" "$script" "$REPO" "$h" "$relative" > "$h.log" 2>&1 || rc=$?
+    assert_eq "$relative merges succeed" 0 "$rc"
+    if [[ $rc -eq 0 ]]; then
+      assert_regular "$h" "$relative"
+      assert_eq "$relative retains both merged fields" '{"created":true,"updated":true}' "$(jq -cS . "$h/$relative")"
+      assert_eq "$relative backs up its previous contents" '{"created":true}' "$(jq -cS . "$h/backup/$relative")"
+    fi
+  done
+  end_scenario
+}
+
 scenario_json_merge_failures() {
   begin_scenario "JSON merge failures preserve the destination without backups" || return 0
   local h script kind rc
@@ -1815,6 +1843,7 @@ main() {
   scenario_automation_summaries
   scenario_install_tables
   scenario_json_merge_failures
+  scenario_json_merge_relative_paths
   scenario_failed_symlink_refresh
   scenario_default_empty
   scenario_default_over_existing

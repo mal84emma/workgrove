@@ -4,7 +4,7 @@
 # Create a tracked temporary file beside the destination.
 # The caller receives its path in INSTALL_TMP.
 install_temp() {
-  mkdir -p "${1%/*}" || return 1
+  mkdir -p "$(dirname "$1")" || return 1
   INSTALL_TMP=$(mktemp "$1.XXXXXX") || return 1
   TMPFILES+=("$INSTALL_TMP")
 }
