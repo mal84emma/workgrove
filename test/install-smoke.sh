@@ -790,6 +790,10 @@ scenario_unknown_flag() {
       "$INSTALL_BASH" "$REPO/install.sh" --no-such-flag >"$out" 2>"$err" </dev/null || rc=$?
   assert_eq "exit status for an unknown flag" 2 "$rc"
   assert_grep "usage printed on stderr" "$err" "usage: install.sh"
+  assert_eq "usage retains its flags and line breaks" 'usage: install.sh [--refresh-config] [--opinionated-config]
+                  [--with-zshrc] [--with-gitconfig] [--with-tmux-conf]
+                  [--with-keybindings] [--with-statusline] [--with-claude-ui]
+                  [--with-cmux-config]' "$(head -4 "$err")"
   assert_eq "bytes written to stdout" 0 "$(wc -c <"$out" | tr -d ' ')"
   # parse_args runs before anything moves, so the HOME must be untouched.
   assert_absent "$h" .zshenv
@@ -1422,10 +1426,82 @@ scenario_zshenv_cmux_paths() {
   end_scenario
 }
 
+scenario_json_merge_failures() {
+  begin_scenario "JSON merge failures preserve the destination without backups" || return 0
+  local h script kind rc
+  h=$(new_home)
+  script="$TEST_ROOT/merge-failure.sh"
+  cat > "$script" <<'SCRIPT'
+set -euo pipefail
+source "$1/lib/workgrove/install-files.sh"
+HOME=$2
+BK="$HOME/backup"
+TMPFILES=()
+trap 'if [[ ${#TMPFILES[@]} -gt 0 ]]; then rm -f "${TMPFILES[@]}"; fi' EXIT
+stash() { mkdir -p "$BK"; mv "$1" "$BK/original.json"; }
+json_merge "$HOME/config.json" "$3" "$4"
+SCRIPT
+  for kind in validation merge; do
+    printf '%s\n' '{"user":"preserved"}' > "$h/config.json"
+    cp "$h/config.json" "$h/original.json"
+    rc=0
+    if [[ $kind == validation ]]; then
+      "$INSTALL_BASH" "$script" "$REPO" "$h" false '.changed = true' > "$h.log" 2>&1 || rc=$?
+      assert_eq "validation failure returns 2" 2 "$rc"
+    else
+      "$INSTALL_BASH" "$script" "$REPO" "$h" true 'error("merge fixture")' > "$h.log" 2>&1 || rc=$?
+      assert_eq "merge failure returns 1" 1 "$rc"
+    fi
+    assert_same_bytes "$kind failure preserves the destination" "$h/original.json" "$h/config.json"
+    assert_absent "$h" backup
+    assert_eq "$kind failure leaves no temporary files" 0 "$(find "$h" -name 'config.json.*' | wc -l | tr -d ' ')"
+  done
+  end_scenario
+}
+
+scenario_install_tables() {
+  begin_scenario "new links and opt-in flags need one table row" || return 0
+  local fixture="$TEST_ROOT/table-repo" h log
+  mkdir -p "$fixture"
+  cp -R "$REPO/install.sh" "$REPO/lib" "$REPO/home" "$REPO/bin" "$fixture/"
+  printf 'linked fixture\n' > "$fixture/home/.table-link"
+  printf 'optional fixture\n' > "$fixture/home/.table-optin"
+  printf 'binary fixture\n' > "$fixture/bin/table-bin"
+  awk '
+    { print }
+    /^OPTIN=\(/ { print "  \047--with-table|WITH_TABLE|home/.table-optin|.table-optin|all|link|7\047" }
+    /^LINKS=\(/ { print "  \047home/.table-link|.table-link|\047" }
+  ' "$fixture/install.sh" > "$fixture/install.new"
+  mv "$fixture/install.new" "$fixture/install.sh"
+  local REPO
+  REPO=$(cd "$fixture" && pwd -P)
+  h=$(new_home)
+  log="$h.log"
+  if assert_install_ok "$h" "$log"; then
+    assert_link "$h" .table-link home/.table-link
+    assert_link "$h" .local/bin/table-bin bin/table-bin
+    assert_absent "$h" .table-optin
+    assert_grep "the new flag appears in skipped config" "$log" --with-table
+    assert_install_fails "$h" "$log.usage" 2 '[--with-table]' --unknown
+    if assert_install_ok "$h" "$log.selected" --with-table; then
+      assert_link "$h" .table-optin home/.table-optin
+    fi
+    if assert_install_ok "$h" "$log.sticky"; then
+      assert_link "$h" .table-optin home/.table-optin
+    fi
+    h=$(new_home)
+    seed_oh_my_zsh "$h"
+    if assert_install_ok "$h" "$log.all" --opinionated-config; then
+      assert_link "$h" .table-optin home/.table-optin
+    fi
+  fi
+  end_scenario
+}
+
 scenario_automation_summaries() {
   begin_scenario "complete installs summarize automation updates and skips" || return 0
   local kind h log config summary original backup
-  for kind in changed disabled managed unknown; do
+  for kind in new invalid changed disabled managed unknown; do
     h="$(new_home)"
     config="$h/.cmuxterm/automations.json"
     log="$h.log"
@@ -1433,6 +1509,8 @@ scenario_automation_summaries() {
     original="$h.original"
     mkdir -p "${config%/*}"
     case $kind in
+      new) ;;
+      invalid) printf '%s\n' '{"version":1,"rules":{}}' > "$config" ;;
       changed|disabled)
         jq --arg kind "$kind" '
           .rules[0].then[0].command = "old-hook" |
@@ -1443,13 +1521,22 @@ scenario_automation_summaries() {
         ln -s "$h/managed.json" "$config" ;;
       unknown) printf '%s\n' '{"version":99,"rules":[]}' > "$config" ;;
     esac
-    cp "$config" "$original"
+    if [[ -e $config ]]; then cp "$config" "$original"; fi
     RUN_EXTRA_ENV=(FORCE_OS=Darwin)
     if assert_install_ok "$h" "$log"; then
       assert_eq "$kind prints one final summary" 1 "$(count_matches "$log" 'Install summary:')"
       sed -n '/^Install summary:/,$p' "$log" > "$summary"
       assert_eq "$kind finishes before its summary" 0 "$(count_matches "$summary" 'done.')"
       case $kind in
+        new)
+          assert_eq "a new install gets the complete automation rule" "$(jq -cS . "$REPO/home/.cmuxterm/automations.json")" "$(jq -cS . "$config")"
+          assert_mode "$h" .cmuxterm/automations.json 600
+          assert_install_ok "$h" "$log.2"
+          assert_grep "a rerun keeps the existing rule" "$log.2" "kept ~/.cmuxterm/automations.json's existing wt-native-relay rule"
+          assert_eq "a rerun preserves the automation rule" "$(jq -cS . "$REPO/home/.cmuxterm/automations.json")" "$(jq -cS . "$config")" ;;
+        invalid)
+          assert_grep "invalid automation has a shape warning" "$log" 'expected a version-1 object with a rules array'
+          assert_same_bytes "invalid automation stays unchanged" "$original" "$config" ;;
         changed|disabled)
           assert_grep "$kind summary retains the reload command" "$summary" 'Run: cmux automation reload'
           assert_eq "$kind summary prints reload once" 1 "$(count_matches "$summary" 'cmux automation reload')"
@@ -1664,6 +1751,8 @@ main() {
   scenario_optional_summary_commands
   scenario_cleanup_summary
   scenario_automation_summaries
+  scenario_install_tables
+  scenario_json_merge_failures
   scenario_default_empty
   scenario_default_over_existing
   scenario_opinionated

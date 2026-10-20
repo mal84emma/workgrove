@@ -82,13 +82,29 @@ if [[ $ZC == "$HOME"/* ]]; then
   ZC_REL="${ZC#"$HOME"/}"
 fi
 REFRESH=0                            # set by --refresh-config
-WITH_ZSHRC=0                         # the six opinionated files, each set by its own --with-… flag
-WITH_GITCONFIG=0
-WITH_TMUX_CONF=0
-WITH_KEYBINDINGS=0
-WITH_STATUSLINE=0
-WITH_CMUX_CONFIG=0                   # …the sixth of them, and the only one that exists on a Mac alone
-WITH_CLAUDE_UI=0                     # the seventh: UI keys inside the copied ~/.claude/settings.json, not a file
+# Each row defines flag, variable, source, destination, platform, kind, and usage position.
+# Usage positions preserve help order. Row order preserves skipped-config order.
+# late-link runs after config copies. keys reads consent from Claude settings.
+OPTIN=(
+  '--with-zshrc|WITH_ZSHRC|home/.zshrc|.zshrc|all|link|0'
+  '--with-gitconfig|WITH_GITCONFIG|home/.gitconfig|.gitconfig|all|link|1'
+  '--with-tmux-conf|WITH_TMUX_CONF|home/.tmux.conf|.tmux.conf|all|link|2'
+  '--with-keybindings|WITH_KEYBINDINGS|home/.claude/keybindings.json|.claude/keybindings.json|all|link|3'
+  '--with-statusline|WITH_STATUSLINE|home/.claude/statusline-command.sh|.claude/statusline-command.sh|all|link|4'
+  '--with-cmux-config|WITH_CMUX_CONFIG|home/.config/cmux/cmux.json|.config/cmux/cmux.json|Darwin|late-link|6'
+  '--with-claude-ui|WITH_CLAUDE_UI|||all|keys|5'
+)
+for row in "${OPTIN[@]}"; do
+  IFS='|' read -r flag variable source destination platform kind position <<< "$row"
+  printf -v "$variable" '%s' 0
+done
+LINKS=(
+  'home/.zshenv|.zshenv|'
+  'home/.gitignore_global|.gitignore_global|'
+  'home/.claude/AGENTS.md|.claude/AGENTS.md|'
+  'home/.claude/CLAUDE.md|.claude/CLAUDE.md|'
+  "home/.oh-my-zsh/custom/themes/workgrove.zsh-theme|$ZC_REL/themes/workgrove.zsh-theme|WITH_ZSHRC"
+)
 BK=""                                # this run's backup dir; filled in by main
 SUMMARY_SKIPS=()
 SUMMARY_ACTIONS=()
@@ -106,30 +122,46 @@ GITRC_LABEL=""                       # …the same path, spelled for a message
 # parse_args accepts --with-cmux-config on a VM too, where it has nothing to do, because cmux is a Mac app.
 # If the flag were a usage error only on a VM, the user would have to remember not to run
 # `wt update --with-cmux-config` there.
+usage() {
+  local row flag variable source destination platform kind position index
+  echo "usage: install.sh [--refresh-config] [--opinionated-config]"
+  for ((index=0; index<${#OPTIN[@]}; index++)); do
+    for row in "${OPTIN[@]}"; do
+      IFS='|' read -r flag variable source destination platform kind position <<< "$row"
+      [[ $position == "$index" ]] || continue
+      if ((index % 3 == 0)); then printf '                  '; else printf ' '; fi
+      printf '[%s]' "$flag"
+      if ((index % 3 == 2 || index == ${#OPTIN[@]} - 1)); then printf '\n'; fi
+    done
+  done
+}
+
 parse_args() {
+  local row flag variable source destination platform kind position found
   while [[ $# -gt 0 ]]; do
+    found=0
     case "$1" in
-      --with-zshrc)         WITH_ZSHRC=1 ;;
-      --with-gitconfig)     WITH_GITCONFIG=1 ;;
-      --with-tmux-conf)     WITH_TMUX_CONF=1 ;;
-      --with-keybindings)   WITH_KEYBINDINGS=1 ;;
-      --with-statusline)    WITH_STATUSLINE=1 ;;
-      --with-cmux-config)   WITH_CMUX_CONFIG=1 ;;
-      --with-claude-ui)     WITH_CLAUDE_UI=1 ;;
-      --opinionated-config) WITH_ZSHRC=1; WITH_GITCONFIG=1; WITH_TMUX_CONF=1
-                            WITH_KEYBINDINGS=1; WITH_STATUSLINE=1; WITH_CMUX_CONFIG=1
-                            WITH_CLAUDE_UI=1 ;;
-      --refresh-config)     REFRESH=1 ;;
+      --refresh-config) REFRESH=1 ;;
       *)
-        { echo "usage: install.sh [--refresh-config] [--opinionated-config]"
-          echo "                  [--with-zshrc] [--with-gitconfig] [--with-tmux-conf]"
-          echo "                  [--with-keybindings] [--with-statusline] [--with-claude-ui]"
-          echo "                  [--with-cmux-config]"
-        } >&2
-        exit 2 ;;
+        for row in "${OPTIN[@]}"; do
+          IFS='|' read -r flag variable source destination platform kind position <<< "$row"
+          if [[ $1 == "$flag" || $1 == --opinionated-config ]]; then
+            printf -v "$variable" '%s' 1
+            found=1
+          fi
+        done
+        if (( ! found )); then usage >&2; exit 2; fi ;;
     esac
     shift
   done
+}
+
+# Read consent for either a linked file or the Claude settings keys.
+optin_selected() {
+  local kind=$1 variable=$2 destination=$3
+  if [[ $kind == keys ]]; then claude_ui_opted_in
+  else opted_in "${!variable}" "$destination"
+  fi
 }
 
 # our_link <absolute path> <repo-relative src>: is that symlink one that this script made for <src>? A link can
@@ -334,9 +366,8 @@ copy_config() {
     fi
     return 0
   fi
-  mkdir -p "$(dirname "$dst")"
-  local tmp; tmp="$(mktemp "$dst.XXXXXX")"                # built first: a failure here leaves ~/$2 untouched
-  TMPFILES+=("$tmp")                                      # and the EXIT trap removes it, signals included
+  install_temp "$dst"
+  local tmp=$INSTALL_TMP
   if [[ $kind == claude ]]; then
     local filter='.'
     if [[ $OS != Darwin ]]; then
@@ -366,26 +397,25 @@ copy_config() {
   else
     cp "$src" "$tmp"
   fi
+  chmod 600 "$tmp"
+  if [[ -L "$dst" ]]; then
+    echo "replaced the symlink at ~/$2 (-> $(readlink "$dst")) with a real file: the app writes its own state"
+    echo "into this one, so it cannot be a link; the link itself is in the backup dir, its target untouched"
+  fi
   if [[ $REFRESH -eq 1 && -f $dst && ( $kind == claude || $2 == .codex/hooks.json ) ]]; then
-    local merged; merged="$(mktemp "$dst.XXXXXX")"
-    TMPFILES+=("$merged")
-    jq --slurpfile existing "$dst" '
-      [.hooks[][]?.hooks[]?.command | select(type == "string")] as $commands
+    # shellcheck disable=SC2016  # jq expands these variables.
+    json_merge "$dst" 'true' '
+      $base[0]
+      | [.hooks[][]?.hooks[]?.command | select(type == "string")] as $commands
       | reduce (($existing[0].hooks // {}) | to_entries[]) as $event (.;
           reduce ($event.value[]
             | .hooks |= map(select(.command as $command | $commands | index($command) | not))
             | select(.hooks | length > 0)) as $group (.;
               .hooks[$event.key] += [$group]))
-    ' "$tmp" >"$merged" || { rm -f "$merged"; die "jq failed on $2"; }
-    mv "$merged" "$tmp"
+    ' --slurpfile base "$tmp" --slurpfile existing "$dst" || die "jq failed on $2"
+  else
+    install_replace "$tmp" "$dst"
   fi
-  chmod 600 "$tmp"
-  if [[ -L "$dst" ]]; then                                # see the header: the link goes, its target stays
-    echo "replaced the symlink at ~/$2 (-> $(readlink "$dst")) with a real file: the app writes its own state"
-    echo "into this one, so it cannot be a link; the link itself is in the backup dir, its target untouched"
-  fi
-  stash "$dst"                                            # only now does anything move
-  mv "$tmp" "$dst"
   echo "installed ~/$2"
 }
 
@@ -433,8 +463,10 @@ make_dirs() {
 
 # install_bins: link the scripts into ~/.local/bin, and retire any copy in ~/bin (which is first on PATH).
 install_bins() {
-  local b
-  for b in wt agent-notify cmux-hook azml-ssh-host github-guard; do
+  local path b
+  for path in "$R"/bin/*; do
+    [[ -f $path ]] || continue
+    b=${path##*/}
     if [[ -e "$HOME/bin/$b" || -L "$HOME/bin/$b" ]]; then
       stash "$HOME/bin/$b"
       echo "retired ~/bin/$b (it shadowed ~/.local/bin/$b); the old copy is in the backup dir"
@@ -451,27 +483,30 @@ install_bins() {
 #   The two instruction files are what the agents read.
 # The rest is taste, so each file waits for its own opt-in. The theme waits for the ~/.zshrc opt-in, because
 # that ~/.zshrc is the only thing that names it.
-link_dotfiles() {
-  local f
-  for f in .zshenv .gitignore_global .claude/AGENTS.md .claude/CLAUDE.md; do
-    link "home/$f" "$f"
+link_optins() {
+  local phase=$1 row flag variable source destination platform kind position extra extra_source extra_destination gate
+  for row in "${OPTIN[@]}"; do
+    IFS='|' read -r flag variable source destination platform kind position <<< "$row"
+    [[ $kind == "$phase" && ( $platform == all || $platform == "$OS" ) ]] || continue
+    if optin_selected "$kind" "$variable" "$destination"; then
+      link "$source" "$destination"
+      for extra in "${LINKS[@]}"; do
+        IFS='|' read -r extra_source extra_destination gate <<< "$extra"
+        if [[ $gate == "$variable" ]]; then link "$extra_source" "$extra_destination"; fi
+      done
+    fi
   done
-  if opted_in "$WITH_ZSHRC" .zshrc; then
-    link home/.zshrc .zshrc
-    link home/.oh-my-zsh/custom/themes/workgrove.zsh-theme "$ZC_REL/themes/workgrove.zsh-theme"
-  fi
-  if opted_in "$WITH_GITCONFIG" .gitconfig; then
-    link home/.gitconfig .gitconfig
-  fi
-  if opted_in "$WITH_TMUX_CONF" .tmux.conf; then
-    link home/.tmux.conf .tmux.conf
-  fi
-  if opted_in "$WITH_KEYBINDINGS" .claude/keybindings.json; then
-    link home/.claude/keybindings.json .claude/keybindings.json
-  fi
-  if opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh; then
-    link home/.claude/statusline-command.sh .claude/statusline-command.sh
-  fi
+}
+
+link_dotfiles() {
+  local row source destination variable
+  for row in "${LINKS[@]}"; do
+    IFS='|' read -r source destination variable <<< "$row"
+    if [[ -z $variable ]]; then
+      link "$source" "$destination"
+    fi
+  done
+  link_optins link
 }
 
 # install_configs: copy the three mutable files from their .base versions.
@@ -504,14 +539,8 @@ link_skills() {
 }
 
 # link_cmux_config: cmux runs only on the Mac. Its UI settings stay a link, so changes show in `git diff`.
-CMUX_DST=.config/cmux/cmux.json
 link_cmux_config() {
-  if [[ $OS != Darwin ]]; then
-    return 0
-  fi
-  if opted_in "$WITH_CMUX_CONFIG" "$CMUX_DST"; then
-    link "home/$CMUX_DST" "$CMUX_DST"
-  fi
+  link_optins late-link
 }
 
 # retired_src <home-relative dst>: print the repo-relative path that the linking steps above point that
@@ -774,8 +803,8 @@ hook_bashrc() {
   elif (( 8#$mode & 8#022 )); then     # never copy a group- or other-writable mode to a file every login shell sources
     die "refusing to copy mode $mode: ~/.bashrc is group- or other-writable; chmod go-w ~/.bashrc, then rerun"
   fi
-  tmp="$(mktemp "$rc.XXXXXX")"
-  TMPFILES+=("$tmp")                 # the EXIT trap removes it if anything below fails
+  install_temp "$rc"
+  tmp=$INSTALL_TMP
   {
     printf '%s\n' "$line"
     if (( moved )); then
@@ -788,8 +817,7 @@ hook_bashrc() {
   if [[ -n $mode ]]; then
     chmod "$mode" "$tmp"
   fi
-  stash "$rc"                        # the backup contract applies here too: keep the original
-  mv "$tmp" "$rc"
+  install_replace "$tmp" "$rc"
   if (( moved )); then
     echo "moved the ~/.zshenv line to the top of ~/.bashrc so non-interactive shells read it too"
   else
@@ -951,15 +979,12 @@ report() {
 report_skipped() {
   local f="" files="" flag
   local settings=()
-  opted_in "$WITH_ZSHRC"       .zshrc                          || f="$f --with-zshrc"
-  opted_in "$WITH_GITCONFIG"   .gitconfig                      || f="$f --with-gitconfig"
-  opted_in "$WITH_TMUX_CONF"   .tmux.conf                      || f="$f --with-tmux-conf"
-  opted_in "$WITH_KEYBINDINGS" .claude/keybindings.json        || f="$f --with-keybindings"
-  opted_in "$WITH_STATUSLINE"  .claude/statusline-command.sh   || f="$f --with-statusline"
-  if [[ $OS == Darwin ]]; then         # on a VM there is no cmux, so this run does not offer the flag
-    opted_in "$WITH_CMUX_CONFIG" "$CMUX_DST"                   || f="$f --with-cmux-config"
-  fi
-  claude_ui_opted_in                                           || f="$f --with-claude-ui"
+  local row variable source destination platform kind position
+  for row in "${OPTIN[@]}"; do
+    IFS='|' read -r flag variable source destination platform kind position <<< "$row"
+    [[ $platform == all || $platform == "$OS" ]] || continue
+    optin_selected "$kind" "$variable" "$destination" || f="$f $flag"
+  done
   if [[ -n $f ]]; then
     SUMMARY_SKIPS+=("Optional config was not selected:$f")
     # These flags are fixed names. Split them to separate file links from settings changes.
@@ -1007,6 +1032,8 @@ print_summary() {
   fi
 }
 
+# shellcheck source=lib/workgrove/install-files.sh
+source "$R/lib/workgrove/install-files.sh"
 # shellcheck source=lib/workgrove/automation.sh
 source "$R/lib/workgrove/automation.sh"
 
