@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' ~/.local/bin/agent-notify",
             "timeout": 10
           }
         ]
@@ -64,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' ~/.local/bin/agent-notify",
             "timeout": 10
           }
         ]
@@ -76,7 +76,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' ~/.local/bin/agent-notify",
             "timeout": 10
           }
         ]
@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' ~/.local/bin/agent-notify",
             "timeout": 10
           }
         ]
@@ -100,7 +100,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' ~/.local/bin/agent-notify",
             "timeout": 10
           }
         ]
@@ -112,7 +112,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify",
+            "command": "AGENT_NOTIFY_SOURCE='Claude Code' ~/.local/bin/agent-notify",
             "timeout": 10
           }
         ]
