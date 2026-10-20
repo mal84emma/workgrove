@@ -60,6 +60,9 @@ Both commands accept no arguments.
 
 An older VM without `wt version` can still have available hardware information.
 Its version fields are null. An unreachable VM also has null version fields.
+Version readers require exactly one JSON object with both correctly typed fields.
+Malformed reports produce null values for both fields.
+The Mac supplies the same validator to both VM probes.
 
 ## Read update records
 
@@ -79,4 +82,6 @@ The VM's update can also print its own `local` records.
 Older VMs without `wt version` have null commit and protocol values.
 The Mac still runs their update command.
 Failed or canceled updates can stop before the `after` records.
+A final reporting failure preserves the successful update status and prints a diagnostic.
+The VM's `after` record then has null commit and protocol values.
 Consumers must accept additional fields in all version and update objects.

@@ -43,7 +43,7 @@ case "$host" in
   alpha) printf 'wt_version\t{"commit":"abc1234","protocol":1}\ncpu\t16\nmem_kib\t33554432\ngpu_status\tok\ngpu\t0\tNVIDIA A100\t40960\ngpu\t1\tNVIDIA A100\t40960\n' ;;
   beta) printf 'cpu\t4\nmem_kib\t8388608\ngpu_status\tunknown\n' ;;
   down) echo 'Permission denied (publickey).' >&2; exit 255 ;;
-  broken) printf 'cpu\tnot-a-number\nmem_kib\t\ngpu_status\tok\ngpu\tbad-index\tbroken\tunknown\n' ;;
+  broken) printf 'wt_version\t{"commit":"abc","protocol":"1"}\ncpu\tnot-a-number\nmem_kib\t\ngpu_status\tok\ngpu\tbad-index\tbroken\tunknown\n' ;;
   nogpu) printf 'cpu\t4\nmem_kib\t14680064\ngpu_status\tnone\n' ;;
   unified) printf 'cpu\t20\nmem_kib\t127631360\ngpu_status\tok\ngpu\t0\tNVIDIA GB10\t[N/A]\n' ;;
   slow1|slow2)
@@ -118,7 +118,8 @@ scenario_records() {
   assert_eq 'VM commit and protocol' true "$(jq -r '.[0] | .wt_commit == "abc1234" and .wt_protocol == 1' <<<"$json")"
   assert_eq 'old VM version stays unknown' true "$(jq -r '.[1] | has("wt_commit") and .wt_commit == null and .wt_protocol == null' <<<"$json")"
   assert_eq 'unreachable VM version stays unknown' true "$(jq -r '.[3] | has("wt_protocol") and .wt_commit == null and .wt_protocol == null' <<<"$json")"
-  assert_eq 'two valid GPUs'  'true' "$(printf '%s' "$json" | jq -r '.[0] | .gpu_status == "ok" and (.gpus | length) == 2 and .memory_mib == 32768')"
+  assert_eq 'malformed version fields become null together' true "$(jq -r '.[2] | .wt_commit == null and .wt_protocol == null' <<<"$json")"
+  assert_eq 'two valid GPUs'   'true' "$(printf '%s' "$json" | jq -r '.[0] | .gpu_status == "ok" and (.gpus | length) == 2 and .memory_mib == 32768')"
   assert_eq 'invalid GPU field' 'true' "$(printf '%s' "$json" | jq -r '.[2] | .gpu_status == "unknown" and .gpus == [] and .cpu_logical == null')"
   assert_eq 'SSH failure reason' 'true' "$(printf '%s' "$json" | jq -r '.[3] | .status == "unavailable" and (.error | contains("Permission denied"))')"
   assert_eq 'confirmed absence' 'true' "$(printf '%s' "$json" | jq -r '.[4] | .gpu_status == "none" and .gpus == []')"

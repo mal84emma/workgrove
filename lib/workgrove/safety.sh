@@ -106,7 +106,7 @@ unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-s
   # stays unchanged.
   local n="$1" p="$2" recorded f h e explained
   meta_require "$n"
-  # WT_COMPAT: Remove when every sidecar records setup output.
+  # WT_COMPAT: Remove the missing setup key default when every sidecar records setup output.
   recorded=${WT_META[setup]-}
   [[ -n "$recorded" ]] || { porcelain_paths "$p"; return 0; }
   porcelain_paths "$p" | while IFS= read -r f; do

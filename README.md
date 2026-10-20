@@ -130,6 +130,7 @@ workgrove/
 │       ├── automation.sh      installer support for the native notification rule
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
+│       ├── version.sh         shared validation for installation version reports
 │       ├── hosts.sh           SSH host inventory and hardware probes
 │       ├── picker.sh          task picker and driver commands
 │       ├── recovery.sh        VM row recovery and task attachment
@@ -719,6 +720,7 @@ Each record has `event: "wt_update"`, `stage`, `side`, `commit`, and `protocol`.
 Local updates use side `local`; remote updates report sides `Mac` and `VM`.
 Stages are `before` and `after`. Older VMs without `wt version` have null values.
 A failed update can stop before the `after` records.
+A failed final version query reports null VM values and preserves the successful update status.
 See [the JSON contracts](docs/wt-json.md) for details.
 
 The close check also requires exit status `1`, status `missing`, and the requested task and repository.

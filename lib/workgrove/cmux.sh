@@ -57,7 +57,6 @@ cmux_row_field() {
   printf '%s' "$rows" | cmux_find_row "$1" "$repo" "$3" "${4:-}" || true
 }
 
-# WT_COMPAT: Remove when no row retains a repository-prefixed title.
 row_label() { # row_label <title> <repo> [host] — the matching row as the sidebar shows it. An older wt's row
   # keeps its old title, so this reads the row's own title and description. A row that is gone by then
   # reads as the label that wt would give it.

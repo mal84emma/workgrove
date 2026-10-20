@@ -2,7 +2,8 @@
 # Reads globals: CMUX_ROW_EXISTING, HOME, WG_LIB_DIR.
 # Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
 # Requires common.sh: die, hook_safe_path, row_title, shell_join, tmux_cmd, usage, valid_name, warn,
-#   wt_read_result, wt_session.
+#   wt_read_result, wt_session, wt_version, WT_PROTOCOL.
+# Requires version.sh: wt_read_version.
 # Requires options.sh: wt_opt_args, wt_opts, wt_spec.
 # Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent.
 # ---------------------------------------------------------------- wt -H <host> …
@@ -71,7 +72,7 @@ wt_remote_args() {
 }
 
 host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
-  remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" <"$WG_LIB_DIR/vm/host-new-preflight.sh"
+  remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" < <(cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/host-new-preflight.sh")
 }
 
 host_new() { # create the worktree on the VM, then the cmux row here unless --no-workspace
@@ -221,11 +222,10 @@ host_version() {
   # shellcheck disable=SC2016  # HOME belongs to the VM shell.
   output=$(remote_sh_raw "$1" 'exec "$HOME/.local/bin/wt" version' 2>/dev/null) || rc=$?
   [[ $rc != 255 ]] || { warn "host unreachable: is the VM running? (ssh $1)"; return 1; }
-  if [[ $rc == 0 ]] && jq -e 'type == "object" and (.commit | type == "string")
-      and (.protocol | type == "number" and . >= 1 and floor == .)' <<<"$output" >/dev/null 2>&1; then
-    jq -c '{commit,protocol}' <<<"$output"
+  if [[ $rc == 0 ]] && output=$(wt_read_version <<<"$output" 2>/dev/null); then
+    printf '%s\n' "$output"
   else
-    # WT_COMPAT: Remove when every VM supports wt version.
+    # WT_COMPAT: Remove the unsupported-command fallback when every VM supports wt version.
     printf '{"commit":null,"protocol":null}\n'
   fi
 }
@@ -236,7 +236,10 @@ host_update() {
   wt_update_record before Mac "$(wt_version)"
   wt_update_record before VM "$version"
   remote_wt_tty "$host" update "${@:2}" || return $?
-  version=$(host_version "$host") || return $?
+  if ! version=$(host_version "$host" 2>/dev/null); then
+    version='{"commit":null,"protocol":null}'
+    warn "update on $host succeeded; could not read its version (ssh $host)"
+  fi
   wt_update_record after Mac "$(wt_version)"
   wt_update_record after VM "$version"
 }

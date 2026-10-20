@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
 #   WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL.
-# Requires no functions from other modules. Loads cmux.sh, task.sh, and options.sh.
+# Requires no functions from other modules. Loads cmux.sh, task.sh, options.sh, and version.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
 # This file needs bash 5. Bash reads a sourced file one command at a time, so an older bash returns at
@@ -13,6 +13,8 @@ if ((BASH_VERSINFO[0] < 5)); then return 1; fi
 if [[ ${WG_COMMON_LOADED:-0} == 1 ]]; then return 0; fi
 WT_PROTOCOL=1
 WG_VERSION_ROOT=${BASH_SOURCE[0]%/*}/../..
+# shellcheck source=lib/workgrove/version.sh
+source "${BASH_SOURCE[0]%/*}/version.sh" || return
 WT_FS=$'\x1f'   # cmux row fields use a separator that preserves empty values.
 
 # shellcheck source=lib/workgrove/cmux.sh
@@ -92,17 +94,20 @@ wt_result() {
     '{version:([$protocol, ($requested | tonumber)] | min), command:$command, status:$status, name:$name, repo:$repo, session:$session, state:$state}'
 }
 
-wt_version() {
-  local commit=unknown
+wt_version() (
+  local commit=unknown variable
+  # Git hooks can export another repository's paths. Clear them only in this lookup subprocess.
+  while IFS= read -r variable; do unset "$variable"; done < <(git rev-parse --local-env-vars)
   if [[ -e $WG_VERSION_ROOT/.git ]]; then
     commit=$(git -C "$WG_VERSION_ROOT" rev-parse --short HEAD 2>/dev/null) || commit=unknown
   fi
   jq -cn --arg commit "$commit" --argjson protocol "$WT_PROTOCOL" '{commit:$commit,protocol:$protocol}'
-}
+)
 
 # Unknown scalar keys are kept. New fields are additive.
 # Increase the version only when a field changes meaning.
 # Unsupported versions also print an update hint for callers such as the Mac hook.
+# Keep the protocol 1 decoder when the maximum accepted version increases.
 # Return 1 for malformed records, 2 for absent records, and 3 for unsupported versions.
 wt_read_result() {
   local output=$1 command=$2 parsed records=()
@@ -124,7 +129,7 @@ wt_read_result() {
     return 3
   fi
   jq -ec --argjson protocol "$WT_PROTOCOL" '
-      if .version == $protocol
+      if .version == 1 and .version <= $protocol
         and all(.status, .name, .repo, .session, .state; type == "string" and (explode | all(. >= 32 and . != 127)))
       then . else error("invalid wt result") end' <<<"$parsed" 2>/dev/null || return 1
 }

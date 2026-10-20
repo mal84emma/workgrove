@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Report the VM hardware to the Mac.
-# WT_COMPAT: Remove when every VM supports wt version.
-version=$("$HOME/.local/bin/wt" version 2>/dev/null) || version='{"commit":null,"protocol":null}'
+# The Mac supplies version.sh before this script.
+version=$(wt_vm_version)
 printf 'wt_version\t%s\n' "$version"
 cpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
 mem_kib=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)

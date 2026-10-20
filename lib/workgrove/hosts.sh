@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Reads globals: TMPDIR, WG_HOST_PROBE_TIMEOUT, WG_LIB_DIR.
 # Requires common.sh: valid_host.
+# Requires version.sh: wt_read_version.
 probe_host() { # one SSH login proves remote-command access and gathers Linux hardware
   local out_file err_file ssh_pid rc=0 tick timeout=${WG_HOST_PROBE_TIMEOUT:-20}
   # Ten ticks per second must fit in signed 64-bit arithmetic.
@@ -19,7 +20,7 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
   # Redirect SSH to files, so that an unkillable child cannot hold this function's output pipes open.
   ssh -T -o BatchMode=yes -o NumberOfPasswordPrompts=0 -o StrictHostKeyChecking=yes \
       -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=5 \
-      -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" <"$WG_LIB_DIR/vm/probe-host.sh" &
+      -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" < <(cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/probe-host.sh") &
   ssh_pid=$!
   for ((tick=0; tick<timeout*10; tick++)); do
     kill -0 "$ssh_pid" 2>/dev/null || break
@@ -40,7 +41,7 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
 }
 
 host_record() { # stable JSON for agents; unknown hardware never becomes a false zero
-  local host="$1" report="" rc=0 err_file err=""
+  local host="$1" report="" rc=0 err_file err="" version
   if ! valid_host "$host"; then
     jq -nc --arg host "$host" '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:"invalid SSH alias"}'
     return
@@ -55,11 +56,12 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
     return
   fi
   rm -f "$err_file"
-  printf '%s' "$report" | jq -Rsc --arg host "$host" '
+  version=$(printf '%s\n' "$report" | sed -n $'s/^wt_version\t//p' | wt_read_version 2>/dev/null) ||
+    version='{"commit":null,"protocol":null}'
+  printf '%s' "$report" | jq -Rsc --arg host "$host" --argjson version "$version" '
     def field($rows; $key): [ $rows[] | select(.[0] == $key) | .[1] ][0] // "";
     def unsigned: if type == "string" and test("^[0-9]+$") then tonumber else null end;
     [split("\n")[] | select(length > 0) | split("\t")] as $rows
-    | (field($rows; "wt_version") | (fromjson? // {}) | if type == "object" then . else {} end) as $version
     | (field($rows; "cpu") | unsigned) as $cpu
     | (field($rows; "mem_kib") | unsigned) as $mem
     | [ $rows[] | select(.[0] == "gpu") ] as $raw_gpus
@@ -75,9 +77,7 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
        elif field($rows; "gpu_status") == "none" and ($raw_gpus | length) == 0
        then "none" else "unknown" end) as $gpu_status
     | {host:$host,status:"available",
-       wt_commit:(if ($version.commit | type) == "string" then $version.commit else null end),
-       wt_protocol:(if ($version.protocol | type) == "number" and $version.protocol >= 1 and ($version.protocol | floor) == $version.protocol
-                    then $version.protocol else null end),cpu_logical:(if $cpu != null and $cpu > 0 then $cpu else null end),
+       wt_commit:$version.commit,wt_protocol:$version.protocol,cpu_logical:(if $cpu != null and $cpu > 0 then $cpu else null end),
        memory_mib:(if $mem != null and $mem > 0 then ($mem / 1024 | floor) else null end),
        gpu_status:$gpu_status,gpus:$gpus,
        error:(if $cpu == null or $cpu == 0 or $mem == null or $mem == 0 then "incomplete CPU/RAM report" else null end)}'

@@ -2,8 +2,8 @@
 # Check the requested repository and agent in the VM's non-interactive shell.
 PATH="$HOME/.local/bin:$PATH"; export PATH
 test -x "$HOME/.local/bin/wt" || { echo "remote wt is missing" >&2; exit 1; }
-# WT_COMPAT: Remove when every VM supports wt version.
-version=$("$HOME/.local/bin/wt" version 2>/dev/null) || version='{"commit":null,"protocol":null}'
+# The Mac supplies version.sh before this script.
+version=$(wt_vm_version)
 printf '%s\n' "$version"
 repo=$1
 if [ -n "$repo" ]; then
