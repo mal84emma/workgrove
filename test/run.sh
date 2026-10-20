@@ -26,6 +26,7 @@ if [[ -n ${ONLY:-} && $# -ne 1 ]]; then
   exit 2
 fi
 SUITES=("$@")
+# Discover every smoke suite, including docs-smoke.sh, for local and CI runs.
 if ((${#SUITES[@]} == 0)); then SUITES=("$REPO"/test/*-smoke.sh); fi
 for suite in "${SUITES[@]}"; do
   [[ -f $suite ]] || { printf 'suite not found: %s\n' "$suite" >&2; exit 2; }

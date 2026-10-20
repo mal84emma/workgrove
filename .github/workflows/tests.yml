@@ -81,6 +81,7 @@ jobs:
           echo "bash on PATH: $(command -v bash), $(bash -c 'echo "$BASH_VERSION"')"
           echo "/bin/bash: $(/bin/bash -c 'echo "$BASH_VERSION"')"
           git --version
+          python3 --version
           if ! jq --version; then
             echo '::error::jq is missing'
             exit 1
@@ -102,7 +103,8 @@ jobs:
             exit 1
           fi
 
-      # The shared runner limits workers and reports scenario, task, suite, and total times.
+      # The shared runner discovers test/*-smoke.sh, including docs-smoke.sh.
+      # It limits workers and reports scenario, task, suite, and total times.
       - name: Run the suites
         env:
           JOBS: "4"

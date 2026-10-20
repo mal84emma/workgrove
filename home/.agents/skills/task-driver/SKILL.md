@@ -7,6 +7,10 @@ description: Spawn and supervise task sessions from a driver session; use when t
 
 Use this skill in the driver session to start, watch, and report tasks on this Mac or on a VM.
 
+Follow the [task policy](../../../.claude/AGENTS.md#tasks-run-in-worktrees),
+[interactive command policy](../../../.claude/AGENTS.md#interactive-commands),
+and [cmux policy](../../../.claude/AGENTS.md#cmux).
+
 The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥⌘D) and starts and watches other sessions. Its cwd (current working directory) is the first existing folder in `$WT_REPOS_DIR`. That folder is not a repo, so every `wt new` needs `-r <repo>`.
 
 `wt` hides the difference between local and remote:
@@ -21,6 +25,8 @@ The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥
    - the constraints
    - the base branch, if it is not main
 
+   State that the agent is already inside its worktree and must stay there.
+
    For a VM task, if you will stage a brief file that carries task details, make the brief tell the agent to read that file.
 
    If the brief is in a local file, pass it to `new` with `--prompt-stdin < brief-file`. Do not shell-quote the file contents with `-p`.
@@ -29,7 +35,6 @@ The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥
    - Locally, run `wt new <slug> -r <repo> -a <agent> -p "<brief>"`.
    - On a VM, run `wt -H <vm> new <slug> -r <repo> -a <agent> -p "<brief>" --no-workspace`.
    - When the user chooses a model, add `-m <model>`. The model stays with the task on restarts.
-   - Start one task per independent unit of work. Do not split work that touches the same files.
 
    When the user gives machine requirements instead of a VM name, choose the host with these steps:
 
@@ -60,25 +65,20 @@ The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥
    - If attach fails, inspect the task state before you retry.
    - In either case, keep the created worktree and report its path and recovery command. Do not create a duplicate task.
 
-4. **Report each task** after its row opens. Give these items:
-   - the name
-   - the row title (`<slug>`, second line `@local · <repo>` or `@<vm> · <repo>`)
-   - the branch
-   - the path
-   - on a VM, the tmux session
-
-   If preparation stopped early, say in the report that the task exists but that its agent has not started.
+4. After its row opens, **report each task** with the [required fields](../../../.claude/AGENTS.md#reporting).
+   If preparation stopped early, state that the task exists but its agent has not started.
 
 5. **Progress on request.**
    - When the user asks for progress, use `wt list [--all]`, `wt show <name>`, `wt -H <vm> list`, and `wt -H <vm> show -r <repo> <name>`.
    - Open the code only when the user asks: `wt open <name>` / `wt -H <vm> open -r <repo> <name>`.
 
-   **Recover an existing VM task.** Do not run recovery, `--reattach`, or `--restart-agent` yourself unless the user asks.
+   **Recover an existing VM task.** Follow the [recovery policy](../../../.claude/AGENTS.md#vm-task-recovery).
    - If the row is suspended after a network switch, or gone after a restart, tell the user to run `wt -H <vm> attach -r <repo> <name>`. That command stops the row's stale SSH relay on the VM. Then it reconnects the row and selects it.
    - After cmux reconnects, the wheel can type arrow keys, or paste or Shift+Enter can misbehave. In that case, point the user to the same attach command. It re-initializes an attached task's tmux client. If this replacement attach fails, it leaves the row at a shell prompt.
    - If a connected row shows a bare shell after a dropped connection, point the user to `--reattach`.
    - Point the user to `--restart-agent` only if attach refuses because a previously started task has no agent.
 
-6. **Do not do the work here.** Never do a task's own coding in the driver session. Never remove worktrees unless the user asks. To remove one, use `wt rm <name>` / `wt -H <vm> rm -r <repo> <name>` under the `worktree-teardown` rules.
+6. Follow the [driver session policy](../../../.claude/AGENTS.md#driver-sessions).
+   Use the [teardown procedure](../worktree-teardown/SKILL.md) for authorized removal.
 
 7. **First task per repo on a VM.** Tell the user to click the row once and accept the agent's trust prompt. This prompt comes once per repo, and worktrees inherit the trust. After a hook change, Codex asks once through `/hooks`.

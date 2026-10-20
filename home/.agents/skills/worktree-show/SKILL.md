@@ -15,8 +15,7 @@ Use this skill to show a task worktree to the user. Find the user's intent first
 | "what changed", "how far is it", "status of <task>" | `wt show <name>` | Summarize in a few sentences. |
 | "what tasks are running", "list the worktrees" | `wt list` | Summarize. |
 
-"Show me the code" means "open the code in VS Code". It does not mean "print files in the terminal", and "the code" does not mean the source of `wt`.
-In a task session, "the worktree" is the worktree that you are in.
+Follow the [display and status policy](../../../.claude/AGENTS.md#what-to-do-in-each-situation).
 
 ## Commands
 
@@ -34,19 +33,13 @@ wt -H <vm> show -r <repo> <name>
 
 ## Check the result of `wt open`
 
-On the Mac:
+Follow the [app launch policy](../../../.claude/AGENTS.md#opening-apps) for escalation and success reporting.
 
-- `wt open` prints `opened in VS Code` only when `code` succeeded. A non-zero exit means that no window opened.
-- Inside Codex's sandbox, `wt open` refuses at once, because the sandbox blocks app launches and `code` would exit 0 anyway.
-  If this refusal occurs, rerun the same `wt open` with escalation (see `AGENTS.md`, Opening apps).
-- For any other failure, report the error that `wt open` printed.
-
-From inside a VM session:
-
-- Exit 0 means that cmux on the Mac accepted the request. It does not mean that the Mac hook confirmed a window.
-  Report that VS Code was requested on the Mac.
-- `wt open` also prints a manual command, `wt -H <vm> open …`. If no window appears, use that manual command. Do not use it otherwise.
-- If `wt open` fails, report its error and the manual command.
+On the Mac, `wt open` prints `opened in VS Code` only when `code` succeeds.
+A nonzero exit means that no window opened.
+In Codex's sandbox, `wt open` refuses before calling `code`.
+From a VM, the command also prints a manual Mac command for a missing window or relay failure.
+For any failure, report the error and the printed recovery command.
 
 ## Read the session line on a VM
 
@@ -68,19 +61,17 @@ The `cd … && git diff` form below is allowed: a compound command is split on `
 cd "$(wt path <name>)" && git diff <base>...HEAD -- <file>
 ```
 
-## Rules
+## Report the changes
 
-1. Run one command per request. Do not chain `wt open` with `wt show`.
-2. Never open VS Code for a status question. Never answer "show me the code" with a status summary or pasted files.
-3. After `wt show`, summarize in your own words. Do not paste the whole diff. Tell the user:
-   - What the task was.
-   - How far it is: the commits compared with the base, and the dirty files.
-   - Whether it is merged. Read the `merged:` line:
-     - `yes`: every commit is in the base.
-     - `squash (…)`: the commits are not in the base, but every change is. This is a squash merge.
-     - `no (…)`: the line gives the reason. It is the same reason that `wt rm` would refuse with.
+After `wt show`, summarize in your own words. Do not paste the whole diff. Tell the user:
+- What the task was.
+- How far it is: the commits compared with the base, and the dirty files.
+- Whether it is merged. Read the `merged:` line:
+  - `yes`: every commit is in the base.
+  - `squash (…)`: the commits are not in the base, but every change is. This is a squash merge.
+  - `no (…)`: the line gives the reason. It is the same reason that `wt rm` would refuse with.
 
-   `wt list` shows the same value in its `MERGED` column.
-   Both commands are offline, so they do not fetch the base. Right after a pull request merges, they read `no` until something fetches the base.
-   `wt show` does not print the pushed state; `wt rm` is the command that checks it.
-4. `wt list`, `wt show` and `wt open` change nothing. They are safe to run while the task's agent is still working.
+`wt list` shows the same value in its `MERGED` column.
+Both commands are offline, so they do not fetch the base. Right after a pull request merges, they read `no` until something fetches the base.
+`wt show` does not print the pushed state; `wt rm` is the command that checks it.
+`wt list`, `wt show` and `wt open` change nothing. They are safe to run while the task's agent is still working.

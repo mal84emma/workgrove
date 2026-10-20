@@ -5,7 +5,9 @@ description: Safely remove task worktrees and their branches, and clean up finis
 
 # Tear down worktrees
 
-Use this skill to remove task worktrees and their branches safely. Remove a worktree only when the user asks.
+Use this skill to remove task worktrees and their branches.
+Follow the [removal policy](../../../.claude/AGENTS.md#tasks-run-in-worktrees)
+and the [GitHub write policy](../../../.claude/AGENTS.md#github-writes-and-publishing).
 
 ## Check for a live agent first
 
@@ -55,7 +57,6 @@ This change of directory is the exception to the stay-inside rule of `worktree-w
 If Codex runs in a sandbox, run the teardown command with escalation.
 The sandbox can block the cmux and tmux sockets even after you change directories.
 `wt rm` refuses sandboxed removal before it deletes the worktree, so you can retry with escalation.
-The user's teardown request authorizes removal. Do not ask for permission again unless the tool requires approval.
 
 `wt rm` uses cmux's `--force` only for the verified caller's own row.
 That flag skips cmux's running-process confirmation. It does not discard Git work or waive `wt rm` safety checks.
@@ -111,18 +112,18 @@ Two refusal messages have these meanings:
 
 `wt rm` refuses these on purpose. Report them and let the user decide.
 
-## Rules
+## Removal policy and refusals
 
-1. **Check liveness, then inspect.** Run `wt show <name>` (or `wt -H <vm> show -r <repo> <name>`) before anything else. Tell the user what the removal would lose.
-2. **Never pass `wt rm --force` or `wt rm --discard-commits` on your own initiative.** Use either flag only when the user has explicitly said to discard that worktree's work in this conversation.
-   If `wt rm` refuses, report the reason and offer these choices:
-   - Report the branch and leave it.
-   - Use `--keep-branch`.
-   - Discard the commits alone with `--discard-commits`. Offer this when the refusal is only about commits, for example a squash that the base then edited or reverted. With `--discard-commits`, `wt rm` still runs the other checks.
-   - Discard everything with `--force`.
+Before removal, inspect the task with `wt show <name>` or `wt -H <vm> show -r <repo> <name>`.
+Report what removal would lose.
 
-   Use `wt pr <name>` only if the user asks for a PR.
-3. **Never remove a worktree that the user has not asked you to remove.** This includes the worktrees that you created yourself.
-4. **Run `wt rm` outside the worktree that you remove.** For your own task, change to the main checkout only for the teardown command, as shown above.
-5. `wt prune` is safe by construction, because it removes only merged and clean worktrees. You can run it when the user asks to "clean up".
-6. If someone deleted a worktree directory by hand, `git worktree prune` inside the repo fixes the stale registration. `wt prune` runs it.
+If `wt rm` refuses, report its reason and the applicable choices:
+
+- Leave the task and report its branch.
+- Keep the branch with `--keep-branch`.
+- Discard commits with `--discard-commits` when only commits block removal. All other checks still apply.
+- Discard all work with `--force`.
+
+Run removal outside the target worktree, as the procedure above shows.
+`wt prune` removes only merged, clean worktrees. Use it for an authorized cleanup.
+If someone deleted a directory by hand, `wt prune` also removes stale Git registrations.
