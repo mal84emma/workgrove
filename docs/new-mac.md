@@ -138,15 +138,18 @@ codex login
 codex             # /hooks -> review and trust the five portable hook events, run one test turn, then exit
 ```
 
-Both installers put the agent CLIs in `~/.local/bin`. On a Mac, `~/.zshenv` tells cmux to run them from there.
-So a cmux row runs these copies, even in a repo whose mise config pins another `claude` or `codex` version.
-To use other copies, set `CMUX_CUSTOM_CLAUDE_PATH` and `CMUX_CUSTOM_CODEX_PATH` in `~/.zshenv.local`.
+Both installers put the agent CLIs in `~/.local/bin`. On a Mac, `~/.zshenv` sets `CMUX_CUSTOM_CLAUDE_PATH` and
+`CMUX_CUSTOM_CODEX_PATH` to these copies, so cmux's wrappers run them. If the environment already sets either
+variable, `~/.zshenv` leaves it unchanged. `~/.zshenv` looks for the binaries only when a shell starts. So open a
+new row after you install them. To use other copies, set the two variables in `~/.zshenv.local`.
 
-Without this setting, such a pin can stop agents from starting in cmux rows. `mise install` in the pinning repo
-creates global `claude` and `codex` shims. `mise activate` puts the shims ahead of cmux's wrappers on `PATH`.
-In any other repo, the shim has no active version, so it runs the next `claude` or `codex` on `PATH`. That is
-cmux's wrapper, which starts the shim again. The Codex row then loops without output. The Claude row stops with
-`cmux: stopped a possible infinite claude shim loop`.
+A repo whose mise config pins `claude` or `codex` changes this. `mise install` in that repo creates global
+`claude` and `codex` shims. `mise activate` puts the shims ahead of cmux's wrappers on `PATH`. Inside that repo,
+the shim runs the pinned version directly, so cmux's wrapper does not run.
+
+In any other repo, the shim has no active version, so it runs the next `claude` or `codex` on `PATH`. Without the
+two variables, that is cmux's wrapper, which starts the shim again. The Codex row then loops without output. The
+Claude row can loop too, or stop with `cmux: stopped a possible infinite claude shim loop`.
 
 `cmux hooks codex install --yes` merges cmux's generated Codex lifecycle handlers into `~/.codex/hooks.json`,
 next to the portable ones. It is a Mac-only step. Run it again after every `install.sh --refresh-config`.
