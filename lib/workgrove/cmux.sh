@@ -185,6 +185,7 @@ cmux_rows_load() {
   shift
   (($# == 0)) || runner=("$@")
   CMUX_ROWS_JSON='' CMUX_ROWS_FULL=1
+  # WT_COMPAT: Remove support for missing --json list-windows when every cmux provides it.
   windows=$("${runner[@]}" --json list-windows 2>/dev/null) || {
     CMUX_ROWS_FULL=0
     [[ $policy != checked ]] || { cmux_error "cannot list cmux windows"; return 1; }
