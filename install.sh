@@ -297,10 +297,12 @@ refresh_config_action() {
 # Nothing is lost: only the LINK moves into the backup dir, and the file it pointed at is untouched. The
 # displacement gets its own line in the output; it is not folded into "installed ~/…". That is also why this
 # step has no check_… twin in the refuse-before-writes pass: it has nothing to refuse.
-# copy_config builds the new file in full before it stashes the old one, so a filter that fails cannot leave a
-# truncated ~/dst behind. A replaced copy is only ever stashed, never merged. So a refreshed .codex/config.toml
-# loses the tables that Codex wrote into it (hook trust, folder trust). The old file in the backup dir still
-# holds them, and /hooks restores them.
+# copy_config finishes the new file before it stashes the old one. A filter failure leaves the destination untouched.
+# JSON hook refreshes start with the base and keep existing commands absent from that base.
+# A mixed group keeps only its foreign commands, with its matcher and other group settings.
+# Base commands use the base's groups, even when an existing group has a different matcher.
+# Other settings come from the base. A refreshed .codex/config.toml loses Codex's hook trust and folder trust.
+# The backup still holds those tables. Use /hooks to trust the hooks again.
 copy_config() {
   local src="$R/$1" dst="$HOME/$2" kind="$3"
   if [[ -e "$dst" && ! -L "$dst" && $REFRESH -eq 0 ]]; then
@@ -363,6 +365,19 @@ copy_config() {
     printf '\n[tui]\nanimations = false\n' >>"$tmp"
   else
     cp "$src" "$tmp"
+  fi
+  if [[ $REFRESH -eq 1 && -f $dst && ( $kind == claude || $2 == .codex/hooks.json ) ]]; then
+    local merged; merged="$(mktemp "$dst.XXXXXX")"
+    TMPFILES+=("$merged")
+    jq --slurpfile existing "$dst" '
+      [.hooks[][]?.hooks[]?.command | select(type == "string")] as $commands
+      | reduce (($existing[0].hooks // {}) | to_entries[]) as $event (.;
+          reduce ($event.value[]
+            | .hooks |= map(select(.command as $command | $commands | index($command) | not))
+            | select(.hooks | length > 0)) as $group (.;
+              .hooks[$event.key] += [$group]))
+    ' "$tmp" >"$merged" || { rm -f "$merged"; die "jq failed on $2"; }
+    mv "$merged" "$tmp"
   fi
   chmod 600 "$tmp"
   if [[ -L "$dst" ]]; then                                # see the header: the link goes, its target stays
@@ -464,6 +479,13 @@ install_configs() {
   copy_config home/.claude/settings.base.json .claude/settings.json claude
   copy_config home/.codex/config.base.toml    .codex/config.toml    codex
   copy_config home/.codex/hooks.base.json     .codex/hooks.json     plain
+  if [[ $REFRESH -eq 1 ]]; then
+    if [[ $OS == Darwin ]]; then
+      SUMMARY_ACTIONS+=("Run: cmux hooks codex install --yes")
+    else
+      SUMMARY_ACTIONS+=("Run: cmux-tui agent hook status claude codex")
+    fi
+  fi
 }
 
 # link_skills: link each skill twice, because Codex reads ~/.agents/skills and Claude reads only

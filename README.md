@@ -185,6 +185,7 @@ workgrove/
 │   ├── metadata-smoke.sh      sidecar compatibility, read counts, and the JSON status contract
 │   ├── lib-smoke.sh           unit tests for every shared shell function
 │   ├── named-outputs-smoke.sh caller-named outputs that match internal local names
+│   ├── hook-wiring-smoke.sh   portable hook events match agent-notify
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── bash5-smoke.sh         all five bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
@@ -341,8 +342,16 @@ The summary includes both flags because the existing copy cannot remember the re
 | Class | Files | Behavior |
 |---|---|---|
 | Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, and every opt-in file you asked for. `cmux.json` is one of them (Mac only, under `--with-cmux-config`). | Edits, including an agent's, land in the repo, so `git diff` is the review. |
-| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | `install.sh` creates them from the versioned `.base` files, minus the keys that this machine cannot use or did not ask for (listed below). The apps write local state into them. So a normal run keeps what is there, and only `install.sh --refresh-config` replaces them. |
+| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | `install.sh` creates them from the versioned `.base` files, minus the keys that this machine cannot use or did not ask for (listed below). The apps write local state into them. So a normal run keeps what is there, and only `install.sh --refresh-config` replaces them. A refresh preserves foreign hook commands and their group settings in the JSON files. |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides. The linked files source or include them, but `~/.zshrc.local` only when `~/.zshrc` is one of the linked files. |
+
+A foreign hook command is an existing command string absent from the new `.base` file.
+A refresh keeps each foreign command with its matcher and other group settings.
+For a mixed group, it keeps only the foreign commands.
+Commands present in the base use the base's groups and matchers.
+The comparison uses the complete command string, including its arguments.
+When a base command changes, refresh preserves its previous command string as foreign.
+Remove obsolete entries from machine-local copies after you review the backup.
 
 The machine-local copies leave out these keys:
 
@@ -1090,7 +1099,12 @@ Expect that state only when Codex itself prompts you.
 Do these steps to turn on VM status for an existing VM. Do them in this order.
 
 1. Update workgrove on the Mac and VM.
-2. Check the cmux-tui hooks as described in [Agent status in VM rows](docs/vm-agent-status.md).
+2. On the VM, run `cmux-tui agent hook status claude codex`.
+   If a provider shows `absent`, run `cmux-tui agent hook install claude codex`.
+   Both providers must show `installed` before you continue.
+   In Codex on the VM, review and trust the hooks with `/hooks`.
+   A config refresh keeps existing foreign hooks, including cmux-tui's hooks.
+   See [Agent status in VM rows](docs/vm-agent-status.md) for details.
 3. Exit the agent in the task row.
 4. Run `wt -H <vm> attach --restart-agent -r <repo> <name>`.
 
@@ -1120,7 +1134,7 @@ These rules apply:
 | Change | Mac | VM |
 |---|---|---|
 | Edit `AGENTS.md`, a skill, `wt` | Skills apply at once. `AGENTS.md` applies at the next session. Commit. | `wt -H <vm> update` |
-| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. It rewrites `~/.codex/config.toml` from the `.base` file and drops Codex's hook trust hashes and folder trust. Then, on the VM, re-trust the hooks in `/hooks`. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
+| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. It rewrites `~/.codex/config.toml` from the `.base` file and drops Codex's hook trust hashes and folder trust. The refresh keeps existing cmux-tui hooks. On the VM, run `cmux-tui agent hook status claude codex`. If a provider shows `absent`, run `cmux-tui agent hook install claude codex`. Re-trust the hooks in `/hooks`, then restart the agent with `wt -H <vm> attach --restart-agent -r <repo> <name>` from the Mac. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
 | Update cmux, or repair local Codex state tracking | Back up the live (machine-local) `config.toml` and `hooks.json`. Run `cmux hooks codex install --yes`. Check that one turn returns to `idle`. | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit. | `wt -H <vm> update` |
 | Change `cmux.json` | The change applies after cmux reloads its config or relaunches (see Hotkeys and configuration). Commit. | n/a |
@@ -1452,17 +1466,11 @@ If the relay fails, run the manual command on the Mac. Where you run it depends 
 - If it is an `open` command, use any Mac shell.
 - If it is a `new` or `attach` command, use a cmux terminal, because these subcommands need the cmux socket.
 
-### The notification hooks find `agent-notify` on `PATH`
+### The notification hooks use a home-relative path
 
-The portable hooks in `home/.claude/settings.base.json` and `home/.codex/hooks.base.json` call `agent-notify`
-by its bare name. `~/.zshenv` puts `~/.local/bin` on `PATH` for every zsh. So any program that a shell starts
-finds `agent-notify`.
-
-If a program that bypasses the login shell launches an agent, the hooks of that agent do not find `agent-notify`.
-The hook then fails silently, without a report of a missing command.
-
-If that ever happens, change the portable hooks to use the absolute path `~/.local/bin/agent-notify`.
-The `wt-native-relay` rule in `~/.cmuxterm/automations.json` already calls `~/.local/bin/cmux-hook --event`.
+The portable hooks call `~/.local/bin/agent-notify` directly, so they do not need `~/.local/bin` on `PATH`.
+The hook shell expands `~` to the agent's home directory.
+The helper still needs its dependencies, including `bash` and `jq`, on `PATH`.
 
 ## Deliberately left out
 

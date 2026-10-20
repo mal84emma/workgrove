@@ -83,10 +83,12 @@ On cmux 0.65 rows, only the cmux-tui hooks report the state.
 An Esc interruption on a cmux 0.65 row was not tested.
 
 The cmux-tui hooks must be installed on the VM.
-`install.sh --refresh-config` replaces `~/.claude/settings.json` and `~/.codex/hooks.json`, which removes them.
+`install.sh --refresh-config` preserves foreign hook commands in both JSON files, including the cmux-tui hooks.
+Its install summary prints the status check below.
 To check them, run `cmux-tui agent hook status claude codex` on the VM.
 Make sure that the `claude` and `codex` providers show `installed`.
 If a provider shows `absent`, run `cmux-tui agent hook install claude codex`.
+In Codex, review and trust the hooks with `/hooks`.
 Then restart the agent.
 
 ## Verification of the status

@@ -1519,6 +1519,61 @@ scenario_install_summary() {
   end_scenario
 }
 
+# Refresh both platforms without touching the real home directory.
+scenario_refresh_foreign_hooks() {
+  begin_scenario "refresh keeps foreign hooks and prints platform follow-ups" || return 0
+  local platform h log rel base command summary before
+  for platform in Darwin Linux; do
+    h="$(new_home)"
+    guard_scratch_home "$h"
+    log="$h.log"
+    mkdir -p "$h/.claude" "$h/.codex"
+    for rel in .claude/settings .codex/hooks; do
+      base="$REPO/home/$rel.base.json"
+      jq '
+        .localSetting = true
+        | .hooks.Stop += [
+            {matcher: "foreign-only", hooks: [{type: "command", command: "foreign-helper", timeout: 7}]},
+            {matcher: "mixed", hooks: [.hooks.Stop[0].hooks[0], {type: "command", command: "mixed-helper"}]},
+            {matcher: "different-base-matcher", hooks: [.hooks.Stop[0].hooks[0]]}]
+        | .hooks.ForeignEvent = [{matcher: "new-event", hooks: [{type: "command", command: "event-helper"}]}]
+      ' "$base" >"$h/$rel.json"
+      cp "$h/$rel.json" "$h/${rel##*/}.before"
+    done
+    RUN_EXTRA_ENV=("FORCE_OS=$platform")
+    if assert_install_ok "$h" "$log" --refresh-config; then
+      for rel in .claude/settings .codex/hooks; do
+        base="$REPO/home/$rel.base.json"
+        if jq -e --slurpfile base "$base" '
+          .hooks.Stop == ($base[0].hooks.Stop + [
+            {matcher: "foreign-only", hooks: [{type: "command", command: "foreign-helper", timeout: 7}]},
+            {matcher: "mixed", hooks: [{type: "command", command: "mixed-helper"}]}])
+          and .hooks.ForeignEvent == [{matcher: "new-event", hooks: [{type: "command", command: "event-helper"}]}]
+          and (has("localSetting") | not)
+        ' "$h/$rel.json" >/dev/null; then pass; else fail "$platform: refreshed $rel hooks differ"; fi
+        before="$(backup_dir "$h")/$rel.json"
+        assert_unchanged "$platform: backup retains the original $rel" "$h/${rel##*/}.before" "$before"
+      done
+      if [[ $platform == Darwin ]]; then
+        command='cmux hooks codex install --yes'
+      else
+        command='cmux-tui agent hook status claude codex'
+      fi
+      summary="$h.summary"
+      sed -n '/^Install summary:/,$p' "$log" >"$summary"
+      assert_eq "$platform: follow-up appears once in summary" 1 "$(count_matches "$summary" "    Run: $command")"
+      assert_eq "$platform: follow-up appears only in summary" 1 "$(count_matches "$log" "$command")"
+      RUN_EXTRA_ENV=("FORCE_OS=$platform")
+      if assert_install_ok "$h" "$log.2" --refresh-config; then
+        for rel in .claude/settings .codex/hooks; do
+          assert_eq "$platform: a second refresh keeps one foreign group" 1 "$(jq '[.hooks.Stop[] | select(.matcher == "foreign-only")] | length' "$h/$rel.json")"
+        done
+      fi
+    fi
+  done
+  end_scenario
+}
+
 # ---------------------------------------------------------------------------- main
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
@@ -1526,6 +1581,7 @@ main() {
   echo "install.sh smoke test: repo $REPO, scratch root $TEST_ROOT"
   echo "  this suite under bash ${BASH_VERSION}; install.sh under $INSTALL_BASH" \
        "($("$INSTALL_BASH" -c 'echo "$BASH_VERSION"'))"
+  scenario_refresh_foreign_hooks
   scenario_install_summary
   scenario_optional_summary_commands
   scenario_cleanup_summary
