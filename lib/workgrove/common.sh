@@ -11,8 +11,7 @@
 if ((BASH_VERSINFO[0] < 5)); then return 1; fi
 # Repeated loads must preserve registered cleanup callbacks and module state.
 if [[ ${WG_COMMON_LOADED:-0} == 1 ]]; then return 0; fi
-WT_FS=$'\x1f'   # the status line's field separator: git allows '|' in a branch name, and a base like
-                # 'feat|x' used to shift every field of the line right, so the branch column printed the base
+WT_FS=$'\x1f'   # cmux row fields use a separator that preserves empty values.
 
 # shellcheck source=lib/workgrove/cmux.sh
 source "${BASH_SOURCE[0]%/*}/cmux.sh" || return

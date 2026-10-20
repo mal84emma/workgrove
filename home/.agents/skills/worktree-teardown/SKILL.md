@@ -43,9 +43,9 @@ wt prune                             # removes those worktrees
 
 Do these steps in this order:
 
-1. Inspect the worktree with `wt show <name>`.
+1. Inspect the worktree with `wt show <name>`. Read its metadata with `wt show <name> --json`.
 2. Tell the user the branch, the commits, the test results, and what the command will remove.
-3. Take the absolute `repo:` path from the `wt show` output.
+3. Take the absolute repository path from the JSON `repo` field (`jq -r '.repo'`).
 4. Run the command below as one shell command, so that `wt rm` starts from that main checkout.
 
 ```bash

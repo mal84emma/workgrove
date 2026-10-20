@@ -811,6 +811,8 @@ apply. `--force` waives all of these reasons.
 - `squash`: the work landed without its commits.
 - `no`: any other case. `wt show` prints the reason behind a `no`.
 
+Use `--json` for scripts. See the [JSON status contract](docs/wt-json.md) for fields, types, and errors.
+
 `wt list` and `wt show` are both offline. So, against a base that nobody has fetched since the PR merged,
 they read `no` until `wt rm`, `wt prune` or `wt new` refresh it.
 
