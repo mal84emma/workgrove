@@ -28,12 +28,13 @@
 # thing that a green run does NOT exercise is the network: install_zsh_plugins' clone, which the fixtures
 # pre-empt.
 #
-# The absolute rule: nothing here may touch anything under the real $HOME. Every scenario runs install.sh
-# with HOME set to a fresh mktemp -d. At the start of each scenario, guard_scratch_home refuses if that
-# HOME resolves anywhere under the real home. run_install pins XDG_CONFIG_HOME to the scratch HOME and
-# unsets GIT_CONFIG_GLOBAL and ZSH_CUSTOM, because these variables could otherwise let a write escape it.
-# No scenario needs the network or sudo. The plugin clone is the only network step in install.sh, and the
-# fixtures pre-create the plugin directories, so the clone never runs.
+# The absolute rule: nothing here may touch anything under the real $HOME. Every install.sh scenario runs
+# install.sh with HOME set to a fresh mktemp -d. Scenario 18 sources home/.zshenv with such a HOME instead.
+# At the start of each scenario, guard_scratch_home refuses if that HOME resolves anywhere under the real
+# home. run_install pins XDG_CONFIG_HOME to the scratch HOME and unsets GIT_CONFIG_GLOBAL and ZSH_CUSTOM,
+# because these variables could otherwise let a write escape it. No scenario needs the network or sudo.
+# The plugin clone is the only network step in install.sh, and the fixtures pre-create the plugin
+# directories, so the clone never runs.
 #
 # An assertion is silent when it holds and loud when it fails. The script prints one line per scenario and
 # a pass/fail count. It exits non-zero if any assertion failed.
@@ -275,6 +276,18 @@ backup_dir() {
     fi
   done
   return 0
+}
+
+# zshenv_paths <shell> <home> <os> [VAR=value ...]: source home/.zshenv with <shell> under set -eu, with a
+# stub uname that prints <os>. Print the two cmux agent path variables, or "unset" for each one that is empty.
+zshenv_paths() {
+  local shell=$1 h=$2 os=$3
+  mkdir -p "$h.stub"
+  printf '#!/bin/sh\necho %s\n' "$os" >"$h.stub/uname"
+  chmod +x "$h.stub/uname"
+  # shellcheck disable=SC2016  # The child shell expands these.
+  env -i HOME="$h" PATH="$h.stub:/usr/bin:/bin" "${@:4}" "$shell" -euc \
+    '. "$1"; echo "${CMUX_CUSTOM_CODEX_PATH:-unset} ${CMUX_CUSTOM_CLAUDE_PATH:-unset}"' zshenv "$REPO/home/.zshenv"
 }
 
 # ---------------------------------------------------------------------------- running install.sh
@@ -1384,33 +1397,27 @@ scenario_cmux_config() {
   end_scenario
 }
 
-# zshenv_paths <shell> <home> <os> [VAR=value ...]: source home/.zshenv with <shell> under set -eu, with a
-# stub uname that prints <os>. Print the two cmux agent path variables, or "unset" for each one that is empty.
-zshenv_paths() {
-  local shell=$1 h=$2 os=$3
-  mkdir -p "$h.stub"
-  printf '#!/bin/sh\necho %s\n' "$os" >"$h.stub/uname"
-  chmod +x "$h.stub/uname"
-  # shellcheck disable=SC2016  # The child shell expands these.
-  env -i HOME="$h" PATH="$h.stub:/usr/bin:/bin" "${@:4}" "$shell" -euc \
-    '. "$1"; echo "${CMUX_CUSTOM_CODEX_PATH:-unset} ${CMUX_CUSTOM_CLAUDE_PATH:-unset}"' zshenv "$REPO/home/.zshenv"
-}
-
 # On a Mac, ~/.zshenv points cmux's agent wrappers at the agent CLIs in ~/.local/bin. The stub uname tests
-# both platforms on either runner. The scratch home has only codex, so CMUX_CUSTOM_CLAUDE_PATH must stay unset.
+# both platforms on either runner. One home has only codex, so CMUX_CUSTOM_CLAUDE_PATH must stay unset there.
+# The other has both agent CLIs, so each variable is checked set and unset.
 scenario_zshenv_cmux_paths() {
   begin_scenario "18. ~/.zshenv sets the cmux agent paths only on a Mac, and keeps a preset value" || return 0
-  local h shell
-  h="$(new_home)"
-  mkdir -p "$h/.local/bin"
-  printf '#!/bin/sh\n' >"$h/.local/bin/codex"
-  chmod +x "$h/.local/bin/codex"
+  local one both cli shell
+  one="$(new_home)"
+  both="$(new_home)"
+  mkdir -p "$one/.local/bin" "$both/.local/bin"
+  for cli in "$one/.local/bin/codex" "$both/.local/bin/codex" "$both/.local/bin/claude"; do
+    printf '#!/bin/sh\n' >"$cli"
+    chmod +x "$cli"
+  done
   for shell in sh bash; do
-    assert_eq "$shell on a Mac sets only the installed CLI" "$h/.local/bin/codex unset" \
-      "$(zshenv_paths "$shell" "$h" Darwin)"
-    assert_eq "$shell on a Mac keeps a preset value" "/preset unset" \
-      "$(zshenv_paths "$shell" "$h" Darwin CMUX_CUSTOM_CODEX_PATH=/preset)"
-    assert_eq "$shell on Linux sets neither variable" "unset unset" "$(zshenv_paths "$shell" "$h" Linux)"
+    assert_eq "$shell on a Mac sets only the installed CLI" "$one/.local/bin/codex unset" \
+      "$(zshenv_paths "$shell" "$one" Darwin)"
+    assert_eq "$shell on a Mac sets both installed CLIs" "$both/.local/bin/codex $both/.local/bin/claude" \
+      "$(zshenv_paths "$shell" "$both" Darwin)"
+    assert_eq "$shell on a Mac keeps a preset value" "/preset $both/.local/bin/claude" \
+      "$(zshenv_paths "$shell" "$both" Darwin CMUX_CUSTOM_CODEX_PATH=/preset)"
+    assert_eq "$shell on Linux sets neither variable" "unset unset" "$(zshenv_paths "$shell" "$both" Linux)"
   done
   end_scenario
 }
