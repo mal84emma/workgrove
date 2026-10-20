@@ -287,7 +287,9 @@ Shift+Enter, and focus events. It also makes the mouse wheel scroll instead of t
 `~/.zshenv` and `~/.gitignore_global` are not opt-in config. They are the contract that the tools rely on, not
 personal preference:
 
-- `~/.zshenv` puts `~/.local/bin` on `PATH` and carries `WT_HOST` and `WT_REPOS_DIR`.
+- `~/.zshenv` puts `~/.local/bin` on `PATH` and carries `WT_HOST` and `WT_REPOS_DIR`. On a Mac, it also points
+  cmux at the `claude` and `codex` binaries in `~/.local/bin`
+  (see [Block 4 of the Mac setup](docs/new-mac.md#block-4-agents-codex-hooks-and-logins)).
 - `~/.gitignore_global` is the file that git-ignores `.worktrees/`.
 
 Every `install.sh` run ends with a summary of skips and follow-up actions.
@@ -456,7 +458,7 @@ An unset or empty value uses one second.
 The host probe defaults to 20 seconds. `WG_HOST_PROBE_TIMEOUT` accepts decimal integers from 1 through 922337203685477580 seconds.
 Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for its deadline check.
 
-- **`bash test/install-smoke.sh`** checks installation across seventeen scenario groups.
+- **`bash test/install-smoke.sh`** checks installation across eighteen scenario groups.
   Each run uses its own throwaway `$HOME` with no network.
   - It covers:
     - the default no-flags install, into an empty home and over a stranger's own dotfiles
@@ -464,6 +466,8 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
     - the stickiness rules, idempotence, an unknown flag, and every refusal path
     - which links count as this repo's own
     - the don't-clobber branches of `configure_git`, retirement of renamed links, and `ZSH_CUSTOM`
+    - the cmux agent paths in `home/.zshenv`. Scenario 18 sources the file with a stub `uname`, so it checks
+      the Mac and Linux branches on every platform.
   - Set `INSTALL_BASH=/bin/bash` to run `install.sh` itself under bash 3.2, which is what a fresh Mac gives it.
   - Set `FORCE_OS=Linux` to drive the Linux-only steps from a Mac.
   - A run on a VM is useful, because `FORCE_OS` cannot fake everything that a real Linux box differs in.
