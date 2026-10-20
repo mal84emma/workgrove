@@ -584,4 +584,71 @@ scenario_settings() {
 }
 scenario_settings
 
+# Add one row to a copy. No checker, help string, or command pattern changes accompany it.
+scenario_new_api_form() {
+  begin_scenario 'one array row adds an API write and its help and compound denial' || return 0
+  local GUARD="$TEST_ROOT/new-api-guard"
+  awk '
+    { print }
+    /^GH_API_WRITES=\(/ {
+      print "  \"^POST pulls/[0-9]+/test-notes$~body~body~~~a test note~POST .../pulls/<n>/test-notes; \""
+    }
+  ' "$REPO/bin/github-guard" >"$GUARD"
+  expect allow 'gh api -X POST repos/acme/widgets/pulls/5/test-notes -f body=note' 'a test note in this repository'
+  expect deny 'gh api -X POST repos/acme/widgets/pulls/5/test-notes' "needs -f body='…' here"
+  expect deny 'gh api -X POST repos/acme/widgets/pulls/5/test-notes -f title=note' 'POST .../pulls/<n>/test-notes;'
+  expect deny 'gh api -X POST repos/acme/widgets/pulls/5/test-notes -f body=note | cat' 'one simple command'
+  expect deny 'gh api -X POST repos/acme/widgets/pulls/5/test-notes -f body=note; true' 'one simple command'
+  end_scenario
+}
+scenario_new_api_form
+
+# A copied form changes only the compound matcher. The normal command checker stays unchanged.
+scenario_generated_prefixes() {
+  begin_scenario 'compound command matching follows checker forms' || return 0
+  local GUARD="$TEST_ROOT/changed-form-guard"
+  sed 's/^PR_CREATE_FORM="approved form: gh pr create /PR_CREATE_FORM="approved form: gh pr propose /' \
+    "$REPO/bin/github-guard" >"$GUARD"
+  expect deny 'gh pr propose --fill | cat' 'gh pr propose is approved only as one simple command'
+  expect deny 'cd /tmp && gh pr propose --fill' 'gh pr propose is approved only as one simple command'
+  expect none 'gh pr create --fill | cat'
+  expect none 'gh pr proposed --fill | cat'
+  end_scenario
+}
+scenario_generated_prefixes
+
+# Fixed rows keep exact help checks independent of future approved forms.
+scenario_denial_text() {
+  begin_scenario 'generated help and compound denial text stay unchanged' || return 0
+  local expected fixture_guard="$TEST_ROOT/fixed-help-guard"
+  awk '
+    /^GH_API_WRITES=\(/ {
+      print
+      print "  \"^POST test-notes$~body~body~~~a test note~-X POST .../test-notes (-f body=); \""
+      print "  \"^PATCH test-notes$~body~body~own~~an edit~on your own, -X PATCH .../test-notes (-f body=); \""
+      rows = 1
+      next
+    }
+    rows {
+      if (/^\)/) { rows = 0; print }
+      next
+    }
+    { print }
+  ' "$GUARD" >"$fixture_guard"
+  expected=$(cat <<'REASON'
+github-guard: gh api -X DELETE repos/acme/widgets/issues/1 is not an approved write; approved gh api forms: a read, gh api <endpoint> (--jq '<expr>' to filter, --paginate for every page, -X GET -f key=value for query parameters, gh api graphql -f query='…' for a GraphQL query); and, in this repository, -X POST .../test-notes (-f body=); on your own, -X PATCH .../test-notes (-f body=); and gh api graphql with a resolveReviewThread or unresolveReviewThread mutation
+REASON
+  )
+  GUARD=$fixture_guard expect deny 'gh api -X DELETE repos/acme/widgets/issues/1'
+  assert_eq 'complete denial reason' "$expected" "$(cat "$TEST_ROOT/reason")"
+  expected=$(cat <<'REASON'
+github-guard: gh pr create is approved only as one simple command: no pipe, redirect, && or ;, no $(...), backticks or $VARIABLES, no globs, and no cd in front (run the cd as its own command first: the directory carries over, and this hook reads it). Filter output with gh's own --jq '<expr>' rather than | jq, pass long text with --body-file, and quote any argument with ? or & in it.
+REASON
+  )
+  expect deny 'gh pr create --fill | cat'
+  assert_eq 'complete denial reason' "$expected" "$(cat "$TEST_ROOT/reason")"
+  end_scenario
+}
+scenario_denial_text
+
 lib_summary

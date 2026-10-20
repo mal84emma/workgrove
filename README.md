@@ -1192,6 +1192,7 @@ approve. For a rule that must hold, use what the documentation points to instead
 
 [`bin/github-guard`](bin/github-guard) is a `PreToolUse` hook. It sees every Bash command before the
 permission lists do, and it decides the same way on every machine.
+An array defines the approved API writes. The guard generates its API help and command pattern from the array and checker forms.
 
 **Why a hook replaced the deny rules.** The lists used to deny `Bash(gh api *)`, `Bash(git push *)`,
 `Bash(gh pr create *)` and `Bash(wt pr *)` outright. That also blocked reading a pull request's review
@@ -1206,7 +1207,7 @@ rule. So those deny rules are gone, and `github-guard` decides instead.
   - It does not push a tag or a bare commit.
   - It does not use force.
   - It goes through a remote whose push URL is on github.com.
-  - It does not go to that repository's default branch. To find the default branch, the guard asks GitHub.
+  - It does not go to `main`, `master`, or that repository's default branch. To find the default branch, the guard asks GitHub.
     The guard denies the push if `gh` is unavailable or if GitHub does not return a valid branch.
 - `gh pr create`, `wt pr` and `gh issue create`. For `wt pr`, the guard first checks the push and the pull
   request destination that `wt pr` runs.
