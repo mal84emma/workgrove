@@ -103,7 +103,7 @@ LINKS=(
   'home/.gitignore_global|.gitignore_global|'
   'home/.claude/AGENTS.md|.claude/AGENTS.md|'
   'home/.claude/CLAUDE.md|.claude/CLAUDE.md|'
-  "home/.oh-my-zsh/custom/themes/workgrove.zsh-theme|$ZC_REL/themes/workgrove.zsh-theme|WITH_ZSHRC"
+  'home/.oh-my-zsh/custom/themes/workgrove.zsh-theme|ZC_REL/themes/workgrove.zsh-theme|WITH_ZSHRC'
 )
 BK=""                                # this run's backup dir; filled in by main
 SUMMARY_SKIPS=()
@@ -158,9 +158,9 @@ parse_args() {
 
 # Read consent for either a linked file or the Claude settings keys.
 optin_selected() {
-  local kind=$1 variable=$2 destination=$3
+  local kind=$1 variable=$2 destination=$3 source=$4
   if [[ $kind == keys ]]; then claude_ui_opted_in
-  else opted_in "${!variable}" "$destination"
+  else opted_in "${!variable}" "$destination" "$source"
   fi
 }
 
@@ -240,19 +240,16 @@ consenting_link() {
   [[ -n $ZSHENV_ROOT && $t == "$ZSHENV_ROOT/$2" ]]
 }
 
-# opted_in <flag> <home-relative dst>: does this run install that opinionated file? Yes when the flag asked for
-# it. Also yes when ~/dst is ALREADY a link that an earlier run of this script made. That link is the record
-# that the earlier run's flag left. `wt update` reruns this script with no arguments, so a choice made once
-# must survive a run that cannot see it. This script stores no state anywhere that could disagree with the link.
-# On a machine where all six files are already linked (every machine the author has), every answer is yes.
-# There, this whole opt-in changes nothing.
-# Only the six FILES can be asked about here. --with-claude-ui gates keys inside a copied file, so its record
-# is the keys themselves; claude_ui_opted_in reads that record.
+# opted_in <flag> <home-relative dst> [repo-relative src]: test consent for a linked file.
+# The flag or an existing link records consent. An omitted source defaults to home/<dst>.
+# `wt update` runs without flags, so consent must survive repeated installs.
+# This script stores no separate state that could disagree with the link.
+# claude_ui_opted_in handles keys inside the copied Claude settings instead.
 opted_in() {
   if [[ $1 -eq 1 ]]; then
     return 0
   fi
-  consenting_link "$HOME/$2" "home/$2"
+  consenting_link "$HOME/$2" "${3:-home/$2}"
 }
 
 # claude_ui_opted_in: the same question for the seventh flag. (--with-cmux-config is the sixth, and the last of
@@ -336,7 +333,7 @@ refresh_config_action() {
 # Other settings come from the base. A refreshed .codex/config.toml loses Codex's hook trust and folder trust.
 # The backup still holds those tables. Use /hooks to trust the hooks again.
 copy_config() {
-  local src="$R/$1" dst="$HOME/$2" kind="$3"
+  local src="$R/$1" dst="$HOME/$2" kind="$3" target=""
   if [[ -e "$dst" && ! -L "$dst" && $REFRESH -eq 0 ]]; then
     # shellcheck disable=SC2088  # The summary prints a home-relative path.
     SUMMARY_SKIPS+=("~/$2 already exists; the machine-local copy was kept")
@@ -398,10 +395,7 @@ copy_config() {
     cp "$src" "$tmp"
   fi
   chmod 600 "$tmp"
-  if [[ -L "$dst" ]]; then
-    echo "replaced the symlink at ~/$2 (-> $(readlink "$dst")) with a real file: the app writes its own state"
-    echo "into this one, so it cannot be a link; the link itself is in the backup dir, its target untouched"
-  fi
+  if [[ -L "$dst" ]]; then target=$(readlink "$dst"); fi
   if [[ $REFRESH -eq 1 && -f $dst && ( $kind == claude || $2 == .codex/hooks.json ) ]]; then
     # shellcheck disable=SC2016  # jq expands these variables.
     json_merge "$dst" 'true' '
@@ -415,6 +409,10 @@ copy_config() {
     ' --slurpfile base "$tmp" --slurpfile existing "$dst" || die "jq failed on $2"
   else
     install_replace "$tmp" "$dst"
+  fi
+  if [[ -n $target ]]; then
+    echo "replaced the symlink at ~/$2 (-> $target) with a real file: the app writes its own state"
+    echo "into this one, so it cannot be a link; the link itself is in the backup dir, its target untouched"
   fi
   echo "installed ~/$2"
 }
@@ -483,16 +481,25 @@ install_bins() {
 #   The two instruction files are what the agents read.
 # The rest is taste, so each file waits for its own opt-in. The theme waits for the ~/.zshrc opt-in, because
 # that ~/.zshrc is the only thing that names it.
+# Resolve runtime paths after parsing the table, so delimiters in paths stay literal.
+link_table_entry() {
+  local destination=$2
+  if [[ $destination == ZC_REL/* ]]; then
+    destination="$ZC_REL/${destination#ZC_REL/}"
+  fi
+  link "$1" "$destination"
+}
+
 link_optins() {
   local phase=$1 row flag variable source destination platform kind position extra extra_source extra_destination gate
   for row in "${OPTIN[@]}"; do
     IFS='|' read -r flag variable source destination platform kind position <<< "$row"
     [[ $kind == "$phase" && ( $platform == all || $platform == "$OS" ) ]] || continue
-    if optin_selected "$kind" "$variable" "$destination"; then
+    if optin_selected "$kind" "$variable" "$destination" "$source"; then
       link "$source" "$destination"
       for extra in "${LINKS[@]}"; do
         IFS='|' read -r extra_source extra_destination gate <<< "$extra"
-        if [[ $gate == "$variable" ]]; then link "$extra_source" "$extra_destination"; fi
+        if [[ $gate == "$variable" ]]; then link_table_entry "$extra_source" "$extra_destination"; fi
       done
     fi
   done
@@ -503,7 +510,7 @@ link_dotfiles() {
   for row in "${LINKS[@]}"; do
     IFS='|' read -r source destination variable <<< "$row"
     if [[ -z $variable ]]; then
-      link "$source" "$destination"
+      link_table_entry "$source" "$destination"
     fi
   done
   link_optins link
@@ -983,7 +990,7 @@ report_skipped() {
   for row in "${OPTIN[@]}"; do
     IFS='|' read -r flag variable source destination platform kind position <<< "$row"
     [[ $platform == all || $platform == "$OS" ]] || continue
-    optin_selected "$kind" "$variable" "$destination" || f="$f $flag"
+    optin_selected "$kind" "$variable" "$destination" "$source" || f="$f $flag"
   done
   if [[ -n $f ]]; then
     SUMMARY_SKIPS+=("Optional config was not selected:$f")

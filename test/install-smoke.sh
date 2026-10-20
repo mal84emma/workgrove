@@ -1212,23 +1212,24 @@ scenario_missing_jq() {
 #     install says success. This happened to the author.
 scenario_custom_theme() {
   begin_scenario "15a. the theme follows ZSH_CUSTOM, because that is where oh-my-zsh looks" || return 0
-  local h log zc pl
-
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  seed_oh_my_zsh "$h"
-  zc="$h/.config/omz-custom"
-  mkdir -p "$zc/themes"
-  for pl in zsh-autosuggestions zsh-syntax-highlighting; do
-    mkdir -p "$zc/plugins/$pl"         # pre-created here too, or install_zsh_plugins would hit the network
+  local h log zc pl relative
+  for relative in .config/omz-custom 'custom|zsh'; do
+    h="$(new_home)"
+    guard_scratch_home "$h"
+    log="$h.log"
+    seed_oh_my_zsh "$h"
+    zc="$h/$relative"
+    mkdir -p "$zc/themes"
+    for pl in zsh-autosuggestions zsh-syntax-highlighting; do
+      mkdir -p "$zc/plugins/$pl"
+    done
+    RUN_EXTRA_ENV=(ZSH_CUSTOM="$zc")
+    if assert_install_ok "$h" "$log" --with-zshrc; then
+      assert_link "$h" .zshrc home/.zshrc
+      assert_link "$h" "$relative/themes/workgrove.zsh-theme" "$THEME_SRC"
+      assert_absent "$h" "$THEME_DST"
+    fi
   done
-  RUN_EXTRA_ENV=(ZSH_CUSTOM="$zc")
-  if assert_install_ok "$h" "$log" --with-zshrc; then
-    assert_link "$h" .zshrc home/.zshrc
-    assert_link "$h" .config/omz-custom/themes/workgrove.zsh-theme "$THEME_SRC"
-    assert_absent "$h" "$THEME_DST"    # the hardcoded path, where oh-my-zsh would never have looked
-  fi
   end_scenario
 }
 
@@ -1426,6 +1427,26 @@ scenario_zshenv_cmux_paths() {
   end_scenario
 }
 
+scenario_failed_symlink_refresh() {
+  begin_scenario "failed hook refreshes do not report replacing untouched symlinks" || return 0
+  local h log relative target
+  for relative in .claude/settings.json .codex/hooks.json; do
+    h=$(new_home)
+    log="$h.log"
+    target="$h/managed.json"
+    mkdir -p "$h/$(dirname "$relative")"
+    printf '%s\n' 'invalid hook JSON' > "$target"
+    cp "$target" "$h/original.json"
+    ln -s "$target" "$h/$relative"
+    assert_install_fails "$h" "$log" 1 "jq failed on $relative" --refresh-config
+    assert_eq "the failed refresh keeps the symlink" "$target" "$(readlink "$h/$relative")"
+    assert_same_bytes "the failed refresh keeps its target" "$h/original.json" "$target"
+    assert_eq "the failed refresh reports no replacement" 0 "$(count_matches "$log" "replaced the symlink at ~/$relative")"
+    assert_eq "the failed refresh reports no installation" 0 "$(count_matches "$log" "installed ~/$relative")"
+  done
+  end_scenario
+}
+
 scenario_json_merge_failures() {
   begin_scenario "JSON merge failures preserve the destination without backups" || return 0
   local h script kind rc
@@ -1465,11 +1486,11 @@ scenario_install_tables() {
   mkdir -p "$fixture"
   cp -R "$REPO/install.sh" "$REPO/lib" "$REPO/home" "$REPO/bin" "$fixture/"
   printf 'linked fixture\n' > "$fixture/home/.table-link"
-  printf 'optional fixture\n' > "$fixture/home/.table-optin"
+  printf 'optional fixture\n' > "$fixture/home/.table-source"
   printf 'binary fixture\n' > "$fixture/bin/table-bin"
   awk '
     { print }
-    /^OPTIN=\(/ { print "  \047--with-table|WITH_TABLE|home/.table-optin|.table-optin|all|link|7\047" }
+    /^OPTIN=\(/ { print "  \047--with-table|WITH_TABLE|home/.table-source|.table-optin|all|link|7\047" }
     /^LINKS=\(/ { print "  \047home/.table-link|.table-link|\047" }
   ' "$fixture/install.sh" > "$fixture/install.new"
   mv "$fixture/install.new" "$fixture/install.sh"
@@ -1484,15 +1505,21 @@ scenario_install_tables() {
     assert_grep "the new flag appears in skipped config" "$log" --with-table
     assert_install_fails "$h" "$log.usage" 2 '[--with-table]' --unknown
     if assert_install_ok "$h" "$log.selected" --with-table; then
-      assert_link "$h" .table-optin home/.table-optin
+      assert_link "$h" .table-optin home/.table-source
     fi
     if assert_install_ok "$h" "$log.sticky"; then
-      assert_link "$h" .table-optin home/.table-optin
+      assert_link "$h" .table-optin home/.table-source
     fi
     h=$(new_home)
     seed_oh_my_zsh "$h"
     if assert_install_ok "$h" "$log.all" --opinionated-config; then
-      assert_link "$h" .table-optin home/.table-optin
+      assert_link "$h" .table-optin home/.table-source
+    fi
+    mv "$fixture" "$fixture-moved"
+    REPO=$(cd "$fixture-moved" && pwd -P)
+    if assert_install_ok "$h" "$log.moved"; then
+      assert_link "$h" .table-optin home/.table-source
+      assert_eq "the moved checkout retains the new opt-in" 0 "$(count_matches "$log.moved" --with-table)"
     fi
   fi
   end_scenario
@@ -1531,6 +1558,7 @@ scenario_automation_summaries() {
         new)
           assert_eq "a new install gets the complete automation rule" "$(jq -cS . "$REPO/home/.cmuxterm/automations.json")" "$(jq -cS . "$config")"
           assert_mode "$h" .cmuxterm/automations.json 600
+          RUN_EXTRA_ENV=(FORCE_OS=Darwin)
           assert_install_ok "$h" "$log.2"
           assert_grep "a rerun keeps the existing rule" "$log.2" "kept ~/.cmuxterm/automations.json's existing wt-native-relay rule"
           assert_eq "a rerun preserves the automation rule" "$(jq -cS . "$REPO/home/.cmuxterm/automations.json")" "$(jq -cS . "$config")" ;;
@@ -1753,6 +1781,7 @@ main() {
   scenario_automation_summaries
   scenario_install_tables
   scenario_json_merge_failures
+  scenario_failed_symlink_refresh
   scenario_default_empty
   scenario_default_over_existing
   scenario_opinionated
