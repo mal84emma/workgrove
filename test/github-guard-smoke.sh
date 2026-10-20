@@ -584,4 +584,23 @@ scenario_settings() {
 }
 scenario_settings
 
+# Add one row to a copy. No checker, help string, or command pattern changes accompany it.
+scenario_new_api_form() {
+  begin_scenario 'one array row adds an API write and its help and compound denial' || return 0
+  local GUARD="$TEST_ROOT/new-api-guard"
+  awk '
+    { print }
+    /^GH_API_WRITES=\(/ {
+      print "  \"^POST pulls/[0-9]+/test-notes$~body~body~~~a test note~POST .../pulls/<n>/test-notes; \""
+    }
+  ' "$REPO/bin/github-guard" >"$GUARD"
+  expect allow 'gh api -X POST repos/acme/widgets/pulls/5/test-notes -f body=note' 'a test note in this repository'
+  expect deny 'gh api -X POST repos/acme/widgets/pulls/5/test-notes' "needs -f body='…' here"
+  expect deny 'gh api -X POST repos/acme/widgets/pulls/5/test-notes -f title=note' 'POST .../pulls/<n>/test-notes;'
+  expect deny 'gh api -X POST repos/acme/widgets/pulls/5/test-notes -f body=note | cat' 'one simple command'
+  expect deny 'gh api -X POST repos/acme/widgets/pulls/5/test-notes -f body=note; true' 'one simple command'
+  end_scenario
+}
+scenario_new_api_form
+
 lib_summary

@@ -4,6 +4,7 @@
 # `wt pr`. It gives no answer at all for every other command, so the permission lists in
 # ~/.claude/settings.json decide those.
 #
+# GH_API_WRITES and the checker form strings define the approved forms and generate help and command matching.
 # The hook approves the forms below on every machine. Each form must be one simple command (defined below),
 # and it must stay in the repository of the session. That repository is one of the github.com remotes of the
 # working directory. It can also be gh's own {owner}/{repo}, as long as GH_REPO, GH_HOST and
@@ -11,7 +12,7 @@
 #
 #   read          gh api GET or HEAD; gh api graphql with a query; gh pr view|diff|checks|list|status;
 #                 gh issue view|list|status
-#   push          git push [-u] <remote> <src>[:<branch>] to any branch but the default one (GitHub must say
+#   push          git push [-u] <remote> <src>[:<branch>] to any branch but main, master or the default one (GitHub must say
 #                 which branch that is). <src> is HEAD or a local branch. No force, no delete, no explicit
 #                 tags, one branch, a github.com push URL. But push.followTags can still add annotated tags.
 #   open          gh pr create, gh issue create (not from a file outside this repository or a temp dir, not
@@ -216,16 +217,35 @@ body_file() {
 
 # ------------------------------------------------------------------------------------------------ gh api
 
-GH_API_FORMS="approved gh api forms: a read, gh api <endpoint> (--jq '<expr>' to filter, --paginate for every \
-page, -X GET -f key=value for query parameters, gh api graphql -f query='…' for a GraphQL query); and, in this \
-repository, -X POST repos/{owner}/{repo}/issues (-f title= -f body=, -f 'labels[]=…' -f 'assignees[]=…' -F \
-milestone=), .../issues/<n>/comments, .../pulls/<n>/comments (an inline comment: -f body= -f commit_id= -f \
-path= -F line=), .../pulls/<n>/comments/<id>/replies, .../pulls/<n>/reviews (-f event=COMMENT|REQUEST_CHANGES, \
-inline comments as -f 'comments[][path]=…' -F 'comments[][line]=…' -f 'comments[][body]=…'), \
-.../pulls/<n>/reviews/<id>/events; on your own, -X PATCH .../issues/<n> with the fields an issue is opened \
-with, and -X PATCH .../pulls/comments/<id> or .../issues/comments/<id> and -X PUT .../pulls/<n>/reviews/<id> \
-with -f body=; and gh api graphql with a resolveReviewThread or unresolveReviewThread mutation"
+# Each row has a method/path regex, fields, required field, ownership check, event check, label, and help text.
+# Separate columns with ~. Keep help fragments in their display order to preserve denial reasons.
 ISSUE_FIELDS='title body labels[] assignees[] milestone'   # not state: closing and reopening stay out
+GH_API_WRITES=(
+  "^POST issues$~$ISSUE_FIELDS~title~~~a new issue~-X POST repos/{owner}/{repo}/issues (-f title= -f body=, -f 'labels[]=…' -f 'assignees[]=…' -F milestone=), "
+  "^POST (issues/[0-9]+/comments|pulls/[0-9]+/comments/[0-9]+/replies)$~body~body~~~a comment~.../issues/<n>/comments, "
+  "^POST pulls/[0-9]+/comments$~body commit_id path line side start_line start_side in_reply_to subject_type position~body~~~an inline review comment~.../pulls/<n>/comments (an inline comment: -f body= -f commit_id= -f path= -F line=), .../pulls/<n>/comments/<id>/replies, "
+  "^POST pulls/[0-9]+/reviews$~body event commit_id comments[][path] comments[][line] comments[][side] comments[][start_line] comments[][start_side] comments[][body] comments[][position]~~~optional~a review~.../pulls/<n>/reviews (-f event=COMMENT|REQUEST_CHANGES, inline comments as -f 'comments[][path]=…' -F 'comments[][line]=…' -f 'comments[][body]=…'), "
+  "^POST pulls/[0-9]+/reviews/[0-9]+/events$~body event~body~~required~submitting a pending review~.../pulls/<n>/reviews/<id>/events; "
+  "^PATCH issues/[0-9]+$~$ISSUE_FIELDS~~own~~an edit of its own issue~on your own, -X PATCH .../issues/<n> with the fields an issue is opened with, and "
+  "^(PUT pulls/[0-9]+/reviews/[0-9]+|PATCH (pulls|issues)/comments/[0-9]+)$~body~body~own~~an edit of its own~-X PATCH .../pulls/comments/<id> or .../issues/comments/<id> and -X PUT .../pulls/<n>/reviews/<id> with -f body=; "
+)
+API_READ_FORM="gh api <endpoint> (--jq '<expr>' to filter, --paginate for every \
+page, -X GET -f key=value for query parameters, gh api graphql -f query='…' for a GraphQL query)"
+API_GRAPHQL_FORM='gh api graphql with a resolveReviewThread or unresolveReviewThread mutation'
+
+PR_REVIEW_FORM="approved form: gh pr review [<number>] --comment|--request-changes --body '…' | --body-file <file>"
+PR_CREATE_FORM="approved form: gh pr create --title '…' --body '…' | --body-file <file> | --fill \
+[--base <branch>] [--head <branch>] [--draft] [--label|--reviewer|--assignee|--milestone|--project …]"
+ISSUE_CREATE_FORM="approved form: gh issue create --title '…' --body '…' | --body-file <file> \
+[--label|--assignee|--milestone|--project …]"
+ISSUE_EDIT_FORM="approved form: gh issue edit <number> [--title '…'] [--body '…' | --body-file \
+<file>] [--add-label|--remove-label|--add-assignee|--remove-assignee|--add-project|--remove-project|--milestone \
+…] [--remove-milestone], on an issue this login opened"
+PUSH_FORM="approved form: git push [-u] <remote> HEAD[:<branch>], to any branch but the default one"
+COMMENT_FORM="approved form: gh pr comment [<number>] --body '…' | --body-file <file> [--edit-last]"
+WT_PR_FORM='approved form: wt pr <name> [--draft], from inside this repository'
+PR_READ_FORM='gh pr view|diff|checks|list|status'
+ISSUE_READ_FORM='gh issue view|list|status'
 
 # gql_class <document>: print "query" or "mutation <root field>…", or fail when it cannot read the document.
 # The lexer uses GraphQL's own token set. Anything outside that set (a comment, a block string, a stray
@@ -367,32 +387,16 @@ unresolveReviewThread. $GH_API_FORMS" ;;
   [[ $path =~ $re_repo ]] || deny "gh api -X $method $endpoint is not an approved write; $GH_API_FORMS"
   local owner=${BASH_REMATCH[1]} name=${BASH_REMATCH[2]}   # saved: same_repo's own =~ overwrites BASH_REMATCH
   rest=${path#"${BASH_REMATCH[0]}"}
-  local mr="$method $rest" edit='' what need=body
-  local re_comment='^POST (issues/[0-9]+/comments|pulls/[0-9]+/comments/[0-9]+/replies)$'
-  local re_inline='^POST pulls/[0-9]+/comments$' re_review='^POST pulls/[0-9]+/reviews$'
-  local re_submit='^POST pulls/[0-9]+/reviews/[0-9]+/events$'
-  local re_issue='^POST issues$' re_issue_edit='^PATCH issues/[0-9]+$'
-  local re_edit='^(PUT pulls/[0-9]+/reviews/[0-9]+|PATCH (pulls|issues)/comments/[0-9]+)$'
-  if [[ $mr =~ $re_comment ]]; then
-    fields_only 'body'; what='a comment'
-  elif [[ $mr =~ $re_inline ]]; then
-    fields_only 'body commit_id path line side start_line start_side in_reply_to subject_type position'
-    what='an inline review comment'
-  elif [[ $mr =~ $re_review ]]; then
-    fields_only 'body event commit_id comments[][path] comments[][line] comments[][side] comments[][start_line]
-                 comments[][start_side] comments[][body] comments[][position]'
-    event_ok optional; need=''; what='a review'
-  elif [[ $mr =~ $re_submit ]]; then
-    fields_only 'body event'; event_ok required; what='submitting a pending review'
-  elif [[ $mr =~ $re_issue ]]; then
-    fields_only "$ISSUE_FIELDS"; need=title; what='a new issue'
-  elif [[ $mr =~ $re_issue_edit ]]; then      # PRs are issues here, so this also edits your own PR
-    fields_only "$ISSUE_FIELDS"; need=''; edit=$path; what='an edit of its own issue'
-  elif [[ $mr =~ $re_edit ]]; then
-    fields_only 'body'; edit=$path; what='an edit of its own'
-  else
-    deny "gh api -X $method $endpoint is not an approved write; $GH_API_FORMS"
-  fi
+  local mr="$method $rest" edit='' what='' need row regex allowed ownership event _help
+  for row in "${GH_API_WRITES[@]}"; do
+    IFS='~' read -r regex allowed need ownership event what _help <<<"$row"
+    [[ $mr =~ $regex ]] || { what=''; continue; }
+    fields_only "$allowed"
+    [[ -z $event ]] || event_ok "$event"
+    [[ $ownership == own ]] && edit=$path
+    break
+  done
+  [[ -n $what ]] || deny "gh api -X $method $endpoint is not an approved write; $GH_API_FORMS"
   [[ -z $need ]] || field "$need" >/dev/null || deny "gh api needs -f $need='…' here"
   gh_aims_here
   same_repo "$owner" "$name" \
@@ -424,7 +428,7 @@ check_gh_comment() {
   local kind=$1 a v n='' body=0 edit=0 noun='a pull request' form
   shift
   [[ $kind == issue ]] && noun='an issue'
-  form="approved form: gh $kind comment [<number>] --body '…' | --body-file <file> [--edit-last]"
+  form=${COMMENT_FORM/gh pr/gh $kind}
   while [[ $# -gt 0 ]]; do
     a=$1; shift
     case $a in
@@ -445,7 +449,7 @@ check_gh_comment() {
 }
 
 check_gh_pr_review() {
-  local a v pr='' body=0 kind='' form="approved form: gh pr review [<number>] --comment|--request-changes --body '…' | --body-file <file>"
+  local a v pr='' body=0 kind='' form=$PR_REVIEW_FORM
   while [[ $# -gt 0 ]]; do
     a=$1; shift
     case $a in
@@ -468,8 +472,7 @@ branch protection, so it stays the user's to give; $form" ;;
 }
 
 check_gh_pr_create() {
-  local a v body=0 form="approved form: gh pr create --title '…' --body '…' | --body-file <file> | --fill \
-[--base <branch>] [--head <branch>] [--draft] [--label|--reviewer|--assignee|--milestone|--project …]"
+  local a v body=0 form=$PR_CREATE_FORM
   while [[ $# -gt 0 ]]; do
     a=$1; shift
     case $a in
@@ -507,8 +510,7 @@ check_gh_pr() {
 # -------------------------------------------------------------------------------------------- gh issue
 
 check_gh_issue_create() {
-  local a v body=0 form="approved form: gh issue create --title '…' --body '…' | --body-file <file> \
-[--label|--assignee|--milestone|--project …]"
+  local a v body=0 form=$ISSUE_CREATE_FORM
   while [[ $# -gt 0 ]]; do
     a=$1; shift
     case $a in
@@ -530,9 +532,7 @@ check_gh_issue_create() {
 }
 
 check_gh_issue_edit() {   # gh issue edit <n> …: one issue, which the gh login opened, as GitHub says
-  local a v n='' body=0 form="approved form: gh issue edit <number> [--title '…'] [--body '…' | --body-file \
-<file>] [--add-label|--remove-label|--add-assignee|--remove-assignee|--add-project|--remove-project|--milestone \
-…] [--remove-milestone], on an issue this login opened"
+  local a v n='' body=0 form=$ISSUE_EDIT_FORM
   while [[ $# -gt 0 ]]; do
     a=$1; shift
     case $a in
@@ -570,7 +570,7 @@ check_gh_issue() {
 # ---------------------------------------------------------------------------------------------- git push
 
 check_git_push() {
-  local a pos=() form="approved form: git push [-u] <remote> HEAD[:<branch>], to any branch but the default one"
+  local a pos=() form=$PUSH_FORM
   while [[ $# -gt 0 ]]; do
     a=$1; shift
     case $a in
@@ -642,7 +642,7 @@ check_wt_pr() {   # wt pr <name> [--draft]: check the push and the gh target in 
   for a in "$@"; do
     case $a in
       --draft) ;;
-      -*) deny "wt pr $a is not approved; approved form: wt pr <name> [--draft], from inside this repository" ;;
+      -*) deny "wt pr $a is not approved; $WT_PR_FORM" ;;
       *) [[ -z $name && $a =~ ^[a-z0-9][a-z0-9_-]*$ ]] || deny "wt pr takes one task name, not '$a'"; name=$a ;;
     esac
   done
@@ -657,7 +657,30 @@ check_wt_pr() {   # wt pr <name> [--draft]: check the push and the gh target in 
 
 # ------------------------------------------------------------------------------------------------- main
 
-GUARDED='(git[[:space:]]+push|gh[[:space:]]+api|gh[[:space:]]+pr[[:space:]]+(view|diff|checks|list|status|comment|review|create)|gh[[:space:]]+issue[[:space:]]+(view|list|status|comment|create|edit)|wt[[:space:]]+pr)([[:space:]]|$)'
+# Generate help and command prefixes from the same forms that the checkers use.
+GH_API_FORMS="approved gh api forms: a read, $API_READ_FORM; and, in this repository, "
+API_WRITE_FORMS=()
+for row in "${GH_API_WRITES[@]}"; do
+  GH_API_FORMS+=${row##*~}
+  API_WRITE_FORMS+=("gh api ${row##*~}")
+done
+GH_API_FORMS+="and $API_GRAPHQL_FORM"
+GUARDED='('
+separator=''
+for form in "${API_WRITE_FORMS[@]}" "$API_READ_FORM" "$API_GRAPHQL_FORM" "$PR_READ_FORM" "$ISSUE_READ_FORM" \
+  "$COMMENT_FORM" "${COMMENT_FORM/gh pr/gh issue}" "$PR_REVIEW_FORM" "$PR_CREATE_FORM" \
+  "$ISSUE_CREATE_FORM" "$ISSUE_EDIT_FORM" "$PUSH_FORM" "$WT_PR_FORM"; do
+  form=${form#approved form: }
+  read -r command subcommand operation _ <<<"$form"
+  prefix="${command}[[:space:]]+$subcommand"
+  if [[ $command == gh && $subcommand != api ]]; then
+    prefix+="[[:space:]]+($operation)"
+  fi
+  GUARDED+="$separator$prefix"
+  separator='|'
+done
+GUARDED+=')([[:space:]]|$)'
+
 if [[ $ctrl == false ]] && tokenize "$cmd"; then
   set -- "${WORDS[@]}"
   lead=0

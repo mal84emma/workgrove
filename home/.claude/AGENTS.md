@@ -134,7 +134,7 @@ The approved forms are:
   - `gh issue view|list|status`
 - **Push:** `git push [-u] origin HEAD[:<branch>]`
   - The form also accepts a local branch by name instead of `HEAD`, but never a tag.
-  - The target can be any branch except the default one.
+  - The hook always denies `main`, `master`, and the default branch.
   - The form is never forced, and it never pushes more than one branch.
 - **Open a pull request or an issue:**
   - `gh pr create --title '…' --body '…'` (or `--fill`)
