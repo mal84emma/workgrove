@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 # Report the VM hardware to the Mac.
+# The Mac supplies version.sh before this script.
+version=$(wt_vm_version)
+printf 'wt_version\t%s\n' "$version"
 cpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
 mem_kib=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || true)
 printf 'cpu\t%s\nmem_kib\t%s\n' "$cpu" "$mem_kib"

@@ -2,7 +2,8 @@
 # Reads globals: CMUX_ROW_EXISTING, HOME, WG_LIB_DIR.
 # Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
 # Requires common.sh: die, hook_safe_path, row_title, shell_join, tmux_cmd, usage, valid_name, warn,
-#   wt_read_result, wt_session.
+#   wt_read_result, wt_session, wt_version, WT_PROTOCOL.
+# Requires version.sh: wt_read_version.
 # Requires options.sh: wt_opt_args, wt_opts, wt_spec.
 # Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent.
 # ---------------------------------------------------------------- wt -H <host> …
@@ -16,8 +17,8 @@ remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means transport
   return $rc
 }
 remote_wt() { local host="$1"; shift; remote_sh "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_wt_result() { local host="$1"; shift; remote_sh "$host" "WT_MACHINE=1 exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_wt_result_raw() { local host="$1"; shift; remote_sh_raw "$host" "WT_MACHINE=1 exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_wt_result() { local host="$1"; shift; remote_sh "$host" "WT_MACHINE=$WT_PROTOCOL exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_wt_result_raw() { local host="$1"; shift; remote_sh_raw "$host" "WT_MACHINE=$WT_PROTOCOL exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
 remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the VM this terminal when there is one,
                   # so a command that asks before it acts (wt update) can read the answer. Never use it for a
                   # caller that captures stdout: a pty folds stderr into stdout and turns every \n into \r\n.
@@ -71,7 +72,7 @@ wt_remote_args() {
 }
 
 host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
-  remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" <"$WG_LIB_DIR/vm/host-new-preflight.sh"
+  remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" < <(cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/host-new-preflight.sh")
 }
 
 host_new() { # create the worktree on the VM, then the cmux row here unless --no-workspace
@@ -104,6 +105,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   else
     rc=$?
     [[ -z "$out" ]] || printf '%s\n' "$out" >&2
+    # WT_COMPAT: Remove when every VM accepts the model option.
     if [[ "$out" == *'new: unknown option -m'* || "$out" == *'new: unknown option --model'* ]]; then
       warn "$host has an older wt without -m; update it with: wt -H $host update"
     fi
@@ -114,15 +116,17 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
     return "$rc"
   fi
   printf '%s\n' "$out"
-  result=$(wt_read_result "$out" new) || result_rc=$?
+  result=$(wt_read_result "$out" new 2>/dev/null) || result_rc=$?
   case $result_rc in
     0)
       [[ $(jq -r .status <<<"$result") == created ]] || die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying"
       name=$(jq -r .name <<<"$result"); repo=$(jq -r .repo <<<"$result"); session=$(jq -r .session <<<"$result") ;;
+    # WT_COMPAT: Remove when every VM emits protocol 1 task results.
     2)
       name=$(printf '%s\n' "$out" | sed -n 's/^created //p' | head -1)
       repo=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
       session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1) ;;
+    3) die "unsupported result protocol from $host; run wt update on the Mac; the worktree may exist; inspect with: $inspect before retrying" ;;
     *) die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying" ;;
   esac
   [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session; the worktree may exist; inspect with: $inspect before retrying"
@@ -145,6 +149,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   fi
 }
 
+# WT_COMPAT: Remove when every VM uses the current agent probe.
 agent_on_vm() { # agent_on_vm <host> <session> — use the Mac's checked probe, even with an older wt on the VM.
   local script
   # shellcheck disable=SC2016  # $1 belongs to the remote Bash command.
@@ -207,4 +212,34 @@ host_repos() {
   remote_wt "$host" repos "$@"
 }
 
-host_update() { remote_wt_tty "$1" update "${@:2}"; }
+wt_update_record() {
+  jq -cn --arg stage "$1" --arg side "$2" --argjson version "$3" \
+    '$version + {event:"wt_update",stage:$stage,side:$side}'
+}
+
+host_version() {
+  local output rc=0
+  # shellcheck disable=SC2016  # HOME belongs to the VM shell.
+  output=$(remote_sh_raw "$1" 'exec "$HOME/.local/bin/wt" version' 2>/dev/null) || rc=$?
+  [[ $rc != 255 ]] || { warn "host unreachable: is the VM running? (ssh $1)"; return 1; }
+  if [[ $rc == 0 ]] && output=$(wt_read_version <<<"$output" 2>/dev/null); then
+    printf '%s\n' "$output"
+  else
+    # WT_COMPAT: Remove the unsupported-command fallback when every VM supports wt version.
+    printf '{"commit":null,"protocol":null}\n'
+  fi
+}
+
+host_update() {
+  local host=$1 version
+  version=$(host_version "$host") || return $?
+  wt_update_record before Mac "$(wt_version)"
+  wt_update_record before VM "$version"
+  remote_wt_tty "$host" update "${@:2}" || return $?
+  version=$(host_version "$host" 2>/dev/null) || version='{"commit":null,"protocol":null}'
+  if ! jq -e '.commit != null and .protocol != null' <<<"$version" >/dev/null; then
+    warn "update on $host succeeded; could not read its version (ssh $host)"
+  fi
+  wt_update_record after Mac "$(wt_version)"
+  wt_update_record after VM "$version"
+}

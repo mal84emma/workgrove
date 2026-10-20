@@ -158,6 +158,7 @@ default_base() {
 declare -A WT_META=()
 WT_META_FILE=''
 WT_META_JSON='{}'
+# WT_COMPAT: Remove string decoding for includes and setup when every sidecar stores arrays.
 # Use index because jq 1.6 treats NUL as an empty substring in contains.
 # shellcheck disable=SC2016  # jq expressions use their own variables.
 WT_META_FILTER='
@@ -266,6 +267,7 @@ task_title() { # task_title <name> [saved title] — the title of the task's row
   # A title that an older wt saved ("<repo>:<name>") reads as the name, so the sidecar moves to the new form.
   local t="${2-}"
   if [[ $# -lt 2 ]]; then meta_require "$1"; t=${WT_META[title]-}; fi
+  # WT_COMPAT: Remove when no sidecar retains a repository-prefixed title.
   if [[ -z "$t" || "$t" == "$(repo_id "$REPO"):$1" ]]; then t=$(row_title "$1"); fi
   printf '%s' "$t"
 }
@@ -390,6 +392,7 @@ wt_status() { # wt_status <name> <associative output> — keep merge caches and 
   # and `wt new` all refresh it. The AHEAD and BEHIND columns have always carried the same caveat. The
   # literal HEAD as a base resolves to the worktree's own tip and would read as 0 ahead. So a HEAD base
   # shows "?" here, as it is a refusal in rm_reasons.
+  # WT_COMPAT: Remove the HEAD guard when no sidecar stores a literal HEAD base.
   if [[ "$__base" != HEAD && "$__ahead" =~ ^[0-9]+$ ]]; then
     if [[ "$__ahead" -eq 0 ]]; then __merged=yes
     elif branch_landed "$__b" "$__base" "${2}[why]"; then __merged=squash

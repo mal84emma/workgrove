@@ -49,6 +49,7 @@
 #                                                             the task picker: choose where, kind, repo, name and brief,
 #                                                             then start the task (on the Mac; needs fzf)
 #   wt driver                                                 open (or select) the driver row (@local)
+#   wt version                                              print the repository commit and protocol number as JSON
 #   wt update [--refresh-config]                              show what git pull would bring in. After you confirm,
 #                                                             wt pulls this repo and re-runs install.sh
 #   wt path <name> [-r PATH]
@@ -696,6 +697,12 @@ cmd_driver() { # the driver session, which starts tasks; its cwd is a repos fold
   printf 'driver %s (created)\n' "$(row_tag)"
 }
 
+cmd_version() {
+  local -A opts=()
+  wt_opts "$(wt_spec version)" opts "$@"
+  wt_version
+}
+
 cmd_update() { # pull this repo and re-run its installer
   # Forward install.sh's own flags; do not reject them. The opt-ins are sticky, so a plain update keeps what
   # this machine chose. But a user must be able to opt IN later through the command that the docs name.
@@ -711,6 +718,7 @@ cmd_update() { # pull this repo and re-run its installer
   local ans
   git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 \
     || die "$dir has no upstream branch; set one: git -C $dir branch --set-upstream-to origin/main"
+  wt_update_record before local "$(wt_version)"
   git -C "$dir" fetch --quiet || die "git fetch failed in $dir"
   # Test containment, not equality. A clone that is only ahead (a local commit, normal on the machine where
   # you edit bin/wt) has nothing incoming. Comparing tips would show your own work as an incoming deletion.
@@ -725,6 +733,7 @@ cmd_update() { # pull this repo and re-run its installer
     [[ "$ans" == [yY] || "$ans" == [yY][eE][sS] ]] || die "update: cancelled"
     git -C "$dir" merge --ff-only '@{u}'
   fi
+  wt_update_record after local "$(bash "$dir/bin/wt" version)"
   bash "$dir/install.sh" "${pass[@]}"
 }
 

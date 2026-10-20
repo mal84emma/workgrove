@@ -185,6 +185,7 @@ cmux_rows_load() {
   shift
   (($# == 0)) || runner=("$@")
   CMUX_ROWS_JSON='' CMUX_ROWS_FULL=1
+  # WT_COMPAT: Remove support for missing --json list-windows when every cmux provides it.
   windows=$("${runner[@]}" --json list-windows 2>/dev/null) || {
     CMUX_ROWS_FULL=0
     [[ $policy != checked ]] || { cmux_error "cannot list cmux windows"; return 1; }
@@ -244,6 +245,7 @@ ROW_SEP=' · '
 # An empty repo ID matches a row with no repo.
 # new_row finds a created row when cmux ssh prints no ref. It excludes known IDs and descriptions with a repo.
 # unclaimed_row finds descriptions that wt does not write. wt rm checks these rows for agents because users can edit descriptions.
+# WT_COMPAT: Remove when no row retains a repository-prefixed title.
 # shellcheck disable=SC2016
 ROW_JQ='
   def desc($sep): (.description | if type == "string" then . else "" end) | split($sep);

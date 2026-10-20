@@ -21,15 +21,7 @@ for script in "${SCRIPTS[@]}"; do
     "$REPO/bin/$script" > "$TEST_ROOT/copies/$script"
 done
 # A copy loads the libraries from ../lib, as the scripts in bin/ do. So copies/ needs lib/ beside it.
-cp "$REPO/lib/workgrove/cmux.sh" "$TEST_ROOT/lib/workgrove/cmux.sh"
-cp "$REPO/lib/workgrove/task.sh" "$TEST_ROOT/lib/workgrove/task.sh"
-cp "$REPO/lib/workgrove/options.sh" "$TEST_ROOT/lib/workgrove/options.sh"
-cp "$REPO/lib/workgrove/common.sh" "$TEST_ROOT/lib/workgrove/common.sh"
-cp "$REPO/lib/workgrove/safety.sh" "$TEST_ROOT/lib/workgrove/safety.sh"
-cp "$REPO/lib/workgrove/remote.sh" "$TEST_ROOT/lib/workgrove/remote.sh"
-cp "$REPO/lib/workgrove/recovery.sh" "$TEST_ROOT/lib/workgrove/recovery.sh"
-cp "$REPO/lib/workgrove/hosts.sh" "$TEST_ROOT/lib/workgrove/hosts.sh"
-cp "$REPO/lib/workgrove/picker.sh" "$TEST_ROOT/lib/workgrove/picker.sh"
+cp "$REPO"/lib/workgrove/*.sh "$TEST_ROOT/lib/workgrove/"
 # These copies have no ../lib, so they test what each script does when it cannot load the library.
 for script in wt cmux-hook agent-notify; do
   cp "$REPO/bin/$script" "$TEST_ROOT/nolib/bin/$script"

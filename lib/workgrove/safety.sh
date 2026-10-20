@@ -58,6 +58,7 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
   while IFS= read -r e; do
     [[ -n "$e" ]] || continue
     f="${e%:*}"; h="${e##*:}"
+    # WT_COMPAT: Remove when every sidecar records hashes for included files.
     [[ "$h" =~ ^[0-9a-f]{64}$ ]] || { f="$e"; h=""; }   # metadata from an older wt: plain names, no hash
     case "$seen" in *"|$f|"*) continue ;; esac          # recorded and still matching: judge it once
     seen="$seen|$f|"
@@ -105,6 +106,7 @@ unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-s
   # stays unchanged.
   local n="$1" p="$2" recorded f h e explained
   meta_require "$n"
+  # WT_COMPAT: Remove the missing setup key default when every sidecar records setup output.
   recorded=${WT_META[setup]-}
   [[ -n "$recorded" ]] || { porcelain_paths "$p"; return 0; }
   porcelain_paths "$p" | while IFS= read -r f; do
@@ -180,6 +182,7 @@ branch_landed() { # branch_landed <branch> <base> <reason output>
     __landed_why="the net change of $__b since $(git -C "$REPO" rev-parse --short "$__m") is empty, which proves nothing"; return 1
   fi
   __tree_b=$(git -C "$REPO" rev-parse "$__base^{tree}" 2>/dev/null) || { __landed_why="$__base has no tree"; return 1; }
+  # WT_COMPAT: Remove the read-tree branch when every machine has Git 2.38 or later.
   if git_merges_trees; then
     __out=$(git -C "$REPO" merge-tree --write-tree "$__base" "$__b" 2>/dev/null) || __rc=$?
     case $__rc in
@@ -249,6 +252,7 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
   # A base that no longer resolves fails both checks below, and each failure reads as "nothing to lose". The
   # literal HEAD (metadata from before wt canonicalized the base) resolves in every worktree to that
   # worktree's own tip, and reads the same way. So settle the base first, and make either case a refusal.
+  # WT_COMPAT: Remove the HEAD guard when no sidecar stores a literal HEAD base.
   if [[ "$__base" != HEAD ]] && git -C "$REPO" rev-parse -q --verify "$__base^{commit}" >/dev/null 2>&1; then
     __base_ok=1
     # merged means one of two things:

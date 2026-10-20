@@ -43,3 +43,45 @@ The `--json` and `--diff` flags cannot be combined.
 
 New sidecars store `includes` and `setup` as arrays of `path:sha256` strings.
 The reader also accepts older sidecars that store these records as newline-joined strings.
+
+## Read installation versions
+
+`wt version` returns one JSON object. `wt -H <host> version` returns the VM's object.
+`commit` is the short repository commit, or `unknown` when the installation has no `.git`.
+`protocol` is the highest supported task result version, currently the integer `1`.
+Both commands accept no arguments.
+
+`wt hosts --json` adds two flat fields to each host object:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `wt_commit` | String or null | The VM's reported commit, or null when unavailable. |
+| `wt_protocol` | Integer or null | The VM's reported protocol number, or null when unavailable. |
+
+An older VM without `wt version` can still have available hardware information.
+Its version fields are null. An unreachable VM also has null version fields.
+Version readers require exactly one JSON object with both correctly typed fields.
+Malformed reports produce null values for both fields.
+The Mac supplies the same validator to both VM probes.
+
+## Read update records
+
+Updates retain their existing output and add one JSON object per version report.
+These objects are separate lines among ordinary output, rather than one JSON document.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `event` | String | Always `wt_update`. |
+| `stage` | String | `before` or `after` the pull. |
+| `side` | String | `local` for direct updates; `Mac` or `VM` for remote comparisons. |
+| `commit` | String or null | The reported commit, `unknown` for a seed, or null when unavailable. |
+| `protocol` | Integer or null | The reported protocol number, or null when unavailable. |
+
+Remote updates report both sides before and after the remote update succeeds.
+The VM's update can also print its own `local` records.
+Older VMs without `wt version` have null commit and protocol values.
+The Mac still runs their update command.
+Failed or canceled updates can stop before the `after` records.
+A final reporting failure preserves the successful update status and prints a diagnostic.
+The VM's `after` record then has null commit and protocol values.
+Consumers must accept additional fields in all version and update objects.

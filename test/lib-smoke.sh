@@ -73,7 +73,21 @@ scenario_results() {
   record=$(WG_MACHINE_RESULT=1 wt_result new created task '/repos/two words' wt-two-words-task)
   assert_eq 'result round trip' 'created|task|/repos/two words|wt-two-words-task' \
     "$(wt_read_result "$record" new | jq -r '[.status,.name,.repo,.session] | join("|" )')"
+  rc=0
+  diagnostic=$(wt_read_result "${record/\"version\":1/\"version\":2}" new 2>&1) || rc=$?
+  assert_eq 'unsupported protocol has its own status' 3 "$rc"
+  assert_eq 'hook callers receive an update hint without hook changes' true \
+    "$([[ $diagnostic == *'wt update'* ]] && echo true || echo false)"
+  assert_eq 'reader 2 retains the protocol 1 decoder' "${record#*$'\t'}" \
+    "$(WT_PROTOCOL=2 wt_read_result "$record" new)"
   assert_eq 'ordinary commands do not emit records' '' "$(WG_MACHINE_RESULT='' wt_result new created task /repos/project)"
+  assert_eq 'newer reader requests still receive protocol 1' "$record" \
+    "$(WG_MACHINE_RESULT=2 wt_result new created task '/repos/two words' wt-two-words-task)"
+  assert_eq 'unknown scalar keys are retained' 'true' \
+    "$(wt_read_result "${record%\}} ,\"extra\":true}" new | jq -r .extra)"
+  for request in 0 -1 invalid 1.5; do
+    assert_eq "invalid request $request stays silent" '' "$(WG_MACHINE_RESULT=$request wt_result new created task /repo)"
+  done
   for sample in text empty malformed duplicate blank-duplicate version command control missing duplicate-status duplicate-name duplicate-repo duplicate-version escaped-key nested multiple-objects; do
     rc=0
     case $sample in
@@ -82,7 +96,7 @@ scenario_results() {
       malformed) output=$'WT_RESULT\t{broken'; expected=1 ;;
       duplicate) output="$record"$'\n'"$record"; expected=1 ;;
       blank-duplicate) output=$'WT_RESULT\t\n'"$record"; expected=1 ;;
-      version) output=${record/\"version\":1/\"version\":2}; expected=1 ;;
+      version) output=${record/\"version\":1/\"version\":2}; expected=3 ;;
       command) output=${record/\"new\"/\"show\"}; expected=1 ;;
       control) output=${record/task/task\\n}; expected=1 ;;
       missing) output=$'WT_RESULT\t{"version":1,"command":"new"}'; expected=1 ;;
@@ -94,12 +108,76 @@ scenario_results() {
       nested) output=${record/\"status\":/\"extra\":\{\"value\":1\},\"status\":}; expected=1 ;;
       multiple-objects) output=$'WT_RESULT\t{"version":1} {"command":"new","status":"created","name":"task","repo":"/repo","session":"session","state":""}'; expected=1 ;;
     esac
-    wt_read_result "$output" new >/dev/null || rc=$?
+    wt_read_result "$output" new >/dev/null 2>&1 || rc=$?
     assert_eq "$sample result status" "$expected" "$rc"
   done
   end_scenario
 }
 scenario_results
+
+scenario_protocol_hint() {
+  begin_scenario 'unsupported results name wt update in creation and recovery' || return 0
+  local command output rc
+  for command in new attach; do
+    rc=0
+    output=$(
+      # shellcheck source=lib/workgrove/remote.sh
+      source "$REPO/lib/workgrove/remote.sh"
+      # shellcheck source=lib/workgrove/recovery.sh
+      source "$REPO/lib/workgrove/recovery.sh"
+      host_new_preflight() { :; }
+      remote_wt_result_raw() { printf 'WT_RESULT\t{"version":2,"command":"new"}\n'; }
+      remote_wt_result() { printf 'WT_RESULT\t{"version":2,"command":"show"}\n'; }
+      if [[ $command == new ]]; then host_new fixture task -r /repo --no-workspace 2>&1
+      else host_attach fixture task -r /repo 2>&1; fi
+    ) || rc=$?
+    assert_eq "$command rejects unsupported protocol" 1 "$rc"
+    assert_eq "$command names wt update" true "$([[ $output == *'wt update'* ]] && echo true || echo false)"
+  done
+  end_scenario
+}
+scenario_protocol_hint
+
+scenario_version_validation() {
+  begin_scenario 'version reports require one object and share null fallback behavior' || return 0
+  local sample reply parsed rc home="$TEST_ROOT/version-home"
+  mkdir -p "$home/.local/bin"
+  cat >"$home/.local/bin/wt" <<'WT'
+#!/bin/sh
+printf '%s\n' "$VERSION_REPLY"
+WT
+  chmod +x "$home/.local/bin/wt"
+  for sample in multiple garbage array missing-commit missing-protocol commit-type protocol-type fractional zero empty; do
+    case $sample in
+      multiple) reply=$'{"commit":"abc","protocol":1}\n{"commit":"def","protocol":1}' ;;
+      garbage) reply='{"commit":"abc","protocol":1}garbage' ;;
+      array) reply='[{"commit":"abc","protocol":1}]' ;;
+      missing-commit) reply='{"protocol":1}' ;;
+      missing-protocol) reply='{"commit":"abc"}' ;;
+      commit-type) reply='{"commit":7,"protocol":1}' ;;
+      protocol-type) reply='{"commit":"abc","protocol":"1"}' ;;
+      fractional) reply='{"commit":"abc","protocol":1.5}' ;;
+      zero) reply='{"commit":"abc","protocol":0}' ;;
+      empty) reply='' ;;
+    esac
+    rc=0
+    parsed=$(wt_read_version <<<"$reply" 2>/dev/null) || rc=$?
+    assert_eq "$sample version is rejected" true "$([[ $rc -ne 0 ]] && echo true || echo false)"
+    assert_eq "$sample probe version becomes null" '{"commit":null,"protocol":null}' \
+      "$(HOME="$home" VERSION_REPLY="$reply" wt_vm_version)"
+    parsed=$(
+      # shellcheck source=lib/workgrove/remote.sh
+      source "$REPO/lib/workgrove/remote.sh"
+      remote_sh_raw() { printf '%s\n' "$reply"; }
+      host_version fixture
+    )
+    assert_eq "$sample update version becomes null" '{"commit":null,"protocol":null}' "$parsed"
+  done
+  assert_eq 'valid extra fields are normalized' '{"commit":"abc","protocol":1}' \
+    "$(wt_read_version <<<'{"extra":true,"protocol":1,"commit":"abc"}')"
+  end_scenario
+}
+scenario_version_validation
 
 assert_result() { # <what> <expected: yes|no> <function> <argument>
   local what=$1 expected=$2 actual=no
