@@ -807,14 +807,15 @@ scenario_claude_ui_keys() {
     for f in "${FIVE_FLAG[@]}"; do
       assert_grep "install.sh output names $f as skipped" "$log" "$f"
     done
-    assert_eq "$UI_FLAG listed as skipped" 0 "$(count_matches "$log" "$UI_FLAG")"
+    assert_eq "$UI_FLAG listed as skipped" 0 \
+      "$(sed -n '/^left alone /p; /^    Optional config was not selected:/p' "$log" | grep -cF -- "$UI_FLAG" || true)"
   fi
   end_scenario
 }
 
 scenario_claude_ui_sticky() {
   begin_scenario "8b. --with-claude-ui is sticky: the keys it wrote are the record of it" || return 0
-  local h log
+  local h log command
   local h2
   h="$(new_home)"
   guard_scratch_home "$h"
@@ -826,9 +827,15 @@ scenario_claude_ui_sticky() {
     if assert_install_ok "$h" "$log.2" "$UI_FLAG"; then
       assert_claude_ui "$h" no
       assert_grep "the kept-copy warning names $UI_FLAG" "$log.2" "$UI_FLAG changed nothing"
+      command=$(sed -n '/^Install summary:/,$p' "$log.2" | sed -n 's/^    Run: \(install.sh --with-claude-ui --refresh-config\)$/\1/p')
+      assert_eq "the UI recovery command retains its opt-in" "install.sh $UI_FLAG --refresh-config" "$command"
+      assert_eq "the summary lists the requested recovery once" 1 "$(sed -n '/^Install summary:/,$p' "$log.2" | grep -cxF -- '    Run: install.sh --with-claude-ui --refresh-config' || true)"
     fi
     # --refresh-config rewrites the copy, and only then do the keys arrive.
-    if assert_install_ok "$h" "$log.3" "$UI_FLAG" --refresh-config; then
+    # Execute the summary's command, including the required opt-in flag.
+    local recovery_args=()
+    read -r -a recovery_args <<<"$command"
+    if assert_install_ok "$h" "$log.3" "${recovery_args[@]:1}"; then
       assert_claude_ui "$h" yes
     fi
     # …and a LATER refresh with no flag keeps them. This is the stickiness rule of scenario 4a, in the one
@@ -1377,6 +1384,141 @@ scenario_cmux_config() {
   end_scenario
 }
 
+scenario_automation_summaries() {
+  begin_scenario "complete installs summarize automation updates and skips" || return 0
+  local kind h log config summary original backup
+  for kind in changed disabled managed unknown; do
+    h="$(new_home)"
+    config="$h/.cmuxterm/automations.json"
+    log="$h.log"
+    summary="$h.summary"
+    original="$h.original"
+    mkdir -p "${config%/*}"
+    case $kind in
+      changed|disabled)
+        jq --arg kind "$kind" '
+          .rules[0].then[0].command = "old-hook" |
+          if $kind == "disabled" then .rules[0].enabled = false else . end' \
+          "$REPO/home/.cmuxterm/automations.json" > "$config" ;;
+      managed)
+        cp "$REPO/home/.cmuxterm/automations.json" "$h/managed.json"
+        ln -s "$h/managed.json" "$config" ;;
+      unknown) printf '%s\n' '{"version":99,"rules":[]}' > "$config" ;;
+    esac
+    cp "$config" "$original"
+    RUN_EXTRA_ENV=(FORCE_OS=Darwin)
+    if assert_install_ok "$h" "$log"; then
+      assert_eq "$kind prints one final summary" 1 "$(count_matches "$log" 'Install summary:')"
+      sed -n '/^Install summary:/,$p' "$log" > "$summary"
+      assert_eq "$kind finishes before its summary" 0 "$(count_matches "$summary" 'done.')"
+      case $kind in
+        changed|disabled)
+          assert_grep "$kind summary retains the reload command" "$summary" 'Run: cmux automation reload'
+          assert_eq "$kind summary prints reload once" 1 "$(count_matches "$summary" 'cmux automation reload')"
+          # shellcheck disable=SC2088  # The rule stores the literal home-relative command.
+          assert_eq "$kind installs the current command" '~/.local/bin/cmux-hook --event' "$(jq -r '.rules[0].then[0].command' "$config")"
+          for backup in "$h"/.workgrove-backup/*/.cmuxterm/automations.json; do
+            assert_same_bytes "$kind backs up the previous rule" "$original" "$backup"
+          done
+          if [[ $kind == disabled ]]; then
+            assert_eq "the updated rule remains disabled" false "$(jq -r '.rules[0].enabled' "$config")"
+          fi ;;
+        managed)
+          # shellcheck disable=SC2088  # The summary prints a home-relative path.
+          assert_grep "managed summary names the skipped file" "$summary" '~/.cmuxterm/automations.json is managed externally'
+          assert_grep "managed summary retains the manual action" "$summary" "Merge home/.cmuxterm/automations.json's wt-native-relay rule into the managed file."
+          assert_eq "the managed symlink stays intact" "$h/managed.json" "$(readlink "$config")"
+          assert_same_bytes "the managed file stays unchanged" "$original" "$config" ;;
+        unknown)
+          # shellcheck disable=SC2088  # The summary prints a home-relative path.
+          assert_grep "unknown version summary names the skip" "$summary" '~/.cmuxterm/automations.json has unknown automations.json version 99'
+          assert_same_bytes "the unknown version stays unchanged" "$original" "$config" ;;
+      esac
+    fi
+  done
+  end_scenario
+}
+
+scenario_optional_summary_commands() {
+  begin_scenario "optional summary commands apply every selected setting" || return 0
+  local h log command commands index=0 i
+  local args=()
+  h="$(new_home)"
+  seed_oh_my_zsh "$h"
+  log="$h.log"
+  commands="$h.commands"
+  if assert_install_ok "$h" "$log"; then
+    sed -n '/^Install summary:/,$p' "$log" | sed -n 's/^    Run: \(install.sh.*\)$/\1/p' > "$commands"
+    while IFS= read -r command; do
+      read -r -a args <<<"$command"
+      index=$((index + 1))
+      if assert_install_ok "$h" "$log.action.$index" "${args[@]:1}"; then :; fi
+    done < "$commands"
+    assert_eq "the summary gives separate file and settings actions" 2 "$index"
+    for i in 0 1 2 3 4; do assert_link "$h" "${FIVE_DST[$i]}" "${FIVE_SRC[$i]}"; done
+    assert_link "$h" "$THEME_DST" "$THEME_SRC"
+    if [[ $OS == Darwin ]]; then assert_link "$h" "$CMUX_DST" "$CMUX_SRC"; fi
+    assert_status_line "$h" yes
+    assert_claude_ui "$h" yes
+    command=$(head -1 "$commands")
+    if [[ $command == *--refresh-config* ]]; then fail 'unrelated file opt-ins require a refresh'; else pass; fi
+  fi
+  end_scenario
+}
+
+scenario_cleanup_summary() {
+  begin_scenario "cleanup failures retain their status and the final summary" || return 0
+  local h log stub real_rm
+  h="$(new_home)"
+  log="$h.log"
+  stub="$h/stub"
+  real_rm=$(command -v rm)
+  mkdir -p "$stub"
+  cat > "$stub/rm" <<'RM'
+#!/usr/bin/env bash
+for file in "$@"; do
+  if [[ $file == "$HOME/.claude/settings.json."* ]]; then
+    echo 'injected cleanup failure' >&2
+    exit 23
+  fi
+done
+exec "$INSTALL_REAL_RM" "$@"
+RM
+  chmod +x "$stub/rm"
+  RUN_EXTRA_ENV=("PATH=$stub:$PATH" "INSTALL_REAL_RM=$real_rm")
+  assert_install_fails "$h" "$log" 23 'injected cleanup failure'
+  assert_eq "cleanup failure still prints one summary" 1 "$(count_matches "$log" 'Install summary:')"
+  assert_grep "cleanup failure reports the final status" "$log" 'install.sh stopped part-way (exit 23)'
+  assert_grep "cleanup failure keeps the follow-up actions" "$log" '  Follow-up actions:'
+  end_scenario
+}
+
+scenario_install_summary() {
+  begin_scenario "install summaries cover successful runs and early refusals" || return 0
+  local h log summary
+  h="$(new_home)"
+  log="$h.log"
+  if assert_install_ok "$h" "$log"; then
+    assert_eq "one summary is printed" 1 "$(count_matches "$log" 'Install summary:')"
+    summary="$h.summary"
+    sed -n '/^Install summary:/,$p' "$log" > "$summary"
+    assert_grep "the summary names optional skips" "$summary" 'Optional config was not selected:'
+    assert_grep "the summary names follow-up actions" "$summary" '  Follow-up actions:'
+    assert_grep "the summary gives the install command" "$summary" 'Run: install.sh'
+    if [[ $OS != Darwin ]]; then
+      assert_grep "the summary includes the repository directory action" "$summary" 'If repositories live elsewhere, edit WT_REPOS_DIR in ~/.zshenv.local.'
+    fi
+  fi
+  assert_install_fails "$h" "$log.2" 2 'usage: install.sh' --unknown
+  assert_eq "an early refusal prints one summary" 1 "$(count_matches "$log.2" 'Install summary:')"
+  assert_eq "empty groups print none at the end" "$(printf 'Install summary:\n  Skips:\n    none\n  Follow-up actions:\n    none')" "$(tail -5 "$log.2")"
+  rm "$h/.gitconfig.local"
+  assert_install_fails "$h" "$log.3" 1 'set user.name/user.email'
+  assert_eq "the identity refusal prints one summary" 1 "$(count_matches "$log.3" 'Install summary:')"
+  assert_eq "the final action names the missing identity" '    Set user.name/user.email in ~/.gitconfig.local, then rerun install.sh.' "$(tail -1 "$log.3")"
+  end_scenario
+}
+
 # ---------------------------------------------------------------------------- main
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
@@ -1384,6 +1526,10 @@ main() {
   echo "install.sh smoke test: repo $REPO, scratch root $TEST_ROOT"
   echo "  this suite under bash ${BASH_VERSION}; install.sh under $INSTALL_BASH" \
        "($("$INSTALL_BASH" -c 'echo "$BASH_VERSION"'))"
+  scenario_install_summary
+  scenario_optional_summary_commands
+  scenario_cleanup_summary
+  scenario_automation_summaries
   scenario_default_empty
   scenario_default_over_existing
   scenario_opinionated

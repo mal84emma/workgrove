@@ -287,6 +287,12 @@ personal preference:
 - `~/.zshenv` puts `~/.local/bin` on `PATH` and carries `WT_HOST` and `WT_REPOS_DIR`.
 - `~/.gitignore_global` is the file that git-ignores `.worktrees/`.
 
+Every `install.sh` run ends with a summary of skips and follow-up actions.
+Empty groups show `none`, including on failed runs.
+The summary lists each refresh command once and retains the required opt-in flags.
+It separates file opt-ins from settings that require a refresh.
+The summary still prints if temporary-file cleanup fails. Cleanup failures retain their exit status.
+
 ### Fallbacks that edit your own files
 
 When you leave out `--with-gitconfig`, `install.sh` adds the core setup to your own file:
@@ -295,7 +301,9 @@ When you leave out `--with-gitconfig`, `install.sh` adds the core setup to your 
   git-ignores `.worktrees/`. The `~/.gitconfig.local` include is where your identity lives. Every other line
   of your file stays as it is.
 - **`~/.cmuxterm/automations.json`:** On the Mac, `install.sh` adds the `wt-native-relay` rule for native VM requests.
-  It preserves existing rules and backs up the file before replacement.
+  It updates a changed rule and preserves an explicit `enabled: false` setting.
+  It preserves other rules and backs up the file before replacement.
+  It reports unknown schema versions on stderr and skips their merge.
   Run `cmux automation reload` after installation.
   See [VM requests after cmux 0.65](docs/vm-open-relay.md) for the transport changes and existing-row recovery.
 
@@ -321,6 +329,8 @@ flag. So a later `--refresh-config` keeps those keys instead of stripping them.
 
 If you give `--with-claude-ui` on its own (without `--refresh-config`) on a machine whose copy was written
 without it, the flag changes nothing. The run says so instead of reporting success.
+Run `install.sh --with-claude-ui --refresh-config` to add the UI keys.
+The summary includes both flags because the existing copy cannot remember the requested opt-in.
 
 ### File classes
 
