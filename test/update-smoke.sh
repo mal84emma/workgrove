@@ -24,11 +24,17 @@ ln -s "$TEST_ROOT/clone/bin/wt" "$TEST_ROOT/vm/.local/bin/wt"
 cat >"$TEST_ROOT/bin/ssh.fixture" <<'SSH'
 printf '%s\n' "$cmd" >>"$TEST_ROOT/ssh.log"
 printf '%s\n' "$*" >>"$TEST_ROOT/ssh-args.log"
-if [[ ${SSH_FAIL_AFTER_UPDATE:-0} == 1 && $cmd == *' version' && -e $TEST_ROOT/updated ]]; then exit 255; fi
+if [[ ${SSH_FAIL_AFTER_UPDATE:-0} != 0 && $cmd == *' version' && -e $TEST_ROOT/updated ]]; then
+  case $SSH_FAIL_AFTER_UPDATE in
+    disconnect) exit 255 ;;
+    malformed) printf '{broken\n'; exit 0 ;;
+    command) exit 1 ;;
+  esac
+fi
 [[ ${SSH_FAIL:-0} == 0 ]] || exit "$SSH_FAIL"
 HOME="$TEST_ROOT/vm" fake_ssh_run "$cmd"
 rc=$?
-if [[ ${SSH_FAIL_AFTER_UPDATE:-0} == 1 && $rc == 0 && $cmd == *' update'* ]]; then : >"$TEST_ROOT/updated"; fi
+if [[ ${SSH_FAIL_AFTER_UPDATE:-0} != 0 && $rc == 0 && $cmd == *' update'* ]]; then : >"$TEST_ROOT/updated"; fi
 exit "$rc"
 SSH
 make_fake_ssh "$TEST_ROOT/bin/ssh" "$TEST_ROOT/bin/ssh.fixture"
@@ -86,13 +92,17 @@ scenario_update() {
   json=$(records <<<"$output")
   assert_eq 'remote update compares both sides at both stages' true "$(jq -r '[.[] | select(.side != "local") | [.stage,.side]] == [["before","Mac"],["before","VM"],["after","Mac"],["after","VM"]]' <<<"$json")"
   assert_eq 'remote records carry VM commit and protocol' true "$(jq -r --arg commit "$expected" 'all(.[] | select(.side == "VM"); .commit == $commit and .protocol == 1)' <<<"$json")"
-  local rc=0
-  output=$(SSH_FAIL_AFTER_UPDATE=1 run_wt -H fixture update 2>"$TEST_ROOT/after-error") || rc=$?
-  assert_eq 'final reporting failure preserves successful update status' 0 "$rc"
-  assert_eq 'final reporting failure emits unavailable VM values' true \
-    "$(records <<<"$output" | jq -r '.[] | select(.stage == "after" and .side == "VM") | .commit == null and .protocol == null')"
-  assert_eq 'final reporting failure explains the successful update' true \
-    "$([[ $(cat "$TEST_ROOT/after-error") == *'succeeded; could not read its version'* ]] && echo true || echo false)"
+  local mode rc
+  for mode in disconnect malformed command; do
+    rm -f "$TEST_ROOT/updated"
+    rc=0
+    output=$(SSH_FAIL_AFTER_UPDATE=$mode run_wt -H fixture update 2>"$TEST_ROOT/after-error") || rc=$?
+    assert_eq "$mode final reporting failure preserves successful update status" 0 "$rc"
+    assert_eq "$mode final reporting failure emits unavailable VM values" true \
+      "$(records <<<"$output" | jq -r '.[] | select(.stage == "after" and .side == "VM") | .commit == null and .protocol == null')"
+    assert_eq "$mode final reporting failure explains the successful update" true \
+      "$([[ $(cat "$TEST_ROOT/after-error") == *'succeeded; could not read its version'* ]] && echo true || echo false)"
+  done
   end_scenario
 }
 scenario_update

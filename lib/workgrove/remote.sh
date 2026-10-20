@@ -236,8 +236,8 @@ host_update() {
   wt_update_record before Mac "$(wt_version)"
   wt_update_record before VM "$version"
   remote_wt_tty "$host" update "${@:2}" || return $?
-  if ! version=$(host_version "$host" 2>/dev/null); then
-    version='{"commit":null,"protocol":null}'
+  version=$(host_version "$host" 2>/dev/null) || version='{"commit":null,"protocol":null}'
+  if ! jq -e '.commit != null and .protocol != null' <<<"$version" >/dev/null; then
     warn "update on $host succeeded; could not read its version (ssh $host)"
   fi
   wt_update_record after Mac "$(wt_version)"
