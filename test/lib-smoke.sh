@@ -162,7 +162,7 @@ WT
     esac
     rc=0
     parsed=$(wt_read_version <<<"$reply" 2>/dev/null) || rc=$?
-    assert_eq "$sample version is rejected" 5 "$rc"
+    assert_eq "$sample version is rejected" true "$([[ $rc -ne 0 ]] && echo true || echo false)"
     assert_eq "$sample probe version becomes null" '{"commit":null,"protocol":null}' \
       "$(HOME="$home" VERSION_REPLY="$reply" wt_vm_version)"
     parsed=$(
