@@ -231,3 +231,33 @@ lib_summary() {
     exit 1
   fi
 }
+
+# Write a fake ssh that uses the remote login shell before it starts each command.
+# An optional fixture receives cmd and host. It can call fake_ssh_run or exit before the command runs.
+make_fake_ssh() {
+  local destination=$1 login_shell
+  login_shell=$(command -v zsh || command -v sh)
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'FAKE_SSH_SHELL=%q\n' "$login_shell"
+    cat <<'SSH'
+fake_ssh_run() { "$FAKE_SSH_SHELL" -c "$1"; }
+args=("$@")
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -o|-F|-p|-i|-l) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+host=$1
+shift
+cmd="$*"
+set -- "${args[@]}"
+SSH
+    if [[ -n ${2:-} ]]; then cat "$2"; fi
+    # shellcheck disable=SC2016  # The fake ssh expands cmd when it runs.
+    printf '\nfake_ssh_run "$cmd"\n'
+  } >"$destination"
+  chmod +x "$destination"
+}

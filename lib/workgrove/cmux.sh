@@ -94,6 +94,8 @@ close_row() { # close_row <row id> [self|new] — silent when the row is already
   local err args=()
   [[ ${2:-} == self || ${2:-} == new ]] && args=(--force)
   err=$(cmux_call workspace close "$1" "${args[@]}" 2>&1) || {
+    # Killing a VM session can close its row before this request reaches cmux.
+    [[ $err == 'Error: not_found: Workspace not found' ]] && return 0
     CMUX_ERROR="could not close cmux row $1${err:+: $err}"$'\n'"on the Mac: cmux workspace close $1${args[*]:+ ${args[*]}}"
     return 1
   }

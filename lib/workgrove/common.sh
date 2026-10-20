@@ -21,7 +21,20 @@ die()  { printf '%s: %s\n' "${WG_PREFIX:-wt}" "$*" >&2; exit 1; }
 warn() { printf '%s: %s\n' "${WG_PREFIX:-wt}" "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 usage() { awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"; }
-shell_join() { local out="" a; for a in "$@"; do printf -v a '%q' "$a"; out="${out:+$out }$a"; done; printf '%s' "$out"; }
+# Keep printf %q output, but escape leading = and ~ for zsh.
+# Replace bash-specific ANSI-C quotes with POSIX single quotes for sh.
+shell_join() {
+  local out="" a quoted
+  for a in "$@"; do
+    printf -v quoted '%q' "$a"
+    case $quoted in
+      \$\'*) a=${a//\'/\'\\\'\'}; quoted="'$a'" ;;
+      [=~]*) quoted="\\$quoted" ;;
+    esac
+    out="${out:+$out }$quoted"
+  done
+  printf '%s' "$out"
+}
 need_jq() { have jq || die "jq not found (brew install jq, or sudo apt-get install -y jq)"; }
 
 # Each callback receives the original exit status, in registration order.

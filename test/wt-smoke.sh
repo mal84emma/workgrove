@@ -1822,16 +1822,17 @@ ROWS
 
   local fake="$TEST_ROOT/active-row-bin"
   mkdir -p "$fake"
-  cat >"$fake/ssh" <<'STUB'
+  cat >"$fake/ssh.fixture" <<'STUB'
 #!/bin/sh
 printf 'ssh %s\n' "$*" >>"$CMUX_STUB_LOG"
 [ "${VM_AGENT_ACTIVE:-}" = 1 ] && exit 0
 if [ "${VM_AGENT_QUERY_FAIL:-}" = 1 ]; then
-  for command in "$@"; do :; done
-  exec bash -c "$command"
+  fake_ssh_run "$cmd"
+  exit $?
 fi
 exit 99
 STUB
+  make_fake_ssh "$fake/ssh" "$fake/ssh.fixture"
   cat >"$fake/tmux" <<'STUB'
 #!/bin/sh
 echo 'error connecting to tmux socket (Operation not permitted)' >&2
@@ -1938,12 +1939,11 @@ scenario_connected_attach() {
   begin_scenario "$1" || return 0
   local fake="$TEST_ROOT/remote-bin" screen shape
   mkdir -p "$fake" "$SCRATCH_HOME/.local/bin"
-  cat >"$fake/ssh" <<'STUB'
+  cat >"$fake/ssh.fixture" <<'STUB'
 #!/bin/bash
-shift 5  # -o BatchMode=yes -o ConnectTimeout=5 <host>; the command is left
-printf 'ssh %s\n' "${1%%$'\n'*}" >>"$REMOTE_LOG"
-bash -c "$1"
+printf 'ssh %s\n' "${cmd%%$'\n'*}" >>"$REMOTE_LOG"
 STUB
+  make_fake_ssh "$fake/ssh" "$fake/ssh.fixture"
   cat >"$SCRATCH_HOME/.local/bin/wt" <<'STUB'
 #!/bin/sh
 printf 'show %s\n' "$*" >>"$REMOTE_LOG"
@@ -2158,6 +2158,24 @@ ROWS
 scenario_shared_helpers() {
   begin_scenario "$1" || return 0
   local a b sys=/bin/bash out rc sys_major env_file="$TEST_ROOT/bash-env" log="$TEST_ROOT/bash-versions"
+  local login_shell word joined actual
+  local words=('=x' '~' '~root' '' 'two words' "a'b" "\$HOME" "\\" $'tab\tline\nnext' $'quote\'\nnext' ';echo bad' '*' 'é')
+  for login_shell in zsh bash sh; do
+    if ! command -v "$login_shell" >/dev/null 2>&1; then
+      echo "skip: $login_shell is not installed"
+      continue
+    fi
+    for word in "${words[@]}"; do
+      joined=$(shell_join "$word")
+      rc=0
+      actual=$("$login_shell" -c "printf '<%s>' $joined" 2>&1) || rc=$?
+      assert_eq "$login_shell preserves a shell_join word" "<$word>" "$actual"
+      assert_eq "$login_shell accepts a shell_join word" 0 "$rc"
+    done
+    joined=$(shell_join "${words[@]}")
+    actual=$("$login_shell" -c "printf '<%s>' $joined" 2>&1) || true
+    assert_eq "$login_shell preserves shell_join argument boundaries" "$(printf '<%s>' "${words[@]}")" "$actual"
+  done
   # Each non-interactive bash sources $BASH_ENV when it starts. So each bash that runs bin/wt adds one line
   # to the log, and the last line is the bash that printed the help.
   # shellcheck disable=SC2016   # ${BASH_VERSINFO[0]} is for each of THOSE bashes to expand, not this one
