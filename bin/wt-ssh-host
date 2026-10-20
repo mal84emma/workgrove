@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Register flat SSH connection fragments without a cloud API.
+if ((BASH_VERSINFO[0] < 5)) && [[ -z ${WORKGROVE_REEXEC:-} ]]; then
+  for bash5 in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x $bash5 ]] && "$bash5" -c '((BASH_VERSINFO[0] >= 5))' >/dev/null 2>&1; then
+      export WORKGROVE_REEXEC=1
+      exec "$bash5" "$0" "$@"
+    fi
+  done
+fi
+unset WORKGROVE_REEXEC
+if ((BASH_VERSINFO[0] < 5)); then
+  printf 'wt-ssh-host: needs bash 5 or later; install it: brew install bash\n' >&2
+  exit 1
+fi
+set -euo pipefail
+
+# Resolve installation links without requiring GNU readlink on the Mac.
+wg_path=$0 wg_hops=0
+[[ $wg_path == */* || -e $wg_path ]] || wg_path=$(type -P -- "$wg_path")
+while [[ -L $wg_path && $wg_hops -lt 32 ]]; do
+  wg_hops=$((wg_hops + 1))
+  wg_target=$(readlink "$wg_path")
+  case $wg_target in
+    /*) wg_path=$wg_target ;;
+    *) wg_path=$(dirname "$wg_path")/$wg_target ;;
+  esac
+done
+wg_lib=$(dirname "$wg_path")/../lib/workgrove/ssh_host.py
+if [[ -L $wg_path || ! -r $wg_lib ]]; then
+  printf 'wt-ssh-host: cannot load its library; reinstall workgrove\n' >&2
+  exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  printf 'wt-ssh-host: needs Python 3; install Python and retry\n' >&2
+  exit 1
+fi
+exec python3 -B "$wg_lib" "$@"

@@ -2,6 +2,28 @@
 # Reads globals: TMPDIR, WG_HOST_PROBE_TIMEOUT, WG_LIB_DIR.
 # Requires common.sh: valid_host.
 # Requires version.sh: wt_read_version.
+# Send public probes inline so missing remote installation links cannot hide prerequisites.
+host_probe_source() {
+  cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/probe-host.sh"
+  cat <<'WG_PROBE_HEADER'
+if command -v python3 >/dev/null 2>&1; then
+python3 -B - <<'WG_CAPACITY_SOURCE'
+WG_PROBE_HEADER
+  cat "$WG_LIB_DIR/vm/capacity.py"
+  cat <<'WG_PROBE_MIDDLE'
+WG_CAPACITY_SOURCE
+python3 -B - doctor --probe <<'WG_READINESS_SOURCE'
+WG_PROBE_MIDDLE
+  cat "$WG_LIB_DIR/portable.py"
+  cat <<'WG_PROBE_END'
+WG_READINESS_SOURCE
+else
+printf 'capabilities\t%s\n' '{"schema":1,"capacity_verified":false,"cpu_logical":null,"memory_mib":null,"capacity_issues":["missing-python"]}'
+printf 'readiness\t%s\n' '{"schema":1,"ready":false,"status":"incomplete","issues":["missing-python"]}'
+fi
+WG_PROBE_END
+}
+
 probe_host() { # one SSH login proves remote-command access and gathers Linux hardware
   local out_file err_file ssh_pid rc=0 tick timeout=${WG_HOST_PROBE_TIMEOUT:-20}
   # Ten ticks per second must fit in signed 64-bit arithmetic.
@@ -20,7 +42,7 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
   # Redirect SSH to files, so that an unkillable child cannot hold this function's output pipes open.
   ssh -T -o BatchMode=yes -o NumberOfPasswordPrompts=0 -o StrictHostKeyChecking=yes \
       -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=5 \
-      -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" < <(cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/probe-host.sh") &
+      -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" < <(host_probe_source) &
   ssh_pid=$!
   for ((tick=0; tick<timeout*10; tick++)); do
     kill -0 "$ssh_pid" 2>/dev/null || break
@@ -41,24 +63,49 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
 }
 
 host_record() { # stable JSON for agents; unknown hardware never becomes a false zero
-  local host="$1" report="" rc=0 err_file err="" version
+  local host="$1" report="" rc=0 err_file err="" version capabilities readiness
   if ! valid_host "$host"; then
-    jq -nc --arg host "$host" '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:"invalid SSH alias"}'
+    jq -nc --arg host "$host" '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,capacity_verified:null,capacity_issues:[],environment:"unknown",workgrove_ready:null,readiness_status:"unknown",readiness_issues:[],gpu_allocation_verified:null,gpu_status:"unknown",gpus:[],error:"invalid SSH alias"}'
     return
   fi
   err_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-error.XXXXXX") || return 1
-  report=$(probe_host "$host" 2>"$err_file") || rc=$?
+  if ssh_host_check "$host" 2>"$err_file"; then
+    report=$(probe_host "$host" 2>"$err_file") || rc=$?
+  else
+    rc=1
+  fi
   if [[ $rc -ne 0 ]]; then
     err=$(sed -n '1p' "$err_file" | LC_ALL=C tr -d '\r' | cut -c1-180)
     rm -f "$err_file"
     jq -nc --arg host "$host" --arg error "SSH probe failed (exit $rc)${err:+: $err}" \
-      '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,gpu_status:"unknown",gpus:[],error:$error}'
+      '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,capacity_verified:null,capacity_issues:[],environment:"unknown",workgrove_ready:null,readiness_status:"unknown",readiness_issues:[],gpu_allocation_verified:null,gpu_status:"unknown",gpus:[],error:$error}'
     return
   fi
   rm -f "$err_file"
   version=$(printf '%s\n' "$report" | sed -n $'s/^wt_version\t//p' | wt_read_version 2>/dev/null) ||
     version='{"commit":null,"protocol":null}'
-  printf '%s' "$report" | jq -Rsc --arg host "$host" --argjson version "$version" '
+  capabilities=$(printf '%s\n' "$report" | sed -n $'s/^capabilities\t//p' | jq -esc '
+    if length == 1 and (.[0] | type == "object" and .schema == 1
+      and (.capacity_verified | type == "boolean")
+      and (.cpu_logical == null or (.cpu_logical | type == "number" and . >= 0 and floor == .))
+      and (.memory_mib == null or (.memory_mib | type == "number" and . >= 0 and floor == .))
+      and (if .capacity_verified then .cpu_logical != null and .memory_mib != null else true end)
+      and (.capacity_issues == null or (.capacity_issues | type == "array" and all(.[]; type == "string" and test("^[a-z0-9-]+$"))))
+      and (.environment == null or (.environment | IN("host", "container", "unknown")))
+      and (.gpu_allocation_verified == null or (.gpu_allocation_verified | type == "boolean"))
+      and (.gpu_indices == null or (.gpu_indices | type == "array" and all(.[]; type == "string" and test("^[0-9]+$")))))
+    then .[0] else error("invalid capacity") end' 2>/dev/null) || capabilities='null'
+  readiness=$(printf '%s\n' "$report" | sed -n $'s/^readiness\t//p' | jq -esc '
+    if length == 1 and (.[0] | type == "object" and .schema == 1
+      and (.ready == null or (.ready | type == "boolean"))
+      and (.status | IN("ready", "incomplete", "legacy", "unknown"))
+      and (.issues | type == "array" and all(.[]; type == "string" and test("^[a-z0-9.-]+$"))))
+    then .[0] else error("invalid readiness") end' 2>/dev/null) || readiness='null'
+  if [[ $report == *$'probe_schema\t2'* || $report == *$'capabilities\t'* || $report == *$'readiness\t'* ]]; then
+    [[ $capabilities != null ]] || capabilities='{"schema":1,"capacity_verified":false,"cpu_logical":null,"memory_mib":null,"capacity_issues":["invalid-capacity-report"]}'
+    [[ $readiness != null ]] || readiness='{"schema":1,"ready":false,"status":"incomplete","issues":["invalid-readiness-report"]}'
+  fi
+  printf '%s' "$report" | jq -Rsc --argjson capabilities "$capabilities" --argjson readiness "$readiness" --arg host "$host" --argjson version "$version" '
     def field($rows; $key): [ $rows[] | select(.[0] == $key) | .[1] ][0] // "";
     def unsigned: if type == "string" and test("^[0-9]+$") then tonumber else null end;
     [split("\n")[] | select(length > 0) | split("\t")] as $rows
@@ -76,9 +123,18 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
        then (if ($gpus | length) == 0 then "none" else "ok" end)
        elif field($rows; "gpu_status") == "none" and ($raw_gpus | length) == 0
        then "none" else "unknown" end) as $gpu_status
+    | (if $capabilities.gpu_indices | type == "array" then
+         [$gpus | to_entries[] | select(($valid_gpus[.key][1] | gsub(" "; "")) as $index
+             | $capabilities.gpu_indices | index($index)) | .value]
+       else $gpus end) as $allocated_gpus
     | {host:$host,status:"available",
-       wt_commit:$version.commit,wt_protocol:$version.protocol,cpu_logical:(if $cpu != null and $cpu > 0 then $cpu else null end),
-       memory_mib:(if $mem != null and $mem > 0 then ($mem / 1024 | floor) else null end),
-       gpu_status:$gpu_status,gpus:$gpus,
-       error:(if $cpu == null or $cpu == 0 or $mem == null or $mem == 0 then "incomplete CPU/RAM report" else null end)}'
+       wt_commit:$version.commit,wt_protocol:$version.protocol,
+       cpu_logical:(if $capabilities != null then $capabilities.cpu_logical else (if $cpu != null and $cpu > 0 then $cpu else null end) end),
+       memory_mib:(if $capabilities != null then $capabilities.memory_mib else (if $mem != null and $mem > 0 then ($mem / 1024 | floor) else null end) end),
+       capacity_verified:$capabilities.capacity_verified,capacity_issues:($capabilities.capacity_issues // []),
+       environment:($capabilities.environment // "unknown"),workgrove_ready:$readiness.ready,
+       readiness_status:($readiness.status // "unknown"),readiness_issues:($readiness.issues // []),
+       gpu_allocation_verified:$capabilities.gpu_allocation_verified,
+       gpu_status:(if $gpu_status == "ok" and $capabilities.gpu_indices == [] then "none" else $gpu_status end),gpus:$allocated_gpus,
+       error:(if $capabilities.capacity_verified == false then "effective allocation unverified" elif $readiness.ready == false then "remote setup incomplete" elif $cpu == null or $cpu == 0 or $mem == null or $mem == 0 then "incomplete CPU/RAM report" else null end)}'
 }

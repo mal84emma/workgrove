@@ -178,6 +178,18 @@ relay_env() {
 ssh_hosts() { # non-wildcard Host aliases in ~/.ssh/config, one per line. known_host reads the same list.
   { awk '$1=="Host"{for(i=2;i<=NF;i++){if($i ~ /^#/)break; if($i !~ /^[!]/ && $i !~ /[*?]/) print $i}}' "$HOME/.ssh/config" 2>/dev/null || true; } | sort -u
 }
+# Validate every imported fragment before OpenSSH can process the configuration.
+# Ordinary configurations retain OpenSSH's existing behavior and need no Python runtime.
+ssh_host_check() {
+  local config="$HOME/.ssh/config"
+  [[ -f $config ]] || return 0
+  LC_ALL=C grep -F 'wt-ssh-host' "$config" >/dev/null || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn 'managed SSH registration needs Python 3 for validation'
+    return 1
+  fi
+  python3 -B "$WG_VERSION_ROOT/lib/workgrove/ssh_host.py" -F "$config" check "$1"
+}
 # known_host <alias> — the alias is one that ssh_hosts prints. grep reads all its input (no -q),
 # so sort never gets SIGPIPE, and the answer stays correct under pipefail.
 known_host() { ssh_hosts | grep -xF -- "$1" >/dev/null; }

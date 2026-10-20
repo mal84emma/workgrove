@@ -85,3 +85,53 @@ Failed or canceled updates can stop before the `after` records.
 A final reporting failure preserves the successful update status and prints a diagnostic.
 The VM's `after` record then has null commit and protocol values.
 Consumers must accept additional fields in all version and update objects.
+
+## Read effective host capacity and readiness
+
+`wt hosts --json` retains `status: "available"` for successful remote-command SSH probes.
+That status alone does not establish workgrove readiness or usable container allocation.
+The Mac supplies the current public probes independently of the remote installation version.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `cpu_logical` | Integer or null | Whole usable logical CPUs after affinity, online CPU sets, and applicable cgroup quotas. A verified fractional allocation can produce zero. |
+| `memory_mib` | Integer or null | The smaller physical or applicable cgroup memory limit, rounded down to MiB. |
+| `capacity_verified` | Boolean or null | Whether the enhanced probe established both CPU and RAM allocation; null identifies a legacy report. |
+| `capacity_issues` | Array of strings | Fixed issue codes for missing, malformed, or hidden kernel limit views. |
+| `environment` | String | `host`, `container`, or `unknown`; independent of the SSH alias or supplier. |
+| `workgrove_ready` | Boolean or null | Basic portable readiness; null means legacy or unavailable capability. |
+| `readiness_status` | String | `ready`, `incomplete`, `legacy`, or `unknown`. |
+| `readiness_issues` | Array of strings | Fixed preparation issue codes; these contain no personal configuration values. |
+| `gpu_allocation_verified` | Boolean or null | Whether whole visible GPU allocation was verified; false excludes automatic GPU selection. |
+
+The [kernel probe](../lib/workgrove/vm/capacity.py) reads cgroup versions 1 and 2 and their visible ancestors.
+It uses hard memory limits, not current usage, requested cloud hardware, or cgroup memory throttling thresholds.
+The Linux kernel documents [hierarchical limits and namespaces](https://docs.kernel.org/admin-guide/cgroup-v2.html).
+A private cgroup namespace can hide stricter ancestor bounds.
+Hidden bounds produce null effective values and `capacity_verified: false`.
+
+The probe recognizes an exposed initial v2 root through controller availability and the absence of non-root limit interfaces.
+It refuses to certify a container's incomplete hierarchy as a full host allocation.
+A malformed enhanced report also becomes unverified; physical host values never replace its unknown effective values.
+Legacy reports without the enhanced protocol retain their previous CPU and RAM interpretation.
+
+GPU inventory retains `gpu_status`, `gpus`, names, and nullable `memory_mib` values.
+Enhanced NVIDIA queries check device UUIDs, partition mode, virtualization mode, and visible sharing indicators.
+The [NVIDIA system management documentation](https://docs.nvidia.com/deploy/nvidia-smi/index.html) describes these read-only hardware queries.
+Unambiguous visibility filters restrict the returned device list.
+GPU partitions, ambiguous CUDA ordinals, or detected fractional sharing cannot qualify for automatic GPU selection.
+A driver-visible inventory does not promise scheduling reservations or exclusive future access.
+
+Hardware selection requires sufficient known capacity, `capacity_verified != false`, and `workgrove_ready != false`.
+GPU requests additionally require `gpu_allocation_verified != false`.
+Null or absent capability fields preserve legacy compatibility.
+Repository and selected-agent checks still run immediately before task creation.
+
+`wt -H <host> doctor --json` returns the read-only readiness object directly.
+It can report missing remote tools or links without invoking the remote `wt` executable.
+Its `ready` value excludes separate personal sign-ins, native relay verification, and hook trust decisions.
+`storage_permission_policy` is `strict`, `trusted-personal-volume`, or null when no portable profile is available.
+`storage_permission_warnings` contains `unix-mode-checks-relaxed` when the user accepted a personal volume exception; otherwise it is empty.
+These fields describe the saved policy, including when other readiness checks fail.
+Readiness under an accepted policy does not certify filesystem privacy or exclusive volume access.
+See [portable setup](remote-setup.md#check-readiness) for the repair and verification procedure.

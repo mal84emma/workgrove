@@ -1,6 +1,12 @@
 #!/usr/bin/env sh
 # Report the VM hardware to the Mac.
 # The Mac supplies version.sh before this script.
+PATH="$HOME/.local/bin:$PATH"; export PATH
+if [ -f "$HOME/.config/workgrove/env.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$HOME/.config/workgrove/env.sh"
+fi
+printf 'probe_schema\t2\n'
 version=$(wt_vm_version)
 printf 'wt_version\t%s\n' "$version"
 cpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)

@@ -46,6 +46,13 @@ case "$host" in
   broken) printf 'wt_version\t{"commit":"abc","protocol":"1"}\ncpu\tnot-a-number\nmem_kib\t\ngpu_status\tok\ngpu\tbad-index\tbroken\tunknown\n' ;;
   nogpu) printf 'cpu\t4\nmem_kib\t14680064\ngpu_status\tnone\n' ;;
   unified) printf 'cpu\t20\nmem_kib\t127631360\ngpu_status\tok\ngpu\t0\tNVIDIA GB10\t[N/A]\n' ;;
+  limited|uncertain|invalid-enhanced)
+    printf 'probe_schema\t2\ncpu\t128\nmem_kib\t1073741824\ngpu_status\tok\ngpu\t0\tSynthetic GPU\t40960\ngpu\t1\tSynthetic GPU\t40960\n'
+    case "$host" in
+      limited) printf 'capabilities\t{"schema":1,"capacity_verified":true,"cpu_logical":0,"memory_mib":8192,"gpu_allocation_verified":true,"gpu_indices":["1"]}\nreadiness\t{"schema":1,"ready":true,"status":"ready","issues":[]}\n' ;;
+      uncertain) printf 'capabilities\t{"schema":1,"capacity_verified":false,"cpu_logical":null,"memory_mib":null,"capacity_issues":["cpu-ancestors-hidden"],"gpu_allocation_verified":false}\nreadiness\t{"schema":1,"ready":false,"status":"incomplete","issues":["missing-prerequisites"]}\n' ;;
+      invalid-enhanced) printf 'capabilities\t{"schema":1,"capacity_verified":true,"cpu_logical":"bad","memory_mib":1024}\nreadiness\tinvalid-json\n' ;;
+    esac ;;
   slow1|slow2)
     : >"$TEST_ROOT/$host.start"
     other=slow1; [[ "$host" == slow1 ]] && other=slow2
@@ -156,6 +163,24 @@ CONFIG
   end_scenario
 }
 scenario_hardware_probe
+
+scenario_enhanced_reports() {
+  begin_scenario 'effective reports never fall back to physical hardware' || return 0
+  PROBE_MODE=records
+  printf 'Host limited uncertain invalid-enhanced\n' >"$TEST_ROOT/home/.ssh/config"
+  local json
+  json=$(run_wt hosts --json)
+  assert_eq 'verified fractional CPU capacity remains zero' true \
+    "$(jq -r 'map(select(.host == "limited"))[0] | .capacity_verified == true and .cpu_logical == 0 and .memory_mib == 8192' <<<"$json")"
+  assert_eq 'visible UUID filtering restricts GPU count' true \
+    "$(jq -r 'map(select(.host == "limited"))[0] | (.gpus | length) == 1 and .gpu_allocation_verified == true' <<<"$json")"
+  assert_eq 'SSH reachability remains separate from readiness' true \
+    "$(jq -r 'map(select(.host == "uncertain"))[0] | .status == "available" and .workgrove_ready == false and .cpu_logical == null and .memory_mib == null' <<<"$json")"
+  assert_eq 'malformed enhanced reports cannot become legacy physical capacity' true \
+    "$(jq -r 'map(select(.host == "invalid-enhanced"))[0] | .capacity_verified == false and .cpu_logical == null and .memory_mib == null and .workgrove_ready == false' <<<"$json")"
+  end_scenario
+}
+scenario_enhanced_reports
 
 scenario_probe_deadline() {
   begin_scenario 'client deadline bounds an unresponsive SSH session' || return 0

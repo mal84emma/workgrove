@@ -191,6 +191,15 @@ On the Mac only, use the `azml-compute` skill (`azml-ssh-host add <instance>`) t
 
 Only the user runs `az login` and `az account set`. Do not run them yourself. When the `azml-ssh-host` helper gives an error, report the error and stop.
 
+### Add a supplied SSH host
+
+Use the [ssh-host skill](../.agents/skills/ssh-host/SKILL.md) for a supplied fragment or portable host preparation.
+Existing usable aliases need no new registration.
+Keep compute lifecycle and credentials with the SSH supplier.
+Confirm the persistent root, storage policy, public revision, and personal identity before full preparation.
+Run `wt -H <host> doctor --json` before deciding whether setup repair is needed.
+Use the existing VM attachment procedure after explicit environment repair.
+
 ### Per-repo setup
 
 Add `.wt-include` and `.wt-setup` only when the user asks.

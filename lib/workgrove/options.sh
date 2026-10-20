@@ -15,6 +15,8 @@ open||host_open|Open a task in VS Code.|name;-r,--repo:repo:a repo|
 repos||host_repos|List or locate repositories.|name!repos;--porcelain:mode:=porcelain;--table:mode:=table|
 version||forward|Show commit and protocol.|!none|
 update||host_update|Update workgrove.|!unknown;--refresh-config,--opinionated-config,--with-*:pass_flag:=1|
+setup||host_setup|Install or restore a portable remote profile.|!unknown;--root:root:an absolute path;--storage:storage:volume or os-disk;--mount:mount:a mount path;--trust-personal-volume:trust:=1;--strict-permissions:strict:=1;--source:source:a public HTTPS URL;--revision:revision:a full commit;--git-identity:git_identity:a remote identity file;--persist-agents:persist:=1;--with-tmux-conf:tmux:=1;--restore-only:restore:=1;--claude-args-json:claude_args:a JSON array;--codex-args-json:codex_args:a JSON array|
+doctor||host_doctor|Inspect remote readiness without repair.|!unknown;--root:root:an absolute path;--json:json:=1|
 help|-h,--help|forward|Show usage.|!unknown|
 run||local|Run the task agent.|name;-r,--repo:repo:a repo|
 diff||local|Show task status and open its diff.|name;--diff:diff:=1;-r,--repo:repo:a repo|

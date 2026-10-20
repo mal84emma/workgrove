@@ -88,6 +88,12 @@ scenario_update() {
   assert_eq 'local update reports both stages' true "$(jq -r --arg commit "$expected" 'map(.stage) == ["before","after"] and all(.[]; .side == "local" and .commit == $commit and .protocol == 1)' <<<"$json")"
   assert_eq 'existing up-to-date line remains' true "$([[ $output == *'Already up to date.'* ]] && echo true || echo false)"
   assert_eq 'scratch installer runs' true "$([[ $output == *'installer stub'* ]] && echo true || echo false)"
+  mkdir -p "$TEST_ROOT/vm/.local/chain"
+  ln -s "$TEST_ROOT/clone/bin/wt" "$TEST_ROOT/vm/.local/chain/wt"
+  ln -s ../chain/wt "$TEST_ROOT/vm/.local/bin/nested-wt"
+  output=$(HOME="$TEST_ROOT/vm" PATH="$TEST_ROOT/bin:$PATH" bash "$TEST_ROOT/vm/.local/bin/nested-wt" update)
+  assert_eq 'nested command links update their owning checkout' true \
+    "$([[ $output == *'Already up to date.'* && $output == *'installer stub'* ]] && echo true || echo false)"
   output=$(run_wt -H fixture update)
   json=$(records <<<"$output")
   assert_eq 'remote update compares both sides at both stages' true "$(jq -r '[.[] | select(.side != "local") | [.stage,.side]] == [["before","Mac"],["before","VM"],["after","Mac"],["after","VM"]]' <<<"$json")"

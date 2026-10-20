@@ -44,6 +44,10 @@
 #                                                             On a terminal: a table of name, task count and location.
 #                                                             Piped: "<name><tab><path>" per repo.
 #                                                             With a name or path: print only that repo's path
+#   wt setup --root PATH [--storage volume|os-disk]          prepare a host with -H; see docs/remote-setup.md
+#                                                             --trust-personal-volume accepts relaxed mode checks for one personal volume
+#                                                             --strict-permissions removes a saved permission exception after strict checks pass
+#   wt doctor [--root PATH] [--json]                         inspect readiness without repair; also works with -H
 #   wt hosts [--json]                                         probe SSH aliases for reachability, CPU, RAM and GPUs
 #   wt task [--where local|<host>] [-a claude|codex|repo-shell|vm-shell] [-r REPO] [-p TEXT]
 #                                                             the task picker: choose where, kind, repo, name and brief,
@@ -126,6 +130,12 @@ WG_MACHINE_RESULT=${WT_MACHINE:-}
 export -n WG_MACHINE_RESULT
 unset WT_MACHINE
 
+# The portable profile contains exports only. Restoration always requires an explicit command.
+if [[ -f $HOME/.config/workgrove/env.sh ]]; then
+  # shellcheck source=/dev/null
+  source "$HOME/.config/workgrove/env.sh" || exit 1
+fi
+
 # Load lib/workgrove/common.sh from the repository that holds this script. install.sh links the script into
 # ~/.local/bin, so follow the link chain to the real file. macOS readlink has no -f, so take one link at a time,
 # as resolve_config_path in bin/azml-ssh-host does. A relative target is read from the link's folder.
@@ -177,6 +187,11 @@ if ! source "$WG_LIB_DIR/picker.sh" 2>/dev/null; then
   exit 1
 fi
 
+# shellcheck source=lib/workgrove/setup.sh
+if ! source "$WG_LIB_DIR/setup.sh" 2>/dev/null; then
+  printf 'wt: cannot load remote setup support; reinstall workgrove\n' >&2
+  exit 1
+fi
 usage() { wt_usage; }
 
 cmd_help() { usage; }
@@ -294,9 +309,15 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
   f=$(wt_prompt "$name")                         # a command substitution would remove the trailing newline
   if [[ -f "$f" ]]; then IFS= read -r -d '' brief <"$f" || true; fi
   local extra=() filtered=() model_arg=() args=() i=0
+  local profile_args='[]'
+  if [[ $agent == claude ]]; then profile_args=${WT_CLAUDE_ARGS_JSON:-'[]'}
+  else profile_args=${WT_CODEX_ARGS_JSON:-'[]'}; fi
+  jq -e 'type == "array" and all(.[]; type == "string" and (length > 0 and (explode | all(. >= 32))))' \
+    <<<"$profile_args" >/dev/null || die 'invalid profile agent arguments'
+  mapfile -t extra < <(jq -r '.[]' <<<"$profile_args")
   if [[ -n "${WT_AGENT_ARGS:-}" ]]; then
     # shellcheck disable=SC2206   # word splitting is the point
-    extra=($WT_AGENT_ARGS)
+    extra+=($WT_AGENT_ARGS)
   fi
   if [[ -n "$model" ]]; then
     # Remove machine-wide model choices and Claude's fallback before adding this task's choice. Then neither
@@ -710,10 +731,8 @@ cmd_update() { # pull this repo and re-run its installer
   local -A opts=()
   wt_opts "$(wt_spec update)" opts "$@"
   wt_opt_args opts pass
-  local s="$0" dir
-  if [[ -L "$s" ]]; then s=$(readlink "$s"); fi            # ~/.local/bin/wt -> <repo>/bin/wt
-  [[ "$s" == /* ]] || s="$(dirname "$0")/$s"
-  dir=$(cd "$(dirname "$s")/.." && pwd -P)
+  local dir
+  dir=$(cd "$WG_LIB_DIR/../.." && pwd -P)
   [[ -d "$dir/.git" ]] || die "$dir is not a git clone; replace the seed: mv $dir $dir.seed && git clone https://github.com/mal84emma/workgrove $dir"
   local ans
   git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 \
@@ -872,11 +891,11 @@ if [[ ${1:-} == -- ]]; then shift; fi
 if [[ "${1:-}" == -H || "${1:-}" == --host ]]; then
   [[ $# -ge 3 ]] || die "usage: wt -H <host> <command> [args] (wt help)"
   host="$2"; shift 2
-  [[ "${1:-}" == help ]] || need_jq
+  case ${1:-} in help|setup|doctor) ;; *) need_jq ;; esac
   cmd_host "$host" "$@"
   exit
 fi
 sub="${1:-help}"; shift || true
-case "$sub" in help|-h|--help) ;; *) need_jq ;; esac
+case "$sub" in help|-h|--help|setup|doctor) ;; *) need_jq ;; esac
 wt_command "$sub" || die "unknown command '$sub' (wt help)"
 "cmd_$WT_COMMAND" "$@"

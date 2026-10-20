@@ -121,7 +121,8 @@ workgrove/
 │   ├── agent-notify           agent lifecycle hook for Mac banners outside cmux
 │   ├── cmux-hook              Mac event handler for native VM row requests
 │   ├── github-guard           Claude PreToolUse hook: GitHub reads, pushes, PRs, issues, comments, reviews
-│   └── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
+│   ├── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
+│   └── wt-ssh-host            register a supplied SSH fragment without a cloud API
 ├── lib/
 │   └── workgrove/
 │       ├── common.sh          shared helpers that bin/wt, cmux-hook and agent-notify load
@@ -133,12 +134,16 @@ workgrove/
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
 │       ├── version.sh         shared validation for installation version reports
 │       ├── hosts.sh           SSH host inventory and hardware probes
+│       ├── ssh_host.py        flat SSH fragment validation and atomic registration
+│       ├── setup.sh           Mac-side setup and read-only doctor over ordinary SSH
+│       ├── portable.py        persistent profiles, installation, and explicit restoration
 │       ├── picker.sh          task picker and driver commands
 │       ├── recovery.sh        VM row recovery and task attachment
 │       ├── remote.sh          remote commands and result parsing
 │       ├── safety.sh          worktree removal checks
 │       └── vm/                scripts that bin/wt sends to a VM on SSH standard input
 │           ├── host-new-preflight.sh
+│           ├── capacity.py    effective Linux allocation from kernel limits
 │           ├── probe-host.sh
 │           ├── reinit-client-confirm.sh
 │           ├── reinit-client-detach.sh
@@ -159,6 +164,7 @@ workgrove/
 │   ├── .agents/skills/
 │   │   ├── azml-compute/SKILL.md
 │   │   ├── task-driver/SKILL.md
+│   │   ├── ssh-host/SKILL.md
 │   │   ├── worktree-create/SKILL.md
 │   │   ├── worktree-work/SKILL.md
 │   │   ├── worktree-show/SKILL.md
@@ -189,9 +195,15 @@ workgrove/
 │   ├── hook-wiring-smoke.sh   portable hook events match agent-notify
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
-│   ├── bash5-smoke.sh         all five bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
+│   ├── bash5-smoke.sh         all bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
+│   ├── ssh-host-smoke.sh      offline SSH fragment registration tests
+│   ├── ssh_host_test.py       synthetic registration, trust, and confidentiality fixtures
+│   ├── portable-smoke.sh      portable installation and explicit restoration
+│   ├── portable_test.py       home replacement, personal state, and shared task recovery
+│   ├── capacity-smoke.sh      effective CPU, RAM, and GPU allocation checks
+│   ├── capacity_test.py       synthetic cgroup and GPU visibility fixtures
 │   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with a fake gh
 │   ├── remote-new-smoke.sh    remote task preflight and recovery with fake ssh/cmux
 │   └── native-relay-smoke.sh  native VM requests, the cmux-tui hook wrapper, and automation backups
@@ -199,6 +211,10 @@ workgrove/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
     ├── azml-compute.md        Azure ML compute instances over ssh
+    ├── runpod-integration.md  SSH integration design and acceptance limits
+    ├── remote-setup.md        prepare and restore portable SSH hosts
+    ├── runpod.md              Runpod preparation through the shared SSH workflow
+    ├── ssh-hosts.md           register a supplied SSH fragment
     ├── vm-open-relay.md        native VM requests after cmux 0.65
     ├── vm-agent-status.md     agent status in VM rows after cmux 0.65
     ├── wt-json.md             the JSON status contract of wt list --json and wt show --json
@@ -224,10 +240,11 @@ It also describes what a run changes, the repo's test suites, and how to remove 
   macOS ships only `/bin/bash` 3.2, so `Brewfile` installs Homebrew's bash.
   - When `/bin/bash` starts a script in `bin/`, the script checks two Homebrew candidates in order.
     It uses the first bash 5 or later: `/opt/homebrew/bin/bash`, then `/usr/local/bin/bash`.
-  - Without a bash 5, `wt` and `azml-ssh-host` stop with a message that names `brew install bash`. The hooks
+  - Without a bash 5, `wt`, `azml-ssh-host`, and `wt-ssh-host` stop with a message that names `brew install bash`. The hooks
     exit 0 and do nothing, so they block no agent and no notification.
   - `install.sh` still runs under bash 3.2. To check that, run its smoke test with `INSTALL_BASH=/bin/bash`
     (see Tests).
+- **Python and OpenSSH:** SSH registration needs Python 3 and OpenSSH. Portable remote setup needs Python 3.9 or later.
 - **tmux:** the VMs have tmux 3.2a, and `home/.tmux.conf` is written for that version.
 - **cmux:** workgrove supports 0.65.1 (build 110). Version 0.65.2 is unverified.
   Support moves to a newer release after verification, rather than automatically when that release appears.
@@ -552,10 +569,14 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   It also checks that `wt run` gives the cmux-tui agent hooks the terminal ID from the task's tmux session.
   It uses a scratch home and fake commands.
   It loads only the automation merge function; it does not run `install.sh`.
-- **`bash test/bash5-smoke.sh`** checks all five scripts under bash 5.
+- **`bash test/portable-smoke.sh`** checks portable profiles, personal configuration, home replacement, and shared task recovery.
+- **`bash test/capacity-smoke.sh`** checks cgroup limits and GPU visibility using synthetic kernel views.
+- **`bash test/ssh-host-smoke.sh`** checks generic SSH registration with temporary files and an offline SSH wrapper.
+  See [the registration guide](docs/ssh-hosts.md) for validation, trust, and failure behavior.
+- **`bash test/bash5-smoke.sh`** checks all bin scripts under bash 5.
   On the Mac, it also starts each script with `/bin/bash` 3.2 and checks the final interpreter.
   Script copies use scratch paths to test missing candidates, older candidates, and candidate order.
-  With no bash 5 or no `lib/`, `wt` stops and the hooks exit 0 without an answer.
+  With no bash 5 or no `lib/`, `wt` and `wt-ssh-host` stop and the hooks exit 0 without an answer.
   `agent-notify` drains its payload.
   `cmux-hook` reads its event from the environment and leaves standard input unread.
   Through a relative link to an absolute link, the suite checks that each script finds `lib/` from another folder.
@@ -620,6 +641,8 @@ steps to recover a VM row.
 | Hand back | The agent reports the branch. It runs `wt pr <name>` only when you ask for it |
 | Clean up | `wt rm <name>`, `wt -H <vm> rm -r <repo> <name>`, `wt prune` |
 | Update a machine | `wt update`, `wt -H <vm> update`. Add `--refresh-config` only after you review a `.base` change |
+| Prepare or restore a portable host | Run `wt -H <host> setup --root <root>` with the [setup options](docs/remote-setup.md). Check `wt -H <host> doctor --json`. See [Runpod preparation](docs/runpod.md). |
+| Register a supplied SSH fragment | Run `wt-ssh-host add <host> --fragment <path>` ([registration guide](docs/ssh-hosts.md)). Existing usable SSH aliases require no helper. |
 | Add an Azure ML compute instance | Run `azml-ssh-host add <instance>`, or say "add compute instance X to my ssh config". After that, the instance is a VM like any other ([docs/azml-compute.md](docs/azml-compute.md)) |
 
 Use `wt <command> -h` to show that command's help.
@@ -999,6 +1022,7 @@ The file also states explicitly that these rules are a convention and not a sand
 | `worktree-show` | "show me the code", "open the worktree", "let me see it" → `wt open`; "what changed", "how far is it" → `wt list` / `wt show` |
 | `worktree-teardown` | "remove the worktree", "clean up finished tasks" |
 | `task-driver` | "start a task on `<vm>`", "queue these three", "check on the tasks" |
+| `ssh-host` | "register this SSH fragment", "prepare this host for workgrove" |
 | `azml-compute` | "add compute instance X to my ssh config", "which compute instances can I ssh to" |
 
 Agents never do these things on their own:

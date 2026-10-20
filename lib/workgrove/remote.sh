@@ -8,6 +8,7 @@
 # Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent.
 # ---------------------------------------------------------------- wt -H <host> …
 remote_sh_raw() { # keep SSH's exit status intact for callers that must tell a refusal from a dropped connection
+  ssh_host_check "$1" || return 1
   ssh -o BatchMode=yes -o ConnectTimeout=5 "$1" "$2"
 }
 remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means transport failure
@@ -16,20 +17,27 @@ remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means transport
   if [[ $rc -eq 255 ]]; then die "host unreachable: is the VM running? (ssh $host)"; fi
   return $rc
 }
-remote_wt() { local host="$1"; shift; remote_sh "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_wt_result() { local host="$1"; shift; remote_sh "$host" "WT_MACHINE=$WT_PROTOCOL exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_wt_result_raw() { local host="$1"; shift; remote_sh_raw "$host" "WT_MACHINE=$WT_PROTOCOL exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_wt_guard() {
+  # shellcheck disable=SC2016
+  printf '%s' 'test -x "$HOME/.local/bin/wt" || { printf "%s\n" ' \
+    "$(shell_join "remote wt is missing; run: wt -H $1 doctor --json; wt -H $1 setup --root <persistent-root>")" \
+    ' >&2; exit 127; }; '
+}
+remote_wt() { local host="$1"; shift; remote_sh "$host" "$(remote_wt_guard "$host")exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_wt_result() { local host="$1"; shift; remote_sh "$host" "$(remote_wt_guard "$host")WT_MACHINE=$WT_PROTOCOL exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_wt_result_raw() { local host="$1"; shift; remote_sh_raw "$host" "$(remote_wt_guard "$host")WT_MACHINE=$WT_PROTOCOL exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
 remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the VM this terminal when there is one,
                   # so a command that asks before it acts (wt update) can read the answer. Never use it for a
                   # caller that captures stdout: a pty folds stderr into stdout and turns every \n into \r\n.
                   # Without a local terminal there is nothing to lend, and the VM's own refusal is correct.
   local host="$1" cmd="$2" rc=0 tty=()
+  ssh_host_check "$host" || return 1
   [[ -t 0 ]] && tty=(-t)                                   # -t works with BatchMode=yes, which only blocks prompts
   ssh -o BatchMode=yes -o ConnectTimeout=5 "${tty[@]}" "$host" "$cmd" || rc=$?
   if [[ $rc -eq 255 ]]; then die "host unreachable: is the VM running? (ssh $host)"; fi
   return $rc
 }
-remote_wt_tty() { local host="$1"; shift; remote_sh_tty "$host" "exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
+remote_wt_tty() { local host="$1"; shift; remote_sh_tty "$host" "$(remote_wt_guard "$host")exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
 remote_run_cmd() {
   # shellcheck disable=SC2016  # $HOME belongs to the VM shell, not this Mac
   printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"
@@ -71,8 +79,27 @@ wt_remote_args() {
   wt_opt_args __parsed "$__output"
 }
 
+host_preflight_source() {
+  cat "$WG_LIB_DIR/version.sh"
+  cat <<'WG_PREFLIGHT_HEADER'
+wg_portable_preflight() {
+if command -v python3 >/dev/null 2>&1; then
+python3 -B - doctor --preflight <<'WG_PREFLIGHT_SOURCE'
+WG_PREFLIGHT_HEADER
+  cat "$WG_LIB_DIR/portable.py"
+  cat <<'WG_PREFLIGHT_END'
+WG_PREFLIGHT_SOURCE
+else return 0; fi
+}
+WG_PREFLIGHT_END
+  cat "$WG_LIB_DIR/vm/host-new-preflight.sh"
+}
+
 host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
-  remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" < <(cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/host-new-preflight.sh")
+  if ! remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" < <(host_preflight_source); then
+    warn "prepare the host explicitly: wt -H $1 doctor --json; wt -H $1 setup --root <persistent-root>"
+    return 1
+  fi
 }
 
 host_new() { # create the worktree on the VM, then the cmux row here unless --no-workspace

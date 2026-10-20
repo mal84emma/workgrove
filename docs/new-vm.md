@@ -3,6 +3,10 @@
 Use this procedure to set up an Ubuntu VM for workgrove tasks. The VM must already exist, and your Mac must
 already reach it with `ssh <vm>`. An Azure ML compute instance is also a VM for this procedure.
 
+For persistent-root installation and explicit restoration, use [portable SSH setup](remote-setup.md).
+That procedure also supports container hosts through the [Runpod guide](runpod.md).
+Existing installations require no migration.
+
 The setup takes about 20 minutes of wall time. About 5 minutes of it is machine time; the browser logins take
 the rest. The last block prints the elapsed wall time since the first line of block 1.
 
@@ -18,8 +22,8 @@ the rest. The last block prints the elapsed wall time since the first line of bl
 - `sudo` works on the VM without a password. Otherwise, block 1 asks for one.
 - The VM has enough free disk. Blocks 1 and 3 download about 1 GB. Before block 1, check the free disk on the
   VM with `df -h /`.
-- The VM has a regular OS disk, not an ephemeral one. An ephemeral disk loses its contents when the machine is
-  stopped, and the purpose of the tmux sessions is that they survive.
+- Task files use storage retained across the intended stop/start operation. Verify that guarantee independently.
+  Tmux processes survive SSH disconnects; they do not survive host shutdown.
 - The VM's inbound ssh rule is restricted to your own IP address. No other network rule is necessary: the rows
   are plain ssh, and the row's own shell starts tmux.
 

@@ -347,6 +347,7 @@ cmux_notify() {
 cmux_row_create_ssh() {
   local host=$1 title=$2 description=$3 command=$4 out ref before; shift 4
   [[ ${CMUX_ROWS_FULL:-0} == 1 ]] || { cmux_error "cannot create an SSH row without a complete row list"; return 1; }
+  ssh_host_check "$host" || return 1
   before=$(printf '%s' "$CMUX_ROWS_JSON" | jq -r '.workspaces[].id') || return 1
   out=$(cmux_call ssh "$host" --name "$title" "$@" --command "$command" 2>&1) || {
     cmux_error "cmux ssh failed: $out"; return 1;
