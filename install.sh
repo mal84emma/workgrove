@@ -397,6 +397,7 @@ copy_config() {
   chmod 600 "$tmp"
   if [[ -L "$dst" ]]; then target=$(readlink "$dst"); fi
   if [[ $REFRESH -eq 1 && -f $dst && ( $kind == claude || $2 == .codex/hooks.json ) ]]; then
+    # Read existing documents through slurpfile so empty files still produce one refreshed object.
     # shellcheck disable=SC2016  # jq expands these variables.
     json_merge "$dst" 'true' '
       $base[0]
@@ -406,7 +407,7 @@ copy_config() {
             | .hooks |= map(select(.command as $command | $commands | index($command) | not))
             | select(.hooks | length > 0)) as $group (.;
               .hooks[$event.key] += [$group]))
-    ' --slurpfile base "$tmp" --slurpfile existing "$dst" || die "jq failed on $2"
+    ' --null-input --slurpfile base "$tmp" --slurpfile existing "$dst" || die "jq failed on $2"
   else
     install_replace "$tmp" "$dst"
   fi

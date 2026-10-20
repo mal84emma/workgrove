@@ -21,7 +21,7 @@ install_replace() {
 json_merge() {
   local destination=$1 validate=$2 merge=$3 tmp
   shift 3
-  if [[ -e $destination ]] && ! jq -e "$validate" "$destination" >/dev/null 2>&1; then
+  if [[ -e $destination ]] && ! jq "$@" -e "$validate" "$destination" >/dev/null 2>&1; then
     return 2
   fi
   install_temp "$destination" || return 1

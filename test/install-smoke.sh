@@ -1673,6 +1673,39 @@ scenario_install_summary() {
 }
 
 # Refresh both platforms without touching the real home directory.
+scenario_refresh_hook_documents() {
+  begin_scenario "hook refreshes accept empty files and read only the first existing document" || return 0
+  local h log kind relative
+  for kind in empty whitespace multiple; do
+    h=$(new_home)
+    log="$h.log"
+    if assert_install_ok "$h" "$log"; then
+      for relative in .claude/settings.json .codex/hooks.json; do
+        cp "$h/$relative" "$h/$relative.expected"
+        case $kind in
+          empty) : > "$h/$relative" ;;
+          whitespace) printf ' \n\t\n' > "$h/$relative" ;;
+          multiple)
+            printf '%s\n' \
+              '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"first-hook"}]}]}}' \
+              '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"second-hook"}]}]}}' > "$h/$relative"
+            jq '.hooks.Stop += [{"hooks":[{"type":"command","command":"first-hook"}]}]' \
+              "$h/$relative.expected" > "$h/expected.json"
+            mv "$h/expected.json" "$h/$relative.expected" ;;
+        esac
+      done
+      if assert_install_ok "$h" "$log.refresh" --refresh-config; then
+        for relative in .claude/settings.json .codex/hooks.json; do
+          assert_eq "$kind refresh writes one document to $relative" 1 "$(jq -s length "$h/$relative")"
+          assert_eq "$kind refresh preserves the original merge behavior for $relative" \
+            "$(jq -cS . "$h/$relative.expected")" "$(jq -cS . "$h/$relative")"
+        done
+      fi
+    fi
+  done
+  end_scenario
+}
+
 scenario_refresh_foreign_hooks() {
   begin_scenario "refresh keeps foreign hooks and prints platform follow-ups" || return 0
   local platform h log rel base command summary before
@@ -1774,6 +1807,7 @@ main() {
   echo "  this suite under bash ${BASH_VERSION}; install.sh under $INSTALL_BASH" \
        "($("$INSTALL_BASH" -c 'echo "$BASH_VERSION"'))"
   scenario_refresh_foreign_hooks
+  scenario_refresh_hook_documents
   scenario_refresh_hook_upgrade
   scenario_install_summary
   scenario_optional_summary_commands
