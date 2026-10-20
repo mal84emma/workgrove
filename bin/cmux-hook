@@ -76,7 +76,7 @@ event_handled() {
 quiet() { event_handled; printf '%s\n' '{"effects":{"desktop":false,"sound":false,"markUnread":false,"paneFlash":false}}'; }
 quiet_control() { event_handled; printf '%s\n' '{"effects":{"record":false,"markUnread":false,"reorderWorkspace":false,"desktop":false,"sound":false,"command":false,"paneFlash":false}}'; }
 CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
-CMUX=$(cmux_bin) || exit 0
+CMUX=$(cmux_bin) || { log "cmux executable not found"; exit 0; }
 CMUX_RUN=(capped "$CMUX")
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
 
@@ -94,25 +94,43 @@ case $mode in
   --event)
     # Native notifications bypass notifications.hooks in cmux 0.65. Use the recorded event's identity.
     event=${CMUX_AUTOMATION_EVENT_JSON:-}
-    nid=$(printf '%s' "$event" | jq -er 'select(.name == "notification.created") | .payload.notification_id | strings' 2>/dev/null) || exit 0
-    ws=$(printf '%s' "$event" | jq -er '.workspace_id | strings' 2>/dev/null) || exit 0
-    [[ $nid =~ ^[A-Fa-f0-9-]{36}$ && $ws =~ ^[A-Fa-f0-9-]{36}$ ]] || exit 0
+    event_name=$(printf '%s' "$event" | jq -er '.name | strings' 2>/dev/null) || { log "missing or invalid event name"; exit 0; }
+    [[ $event_name == notification.created ]] || exit 0
+    nid=$(printf '%s' "$event" | jq -er '.payload.notification_id | strings' 2>/dev/null) || { log "missing or invalid notification id"; exit 0; }
+    ws=$(printf '%s' "$event" | jq -er '.workspace_id | strings' 2>/dev/null) || { log "missing or invalid workspace id"; exit 0; }
+    [[ $nid =~ ^[A-Fa-f0-9-]{36}$ ]] || { log "malformed notification id"; exit 0; }
+    [[ $ws =~ ^[A-Fa-f0-9-]{36}$ ]] || { log "malformed workspace id"; exit 0; }
     ws_load || { log "$CMUX_ERROR"; exit 0; }
-    printf '%s' "$WS_JSON" | jq -e --arg w "$ws" 'any(.workspaces[]; .id == $w and .remote.enabled and .remote.backend == "cmux-tui")' >/dev/null 2>&1 || exit 0
+    row=$(printf '%s' "$WS_JSON" | jq -ec --arg w "$ws" 'first(.workspaces[] | select(.id == $w))' 2>/dev/null) || { log "workspace $ws not found in row list"; exit 0; }
+    printf '%s' "$row" | jq -e '.remote.enabled' >/dev/null 2>&1 || exit 0
+    printf '%s' "$row" | jq -e '.remote.backend == "cmux-tui"' >/dev/null 2>&1 || { log "workspace $ws remote.backend is not cmux-tui"; exit 0; }
     # Public events redact notification text. Read only the record with the event's ID and row.
-    record=$(cmux_notifications 2>/dev/null | jq -ec --arg i "$nid" --arg w "$ws" 'first(.[] | select(.id == $i and .workspace_id == $w))' 2>/dev/null) || exit 0
-    t=$(printf '%s' "$record" | jq -er '.title | strings') || exit 0
-    b=$(printf '%s' "$record" | jq -er '.body | strings') || exit 0
-    case $t in wt-open|wt-attach|wt-close) ;; *) exit 0 ;; esac
+    record=$(cmux_notifications 2>/dev/null | jq -ec --arg i "$nid" --arg w "$ws" 'first(.[] | select(.id == $i and .workspace_id == $w))' 2>/dev/null) || { log "notification record $nid not found for workspace $ws"; exit 0; }
+    t=$(printf '%s' "$record" | jq -er '.title | strings' 2>/dev/null) || { log "notification record $nid title is not a string"; exit 0; }
+    b=$(printf '%s' "$record" | jq -er '.body | strings' 2>/dev/null) || { log "notification record $nid body is not a string"; exit 0; }
+    case $t in wt-open|wt-attach|wt-close) ;; *) log "notification record $nid title is not a wt request"; exit 0 ;; esac
     ;;
 esac
+request_valid() {
+  if [[ $t == wt-open && ! -x $CODE ]]; then log "ignored $t: VS Code executable unavailable"; return 1; fi
+  valid_host "$h" || { log "ignored $t: invalid host"; return 1; }
+  known_host "$h" || { log "ignored $t: unknown SSH host"; return 1; }
+  from_row_on_host "$ws" "$h" || { log "ignored $t: sending row does not match host"; return 1; }
+  if [[ $t == wt-open ]]; then
+    hook_safe_path "$p" || { log "ignored $t: unsafe path"; return 1; }
+  else
+    hook_safe_path "$r" || { log "ignored $t: unsafe repo path"; return 1; }
+    valid_name "$n" || { log "ignored $t: invalid task name"; return 1; }
+  fi
+}
+
 case $t in
   wt-open)   # body: {"host":…,"path":…}
     h=$(field host || true); p=$(field path || true)
     # -x $CODE first: the fallback above is a hard-coded path. A machine can have no VS Code, or have it
     # installed elsewhere. On such a machine, quieting the row for a window that can never open is the
     # worst of both.
-    if [[ -x $CODE ]] && valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && hook_safe_path "$p"; then
+    if request_valid; then
       "$CODE" --folder-uri "vscode-remote://ssh-remote+$h$p/" >/dev/null 2>&1 &
       pid=$!; wg_sleep                      # the code CLI hands the folder to the app and exits 0 well inside
       if kill -0 "$pid" 2>/dev/null; then  # a second, so both "still running" and "exited 0" mean it launched;
@@ -125,7 +143,7 @@ case $t in
     fi ;;
   wt-attach) # body: {"host":…,"repo":…,"task":…}
     h=$(field host || true); r=$(field repo || true); n=$(field task || true)
-    if valid_host "$h" && known_host "$h" && from_row_on_host "$ws" "$h" && hook_safe_path "$r" && valid_name "$n"; then
+    if request_valid; then
       # valid_name, repo_id, row_title and wt_session come from lib/workgrove/common.sh, which wt loads too.
       # attach_row writes the description in the format of row_tag in wt.
       id=$(repo_id "$r"); printf -v q '%q' "$r"
@@ -138,6 +156,8 @@ case $t in
       # The automation cannot suppress delivery effects. Keep diagnostics in $LOG.
       if attach_row "$h" "$(wt_session "$n" "$r")" "$(row_title "$n")" "$id" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
         quiet
+      else
+        log "ignored wt-attach: could not attach row for workspace $ws"
       fi
     fi ;;
   wt-close) # a VM task removed itself; only its own row may ask to close

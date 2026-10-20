@@ -212,6 +212,70 @@ scenario_lookup_diagnostics() {
 }
 scenario_lookup_diagnostics
 
+scenario_event_diagnostics() {
+  begin_scenario 'event shape failures retain distinct diagnostics and exit zero' || return 0
+  local original=$CMUX_AUTOMATION_EVENT_JSON filter reason out
+  record wt-open '{"host":"test-vm","path":"/vm/repos/repo"}'
+  while IFS=$'\t' read -r filter reason; do
+    : > "$XDG_STATE_HOME/cmux-hook.log"
+    out=$(CMUX_AUTOMATION_EVENT_JSON=$(jq -c "$filter" <<<"$original") hook)
+    assert_eq 'a dropped event prints no response' '' "$out"
+    has "$XDG_STATE_HOME/cmux-hook.log" "$reason"
+  done <<'CASES'
+.name2 = .name | del(.name)	missing or invalid event name
+.payload.id = .payload.notification_id | del(.payload.notification_id)	missing or invalid notification id
+.workspace = .workspace_id | del(.workspace_id)	missing or invalid workspace id
+.payload.notification_id = "bad"	malformed notification id
+.workspace_id = "bad"	malformed workspace id
+CASES
+  end_scenario
+}
+scenario_event_diagnostics
+
+scenario_record_diagnostics() {
+  begin_scenario 'record and request failures name the failed check' || return 0
+  local filter reason title body out
+  while IFS=$'\t' read -r filter reason; do
+    record wt-open '{"host":"test-vm","path":"/vm/repos/repo"}'
+    jq "$filter" "$RECORD_FILE" > "$TEST_ROOT/changed-record"
+    mv "$TEST_ROOT/changed-record" "$RECORD_FILE"
+    : > "$XDG_STATE_HOME/cmux-hook.log"
+    out=$(hook)
+    assert_eq 'record failure leaves effects unchanged' '' "$out"
+    has "$XDG_STATE_HOME/cmux-hook.log" "$reason"
+  done <<'CASES'
+[]	not found for workspace
+.[0].title = null	title is not a string
+.[0].body = {}	body is not a string
+.[0].title = "ordinary notification"	title is not a wt request
+CASES
+  while IFS=$'\t' read -r title body reason; do
+    record "$title" "$body"
+    : > "$XDG_STATE_HOME/cmux-hook.log"
+    out=$(hook)
+    assert_eq 'invalid request leaves effects unchanged' '' "$out"
+    has "$XDG_STATE_HOME/cmux-hook.log" "ignored $title: $reason"
+    lacks "$CMUX_LOG" 'dismiss-notification'
+  done <<'CASES'
+wt-open	{"host":"bad host","path":"/vm/repos/repo"}	invalid host
+wt-open	{"host":"unknown-vm","path":"/vm/repos/repo"}	unknown SSH host
+wt-open	{"host":"test-vm","path":"relative"}	unsafe path
+wt-attach	{"host":"bad host","repo":"/vm/repos/repo","task":"task"}	invalid host
+wt-attach	{"host":"unknown-vm","repo":"/vm/repos/repo","task":"task"}	unknown SSH host
+wt-attach	{"host":"test-vm","repo":"relative","task":"task"}	unsafe repo path
+wt-attach	{"host":"test-vm","repo":"/vm/repos/repo","task":"bad name"}	invalid task name
+CASES
+  printf 'Host other-vm\n' >> "$HOME/.ssh/config"
+  for title in wt-open wt-attach; do
+    record "$title" '{"host":"other-vm","path":"/vm/repos/repo","repo":"/vm/repos/repo","task":"task"}'
+    : > "$XDG_STATE_HOME/cmux-hook.log"
+    hook >/dev/null
+    has "$XDG_STATE_HOME/cmux-hook.log" "ignored $title: sending row does not match host"
+  done
+  end_scenario
+}
+scenario_record_diagnostics
+
 scenario_native_open() {
   begin_scenario 'native open uses the recorded ID and validates the sending row' || return 0
   record wt-open '{"host":"test-vm","path":"/vm/repos/repo/.worktrees/task","request_id":"unique"}'
@@ -220,10 +284,12 @@ scenario_native_open() {
   has "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
   has "$XDG_STATE_HOME/cmux-hook.log" "handled wt-open for workspace $ROW_ID"
   export BACKEND=legacy
+  : > "$XDG_STATE_HOME/cmux-hook.log"
   : > "$CODE_LOG"; : > "$CMUX_LOG"
   hook >/dev/null
   lacks "$CODE_LOG" '--folder-uri'
   lacks "$CMUX_LOG" 'list-notifications'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'remote.backend is not cmux-tui'
   export BACKEND=cmux-tui
   record wt-open '{"host":"other-vm","path":"/vm/repos/repo"}'
   hook >/dev/null
@@ -303,6 +369,7 @@ R=$REPO
 BK="$TEST_ROOT/backup"
 # shellcheck disable=SC2034  # read by the installation module
 TMPFILES=()
+SUMMARY_SKIPS=() SUMMARY_ACTIONS=()
 stash() { mkdir -p "$BK/$(dirname "${1#"$HOME"/}")"; mv "$1" "$BK/${1#"$HOME"/}"; }
 config="$HOME/.cmuxterm/automations.json"
 }
@@ -337,6 +404,37 @@ scenario_automation_merge() {
   end_scenario
 }
 scenario_automation_merge
+
+scenario_automation_updates() {
+  begin_scenario 'automation updates replace stale rules and preserve explicit disabling' || return 0
+  setup_automation
+  mkdir -p "${config%/*}"
+  local disabled sum out
+  for disabled in true false; do
+    jq --argjson enabled "$disabled" '.rules[0].enabled = $enabled | .rules[0].then[0].command = "old-hook" | .rules += [{id:"user-rule"}]' \
+      "$REPO/home/.cmuxterm/automations.json" > "$config"
+    sum=$(cksum < "$config")
+    out=$(hook_cmux_automation)
+    has <(printf '%s' "$out") 'cmux automation reload'
+    # shellcheck disable=SC2088  # The rule stores the literal home-relative command.
+    assert_eq 'the stale command is replaced' '~/.local/bin/cmux-hook --event' "$(jq -r '.rules[0].then[0].command' "$config")"
+    assert_eq 'an explicit disable remains disabled' "$disabled" "$(jq -r '.rules[0] | if has("enabled") then .enabled else true end' "$config")"
+    assert_eq 'the user rule stays in place' user-rule "$(jq -r '.rules[1].id' "$config")"
+    assert_eq 'the stale file is backed up' "$sum" "$(cksum < "$BK/.cmuxterm/automations.json")"
+    sum=$(cksum < "$config")
+    hook_cmux_automation >/dev/null
+    assert_eq 'updated rules are idempotent' "$sum" "$(cksum < "$config")"
+  done
+  printf '%s\n' '{"version":99,"rules":[]}' > "$config"
+  sum=$(cksum < "$config")
+  hook_cmux_automation >"$TEST_ROOT/version.out" 2>"$TEST_ROOT/version.err"
+  has "$TEST_ROOT/version.err" 'unknown automations.json version 99'
+  lacks "$TEST_ROOT/version.out" 'unknown automations.json version'
+  assert_eq 'an unknown version stays unchanged' "$sum" "$(cksum < "$config")"
+  rm "$config"
+  end_scenario
+}
+scenario_automation_updates
 
 scenario_installed_rule() {
   begin_scenario 'the installed native rule dispatches an open request through its configured command' || return 0

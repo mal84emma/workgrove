@@ -90,7 +90,10 @@ WITH_STATUSLINE=0
 WITH_CMUX_CONFIG=0                   # …the sixth of them, and the only one that exists on a Mac alone
 WITH_CLAUDE_UI=0                     # the seventh: UI keys inside the copied ~/.claude/settings.json, not a file
 BK=""                                # this run's backup dir; filled in by main
-TMPFILES=()                          # half-built files; removed by report, which is the EXIT trap
+SUMMARY_SKIPS=()
+SUMMARY_ACTIONS=()
+REPORT_ACTIVE=0
+TMPFILES=()                          # Half-built files are removed by report at exit.
 ZSHENV_ROOT=""                       # the clone root that ~/.zshenv pointed at before this run; found by
                                      # read_zshenv_root, used by opted_in
 GITRC=""                             # the file that `git config --global` writes, which need not be
@@ -239,6 +242,7 @@ claude_ui_opted_in() {
 
 # die <message>: stop with a message on stderr. The EXIT trap still reports where anything went.
 die() {
+  SUMMARY_ACTIONS+=("$*")
   echo "$*" >&2
   exit 1
 }
@@ -286,12 +290,18 @@ link() {
 copy_config() {
   local src="$R/$1" dst="$HOME/$2" kind="$3"
   if [[ -e "$dst" && ! -L "$dst" && $REFRESH -eq 0 ]]; then
+    # shellcheck disable=SC2088  # The summary prints a home-relative path.
+    SUMMARY_SKIPS+=("~/$2 already exists; the machine-local copy was kept")
+    SUMMARY_ACTIONS+=("To replace ~/$2, run: install.sh --refresh-config")
     echo "kept ~/$2 (install.sh --refresh-config replaces it)"
     # A kept file also keeps the filter decision that the FIRST install made. So --with-statusline on a machine
     # that is already installed links the script, but leaves settings.json without the key that names it. The
     # status line then never appears, while every line of the run says success. Say so here instead.
     if [[ $kind == claude ]] && opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh \
        && ! jq -e 'has("statusLine")' "$dst" >/dev/null 2>&1; then
+      # shellcheck disable=SC2088  # The summary prints a home-relative path.
+      SUMMARY_SKIPS+=("~/$2 has no statusLine key")
+      SUMMARY_ACTIONS+=("Run: install.sh --refresh-config")
       echo "…but the kept ~/$2 has no statusLine key, so the status line will not appear:" >&2
       echo "rerun with --refresh-config to rewrite it (the old copy goes to the backup dir)" >&2
     fi
@@ -300,6 +310,9 @@ copy_config() {
     # the run says success.
     if [[ $kind == claude && $WITH_CLAUDE_UI -eq 1 ]] \
        && ! jq -e 'has("tui")' "$dst" >/dev/null 2>&1; then
+      # shellcheck disable=SC2088  # The summary prints a home-relative path.
+      SUMMARY_SKIPS+=("~/$2 has no tui key")
+      SUMMARY_ACTIONS+=("Run: install.sh --refresh-config")
       echo "…but the kept ~/$2 has no tui key, so --with-claude-ui changed nothing:" >&2
       echo "rerun with --refresh-config to rewrite it (the old copy goes to the backup dir)" >&2
     fi
@@ -376,6 +389,7 @@ require_oh_my_zsh() {
   fi
   local page=vm
   [[ $OS == Darwin ]] && page=mac
+  SUMMARY_ACTIONS+=("Install oh-my-zsh first (docs/new-$page.md), then rerun install.sh.")
   echo "install oh-my-zsh first (docs/new-$page.md)" >&2
   exit 1
 }
@@ -556,6 +570,7 @@ ask_vm_host() {
   local h="${WT_HOST:-}"
   if [[ -z $h ]]; then
     if [[ ! -t 0 ]]; then
+      SUMMARY_ACTIONS+=("Run install.sh in a terminal so it can ask for the VM name.")
       echo "WT_HOST unset: run install.sh in a terminal so it can ask for the VM name" >&2
       exit 1
     fi
@@ -694,6 +709,9 @@ hook_bashrc() {
   if [[ -L $rc ]]; then               # a live link into a dotfiles repo: a rewrite here would put a regular
     target="$(readlink -f "$rc")"     # file in its place and orphan the target. The repo would then quietly
     {                                 # stop governing ~/.bashrc, and the user would find out only weeks later.
+      # shellcheck disable=SC2088  # The summary prints a home-relative path.
+      SUMMARY_SKIPS+=("~/.bashrc is managed by a symlink")
+      SUMMARY_ACTIONS+=("Add this as the FIRST line of $target: $line")
       echo "skipped ~/.bashrc: it is a symlink to $target, left alone because a dotfile manager owns it."
       echo "add this yourself, as the FIRST line of $target:"
       echo "  $line"
@@ -754,6 +772,7 @@ require_git_identity() {
     email="$(git config --global user.email 2>/dev/null || true)"
   fi
   if [[ -z "$email" ]]; then
+    SUMMARY_ACTIONS+=("Set user.name/user.email in ~/.gitconfig.local, then rerun install.sh.")
     echo "set user.name/user.email in ~/.gitconfig.local (see the setup page), then rerun" >&2
     exit 1
   fi
@@ -824,6 +843,8 @@ configure_git() {
   require_plain_path "$rc" "$GITRC_LABEL"
   if [[ -L $rc ]]; then               # a live link into a dotfiles repo: `git config --global` follows it
     {                                 # and edits the file that the repo owns and syncs, which is not ours to edit
+      SUMMARY_SKIPS+=("$GITRC_LABEL is managed by a symlink")
+      SUMMARY_ACTIONS+=("Add core.excludesFile = $ex and include.path = $inc to $GITRC_LABEL.")
       echo "skipped $GITRC_LABEL: it is a symlink to $(readlink "$rc"), left alone because a dotfile manager owns it."
       echo "add these yourself, in that file (both paths are this machine's, so keep them out of anything you sync):"
       echo "  [core]"
@@ -842,6 +863,8 @@ configure_git() {
     echo "set core.excludesFile = ~/.gitignore_global in $GITRC_LABEL (it is what git-ignores .worktrees/)"
   elif [[ $have != "$ex" ]]; then      # the user points it at their own file: replacing it would silently drop
     {                                  # every rule in that file, so say what is missing instead
+      SUMMARY_SKIPS+=("core.excludesFile points at $have")
+      SUMMARY_ACTIONS+=("Add the lines of ~/.gitignore_global to $have.")
       echo "kept core.excludesFile = $have: this repo did not change it."
       echo "add the lines of ~/.gitignore_global to that file, or .worktrees/ is not ignored."
     } >&2
@@ -864,10 +887,10 @@ configure_git() {
 #      building one and moving it into place. An EXIT trap runs on SIGINT and SIGTERM too. So without this
 #      job, a ^C mid-run orphans a ~/.claude/settings.json.XXXXXX for good.
 #   2. It says where anything that was in the way ended up. But a die() reaches the trap in the same way as a
-#      finished run does, so the trap must know which one happened. $? at trap entry is still the status that
-#      ends the script. So a failure gets a line that admits the failure, not "done." under the error message.
+#      finished run does. finish_install passes the exit status to report.
+#      A failure gets a failure message instead of "done." under the error message.
 report() {
-  local rc=$?
+  local rc=$1
   if [[ ${#TMPFILES[@]} -gt 0 ]]; then
     rm -f "${TMPFILES[@]}"             # already moved into place: rm -f on a gone path is a no-op
   fi
@@ -886,12 +909,7 @@ report() {
   fi
 }
 
-# report_skipped: names each piece of opt-in config that this run did not install, and the flag that would
-# install it. A default install deliberately leaves the user's own shell, git and tmux alone. A user who wanted
-# the author's prompt should not have to read this script to find out why it never arrived.
-# --with-claude-ui controls the UI keys of ~/.claude/settings.json.
-# This function is deliberately not part of report(). report() is the EXIT trap, so it also runs after a die().
-# There, a list of optional extras would sit under a failure message and say nothing about the failure.
+# Report optional config that this run left alone.
 report_skipped() {
   local f=""
   opted_in "$WITH_ZSHRC"       .zshrc                          || f="$f --with-zshrc"
@@ -904,8 +922,34 @@ report_skipped() {
   fi
   claude_ui_opted_in                                           || f="$f --with-claude-ui"
   if [[ -n $f ]]; then
+    SUMMARY_SKIPS+=("Optional config was not selected:$f")
+    SUMMARY_ACTIONS+=("Run: install.sh$f (or install.sh --opinionated-config)")
     echo "left alone (the author's own taste, not machinery):$f"
     echo "rerun with those flags, or --opinionated-config for all of them, to install them"
+  fi
+}
+
+finish_install() {
+  local rc=$?
+  if (( REPORT_ACTIVE )); then report "$rc"; fi
+  if [[ $rc -eq 0 ]]; then print_summary; else print_summary >&2; fi
+}
+
+# Print the accumulated actions after the final status, including early refusals.
+print_summary() {
+  local item
+  echo "Install summary:"
+  echo "  Skips:"
+  if [[ ${#SUMMARY_SKIPS[@]} -eq 0 ]]; then
+    echo "    none"
+  else
+    for item in "${SUMMARY_SKIPS[@]}"; do printf '    %s\n' "$item"; done
+  fi
+  echo "  Follow-up actions:"
+  if [[ ${#SUMMARY_ACTIONS[@]} -eq 0 ]]; then
+    echo "    none"
+  else
+    for item in "${SUMMARY_ACTIONS[@]}"; do printf '    %s\n' "$item"; done
   fi
 }
 
@@ -913,6 +957,7 @@ report_skipped() {
 source "$R/lib/workgrove/automation.sh"
 
 main() {
+  trap finish_install EXIT
   parse_args "$@"
   BK="$HOME/.workgrove-backup/$(date +%Y%m%d-%H%M%S)-$$"   # timestamp+pid: same-second reruns cannot collide
   # Every step that can refuse runs first, while the machine is still untouched. A half-install that then
@@ -937,7 +982,7 @@ main() {
   record_repos_dir   # Linux only
   trap 'exit 130' INT    # so $? at report's entry is the signal's status, not the last command's
   trap 'exit 143' TERM
-  trap report EXIT   # from here on files move, so always say where the originals went
+  REPORT_ACTIVE=1   # From here on, report where the originals went.
   make_dirs
   install_bins
   link_dotfiles

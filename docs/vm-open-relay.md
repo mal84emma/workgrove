@@ -67,9 +67,10 @@ cmux retries requests above that rate on later updates.
 
 `install.sh` merges this rule into `~/.cmuxterm/automations.json` on the Mac.
 It backs up an existing regular file before replacement.
-It preserves existing rules and leaves managed symlinks or unreadable configurations unchanged.
-An existing rule with the same ID stays unchanged, including an explicitly disabled rule.
-Review the repository rule when the installer reports an existing or managed configuration.
+It preserves other rules and leaves managed symlinks or unreadable configurations unchanged.
+It replaces a changed `wt-native-relay` rule and preserves an explicit `enabled: false` setting.
+It reports unknown schema versions on stderr and skips their merge.
+Each install ends with a summary of skips and follow-up actions.
 
 After an authorized installation, run `cmux automation reload` on the Mac.
 For an older task row, close that row and reopen it with `wt -H <host> attach -r <repo> <name>`.
@@ -92,6 +93,9 @@ If the rule is intentionally disabled, keep that setting.
 Use the printed Mac-side `wt -H <host> open -r <repo> <name>` command instead.
 
 Check `~/.local/state/cmux-hook.log` for a new `handled wt-open` entry for the task's row.
+The log reports missing event fields, unsupported remote backends, missing records, and invalid request fields.
+Dropped `wt-open` and `wt-attach` requests name the check that failed.
+The hook exits zero for dropped requests and leaves their notifications unchanged.
 If the request remains in the notification list without that entry, the hook has not confirmed the open operation.
 The Mac-side open command starts VS Code directly and does not need this automation.
 

@@ -1377,6 +1377,29 @@ scenario_cmux_config() {
   end_scenario
 }
 
+scenario_install_summary() {
+  begin_scenario "install summaries cover successful runs and early refusals" || return 0
+  local h log summary
+  h="$(new_home)"
+  log="$h.log"
+  if assert_install_ok "$h" "$log"; then
+    assert_eq "one summary is printed" 1 "$(count_matches "$log" 'Install summary:')"
+    summary="$h.summary"
+    sed -n '/^Install summary:/,$p' "$log" > "$summary"
+    assert_grep "the summary names optional skips" "$summary" 'Optional config was not selected:'
+    assert_grep "the summary names follow-up actions" "$summary" '  Follow-up actions:'
+    assert_grep "the summary gives the install command" "$summary" 'Run: install.sh'
+  fi
+  assert_install_fails "$h" "$log.2" 2 'usage: install.sh' --unknown
+  assert_eq "an early refusal prints one summary" 1 "$(count_matches "$log.2" 'Install summary:')"
+  assert_eq "empty groups print none at the end" "$(printf 'Install summary:\n  Skips:\n    none\n  Follow-up actions:\n    none')" "$(tail -5 "$log.2")"
+  rm "$h/.gitconfig.local"
+  assert_install_fails "$h" "$log.3" 1 'set user.name/user.email'
+  assert_eq "the identity refusal prints one summary" 1 "$(count_matches "$log.3" 'Install summary:')"
+  assert_eq "the final action names the missing identity" '    Set user.name/user.email in ~/.gitconfig.local, then rerun install.sh.' "$(tail -1 "$log.3")"
+  end_scenario
+}
+
 # ---------------------------------------------------------------------------- main
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
@@ -1384,6 +1407,7 @@ main() {
   echo "install.sh smoke test: repo $REPO, scratch root $TEST_ROOT"
   echo "  this suite under bash ${BASH_VERSION}; install.sh under $INSTALL_BASH" \
        "($("$INSTALL_BASH" -c 'echo "$BASH_VERSION"'))"
+  scenario_install_summary
   scenario_default_empty
   scenario_default_over_existing
   scenario_opinionated
