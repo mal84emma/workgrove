@@ -181,6 +181,7 @@ workgrove/
 │   ├── docs_check_test.py     regression fixtures for documentation checks
 │   ├── options-smoke.sh       command metadata and option parsing
 │   ├── task-smoke.sh          task context, sidecars, identity, and cleanup
+│   ├── metadata-smoke.sh      sidecar compatibility, read counts, and the JSON status contract
 │   ├── lib-smoke.sh           unit tests for every shared shell function
 │   ├── named-outputs-smoke.sh caller-named outputs that match internal local names
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
@@ -196,6 +197,7 @@ workgrove/
     ├── azml-compute.md        Azure ML compute instances over ssh
     ├── vm-open-relay.md        native VM requests after cmux 0.65
     ├── vm-agent-status.md     agent status in VM rows after cmux 0.65
+    ├── wt-json.md             the JSON status contract of wt list --json and wt show --json
     ├── documentation-style.md the writing rules for docs, agent instructions and comments
     └── ssh-config.example     the Host block a VM alias needs
 ```
