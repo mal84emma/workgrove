@@ -108,7 +108,7 @@ scenario_shapes_and_hooks() {
     invoke doctor
     assert_eq "a valid hook resolves: $command" 0 "$STATUS"
   done
-  for command in '/usr/bin/env /missing/hook' '/missing/env true' 'true && /missing/hook' 'printf data | /missing/hook' \
+  for command in 'env exec /usr/bin/true' 'env command /missing/hook' '/usr/bin/env /missing/hook' '/missing/env true' 'true && /missing/hook' 'printf data | /missing/hook' \
       $'true\n/missing/hook' 'bash -c "true && /missing/hook"'; do
     jq --arg command "$command" '.hooks.Stop[0].hooks[0].command=$command' \
       "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"

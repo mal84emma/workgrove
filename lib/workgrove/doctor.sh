@@ -56,6 +56,13 @@ doctor_words() {
   done
 }
 
+doctor_executable() {
+  local path=$1
+  if [[ $path != */* ]]; then path=$(type -P -- "$path") || return 1; fi
+  [[ -f $path && -x $path ]] || return 1
+  printf '%s' "$path"
+}
+
 doctor_simple_hook() {
   local word path
   while (($#)); do
@@ -73,8 +80,7 @@ doctor_simple_hook() {
   case $path in
     if|then|else|fi|for|while|do|done|case|"esac"|function|source|.|cd|pushd|popd|export|unset|eval|set|trap|alias|hash|builtin) return 2 ;;
   esac
-  if [[ $path != */* ]]; then path=$(type -P -- "$path") || return 1; fi
-  [[ -f $path && -x $path ]] || return 1
+  path=$(doctor_executable "$path") || return 1
   case ${path##*/} in
     env)
       while (($#)); do
@@ -87,7 +93,14 @@ doctor_simple_hook() {
           *) break ;;
         esac
       done
-      doctor_simple_hook "$@" ;;
+      while (($#)) && [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+        doctor_static_environment "${1%%=*}" || return 2
+        shift
+      done
+      (($#)) || return 2
+      path=$(doctor_executable "$1") || return 1
+      doctor_simple_hook "$path" "${@:2}" ;;
+    command|exec) doctor_simple_hook "$@" ;;
     sh|bash|zsh)
       while (($#)); do
         word=$1; shift
