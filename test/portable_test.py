@@ -459,7 +459,9 @@ sys.exit(module["main"]())
     def test_portable_installer_and_update_share_supported_python_selection(self):
         runtime = self.source / "lib/workgrove/vm/python-runtime.sh"
         original = runtime.read_text()
-        runtime.write_text(original.replace("/usr/bin/python3", sys.executable))
+        supported = self.base / "supported-python"
+        supported.symlink_to(sys.executable)
+        runtime.write_text(original.replace("/usr/bin/python3", str(supported)))
         self.git("add", str(runtime))
         self.git("commit", "-qm", "Configure the synthetic Python fallback")
         self.install("--persist-agents")
