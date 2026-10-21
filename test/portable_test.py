@@ -1076,6 +1076,33 @@ sys.exit(module["main"]())
         self.command("bootstrap", "--root", str(self.root), "--revision", "0" * 40, ok=False)
         self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), self.revision)
 
+    def test_trusted_bootstrap_rejects_modified_installer_before_execution(self):
+        marker = self.base / "unexpected-installer-execution"
+        self.script.write_text(f'from pathlib import Path; Path({str(marker)!r}).touch()\n' + self.script.read_text())
+        result = subprocess.run([sys.executable, "-B", str(REPO / "lib/workgrove/portable.py"), "bootstrap",
+                                 "--root", str(self.root), "--host", "test-host", "--storage", "os-disk",
+                                 "--revision", self.revision], env=self.env, text=True, capture_output=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("installation-has-local-edits", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), self.revision)
+
+    def test_trusted_bootstrap_rejects_revision_mismatch_before_execution(self):
+        marker = self.base / "unexpected-installer-execution"
+        self.script.write_text(f'from pathlib import Path; Path({str(marker)!r}).touch()\n' + self.script.read_text())
+        self.git("add", "lib/workgrove/portable.py")
+        self.git("commit", "-qm", "Create different synthetic installer revision")
+        selected = self.git("rev-parse", "HEAD").stdout.strip()
+        result = subprocess.run([sys.executable, "-B", str(REPO / "lib/workgrove/portable.py"), "bootstrap",
+                                 "--root", str(self.root), "--host", "test-host", "--storage", "os-disk",
+                                 "--revision", self.revision], env=self.env, text=True, capture_output=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("selected-revision-unavailable", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), selected)
+
     def test_durable_agent_commands_keep_the_owning_installers_indirection(self):
         directory = self.root / "agent-tools/bin"
         directory.mkdir(parents=True)

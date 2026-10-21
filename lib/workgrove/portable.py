@@ -408,6 +408,17 @@ def validate_objects(source):
     require(result.returncode == 0, "installation-object-store-incomplete")
 
 
+def validate_installation(source, requested_revision):
+    """Validate the selected checkout before executing or installing its runtime."""
+    validate_source(source)
+    validate_objects(source)
+    manifest = approved_runtime(source)
+    revision = git(["rev-parse", "HEAD"], source).stdout.strip()
+    require(not requested_revision or requested_revision == revision, "selected-revision-unavailable")
+    require(not git(["status", "--porcelain", "--untracked-files=no"], source).stdout, "installation-has-local-edits")
+    return revision, manifest
+
+
 def validate_agent_args(value):
     require(isinstance(value, dict) and set(value) <= {"claude", "codex"}, "invalid-agent-arguments")
     for args in value.values():
@@ -995,12 +1006,7 @@ def install(args):
     mount = args.mount or (previous["mount"] if previous else str(root) if policy == "volume" else None)
     storage(root, policy, mount)
     source = root / "workgrove"
-    validate_source(source)
-    validate_objects(source)
-    manifest = approved_runtime(source)
-    revision = git(["rev-parse", "HEAD"], source).stdout.strip()
-    require(not args.revision or args.revision == revision, "selected-revision-unavailable")
-    require(not git(["status", "--porcelain", "--untracked-files=no"], source).stdout, "installation-has-local-edits")
+    revision, manifest = validate_installation(source, args.revision)
     host = args.host or (previous["host"] if previous else os.environ.get("WT_HOST"))
     require(host and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", host), "host-alias-required")
     persist = args.persist_agents or bool(previous and previous["persist_agents"])
@@ -1129,6 +1135,7 @@ def bootstrap(args):
             finally:
                 if temporary.exists():
                     shutil.rmtree(temporary)
+    validate_installation(source, args.revision)
     args.root = str(root)
     # Execute the selected revision's installer rather than a different Mac revision's implementation.
     command = [sys.executable, "-B", str(source / "lib/workgrove/portable.py"), "install", "--root", str(root)]

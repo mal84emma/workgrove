@@ -57,6 +57,8 @@ Strict permission checks cover installed runtime files, their directories, and G
 Runtime files, runtime directories, and Git metadata must not contain symbolic links.
 Unrelated environments outside those directories retain their normal layout.
 An existing checkout needs no `--source`; `--revision`, when supplied, must match its current commit.
+Before executing the selected installer, bootstrap checks the object store, runtime contents, requested revision, and tracked edits.
+The selected installer repeats these checks before installation.
 Setup does not reset, switch, or update that checkout.
 Do not seed private investigation history or personal configuration into the public installation.
 
