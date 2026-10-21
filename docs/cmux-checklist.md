@@ -42,6 +42,7 @@ It returns nonzero for failures and version warnings, while reporting the remain
 Hook checks support static commands, environment assignments, shell script arguments, and command separators.
 Dynamic expansions or unsupported shell syntax produce a warning instead of a passing result.
 Changes to executable lookup, shell initialization, or the working directory also produce a warning.
+Interactive, login, restricted, and stdin shell modes require an executable helper file.
 Move such code into an executable helper file, then use its path as the hook command.
 The probe never executes hook commands.
 

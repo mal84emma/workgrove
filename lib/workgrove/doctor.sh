@@ -112,10 +112,10 @@ doctor_simple_hook() {
           --) break ;;
           -c) (($#)) && doctor_hook_path "$1"; return ;;
           --norc|--noprofile|--posix) ;;
-          -o|+o) (($#)) || return 1; shift ;;
-          --rcfile|--init-file) (($#)) && [[ -f $1 ]] || return 1; shift ;;
+          -o|+o|--rcfile|--init-file|--login) return 2 ;;
           -*)
-            [[ $word =~ ^-[A-Za-z]+$ ]] || return 2
+            # Interactive, login, restricted, and stdin modes can change lookup or execution.
+            [[ $word =~ ^-[abefhkmnptuvxBCEHPTc]+$ ]] || return 2
             if [[ $word == *c* ]]; then (($#)) && doctor_hook_path "$1"; return; fi ;;
           *) set -- "$word" "$@"; break ;;
         esac

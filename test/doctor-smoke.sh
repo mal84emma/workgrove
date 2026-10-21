@@ -123,6 +123,19 @@ scenario_shapes_and_hooks() {
     assert_eq "a missing later hook fails: $command" 1 "$STATUS"
     assert_grep 'a missing later helper is reported' "$TEST_ROOT/output" 'FAIL hook command'
   done
+  printf 'PATH=/nonexistent\n' >"$TEST_ROOT/hook-startup"
+  local shell_status=0
+  LC_ALL=C bash --noprofile --rcfile "$TEST_ROOT/hook-startup" -ic jq >"$TEST_ROOT/startup-output" 2>&1 || shell_status=$?
+  assert_eq 'a shell startup file can invalidate inherited lookup' 127 "$shell_status"
+  for command in "bash --rcfile $(printf '%q' "$TEST_ROOT/hook-startup") -ic jq" \
+      "bash --init-file $(printf '%q' "$TEST_ROOT/hook-startup") -c true" \
+      'bash -lc true' 'sh -ic true' 'bash --login -c true' 'bash -rz -c true'; do
+    jq --arg command "$command" '.hooks.Stop[0].hooks[0].command=$command' \
+      "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
+    invoke doctor
+    assert_eq "initialization-changing options cannot pass: $command" 1 "$STATUS"
+    assert_grep 'shell initialization receives an explicit warning' "$TEST_ROOT/output" 'WARN hook command needs a static helper'
+  done
   mkdir -p "${HOME}_UNSET"
   cp "$HOME/.local/bin/cmux-hook" "${HOME}_UNSET/hook"
   # shellcheck disable=SC2016  # The parser must not confuse HOME_UNSET with HOME.
