@@ -213,10 +213,12 @@ doctor_vm() {
   local rc raw='' provider helper rest directory
   rc=0; command -v cmux-tui >/dev/null 2>&1 || rc=1
   doctor_result "$rc" 'cmux-tui CLI' 'cmux ssh <vm> # run on the Mac to install cmux-tui'
-  raw=$(cmux-tui agent hook status claude codex 2>/dev/null) || raw=''
+  raw=$(cmux-tui --json agent hook status claude codex 2>/dev/null) || raw=''
   for provider in claude codex; do
     rc=0
-    grep -Eiq "^[[:space:]]*${provider}[[:space:]:]+installed([[:space:]]|$)" <<<"$raw" || rc=1
+    jq -e --arg provider "$provider" '.errors == [] and (.providers | type == "array")
+      and ([.providers[] | select(.provider == $provider)] | length == 1 and all(.[]; .state == "installed"))' \
+      <<<"$raw" >/dev/null 2>&1 || rc=1
     doctor_result "$rc" "cmux-tui $provider hook" 'cmux-tui agent hook install claude codex'
   done
   helper=$(cmux_tui_agent_helper)

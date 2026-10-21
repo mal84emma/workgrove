@@ -216,7 +216,9 @@ scenario_vm() {
   cp "$HOME/.local/bin/cmux-hook" "$HOME/.local/share/cmux-tui/bin/cmux-tui-hook"
   cat >"$TEST_ROOT/bin/cmux-tui" <<'TUI'
 #!/usr/bin/env bash
-printf 'claude: installed\ncodex: %s\n' "${TUI_CODEX_STATUS:-installed}"
+[[ $* == '--json agent hook status claude codex' ]] || exit 64
+if [[ ${TUI_BAD_JSON:-0} == 1 ]]; then printf 'action status\nproviders []\n'; exit; fi
+printf '{"action":"status","errors":[],"providers":[{"provider":"claude","state":"installed"},{"provider":"codex","state":"%s"}]}\n' "${TUI_CODEX_STATUS:-installed}"
 TUI
   cat >"$TEST_ROOT/bin/tmux" <<'TMUX'
 #!/usr/bin/env bash
@@ -226,6 +228,9 @@ TMUX
   export CMUX_SSH_ATTEMPT_ID=doctor-test WT_HOST=test-vm WT_REPOS_DIR="$TEST_ROOT/repos"
   invoke doctor
   assert_eq 'VM checks pass' 0 "$STATUS"
+  TUI_BAD_JSON=1 invoke doctor
+  assert_eq 'non-JSON cmux-tui status fails the contract check' 1 "$STATUS"
+  assert_grep 'malformed status names the hook check' "$TEST_ROOT/output" 'FAIL cmux-tui claude hook'
   TUI_CODEX_STATUS=absent TMUX_VERSION=3.1 invoke doctor
   assert_eq 'absent hook and old tmux fail' 1 "$STATUS"
   assert_grep 'absent hook repair' "$TEST_ROOT/output" 'Fix: cmux-tui agent hook install claude codex'
