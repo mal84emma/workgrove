@@ -1,0 +1,8 @@
+# Terminal left padding raised by 5pt (Ghostty default is 2 on each side).
+window-padding-x = 7,2
+split-divider-color = #597F68
+
+# Heavier strokes, closer to Terminal.app's text rendering.
+font-thicken = true
+font-family = SF Mono
+theme = light:learning-light,dark:learning-dark
