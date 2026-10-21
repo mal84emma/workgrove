@@ -127,10 +127,17 @@ scenario_shapes_and_hooks() {
 
 scenario_record() {
   begin_scenario 'recorded fixtures redact identities and replay through the fake cmux' || return 0
+  cp "$CMUX_FIXTURES/windows.json" "$TEST_ROOT/saved-windows.json"
+  jq '. + [{id:"EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE",title:"private-window-two"}]' \
+    "$TEST_ROOT/saved-windows.json" >"$CMUX_FIXTURES/windows.json"
+  jq -n --slurpfile rows "$CMUX_FIXTURES/rows.json" '{
+    "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA":$rows[0],
+    "EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE":{workspaces:[{id:"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD",title:"private-title-two"}]}
+  }' >"$CMUX_FIXTURES/rows_by_window.json"
   invoke doctor --record "$TEST_ROOT/recorded"
   assert_eq 'record succeeds' 0 "$STATUS"
   local dir="$TEST_ROOT/recorded/cmux-0.65.1" file
-  for file in rows windows top notifications automation capabilities event; do
+  for file in rows windows top notifications automation capabilities event rows_by_window; do
     assert_regular "$dir" "$file.json"
     if jq -e . "$dir/$file.json" >/dev/null; then pass; else fail "$file is invalid JSON"; fi
   done
@@ -142,12 +149,17 @@ scenario_record() {
     "$(jq -r '.[0].id' "$dir/notifications.json")" "$(jq -r '.payload.notification_id' "$dir/event.json")"
   CMUX_FIXTURES=$dir invoke doctor
   assert_eq 'redacted fixtures pass the contract probe' 0 "$STATUS"
+  local replay_count
+  replay_count=$(CMUX_FIXTURES=$dir bash -c 'source "$1/lib/workgrove/common.sh"; rows_json checked | jq ".workspaces | length"' bash "$REPO")
+  assert_eq 'two recorded windows replay exactly two rows' 2 "$replay_count"
   cp "$CMUX_FIXTURES/event.json" "$TEST_ROOT/saved-event.json"
   printf '{}\n' >"$CMUX_FIXTURES/event.json"
   invoke doctor --record "$TEST_ROOT/no-event"
   assert_eq 'missing event fails recording' 1 "$STATUS"
   assert_absent "$TEST_ROOT/no-event" cmux-0.65.1
   mv "$TEST_ROOT/saved-event.json" "$CMUX_FIXTURES/event.json"
+  mv "$TEST_ROOT/saved-windows.json" "$CMUX_FIXTURES/windows.json"
+  rm "$CMUX_FIXTURES/rows_by_window.json"
   end_scenario
 }
 

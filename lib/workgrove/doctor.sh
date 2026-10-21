@@ -252,19 +252,28 @@ host_doctor() {
 
 # Raw responses stay in shell variables. Only sanitized JSON reaches the destination.
 doctor_record() {
-  local base=$1 windows event raw bundle dir rc=0 file
+  local base=$1 windows event raw bundle dir rc=0 file window rows rows_by_window='{}'
+  local -a window_ids=()
   if [[ -z $base || ! $DOCTOR_CMUX_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     doctor_result 1 'fixture destination or cmux version unavailable' 'wt doctor --record test/fixtures'
     return 1
   fi
   dir=$base/cmux-$DOCTOR_CMUX_VERSION
   windows=$(cmux_call --json list-windows 2>/dev/null) || rc=1
+  if [[ $rc == 0 ]]; then
+    mapfile -t window_ids < <(jq -r '.[].id' <<<"$windows")
+    for window in "${window_ids[@]}"; do
+      rows=$(cmux_call workspace list --json --window "$window" 2>/dev/null) || { rc=1; break; }
+      rows_by_window=$(printf '%s\n' "$rows_by_window" "$rows" | jq -sc --arg window "$window" \
+        '.[0] + {($window):.[1]}') || { rc=1; break; }
+    done
+  fi
   event=$(cmux_call events --after 0 --name notification.created --limit 1 --timeout 3 --no-ack --no-heartbeat 2>/dev/null) || rc=1
   raw=$(cmux_call capabilities 2>/dev/null) || rc=1
   bundle=$(printf '%s\n' "$DOCTOR_ROWS" "$windows" "$DOCTOR_NOTIFICATIONS" "$DOCTOR_TOP" \
-    "$DOCTOR_AUTOMATION" "$raw" "$event" | jq -s '
-      if length == 7 then
-        {rows:.[0],windows:.[1],notifications:.[2],top:.[3],automation:.[4],capabilities:.[5],event:.[6]}
+    "$DOCTOR_AUTOMATION" "$raw" "$event" "$rows_by_window" | jq -s '
+      if length == 8 then
+        {rows:.[0],windows:.[1],notifications:.[2],top:.[3],automation:.[4],capabilities:.[5],event:.[6],rows_by_window:.[7]}
       else error("incomplete cmux capture") end' 2>/dev/null) || rc=1
   if [[ $rc == 0 ]]; then
     doctor_json "$event" '.name == "notification.created" and (.workspace_id | type == "string")
@@ -278,7 +287,7 @@ doctor_record() {
     return 1
   fi
   if mkdir -p "$dir"; then
-    for file in rows windows notifications top automation capabilities event; do
+    for file in rows windows notifications top automation capabilities event rows_by_window; do
       jq ".$file" <<<"$bundle" >"$dir/$file.json" || rc=1
     done
     printf 'cmux %s\n' "$DOCTOR_CMUX_VERSION" >"$dir/version.txt" || rc=1

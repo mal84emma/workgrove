@@ -9,7 +9,11 @@ case "$*" in
   capabilities)
     jq --arg method "${FAKE_CMUX_MISSING_METHOD:-}" '.methods -= [$method]' "$fixtures/capabilities.json" ;;
   '--json list-windows') cat "$fixtures/windows.json" ;;
-  'workspace list --json'*) cat "$fixtures/rows.json" ;;
+  'workspace list --json --window '*)
+    if [[ -f $fixtures/rows_by_window.json ]]; then
+      jq -e --arg window "$5" 'if has($window) then .[$window] else error("unknown fixture window") end' "$fixtures/rows_by_window.json"
+    else cat "$fixtures/rows.json"; fi ;;
+  'workspace list --json') cat "$fixtures/rows.json" ;;
   'top --json') cat "$fixtures/top.json" ;;
   '--json list-notifications') cat "$fixtures/notifications.json" ;;
   'automation show wt-native-relay') cat "$fixtures/automation.json" ;;
