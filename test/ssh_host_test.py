@@ -194,13 +194,29 @@ sys.exit(int(open(os.environ["SSH_TEST_STATUS"]).read()))
         self.assertTrue(all("-G" in call for call in self.calls()[-2:]))
 
     def test_inherited_identity_and_trust_policy_conflicts(self):
-        for policy in ("IdentityFile /different/key", "KnownHostsCommand echo-secret", "VerifyHostKeyDNS yes",
+        self.fragment.write_text(self.fragment.read_text() + "IdentityFile /supplier/key\nIdentitiesOnly yes\n")
+        for policy in ("IdentityFile /different/key", "CertificateFile /different/cert.pub",
+                       "KnownHostsCommand echo-secret", "VerifyHostKeyDNS yes",
                        "GlobalKnownHostsFile /dev/null", "UpdateHostKeys no"):
             with self.subTest(policy=policy):
                 original = "Host *\n    " + policy + "\n"
                 self.existing(original)
-                self.add(ok=False)
+                before = len(self.calls())
+                self.assertIn("effective-config-conflict", self.add(ok=False).stderr)
                 self.assertEqual(self.config.read_text(), original)
+                self.assertTrue(all("-G" in call for call in self.calls()[before:]))
+
+    def test_check_rejects_inherited_certificate_without_connecting(self):
+        self.fragment.write_text(self.fragment.read_text() + "IdentityFile /supplier/key\nIdentitiesOnly yes\n")
+        self.add()
+        with self.config.open("a") as stream:
+            stream.write("Host *\n    CertificateFile /different/cert.pub\n")
+        original = self.config.read_bytes()
+        before = len(self.calls())
+        result = self.run_helper("check", "test-host", ok=False)
+        self.assertIn("effective-config-conflict", result.stderr)
+        self.assertEqual(self.config.read_bytes(), original)
+        self.assertTrue(all("-G" in call for call in self.calls()[before:]))
 
     def test_unmanaged_alias_and_broken_markers_leave_config_unchanged(self):
         for original in (
@@ -382,19 +398,21 @@ sys.exit(int(open(os.environ["SSH_TEST_STATUS"]).read()))
 
     def test_default_validation_includes_system_policy_and_rolls_back(self):
         original = "# Original configuration.\n"
-        self.existing(original)
         backup = self.config.with_name("config.bak")
-        backup.write_text("# Previous backup.\n")
-        self.env["SSH_TEST_SYSTEM"] = "IdentityFile /different/system-key\n"
-        result = self.default_helper("add", "test-host", "--fragment", str(self.fragment), ok=False)
-        self.assertIn("effective-config-conflict", result.stderr)
-        self.assertEqual(self.config.read_text(), original)
-        self.assertEqual(backup.read_text(), "# Previous backup.\n")
-        self.assertTrue(all("-G" in call for call in self.calls()))
-        self.config.unlink()
-        self.default_helper("add", "test-host", "--fragment", str(self.fragment), ok=False)
-        self.assertFalse(self.config.exists())
-        self.assertEqual(backup.read_text(), "# Previous backup.\n")
+        for policy in ("IdentityFile /different/system-key", "CertificateFile /different/system-cert.pub"):
+            with self.subTest(policy=policy):
+                self.existing(original)
+                backup.write_text("# Previous backup.\n")
+                self.env["SSH_TEST_SYSTEM"] = policy + "\n"
+                result = self.default_helper("add", "test-host", "--fragment", str(self.fragment), ok=False)
+                self.assertIn("effective-config-conflict", result.stderr)
+                self.assertEqual(self.config.read_text(), original)
+                self.assertEqual(backup.read_text(), "# Previous backup.\n")
+                self.assertTrue(all("-G" in call for call in self.calls()))
+                self.config.unlink()
+                self.default_helper("add", "test-host", "--fragment", str(self.fragment), ok=False)
+                self.assertFalse(self.config.exists())
+                self.assertEqual(backup.read_text(), "# Previous backup.\n")
 
     def test_default_check_and_verification_use_ordinary_transport_semantics(self):
         self.default_helper("add", "test-host", "--fragment", str(self.fragment))

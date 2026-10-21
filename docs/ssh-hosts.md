@@ -102,7 +102,7 @@ These limits keep the import grammar independent of any SSH supplier.
 
 The fragment supplies file references; the helper never reads private keys or edits trust files itself.
 OpenSSH can read those files during verification and apply the approved configuration's ordinary trust behavior.
-The helper compares inherited identity and trust policy, including additional identity files and known-hosts commands.
+The helper compares inherited identity and trust policy, including additional identity files, certificates, and known-hosts commands.
 Existing user-owned `Match exec` sections can execute during OpenSSH processing after fragment validation.
 Only register trusted local configuration.
 

@@ -35,7 +35,7 @@ KEYS = PATH_KEYS | BOOL_KEYS | INT_KEYS | {
 }
 # Compare security policy as well as the endpoint. Extra identities can change authentication.
 EFFECTIVE_KEYS = {
-    "hostname", "port", "user", "hostkeyalias", "stricthostkeychecking", "identityfile",
+    "hostname", "port", "user", "hostkeyalias", "stricthostkeychecking", "identityfile", "certificatefile",
     "userknownhostsfile", "globalknownhostsfile", "knownhostscommand", "verifyhostkeydns",
     "hostkeyalgorithms", "identitiesonly", "checkhostip", "updatehostkeys",
 }
