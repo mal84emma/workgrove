@@ -80,6 +80,12 @@ Repeated identity selection retains personal settings without adding include lay
 For identity refreshes, select the original personal file or the active global configuration.
 The installer never invents an identity or copies a different user's sign-in.
 
+After the first installation, the saved global configuration remains authoritative.
+Full setup ignores replacement HOME configuration and inherited `GIT_CONFIG_GLOBAL` paths.
+An explicit `--git-identity` refresh preserves saved custom settings and credential-helper resets.
+If the saved global file is missing, setup requires an explicit identity file before rebuilding it.
+That repair cannot recover settings from the missing file.
+
 ## Trust a personal volume
 
 Strict permission checks are the default.
@@ -142,6 +148,9 @@ Shell files source an exports file; sourcing it never installs packages, restore
 Git uses the persistent configuration through `GIT_CONFIG_GLOBAL` and a home compatibility link.
 Normal `wt update` and bare installer reruns retain the portable root and selected options.
 
+Surviving portable environment files prevent fallback to the original installer.
+If the saved profile is missing, an ordinary rerun refuses and requires explicit setup.
+
 Processes, tmux sockets, relay sockets, temporary agent status, and native terminal identities remain runtime state.
 A persistent pathname cannot preserve a running process across host shutdown.
 
@@ -154,10 +163,24 @@ Setup never stops them automatically.
 It preserves settings, authentication files, sessions, and foreign hooks while migrating the normal home directories.
 It preserves an existing `CODEX_HOME` or `CLAUDE_CONFIG_DIR` instead of replacing another tool's configuration root.
 Confirm persistence independently when a redirected root lies outside the selected persistent root.
+Existing profiles retain their selected agent roots when HOME or inherited environment variables change.
+
+Without a selected Claude directory, setup leaves `CLAUDE_CONFIG_DIR` unset.
+Claude continues to read its global state from `~/.claude.json`.
+When `--persist-agents` moves that default directory, setup also moves global state into the selected directory's `.claude.json`.
+An existing explicitly redirected Claude directory keeps its own global state; unrelated default HOME state remains untouched.
+Conflicting migration files cause refusal before configuration changes.
+Setup never merges sign-in state.
 
 If two separate configuration locations already exist, setup stops before migration.
 It never selects between credentials or merges conversation directories.
+Setup also refuses a directory move that would contain another selected agent root.
 Mutable configuration links into Git repositories also cause refusal.
+
+Before moving directories, setup checks every copied link, including links in nested state and foreign skills.
+Links must retain their targets after migration and restoration of the home directory links.
+Internal links that move with their targets and absolute external links remain supported.
+Other links cause `agent-link-migration-conflict` before any state moves.
 Resolve those conflicts privately before retrying.
 Restore-only refuses new conflicting home data and refuses missing selected persistent agent roots.
 
@@ -193,6 +216,9 @@ Known credential-related argument names cause refusal.
 
 `--with-tmux-conf` explicitly selects workgrove's terminal settings and remains sticky across updates.
 Existing unrelated shell content and personal instructions remain intact.
+Full setup copies linked personal instructions before adding workgrove's instructions.
+This supports migration from the original installer without writing into its old checkout.
+Restore-only accepts existing instruction links only when they target the saved public installation.
 Other desktop preference flags belong to the original installation procedure.
 
 ## Check readiness
@@ -242,8 +268,23 @@ wt -H <host> doctor --json
 
 Restore-only uses the durable installation and Python's standard library.
 It performs no download, package installation, Git update, login, or agent restart.
+Setup, restore-only, and doctor apply the same safety checks to managed personal configuration files.
+They check ownership, permissions, repository boundaries, and link targets without requiring agent authentication.
 If packages or Python were also lost, run full setup with the saved root and explicit storage policy.
 Full setup can install missing prerequisites before repairing compatibility links.
+
+The saved runtime manifest records every file and directory under `bin/`, `lib/`, and `home/`, plus `install.sh` and repository configuration.
+Full setup verifies those files against the actual standalone Git checkout before saving the manifest.
+Restore-only compares their contents without invoking Git.
+Changes require full setup; untracked runtime files and redirected Git worktrees cause refusal.
+Unrelated checkout environments, such as `.venv/`, remain outside this check.
+Repository-local configuration includes and `extensions.worktreeConfig` are unsupported because they introduce additional repository configuration sources.
+
+Older profiles with partial file signatures require one explicit full setup before restoration or task creation.
+The upgrade preserves saved Git configuration and migrates stranded default Claude state when its destination is unambiguous.
+Conflicting Claude state requires private resolution before retrying setup.
+An older installer that cannot read the upgraded profile refuses instead of downgrading it.
+Use a revision that supports the saved profile for subsequent setup and updates.
 
 After readiness passes, follow [the shared VM recovery procedure](new-vm.md#recovering-a-vm-row).
 Inspect the original checkout and task state before attaching.

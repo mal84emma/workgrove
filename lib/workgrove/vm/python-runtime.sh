@@ -23,9 +23,16 @@ wg_has_portable_profile() {
   for wg_path in "$HOME/.config/workgrove/profile.json" "$HOME/.config/workgrove/env.sh"; do
     [ ! -e "$wg_path" ] && [ ! -L "$wg_path" ] || return 0
   done
-  wg_executable=$(/usr/bin/readlink -f "$HOME/.local/bin/wt" 2>/dev/null) || return 1
-  wg_parent=${wg_executable%/*}
-  wg_parent=${wg_parent%/*}
-  wg_parent=${wg_parent%/*}
-  [ -f "$wg_parent/.config/workgrove/profile.json" ]
+  wg_parent=${1:-}
+  if [ -z "$wg_parent" ]; then
+    wg_executable=$(/usr/bin/readlink -f "$HOME/.local/bin/wt" 2>/dev/null) || return 1
+    wg_parent=${wg_executable%/*}
+    wg_parent=${wg_parent%/*}
+    wg_parent=${wg_parent%/*}
+  fi
+  for wg_path in "$wg_parent/.config/workgrove/profile.json" "$wg_parent/.config/workgrove/env.sh" \
+                 "$wg_parent/.config/workgrove/git/global"; do
+    [ ! -e "$wg_path" ] && [ ! -L "$wg_path" ] || return 0
+  done
+  return 1
 }

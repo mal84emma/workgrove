@@ -80,6 +80,457 @@ class PortableTests(unittest.TestCase):
     def profile(self):
         return json.loads((self.root / ".config/workgrove/profile.json").read_text())
 
+    def claude_lookup(self):
+        fixture = ('import json,os; from pathlib import Path; '
+                   'print(json.dumps([os.environ.get("CLAUDE_CONFIG_DIR"), '
+                   '(Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home())/".claude.json").read_text()]))')
+        result = subprocess.run([str(self.tools / "bash"), "-c", '. "$HOME/.config/workgrove/env.sh"; exec "$@"',
+                                 "fixture", sys.executable, "-c", fixture], env=self.env,
+                                capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+
+    def test_claude_default_lookup_and_explicit_persistence_transition(self):
+        state = json.dumps({"synthetic_session": CANARY, "trusted_project": "example"})
+        (self.home / ".claude.json").write_text(state)
+        self.install()
+        self.assertEqual(self.claude_lookup(), [None, state])
+        self.install()
+        self.assertEqual(self.claude_lookup(), [None, state])
+        self.install("--persist-agents")
+        selected = self.profile()["agent_roots"]["claude"]
+        self.assertEqual(self.claude_lookup(), [selected, state])
+        self.assertFalse((self.home / ".claude.json").exists())
+        self.install()
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=str(self.base / "no-tools")))
+        self.assertEqual(self.claude_lookup(), [selected, state])
+
+    def test_existing_explicit_claude_root_keeps_its_own_identity(self):
+        external = self.base / "selected-claude"
+        external.mkdir(mode=0o700)
+        (external / ".claude.json").write_text("selected identity")
+        (self.home / ".claude.json").write_text("unrelated default identity")
+        self.env["CLAUDE_CONFIG_DIR"] = str(external)
+        self.install("--persist-agents")
+        self.assertEqual(self.claude_lookup(), [str(external), "selected identity"])
+        self.assertEqual((self.home / ".claude.json").read_text(), "unrelated default identity")
+        self.install()
+        self.assertEqual(self.claude_lookup(), [str(external), "selected identity"])
+        old = self.profile()
+        old["schema"] = 1
+        old["signatures"] = {name: old["runtime_manifest"][name]
+                             for name in ("bin/wt", "install.sh", "lib/workgrove/portable.py")}
+        del old["runtime_manifest"], old["claude_config_dir"]
+        (self.root / ".config/workgrove/profile.json").write_text(json.dumps(old))
+        self.install()
+        self.assertEqual(self.claude_lookup(), [str(external), "selected identity"])
+        self.assertEqual((self.home / ".claude.json").read_text(), "unrelated default identity")
+
+    def test_claude_global_conflict_refuses_before_mutation(self):
+        (self.home / ".claude.json").write_text("default identity")
+        selected = self.root / ".config/claude"
+        selected.mkdir(parents=True, mode=0o700)
+        (selected / ".claude.json").write_text("other identity")
+        result = self.install("--persist-agents", ok=False)
+        self.assertIn("claude-global-state-conflict", result.stderr)
+        self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+        self.assertEqual((self.home / ".claude.json").read_text(), "default identity")
+        self.assertEqual((selected / ".claude.json").read_text(), "other identity")
+
+    def test_explicit_claude_directory_alias_preserves_selected_global_state(self):
+        selected = self.root / "selected-claude"
+        selected.mkdir(mode=0o700)
+        state = selected / ".claude.json"
+        state.write_text("selected global state")
+        alias = self.base / "claude-alias"
+        alias.symlink_to(selected)
+        self.env["CLAUDE_CONFIG_DIR"] = str(alias)
+        self.install("--persist-agents")
+        self.assertEqual(self.claude_lookup(), [str(selected), "selected global state"])
+        self.install()
+        self.assertEqual(state.read_text(), "selected global state")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        self.command("restore", "--root", str(self.root))
+        self.assertEqual(self.claude_lookup(), [str(selected), "selected global state"])
+
+    def test_replacement_home_and_environment_cannot_replace_durable_git(self):
+        with (self.home / ".gitconfig").open("a") as stream:
+            stream.write('[credential]\n helper =\n helper = durable-helper\n[custom]\n preserved = yes\n')
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        replacement = self.home / ".gitconfig"
+        replacement.write_text('[user]\n name = Image User\n email = image@example.invalid\n[credential]\n helper = image-helper\n')
+        self.install()
+        self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.name").stdout.strip(), "Test User")
+        self.assertEqual(self.git("config", "--global", "--includes", "--get", "custom.preserved").stdout.strip(), "yes")
+        alternate = self.base / "alternate-global"
+        alternate.write_text('[user]\n name = Other User\n email = other@example.invalid\n')
+        self.env["GIT_CONFIG_GLOBAL"] = str(alternate)
+        self.install()
+        active = self.root / ".config/workgrove/git/global"
+        self.assertEqual(self.git("config", "--file", str(active), "--includes", "--get", "user.name").stdout.strip(), "Test User")
+        self.install("--git-identity", str(alternate))
+        self.assertEqual(self.git("config", "--file", str(active), "--includes", "--get", "user.name").stdout.strip(), "Other User")
+        self.assertEqual(self.git("config", "--file", str(active), "--includes", "--get", "custom.preserved").stdout.strip(), "yes")
+        helpers = self.git("config", "--file", str(active), "--includes", "--get-all", "credential.helper").stdout.splitlines()
+        self.assertEqual(helpers[-2:], ["", "durable-helper"])
+        active.unlink()
+        self.assertIn("personal-git-configuration-missing", self.install(ok=False).stderr)
+        self.install("--git-identity", str(alternate))
+        self.assertEqual(self.git("config", "--file", str(active), "--includes", "--get", "user.name").stdout.strip(), "Other User")
+
+    def test_actual_update_repairs_missing_profile_link_without_legacy_fallback(self):
+        upstream = self.base / "upstream.git"
+        self.git("clone", "--bare", str(self.source), str(upstream))
+        branch = self.git("branch", "--show-current").stdout.strip()
+        self.git("remote", "add", "origin", str(upstream))
+        self.git("fetch", "origin")
+        self.git("branch", "--set-upstream-to", "origin/" + branch)
+        self.install("--persist-agents")
+        (self.home / ".config/workgrove/profile.json").unlink()
+        result = subprocess.run([str(self.tools / "bash"), str(self.home / ".local/bin/wt"), "update"],
+                                env=dict(self.env, FORCE_OS="Linux"), capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.home / ".config/workgrove/profile.json").is_symlink())
+        self.assertFalse((self.home / ".zshenv").is_symlink())
+        self.assertIn("workgrove environment", (self.home / ".zshenv").read_text())
+        publisher = self.base / "publisher"
+        self.git("clone", str(upstream), str(publisher))
+        updated = publisher / "lib/workgrove/remote.sh"
+        updated.write_text(updated.read_text() + "\n# Updated synthetic runtime.\n")
+        for args in (("add", str(updated)), ("commit", "-qm", "Update synthetic runtime"), ("push", "origin", branch)):
+            subprocess.run([str(self.tools / "git"), "-C", str(publisher), *args], env=self.env,
+                           capture_output=True, text=True, check=True)
+        master, slave = pty.openpty()
+        try:
+            os.write(master, b"y\n")
+            result = subprocess.run([str(self.tools / "bash"), str(self.home / ".local/bin/wt"), "update"],
+                                    stdin=slave, env=dict(self.env, FORCE_OS="Linux"),
+                                    capture_output=True, text=True, timeout=30)
+        finally:
+            os.close(slave)
+            os.close(master)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(self.profile()["revision"], self.revision)
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+        saved = self.root / ".config/workgrove/profile.json"
+        saved.unlink()
+        before = (self.home / ".zshenv").read_bytes()
+        result = subprocess.run([str(self.tools / "bash"), str(self.source / "install.sh")],
+                                env=dict(self.env, FORCE_OS="Linux"), capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("portable-profile-missing-run-explicit-setup", result.stderr)
+        self.assertEqual((self.home / ".zshenv").read_bytes(), before)
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        result = subprocess.run([str(self.tools / "bash"), str(self.source / "install.sh")],
+                                env=dict(self.env, FORCE_OS="Linux"), capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("portable-profile-missing-run-explicit-setup", result.stderr)
+        self.assertFalse((self.home / ".zshenv").exists())
+
+    def test_actual_legacy_install_migrates_links_without_modifying_old_checkout(self):
+        legacy = self.base / "legacy"
+        shutil.copytree(self.source, legacy, symlinks=True)
+        (self.home / ".gitconfig").unlink()
+        result = subprocess.run([str(self.tools / "bash"), str(legacy / "install.sh")],
+                                env=dict(self.env, FORCE_OS="Linux", WT_HOST="test-host"),
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.home / ".claude/AGENTS.md").is_symlink())
+        personal = self.base / "personal-instructions"
+        personal.write_text("Keep this personal instruction.\n")
+        (self.home / ".codex/AGENTS.md").unlink()
+        (self.home / ".codex/AGENTS.md").symlink_to(personal)
+        (self.home / ".claude.json").write_text("legacy global state")
+        (self.home / ".codex/auth.json").write_text(CANARY)
+        before = {str(path.relative_to(legacy)): path.read_bytes() for path in legacy.rglob("*") if path.is_file()}
+        self.install("--persist-agents")
+        self.install()
+        self.assertIn("Keep this personal instruction.", (self.home / ".codex/AGENTS.md").read_text())
+        self.assertEqual((self.home / ".codex/auth.json").read_text(), CANARY)
+        self.assertEqual(self.claude_lookup()[1], "legacy global state")
+        self.assertEqual(personal.read_text(), "Keep this personal instruction.\n")
+        after = {str(path.relative_to(legacy)): path.read_bytes() for path in legacy.rglob("*") if path.is_file()}
+        self.assertEqual(after, before)
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+
+    def test_missing_profile_evidence_blocks_clean_environment_preflight(self):
+        self.install("--persist-agents")
+        (self.root / ".config/workgrove/profile.json").unlink()
+        self.assertNotIn("WT_REMOTE_ROOT", self.env)
+        before = (self.home / ".config/workgrove/env.sh").read_bytes()
+        for remove_home_links in (False, True):
+            if remove_home_links:
+                (self.home / ".config/workgrove/profile.json").unlink()
+                (self.home / ".config/workgrove/env.sh").unlink()
+            report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+            self.assertFalse(report["ready"])
+            self.assertIn("portable-profile-missing", report["issues"])
+            self.command("doctor", "--preflight", ok=False)
+            self.assertEqual((self.root / ".config/workgrove/env.sh").read_bytes(), before)
+            self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+
+    def test_manifest_covers_all_runtime_inputs_and_requires_full_setup_after_update(self):
+        self.install("--persist-agents")
+        for name in ("lib/workgrove/remote.sh", "bin/cmux-hook", "home/.claude/AGENTS.md"):
+            with self.subTest(name=name):
+                path = self.source / name
+                before = path.read_bytes()
+                path.write_bytes(before + b"\n# Modified runtime input.\n")
+                report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+                self.assertIn("installation-changed-run-full-setup", report["issues"])
+                self.command("restore", "--root", str(self.root), ok=False,
+                             env=dict(self.env, PATH=str(self.base / "no-tools")))
+                self.assertIn("installation-has-local-edits", self.install(ok=False).stderr)
+                path.write_bytes(before)
+        path = self.source / "lib/workgrove/remote.sh"
+        path.write_text(path.read_text() + "\n# Updated public runtime.\n")
+        self.git("add", str(path))
+        self.git("commit", "-qm", "Update synthetic runtime")
+        self.install()
+        self.command("restore", "--root", str(self.root))
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+
+    def test_manifest_rejects_untracked_inputs_but_ignores_unrelated_environment(self):
+        extra = self.source / "bin/extra-command"
+        extra.write_text("#!/bin/sh\nexit 0\n")
+        extra.chmod(0o700)
+        self.assertIn("installation-untracked-runtime", self.install(ok=False).stderr)
+        extra.unlink()
+        unused = self.source / ".venv/bin"
+        unused.mkdir(parents=True)
+        (unused / "python").symlink_to(sys.executable)
+        self.install()
+        (self.source / "home/.agents/skills/untracked-skill").mkdir()
+        self.command("doctor", "--json", ok=False)
+        self.assertIn("installation-untracked-runtime", self.install(ok=False).stderr)
+
+    def test_effective_git_worktree_must_match_the_installation(self):
+        external = self.base / "other-tree"
+        shutil.copytree(self.source, external, ignore=shutil.ignore_patterns(".git"))
+        self.git("config", "core.worktree", str(external))
+        self.assertIn("installation-identity-conflict", self.install(ok=False).stderr)
+        self.git("config", "--unset", "core.worktree")
+        self.install()
+        self.git("config", "core.worktree", str(external))
+        self.command("restore", "--root", str(self.root), ok=False)
+        self.command("doctor", "--json", ok=False)
+
+    def test_git_status_cannot_hide_modified_runtime_contents(self):
+        path = self.source / "lib/workgrove/remote.sh"
+        self.git("update-index", "--assume-unchanged", str(path))
+        path.write_text(path.read_text() + "\n# Modified hidden runtime.\n")
+        self.assertEqual(self.git("status", "--porcelain").stdout, "")
+        self.assertIn("installation-has-local-edits", self.install(ok=False).stderr)
+
+    def test_replacement_objects_cannot_change_the_selected_revision_runtime(self):
+        path = self.source / "lib/workgrove/remote.sh"
+        path.write_text(path.read_text() + "\n# Replacement runtime.\n")
+        self.git("add", str(path))
+        self.git("commit", "-qm", "Create replacement runtime")
+        replacement = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("reset", "--soft", self.revision)
+        self.git("replace", self.revision, replacement)
+        self.assertEqual(self.git("status", "--porcelain").stdout, "")
+        result = self.install("--revision", self.revision, ok=False)
+        self.assertIn("installation-has-local-edits", result.stderr)
+        self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+        self.git("replace", "-d", self.revision)
+        self.git("reset", "--hard", replacement)
+        self.install("--revision", replacement)
+        self.assertEqual(self.profile()["revision"], replacement)
+
+    def test_standalone_runtime_rejects_external_repository_configuration(self):
+        include = self.base / "repository-options"
+        include.write_text("[core]\n bare = false\n")
+        self.git("config", "include.path", str(include))
+        self.assertIn("standalone-configuration-required", self.install(ok=False).stderr)
+        self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+
+    def test_old_partial_manifest_requires_explicit_full_setup_upgrade(self):
+        self.install("--persist-agents")
+        path = self.root / ".config/workgrove/profile.json"
+        old = self.profile()
+        old["schema"] = 1
+        old["signatures"] = {name: old["runtime_manifest"][name]
+                             for name in ("bin/wt", "install.sh", "lib/workgrove/portable.py")}
+        del old["runtime_manifest"], old["claude_config_dir"]
+        path.write_text(json.dumps(old))
+        self.assertIn("profile-upgrade-run-full-setup", self.command("restore", "--root", str(self.root), ok=False).stderr)
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("profile-upgrade-run-full-setup", report["issues"])
+        (self.home / ".claude.json").write_text("stranded global state")
+        self.install()
+        self.assertEqual(self.profile()["schema"], 2)
+        self.assertEqual(self.claude_lookup()[1], "stranded global state")
+        self.command("restore", "--root", str(self.root))
+
+    def test_every_managed_personal_file_has_the_same_safety_checks(self):
+        self.install("--persist-agents")
+        claude = Path(self.profile()["agent_roots"]["claude"])
+        (claude / ".claude.json").write_text("synthetic global state")
+        paths = [Path(self.profile()["agent_roots"]["codex"]) / "config.toml",
+                 claude / ".claude.json", self.root / ".config/workgrove/git/global"]
+        for path in paths:
+            with self.subTest(file=path.name):
+                path.chmod(0o666)
+                report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+                self.assertIn("shared-configuration-target", report["issues"])
+                self.command("doctor", "--preflight", ok=False)
+                self.assertIn("shared-configuration-target", self.command("restore", "--root", str(self.root), ok=False).stderr)
+                self.assertIn("shared-configuration-target", self.install(ok=False).stderr)
+                path.chmod(0o600)
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+
+    def test_mutable_configuration_links_and_hardlinks_fail_every_entry_point(self):
+        self.install("--persist-agents")
+        codex = Path(self.profile()["agent_roots"]["codex"])
+        path = codex / "config.toml"
+        path.unlink()
+        path.symlink_to(self.source / "home/.codex/config.base.toml")
+        for command in (("doctor", "--json"), ("restore", "--root", str(self.root)),
+                        ("install", "--root", str(self.root))):
+            result = self.command(*command, ok=False)
+            self.assertIn("repository-destination", result.stdout + result.stderr)
+        path.unlink()
+        path.write_text("custom = true\n")
+        original = self.base / "authentication"
+        original.write_text(CANARY)
+        os.link(original, codex / "auth.json")
+        for command in (("doctor", "--json"), ("restore", "--root", str(self.root)),
+                        ("install", "--root", str(self.root))):
+            result = self.command(*command, ok=False)
+            self.assertIn("hardlinked-file", result.stdout + result.stderr)
+
+    def test_trusted_volume_does_not_require_exact_runtime_mode_bits(self):
+        self.volume_install("--persist-agents", "--trust-personal-volume")
+        for path in (self.source / "lib/workgrove/remote.sh",
+                     Path(self.profile()["agent_roots"]["codex"]) / "config.toml"):
+            path.chmod(0o666)
+        self.assertTrue(json.loads(self.volume_command("doctor", "--json").stdout)["ready"])
+        self.volume_command("restore", "--root", str(self.root))
+        self.volume_install()
+        self.volume_install("--strict-permissions", ok=False)
+        self.assertTrue(self.profile()["trust_personal_volume"])
+
+    def test_partial_agent_move_can_be_retried_without_losing_claude_state(self):
+        self.install()
+        state = self.home / ".claude.json"
+        state.write_text("existing global state")
+        target = self.root / ".config/claude"
+        (self.home / ".claude").rename(target)
+        self.install("--persist-agents")
+        self.assertEqual(self.claude_lookup(), [str(target), "existing global state"])
+        self.assertTrue((self.home / ".claude").is_symlink())
+
+    def test_migration_refuses_changed_link_referents_before_moving_any_state(self):
+        claude = self.home / ".claude"
+        claude.mkdir()
+        (self.home / "selected-settings.json").write_text('{"custom":true}')
+        (self.home / "foreign-skills").mkdir()
+        (self.home / "foreign-skills/SKILL.md").write_text("Synthetic foreign skill.\n")
+        links = (("settings.json", "../selected-settings.json"),
+                 ("nested/session", "../../selected-settings.json"),
+                 ("skills/foreign", "../../foreign-skills"))
+        for name, reference in links:
+            with self.subTest(name=name):
+                path = claude / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.symlink_to(reference)
+                result = self.install("--persist-agents", ok=False)
+                self.assertIn("agent-link-migration-conflict", result.stderr)
+                self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+                self.assertFalse((self.root / ".config/claude").exists())
+                self.assertTrue(path.exists())
+                self.assertFalse(claude.is_symlink())
+                path.unlink()
+
+    def test_migration_keeps_internal_links_and_absolute_external_links(self):
+        claude = self.home / ".claude"
+        (claude / "nested").mkdir(parents=True)
+        (claude / "data").write_text("synthetic session")
+        (claude / "nested/internal").symlink_to("../data")
+        (claude / "absolute-internal").symlink_to(claude / "data")
+        external = self.base / "external-state"
+        external.write_text("external session")
+        (claude / "nested/external").symlink_to(external)
+        (claude / "AGENTS.md").symlink_to("../selected-instructions")
+        (self.home / "selected-instructions").write_text("Keep these personal instructions.\n")
+        self.install("--persist-agents")
+        self.assertEqual((claude / "nested/internal").read_text(), "synthetic session")
+        self.assertEqual((claude / "absolute-internal").read_text(), "synthetic session")
+        self.assertEqual((claude / "nested/external").read_text(), "external session")
+        self.assertIn("Keep these personal instructions.", (claude / "AGENTS.md").read_text())
+        self.install()
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        self.command("restore", "--root", str(self.root))
+        self.assertEqual((claude / "nested/internal").read_text(), "synthetic session")
+        self.assertEqual((claude / "absolute-internal").read_text(), "synthetic session")
+
+    def test_migration_checks_parent_traversal_after_a_directory_link(self):
+        claude = self.home / ".claude"
+        claude.mkdir()
+        (self.home / "outside").write_text("external session")
+        (claude / "alias").symlink_to(claude)
+        (claude / "session").symlink_to("alias/../outside")
+        result = self.install("--persist-agents", ok=False)
+        self.assertIn("agent-link-migration-conflict", result.stderr)
+        self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+        self.assertEqual((claude / "session").read_text(), "external session")
+
+    def test_migration_refuses_link_cycles_before_moving_state(self):
+        claude = self.home / ".claude"
+        (claude / "skills").mkdir(parents=True)
+        (claude / "skills/cycle-a").symlink_to("cycle-b")
+        (claude / "skills/cycle-b").symlink_to("cycle-a")
+        result = self.install("--persist-agents", ok=False)
+        self.assertIn("agent-link-migration-conflict", result.stderr)
+        self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+        self.assertFalse(claude.is_symlink())
+
+    def test_migration_checks_links_between_both_agent_roots(self):
+        claude, codex = self.home / ".claude", self.home / ".codex"
+        claude.mkdir()
+        codex.mkdir()
+        (codex / "session").write_text("synthetic shared state")
+        link = claude / "other-agent"
+        link.symlink_to("../.codex/session")
+        result = self.install("--persist-agents", ok=False)
+        self.assertIn("agent-link-migration-conflict", result.stderr)
+        self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+        link.unlink()
+        link.symlink_to(codex / "session")
+        self.install("--persist-agents")
+        self.assertEqual(link.read_text(), "synthetic shared state")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        self.command("restore", "--root", str(self.root))
+        self.assertEqual(link.read_text(), "synthetic shared state")
+
+    def test_migration_refuses_selected_roots_nested_inside_a_moved_directory(self):
+        for parent, nested, variable in (("codex", "claude", "CLAUDE_CONFIG_DIR"),
+                                         ("claude", "codex", "CODEX_HOME")):
+            with self.subTest(parent=parent):
+                original = self.home / ("." + parent)
+                selected = original / nested
+                selected.mkdir(parents=True)
+                state = selected / (".claude.json" if nested == "claude" else "config.toml")
+                state.write_text(CANARY)
+                self.env[variable] = str(selected)
+                result = self.install("--persist-agents", ok=False)
+                self.assertIn("agent-configuration-conflict", result.stderr)
+                self.assertEqual(state.read_text(), CANARY)
+                self.assertFalse(original.is_symlink())
+                self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+                self.assertFalse((self.root / ".config" / parent).exists())
+                del self.env[variable]
+                shutil.rmtree(original)
+
     def volume_command(self, *args, ok=True, mounts=None):
         harness = '''import json,runpy,sys
 from pathlib import Path
@@ -146,7 +597,7 @@ sys.exit(module["main"]())
         external.chmod(0o777)
         report = json.loads(self.volume_command("doctor", "--json", ok=False).stdout)
         self.assertFalse(report["ready"])
-        self.assertIn("shared-configuration-parent", report["issues"])
+        self.assertIn("shared-configuration-target", report["issues"])
         self.assertEqual(report["storage_permission_policy"], "trusted-personal-volume")
 
     def test_strict_permissions_check_existing_target_files_and_directories(self):

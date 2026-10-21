@@ -67,9 +67,9 @@ umask 077
 # every link made under the first spelling would read as "not ours" under the second.
 R="$(cd "$(dirname "$0")" && pwd -P)"   # this repo
 # Portable installations use their own profile instead of applying desktop preferences.
+# shellcheck source=lib/workgrove/vm/python-runtime.sh
+source "$R/lib/workgrove/vm/python-runtime.sh"
 portable_python() {
-  # shellcheck source=lib/workgrove/vm/python-runtime.sh
-  source "$R/lib/workgrove/vm/python-runtime.sh"
   wg_select_python || { printf 'workgrove: %s\n' "$wg_python_issue" >&2; return 1; }
 }
 if [[ ${1:-} == --remote-root ]]; then
@@ -79,7 +79,7 @@ if [[ ${1:-} == --remote-root ]]; then
   portable_python
   exec "$wg_python" -B "$R/lib/workgrove/portable.py" install --root "$remote_root" "$@"
 fi
-if [[ -f $HOME/.config/workgrove/profile.json ]]; then
+if wg_has_portable_profile "$R/.."; then
   portable_python
   exec "$wg_python" -B "$R/lib/workgrove/portable.py" reinstall --source "$R" "$@"
 fi

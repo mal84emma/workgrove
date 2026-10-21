@@ -141,11 +141,12 @@ def outside_git(path):
                 "repository-destination")
 
 
-def private_path(path, detach=False):
+def private_path(path, detach=False, read_only_source=False):
     path = Path(path)
     require(detach or not path.is_symlink() or path.exists(), "dangling-configuration-link")
     target = canonical(path.parent) / path.name if detach else canonical(path)
-    outside_git(target)
+    if not read_only_source:
+        outside_git(target)
     if target.exists():
         info = target.lstat()
         require(info.st_uid == os.getuid(), "foreign-owner")
@@ -228,6 +229,7 @@ def git(args, source=None, allowed=(0,)):
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GIT_NO_LAZY_FETCH"] = "1"
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
     return run(["git", "-c", "core.hooksPath=/dev/null", "-c", "credential.helper=",
                 "-c", "credential.interactive=false", "-c", "core.fsmonitor=false", *args], cwd=source or "/", env=env, allowed=allowed)
 
@@ -247,9 +249,10 @@ def load_profile(root=None):
     path = profile_path(root) if root else Path.home() / ".config/workgrove/profile.json"
     require(path.is_file(), "profile-missing")
     data = json.loads(read(path))
-    require(isinstance(data, dict) and data.get("schema") == 1, "invalid-profile")
+    require(isinstance(data, dict) and data.get("schema") in (1, 2), "invalid-profile")
     allowed = {"schema", "root", "source", "revision", "host", "storage", "mount", "persist_agents",
-               "agent_roots", "agent_commands", "tmux", "agent_args", "signatures"}
+               "agent_roots", "agent_commands", "tmux", "agent_args"}
+    allowed.update({"signatures"} if data["schema"] == 1 else {"runtime_manifest", "claude_config_dir"})
     data.setdefault("trust_personal_volume", False)
     allowed.add("trust_personal_volume")
     require(set(data) == allowed, "invalid-profile")
@@ -275,10 +278,21 @@ def load_profile(root=None):
     for value in data["agent_commands"].values():
         require(value is None or (isinstance(value, str) and Path(value).is_absolute()), "invalid-profile")
     validate_agent_args(data["agent_args"])
-    require(isinstance(data["signatures"], dict) and set(data["signatures"]) == {
-        "bin/wt", "install.sh", "lib/workgrove/portable.py"}, "invalid-profile")
-    for value in data["signatures"].values():
-        require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value), "invalid-profile")
+    if data["schema"] == 1:
+        require(isinstance(data["signatures"], dict) and set(data["signatures"]) == {
+            "bin/wt", "install.sh", "lib/workgrove/portable.py"}, "invalid-profile")
+        require(all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+                    for value in data["signatures"].values()), "invalid-profile")
+    else:
+        manifest = data["runtime_manifest"]
+        require(isinstance(manifest, dict) and manifest, "invalid-profile")
+        for name, value in manifest.items():
+            require(name in {"install.sh", ".git/config"} or name.split("/")[0] in {"bin", "lib", "home"}, "invalid-profile")
+            require(str(Path(name)) == name and ".." not in Path(name).parts, "invalid-profile")
+            require(isinstance(value, str) and (value == "directory" or re.fullmatch(r"[0-9a-f]{64}", value)),
+                    "invalid-profile")
+        require(data["claude_config_dir"] is None or data["claude_config_dir"] == data["agent_roots"]["claude"],
+                "invalid-profile")
     return data
 
 
@@ -317,9 +331,48 @@ def storage(root, policy, mount):
         check_mode(root, root.stat().st_mode, "persistent-root-writable-by-others")
 
 
-def signatures(source):
-    return {name: hashlib.sha256((source / name).read_bytes()).hexdigest()
-            for name in ("bin/wt", "install.sh", "lib/workgrove/portable.py")}
+RUNTIME_INPUTS = ("install.sh", "bin", "lib", "home")
+
+
+def runtime_manifest(source):
+    """Describe every installed input, without inspecting unrelated checkout environments."""
+    paths = [source / "install.sh", source / ".git/config"]
+    for component in RUNTIME_INPUTS[1:]:
+        for directory, dirs, files in os.walk(source / component):
+            paths.extend((Path(directory), *(Path(directory) / name for name in files)))
+    return {str(path.relative_to(source)): "directory" if path.is_dir() else hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(paths)}
+
+
+def approved_runtime(source):
+    """Bind runtime contents to the effective Git checkout before saving a manifest."""
+    locations = git(["rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"], source).stdout.splitlines()
+    require(len(locations) == 3 and [canonical(source / path) for path in locations] ==
+            [source, source / ".git", source / ".git"], "installation-identity-conflict")
+    indirect = git(["config", "--local", "--no-includes", "--get-regexp",
+                    r"^(include|includeif\..*)\.path$|^extensions\.worktreeconfig$"], source, allowed=(0, 1))
+    require(not indirect.stdout, "standalone-configuration-required")
+    approved = {".git/config": hashlib.sha256((source / ".git/config").read_bytes()).hexdigest()}
+    tree = git(["ls-tree", "-rz", "--full-tree", "HEAD", "--", *RUNTIME_INPUTS], source).stdout
+    for record in tree.split("\0"):
+        if not record:
+            continue
+        metadata, name = record.split("\t", 1)
+        mode, kind, object_id = metadata.split()
+        require(kind == "blob" and mode in {"100644", "100755"}, "installation-source-link-refused")
+        path = source / name
+        require(path.is_file(), "installation-has-local-edits")
+        contents = path.read_bytes()
+        digest = hashlib.new("sha1" if len(object_id) == 40 else "sha256")
+        digest.update(f"blob {len(contents)}\0".encode())
+        digest.update(contents)
+        require(digest.hexdigest() == object_id, "installation-has-local-edits")
+        approved[name] = hashlib.sha256(contents).hexdigest()
+        for parent in Path(name).parents:
+            if parent != Path("."):
+                approved[str(parent)] = "directory"
+    require(approved == runtime_manifest(source), "installation-untracked-runtime")
+    return approved
 
 
 def validate_source(source, profile=None):
@@ -346,7 +399,8 @@ def validate_source(source, profile=None):
         require((source / name).is_file() and canonical(source) in canonical(source / name).parents,
                 "installation-identity-conflict")
     if profile:
-        require(signatures(source) == profile["signatures"], "installation-changed-run-full-setup")
+        require(profile["schema"] == 2, "profile-upgrade-run-full-setup")
+        require(runtime_manifest(source) == profile["runtime_manifest"], "installation-changed-run-full-setup")
 
 
 def validate_objects(source):
@@ -373,7 +427,7 @@ def select_agent_roots(root, persist, previous):
         home = Path.home() / default
         require(not home.is_symlink() or home.exists(), "agent-configuration-link-unavailable")
         old = previous["agent_roots"][agent] if previous else None
-        configured = os.environ.get(variable) or old
+        configured = old or os.environ.get(variable)
         current = canonical(configured) if configured else canonical(home)
         if previous and previous["persist_agents"]:
             require(current.is_dir(), "persistent-agent-configuration-missing")
@@ -394,6 +448,44 @@ def select_agent_roots(root, persist, previous):
             migrations.append((current, target))
         chosen[agent] = str(target)
     return chosen, migrations
+
+
+def claude_directory(agents, persist, previous):
+    if previous and previous["schema"] == 2:
+        return agents["claude"] if persist or previous["claude_config_dir"] is not None else None
+    if previous:
+        redirected = Path(agents["claude"]) != Path.home() / ".claude"
+        return agents["claude"] if persist or redirected else None
+    return agents["claude"] if persist or os.environ.get("CLAUDE_CONFIG_DIR") else None
+
+
+def claude_global(profile):
+    return Path(profile["claude_config_dir"] or Path.home()) / ".claude.json"
+
+
+def plan_claude_state(profile, previous, migrations):
+    """Move global state with a changed lookup location, without combining identities."""
+    target = claude_global(profile)
+    if previous and previous["schema"] == 2:
+        originals = [claude_global(previous)]
+    elif previous:
+        directory = Path(previous["agent_roots"]["claude"])
+        originals = [directory / ".claude.json"]
+        if directory in {Path.home() / ".claude", Path(previous["root"]) / ".config/claude"}:
+            originals.append(Path.home() / ".claude.json")
+    else:
+        originals = [Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home()) / ".claude.json"]
+        for old, new in migrations:
+            if new == target.parent:
+                originals.append(old / ".claude.json")
+    paths = list(dict.fromkeys([*originals, target]))
+    contents = {}
+    for path in paths:
+        private_path(path)
+        if path.exists():
+            contents[path] = read(path)
+    require(len(set(contents.values())) <= 1, "claude-global-state-conflict")
+    return target, next(iter(contents.values()), None), [path for path in contents if canonical(path) != canonical(target)]
 
 
 def select_agent_commands(root, migrations, previous):
@@ -429,6 +521,7 @@ def select_agent_commands(root, migrations, previous):
 def augmented_excludes(path, destination, missing_text=""):
     path = Path(path).expanduser()
     require(path.is_absolute(), "absolute-git-exclusions-required")
+    private_path(path, read_only_source=True)
     text = read(path) if path.exists() else missing_text
     if text.rstrip("\n").split("\n")[-1] != ".worktrees/":
         text = text.rstrip("\n") + "\n.worktrees/\n"
@@ -457,6 +550,7 @@ def git_config_graph(start, destination, managed=None, skip=(), missing_excludes
     def visit(path):
         path = Path(path).expanduser().absolute()
         require(path.is_file(), "git-include-missing")
+        private_path(path, read_only_source=True)
         if path in mapping:
             return mapping[path]
         require(len(mapping) < 64, "git-includes-too-deep")
@@ -516,12 +610,12 @@ def prepare_git(root, identity, previous):
     configured = os.environ.get("GIT_CONFIG_GLOBAL")
     candidates = [Path(configured)] if configured is not None else [
         Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/config", Path.home() / ".gitconfig"]
-    originals = [path for path in candidates if path.is_file()]
-    if previous and active.is_file() and not originals:
-        originals = [active]
-    adopting = bool(previous and active.is_file() and any(canonical(path) == active for path in originals))
-    if adopting:
-        originals = [active]
+    adopting = bool(previous and active.is_file())
+    if previous:
+        require(adopting or identity, "personal-git-configuration-missing")
+        originals = [active] if adopting else []
+    else:
+        originals = [path for path in candidates if path.is_file()]
     old_text = read(active) if adopting else ""
     old_identity = git_owned_path(old_text, "identity", destination)
     old_default = git_owned_path(old_text, "defaults", destination)
@@ -535,7 +629,8 @@ def prepare_git(root, identity, previous):
     require(identity or originals, "personal-git-identity-required")
     generation = destination / uuid.uuid4().hex
     mkdir(generation)
-    implicit = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/ignore"
+    implicit = (destination / "missing-defaults" if previous else
+                Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/ignore")
     legacy_text = ""
     if adopting and old_default is None:
         result = git(["config", "--includes", "--file", str(active), "--path", "--get", "core.excludesFile"], allowed=(0, 1))
@@ -626,11 +721,14 @@ def shell_environment(profile):
     root = Path(profile["root"])
     values = {"WT_REMOTE_ROOT": str(root), "WT_HOST": profile["host"], "WT_REPOS_DIR": str(root),
               "GIT_CONFIG_GLOBAL": str(root / ".config/workgrove/git/global"),
-              "CLAUDE_CONFIG_DIR": profile["agent_roots"]["claude"],
               "CODEX_HOME": profile["agent_roots"]["codex"]}
+    if profile["claude_config_dir"] is not None:
+        values["CLAUDE_CONFIG_DIR"] = profile["claude_config_dir"]
     text = "# Workgrove exports only; sourcing this file performs no setup.\n"
     for name, value in values.items():
         text += f"export {name}={shlex.quote(value)}\n"
+    if profile["claude_config_dir"] is None:
+        text += "unset CLAUDE_CONFIG_DIR\n"
     for agent in ("claude", "codex"):
         value = json.dumps(profile["agent_args"].get(agent, []))
         text += f"export WT_{agent.upper()}_ARGS_JSON={shlex.quote(value)}\n"
@@ -668,6 +766,104 @@ def compatibility(profile):
     return [(a, b) for a, b in links if a.absolute() != b.absolute()]
 
 
+AGENT_FILES = {
+    "claude": {"settings.json": "hooks", ".credentials.json": "state",
+               "AGENTS.md": "instructions", "CLAUDE.md": "instructions"},
+    "codex": {"hooks.json": "hooks", "config.toml": "settings", "auth.json": "state",
+              "AGENTS.md": "instructions"},
+}
+
+
+def validate_migration_links(migrations, materialized, selected_roots):
+    """Refuse directory moves that change a copied link's referent."""
+    selected = [canonical(path) for path in selected_roots]
+    for original, _ in migrations:
+        require(not any(path == original or original in path.parents for path in selected),
+                "agent-configuration-conflict")
+
+    def relocated(path):
+        for original, target in migrations:
+            if path == original or original in path.parents:
+                return target / path.relative_to(original)
+        return path
+
+    def future_referent(path):
+        current, pending, followed = Path("/"), list(path.parts[1:]), 0
+        while pending:
+            part = pending.pop(0)
+            if part == "..":
+                current = current.parent
+                continue
+            candidate = current / part
+            # HOME compatibility links will point to the migrated directories.
+            replacement = next((target for original, target in migrations if candidate == original), None)
+            physical = candidate
+            # Copied links retain their text but resolve from their future parent directories.
+            for original, target in migrations:
+                if candidate == target or target in candidate.parents:
+                    physical = original / candidate.relative_to(target)
+                    break
+            if replacement is None and physical.is_symlink():
+                replacement = physical.readlink()
+            if replacement is not None:
+                followed += 1
+                require(followed <= 40, "agent-link-migration-conflict")
+                if replacement.is_absolute():
+                    current = Path("/")
+                    pending = list(replacement.parts[1:]) + pending
+                else:
+                    pending = list(replacement.parts) + pending
+            else:
+                current = candidate
+        return current
+
+    for original, target in migrations:
+        for directory, dirs, files in os.walk(original):
+            for name in dirs + files:
+                path = Path(directory) / name
+                destination = target / path.relative_to(original)
+                if path.is_symlink() and destination not in materialized:
+                    try:
+                        referent = canonical(path)
+                    except Refusal:
+                        raise Refusal("agent-link-migration-conflict") from None
+                    require(future_referent(destination) == relocated(referent), "agent-link-migration-conflict")
+
+
+def validate_personal_files(profile, migrations=(), installing=False):
+    """Apply the same file safety contract during setup, restoration, and readiness checks."""
+    source, root = Path(profile["source"]), Path(profile["root"])
+    instruction_copies = {}
+    for agent, files in AGENT_FILES.items():
+        base = Path(profile["agent_roots"][agent])
+        original = next((old for old, target in migrations if target == base), base)
+        for directory in dict.fromkeys((original, base)):
+            private_path(directory)
+            for filename, role in files.items():
+                path = directory / filename
+                private_path(path, detach=role == "instructions")
+                require(not path.exists() or path.is_file(), "nonregular-file")
+                if role == "instructions" and path.is_symlink():
+                    expected = source / "home/.claude" / filename
+                    if canonical(path) != expected:
+                        require(installing, "instruction-link-conflict")
+                        private_path(path, read_only_source=True)
+                        require(path.is_file(), "instruction-link-conflict")
+                        instruction_copies[base / filename] = read(path)
+                elif role == "instructions" and path.exists():
+                    replace_block(read(path), "instructions", "placeholder")
+    for path in (claude_global(profile), root / ".config/workgrove/env.sh", profile_path(root)):
+        private_path(path)
+    configuration = root / ".config/workgrove/git"
+    private_path(configuration)
+    if configuration.exists():
+        for directory, dirs, files in os.walk(configuration):
+            for path in (Path(directory), *(Path(directory) / name for name in dirs + files)):
+                require(not path.is_symlink(), "git-configuration-link-refused")
+                private_path(path)
+    return instruction_copies
+
+
 def preflight_files(profile, migrations, restoring):
     root = Path(profile["root"])
     moved = {start: target for start, target in migrations}
@@ -687,11 +883,7 @@ def preflight_files(profile, migrations, restoring):
         if path.exists():
             require(path.is_file(), "shell-configuration-conflict")
             replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
-    for agent, files in (("claude", ("settings.json", "AGENTS.md", "CLAUDE.md")),
-                         ("codex", ("hooks.json", "config.toml", "AGENTS.md"))):
-        base = Path(profile["agent_roots"][agent])
-        for filename in files:
-            private_path(base / filename, detach=filename.endswith(".md"))
+    instructions = validate_personal_files(profile, migrations, installing=not restoring)
     for agent in ("claude", "codex"):
         base = Path(profile["agent_roots"][agent])
         original = next((old for old, target in migrations if target == base), base)
@@ -702,15 +894,8 @@ def preflight_files(profile, migrations, restoring):
             if filename.endswith(".json") and path.exists():
                 template = "home/.claude/settings.base.json" if agent == "claude" else "home/.codex/hooks.base.json"
                 merge_hooks(json.loads(read(path)), json.loads(read(Path(profile["source"]) / template)))
-        for filename in (("AGENTS.md", "CLAUDE.md") if agent == "claude" else ("AGENTS.md",)):
-            path = original / filename
-            if path.is_symlink():
-                require(canonical(path) == canonical(Path(profile["source"]) / "home/.claude" / filename),
-                        "instruction-link-conflict")
-            elif path.exists():
-                replace_block(read(path), "instructions", "placeholder")
-    private_path(root / ".config/workgrove/env.sh")
-    private_path(profile_path(root))
+    validate_migration_links(migrations, instructions, profile["agent_roots"].values())
+    return instructions
 
 
 def require_agent_roots(profile):
@@ -722,10 +907,13 @@ def require_agent_roots(profile):
             require(target.is_dir(), "external-agent-configuration-missing")
 
 
-def install_files(profile, restoring=False):
+def install_files(profile, restoring=False, instruction_copies=None):
     root, source = Path(profile["root"]), Path(profile["source"])
     for path in profile["agent_roots"].values():
         mkdir(Path(path))
+    for path, contents in (instruction_copies or {}).items():
+        backup(path, root)
+        write(path, contents)
     for target, path in compatibility(profile):
         link(target, path, root, replace=not restoring)
     env = root / ".config/workgrove/env.sh"
@@ -807,6 +995,7 @@ def install(args):
     source = root / "workgrove"
     validate_source(source)
     validate_objects(source)
+    manifest = approved_runtime(source)
     revision = git(["rev-parse", "HEAD"], source).stdout.strip()
     require(not args.revision or args.revision == revision, "selected-revision-unavailable")
     require(not git(["status", "--porcelain", "--untracked-files=no"], source).stdout, "installation-has-local-edits")
@@ -820,13 +1009,14 @@ def install(args):
         if value is not None:
             launch[agent] = json.loads(value)
     validate_agent_args(launch)
-    profile = dict(schema=1, root=str(root), source=str(source), revision=revision, host=host,
+    profile = dict(schema=2, root=str(root), source=str(source), revision=revision, host=host,
                    storage=policy, mount=mount, trust_personal_volume=args.trust_personal_volume,
                    persist_agents=persist, agent_roots=agents,
                    agent_commands=select_agent_commands(root, migrations, previous),
                    tmux=args.with_tmux_conf or bool(previous and previous["tmux"]), agent_args=launch,
-                   signatures=signatures(source))
-    preflight_files(profile, migrations, False)
+                   claude_config_dir=claude_directory(agents, persist, previous), runtime_manifest=manifest)
+    instruction_copies = preflight_files(profile, migrations, False)
+    global_target, global_contents, global_originals = plan_claude_state(profile, previous, migrations)
     with installation_lock(root):
         require(read(profile_path(root), missing=True) == expected_profile, "profile-changed-retry-setup")
         personal = prepare_git(root, args.git_identity, previous)
@@ -842,11 +1032,15 @@ def install(args):
                 if temporary.exists():
                     shutil.rmtree(temporary)
             backup(old, root)
+        if global_contents is not None:
+            write(global_target, global_contents)
+            for old in global_originals:
+                backup(old, root)
         global_path = root / ".config/workgrove/git/global"
         if canonical(personal) != canonical(global_path):
             write(global_path, '[include]\n    path = ' + git_quote(personal) + '\n')
         write(profile_path(root), json.dumps(profile, indent=2) + "\n")
-        install_files(profile)
+        install_files(profile, instruction_copies=instruction_copies)
     print("workgrove: portable profile installed; run doctor before creating tasks")
 
 
@@ -963,7 +1157,8 @@ def _readiness(root=None):
             executable = canonical(command)
             if len(executable.parents) > 2 and executable.parent.name == "bin":
                 candidate = executable.parents[2]
-                if profile_path(candidate).is_file():
+                if any((candidate / name).exists() or (candidate / name).is_symlink() for name in (
+                        ".config/workgrove/profile.json", ".config/workgrove/env.sh", ".config/workgrove/git/global")):
                     root = str(candidate)
     issues = []
     profile = None
@@ -982,9 +1177,7 @@ def _readiness(root=None):
                     issues.append("compatibility-links-missing")
                     break
             env = Path(profile["root"]) / ".config/workgrove/env.sh"
-            private_path(env)
-            for agent, path in profile["agent_roots"].items():
-                private_path(Path(path) / ("settings.json" if agent == "claude" else "hooks.json"))
+            validate_personal_files(profile)
             if not env.is_file() or read(env) != shell_environment(profile):
                 issues.append("environment-incomplete")
     except (Refusal, OSError, ValueError, RuntimeError, UnicodeError) as error:
@@ -1040,6 +1233,11 @@ def _readiness(root=None):
                                for group in groups for hook in group.get("hooks", []))
         except (Refusal, OSError, ValueError, TypeError, AttributeError):
             hooks[agent] = False
+    evidence = any(path.exists() or path.is_symlink() for path in (
+        Path.home() / ".config/workgrove/profile.json", Path.home() / ".config/workgrove/env.sh"))
+    if evidence and "profile-missing" in issues:
+        issues.remove("profile-missing")
+        issues.append("portable-profile-missing")
     legacy = profile is None and issues == ["profile-missing"]
     return {"schema": 1, "status": "legacy" if legacy else "incomplete" if issues else "ready",
             "ready": None if legacy else not issues, "issues": sorted(set(issues)), "tools": tools,
@@ -1061,7 +1259,10 @@ def readiness(root=None):
 
 
 def reinstall(args):
-    profile = load_profile()
+    # Bare reruns use the owning checkout even when HOME has lost its profile link.
+    root = canonical(args.source).parent
+    require(profile_path(root).is_file(), "portable-profile-missing-run-explicit-setup")
+    profile = load_profile(root)
     require(canonical(args.source) == Path(profile["source"]), "installation-identity-conflict")
     args.root = profile["root"]
     return install(args)
