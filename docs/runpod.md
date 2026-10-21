@@ -116,6 +116,8 @@ They used only disposable canary files and made no model requests.
 | Explicit `:workspace` and `:read-only` profiles | Six write probes failed across persistent and ordinary operating-system storage before executing their child commands. |
 | Direct system Bubblewrap | A read-only no-op invocation failed independently of Codex and workgrove. |
 | Namespace creation | User, mount, process, and network namespace probes each returned `Operation not permitted`. |
+| Storage controls | The container root, temporary directory, and home cache used overlay storage. Namespace creation failed on overlay storage and the persistent FUSE volume. |
+| No-op system call | `unshare(0)` returned `EPERM` without requesting namespace changes or filesystem operations. |
 | Kernel settings | Unprivileged user namespaces were enabled, their configured limit was nonzero, and the AppArmor unprivileged-user-namespace restriction was disabled. |
 | Container controls | Seccomp system-call filtering was active, and the system-administration capability (`CAP_SYS_ADMIN`) was absent. The blocking runtime rule remains unverified. |
 | Unsandboxed controls | Disposable canary writes passed. Personal Codex configuration remained unchanged. |
@@ -129,5 +131,40 @@ The execution-environment owner must provide compatible namespace support before
 The [official sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing) describe Bubblewrap's user-namespace requirement.
 These checks changed no container policy, kernel setting, personal sandbox setting, or agent process.
 
+### Remediation investigation
+
+An independent agent reviewed the runtime evidence, public provider documentation, and the installed Codex version's source.
+The shared persistent volume does not explain the namespace failure.
+The separate control-socket permission failure explains the `--no-daemon` option.
+Moving persistent files cannot repair the reproduced namespace denial on overlay storage.
+
+The outer container's system-call filter is the leading explanation; the exact blocking rule remains unverified.
+[Docker's seccomp documentation](https://docs.docker.com/engine/security/seccomp/) lists namespace operations among its default restrictions.
+The no-op `unshare(0)` denial strengthens this explanation without identifying the actual host policy.
+The host owner must inspect its runtime configuration or audit records to identify that policy.
+
+The [public Pod API](https://docs.runpod.io/api-reference/pods/POST/pods) documents no seccomp, AppArmor, or capability override.
+No supported self-service runtime-policy control was established by this investigation.
+This documentation gap does not prove that the supplier cannot provide a compatible environment.
+The [template start command](https://docs.runpod.io/pods/templates/manage-templates) changes container command execution, not the outer runtime's security policy.
+Linux preserves inherited filters across child processes and executable changes; see [seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html).
+
+Ask the supplier whether this Pod class supports Bubblewrap's nested namespaces under a restricted runtime policy.
+Provide sanitized no-op failures and request identification of the denying host rule.
+If supported, validate a narrowly reviewed policy before changing the host's production setup.
+Repeat startup, permitted task writes, prohibited outside writes, and network-policy checks after that repair.
+Keep the persistent storage layout unchanged while investigating runtime compatibility.
+
+Codex 0.163.0 cannot use its deprecated Landlock option for filesystem-restricted execution.
+Its [versioned implementation](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/linux-sandbox/src/linux_run_main.rs#L382-L388) explicitly rejects that combination.
+Installing Bubblewrap again or changing an already permissive user-namespace setting would not address the observed denial.
+Disabling agent isolation or granting broad container privileges changes the security model; it does not establish the required sandbox behavior.
+
+If the supplier cannot provide compatible namespace support, run Codex in a verified compatible environment and use the Pod for GPU commands.
+That alternative changes the execution location; it does not validate Codex isolation inside the Pod.
+
+### Optional lifecycle validation
+
+Stop/start recovery is optional follow-up validation for this integration.
 Actual lifecycle acceptance requires separate authorization and a bounded compute budget.
 It must verify retained task files, endpoint refresh, environment repair, and explicit restart of selected lost agents.
