@@ -190,6 +190,15 @@ WT
   DOCTOR_TEST_REPO=$REPO invoke -H test-vm doctor
   assert_eq 'a VM ahead of the Mac fails' 1 "$STATUS"
   assert_grep 'a newer VM names the Mac repair' "$TEST_ROOT/output" 'Fix: wt update'
+  cat >"$HOME/.local/bin/wt" <<'WT'
+#!/usr/bin/env bash
+if [[ $1 == version ]]; then printf '{"commit":"fixture","protocol":1}\n'
+else printf 'wt: unknown command doctor\n' >&2; exit 1; fi
+WT
+  invoke -H test-vm doctor
+  assert_eq 'an older VM without doctor fails' 1 "$STATUS"
+  assert_grep 'the missing VM command is named' "$TEST_ROOT/output" 'FAIL VM doctor unavailable'
+  assert_grep 'the missing VM command names its repair' "$TEST_ROOT/output" 'Fix: wt -H test-vm update'
   end_scenario
 }
 
