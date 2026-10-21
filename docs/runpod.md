@@ -104,5 +104,30 @@ That option preserved sandbox policy; individual approvals ran the acceptance co
 Follow the [agent runtime compatibility checks](remote-setup.md#check-agent-runtime-compatibility) before treating an installation as ready for unattended agent work.
 The personal volume exception does not change agent sandbox requirements.
 
+### Sandbox compatibility check
+
+Further live checks reproduced the failure with Codex 0.163.0 and system Bubblewrap 0.9.0.
+All ten Codex probes failed before their test commands started.
+They used only disposable canary files and made no model requests.
+
+| Check | Result |
+|---|---|
+| Existing and clean Codex configuration | Four startup probes failed across the persistent task directory and temporary storage. |
+| Explicit `:workspace` and `:read-only` profiles | Six write probes failed across persistent and ordinary operating-system storage before executing their child commands. |
+| Direct system Bubblewrap | A read-only no-op invocation failed independently of Codex and workgrove. |
+| Namespace creation | User, mount, process, and network namespace probes each returned `Operation not permitted`. |
+| Kernel settings | Unprivileged user namespaces were enabled, their configured limit was nonzero, and the AppArmor unprivileged-user-namespace restriction was disabled. |
+| Container controls | Seccomp system-call filtering was active, and the system-administration capability (`CAP_SYS_ADMIN`) was absent. The blocking runtime rule remains unverified. |
+| Unsandboxed controls | Disposable canary writes passed. Personal Codex configuration remained unchanged. |
+
+The failure reproduces outside workgrove's launcher and outside the persistent volume.
+It prevents testing both successful workspace writes and rejection of writes outside the workspace.
+Unchanged outside canaries do not establish protection when the sandbox never starts.
+
+This Pod therefore does not pass Codex sandbox acceptance.
+The execution-environment owner must provide compatible namespace support before those boundary checks can pass.
+The [official sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing) describe Bubblewrap's user-namespace requirement.
+These checks changed no container policy, kernel setting, personal sandbox setting, or agent process.
+
 Actual lifecycle acceptance requires separate authorization and a bounded compute budget.
 It must verify retained task files, endpoint refresh, environment repair, and explicit restart of selected lost agents.
