@@ -448,6 +448,111 @@ sys.exit(module["main"]())
         (self.source / "bin/wt").write_text("#!/bin/sh\nexit 0\n")
         self.assertIn("installation-changed", self.command("restore", "--root", str(self.root), ok=False).stderr)
 
+    def test_strict_setup_checks_source_directories_and_runtime_files(self):
+        self.install()
+        self.root.chmod(0o755)
+        for relative, mode in (("lib/workgrove", 0o777), ("lib/workgrove/task.sh", 0o666)):
+            path = self.source / relative
+            original = path.stat().st_mode & 0o777
+            path.chmod(mode)
+            result = self.install(ok=False)
+            self.assertIn("installation-writable-by-others", result.stderr)
+            report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+            self.assertIn("installation-writable-by-others", report["issues"])
+            path.chmod(original)
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+
+    def test_source_modes_use_the_explicit_volume_exception(self):
+        (self.source / "lib/workgrove").chmod(0o777)
+        (self.source / "lib/workgrove/task.sh").chmod(0o666)
+        self.volume_install(ok=False)
+        self.volume_install("--trust-personal-volume")
+        self.assertTrue(json.loads(self.volume_command("doctor", "--json").stdout)["ready"])
+        with patch.object(portable.os, "getuid", return_value=-1):
+            with self.assertRaisesRegex(portable.Refusal, "installation-foreign-owner"):
+                portable.validate_source(self.source)
+
+    def test_source_checks_do_not_follow_unrelated_untracked_environments(self):
+        environment = self.source / ".venv/bin"
+        environment.mkdir(parents=True)
+        (environment / "python3").symlink_to(sys.executable)
+        self.install()
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+
+    def test_runtime_directory_links_cannot_hide_writable_source_files(self):
+        self.install()
+        directory = self.source / "lib/workgrove"
+        target = self.source / ".runtime/workgrove"
+        target.parent.mkdir()
+        directory.rename(target)
+        directory.symlink_to("../.runtime/workgrove", target_is_directory=True)
+        (target / "task.sh").chmod(0o666)
+        self.git("add", "-A")
+        self.git("commit", "-qm", "Create the synthetic runtime directory link")
+        self.assertIn("installation-source-link-refused", self.install(ok=False).stderr)
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("installation-source-link-refused", report["issues"])
+
+    def test_runtime_file_links_are_refused_for_unsafe_and_safe_targets(self):
+        self.install()
+        original = self.source / "lib/workgrove/task.sh"
+        target = self.source / ".runtime/task.sh"
+        target.parent.mkdir()
+        original.rename(target)
+        original.symlink_to("../../.runtime/task.sh")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "Create the synthetic runtime file link")
+        target.parent.chmod(0o777)
+        self.assertIn("installation-source-link-refused", self.install(ok=False).stderr)
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("installation-source-link-refused", report["issues"])
+        target.parent.chmod(0o755)
+        self.assertIn("installation-source-link-refused", self.install(ok=False).stderr)
+
+    def test_runtime_file_links_cannot_traverse_unchecked_directory_links(self):
+        self.install()
+        original = self.source / "lib/workgrove/task.sh"
+        target = self.source / ".safe/task.sh"
+        target.parent.mkdir()
+        original.rename(target)
+        intermediate = self.source / ".runtime"
+        intermediate.mkdir()
+        (intermediate / "door").symlink_to("../.safe", target_is_directory=True)
+        original.symlink_to("../../.runtime/door/task.sh")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "Create the synthetic indirect runtime link")
+        intermediate.chmod(0o777)
+        self.assertIn("installation-source-link-refused", self.install(ok=False).stderr)
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("installation-source-link-refused", report["issues"])
+
+    def test_seeded_shared_clones_and_linked_objects_are_refused(self):
+        external = self.base / "external-source"
+        self.source.rename(external)
+        subprocess.run([str(self.tools / "git"), "clone", "--shared", str(external), str(self.source)],
+                       env=self.env, check=True, capture_output=True, text=True)
+        result = self.install(ok=False)
+        self.assertIn("standalone-object-store-required", result.stderr)
+        self.assertFalse((self.root / ".config/workgrove/profile.json").exists())
+        (self.source / ".git/objects/info/alternates").unlink()
+        objects = self.source / ".git/objects"
+        promisor = objects / "pack/synthetic.promisor"
+        promisor.parent.mkdir(exist_ok=True)
+        promisor.write_text("")
+        self.assertIn("standalone-object-store-required", self.install(ok=False).stderr)
+        promisor.unlink()
+        objects.rename(self.base / "external-objects")
+        objects.symlink_to(self.base / "external-objects", target_is_directory=True)
+        self.assertIn("standalone-object-store-required", self.install(ok=False).stderr)
+
+    def test_doctor_refuses_missing_installation_objects(self):
+        self.install()
+        objects = self.source / ".git/objects"
+        shutil.rmtree(objects)
+        objects.mkdir()
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("installation-object-store-incomplete", report["issues"])
+
     def test_plain_installer_rerun_keeps_portable_profile(self):
         self.install("--persist-agents", "--with-tmux-conf")
         result = subprocess.run([str(self.tools / "bash"), str(self.source / "install.sh")], env=self.env,
@@ -614,6 +719,114 @@ sys.exit(module["main"]())
         self.install()
         self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.email").stdout.strip(), "xdg@example.invalid")
         self.assertEqual(self.git("config", "--global", "--includes", "--get-all", "custom.order").stdout.splitlines(), ["xdg", "home"])
+        self.install()
+        self.assertEqual(self.git("config", "--global", "--includes", "--get-all", "custom.order").stdout.splitlines(), ["xdg", "home"])
+
+    def test_full_setup_reuses_durable_git_configuration_after_home_loss(self):
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        self.install()
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+        self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.email").stdout.strip(), "test@example.invalid")
+
+    def test_identity_refresh_preserves_later_user_overrides_and_helper_resets(self):
+        identity = self.home / "identity"
+        identity.write_text('[user]\n email = selected@example.invalid\n[credential]\n helper = cache\n')
+        self.install("--git-identity", str(identity))
+        active = self.root / ".config/workgrove/git/global"
+        with active.open("a") as stream:
+            stream.write('[user]\n email = edited@example.invalid\n[credential]\n helper =\n')
+        for args in ((), ("--git-identity", str(identity))):
+            before = self.git("config", "--global", "--includes", "--get-all", "credential.helper").stdout
+            self.install(*args)
+            self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.email").stdout.strip(), "edited@example.invalid")
+            self.assertEqual(self.git("config", "--global", "--includes", "--get-all", "credential.helper").stdout, before)
+
+    def test_git_maintenance_keeps_user_entries_added_inside_managed_sections(self):
+        self.install()
+        self.git("config", "--global", "core.editor", "test-editor")
+        ignore = self.home / "second-ignore"
+        ignore.write_text("second-secret\n")
+        self.git("config", "--global", "--add", "core.excludesFile", str(ignore))
+        self.install()
+        self.assertEqual(self.git("config", "--global", "--get", "core.editor").stdout.strip(), "test-editor")
+        self.git("check-ignore", "--no-index", "second-secret", ".worktrees/task")
+
+    def test_git_exclusions_keep_per_repository_conditions(self):
+        projects = []
+        for number in range(2):
+            project = self.root / f"project-{number}"
+            self.git("init", "-q", str(project))
+            ignore = self.home / f"ignore-{number}"
+            ignore.write_text(f"secret-{number}\n")
+            branch = self.home / f"config-{number}"
+            branch.write_text('[core]\n excludesFile = ' + str(ignore) + '\n')
+            with (self.home / ".gitconfig").open("a") as stream:
+                stream.write(f'[includeIf "gitdir:{project}/"]\n path = {branch}\n')
+            projects.append(project)
+        self.install()
+        for number, project in enumerate(projects):
+            self.git("-C", str(project), "check-ignore", "--no-index", f"secret-{number}", ".worktrees/task")
+            result = subprocess.run([str(self.tools / "git"), "-C", str(project), "check-ignore", "--no-index",
+                                     f"secret-{1-number}"], env=self.env, capture_output=True)
+            self.assertEqual(result.returncode, 1)
+
+    def test_git_exclusions_preserve_implicit_defaults_and_explicit_missing_files(self):
+        (self.home / ".gitconfig").write_text('[user]\n name = Test User\n email = test@example.invalid\n')
+        implicit = self.home / ".config/git/ignore"
+        implicit.parent.mkdir(parents=True)
+        implicit.write_text("implicit-secret\n")
+        project = self.root / "project"
+        self.git("init", "-q", str(project))
+        self.install()
+        self.git("-C", str(project), "check-ignore", "--no-index", "implicit-secret", ".worktrees/task")
+        self.git("config", "--global", "core.excludesFile", str(self.home / "missing-ignore"))
+        self.install()
+        result = subprocess.run([str(self.tools / "git"), "-C", str(project), "check-ignore", "--no-index",
+                                 "implicit-secret"], env=self.env, capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.git("-C", str(project), "check-ignore", "--no-index", ".worktrees/task")
+
+    def test_explicit_identity_refresh_is_repeatable_and_preserves_active_settings(self):
+        identity = self.home / "identity"
+        identity.write_text('[user]\n name = Selected User\n email = selected@example.invalid\n[credential]\n helper = cache\n')
+        self.install("--git-identity", str(identity))
+        helpers = self.git("config", "--global", "--includes", "--get-all", "credential.helper").stdout
+        self.git("config", "--global", "custom.keep", "retained")
+        for _ in range(12):
+            self.install("--git-identity", str(identity))
+        self.install("--git-identity", str(self.home / ".gitconfig"))
+        active = self.root / ".config/workgrove/git/global"
+        overlay = portable.git_owned_path(active.read_text(), "identity", active.parent)
+        self.install("--git-identity", str(overlay))
+        self.assertEqual(self.git("config", "--global", "--includes", "--get-all", "credential.helper").stdout, helpers)
+        self.assertEqual(self.git("config", "--global", "--get", "custom.keep").stdout.strip(), "retained")
+        before = active.read_bytes(), overlay.read_bytes()
+        invalid = self.home / "invalid-identity"
+        invalid.write_text("[broken\n")
+        self.install("--git-identity", str(invalid), ok=False)
+        self.assertEqual((active.read_bytes(), overlay.read_bytes()), before)
+
+    def test_legacy_git_graph_is_adopted_without_another_include_layer(self):
+        self.install()
+        folder = self.root / ".config/workgrove/git"
+        personal = self.home / "personal-base"
+        personal.write_text('[include]\n path = ' + str(self.home / ".gitconfig.local") + '\n'
+                            '[core]\n excludesFile = ' + str(self.home / "ignore") + '\n')
+        target = personal
+        for number in range(8):
+            generation = folder / f"{number:032x}"
+            generation.mkdir()
+            (generation / "ignore").write_text("private-example\n.worktrees/\n")
+            current = generation / "global"
+            current.write_text('[include]\n path = ' + str(target) + '\n[core]\n excludesFile = ' + str(generation / "ignore") + '\n')
+            target = current
+        (folder / "global").write_text('[include]\n path = ' + str(target) + '\n')
+        self.git("config", "--global", "--includes", "--get", "user.email")
+        for _ in range(3):
+            self.install("--git-identity", str(self.home / ".gitconfig.local"))
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
 
     def test_git_copy_traverses_symlink_directories_before_parent_components(self):
         target = self.base / "elsewhere/deep"

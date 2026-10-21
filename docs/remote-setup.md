@@ -52,6 +52,10 @@ An unavailable revision causes failure; setup does not choose a newer tip.
 
 Alternatively, seed a reviewed standalone checkout at `<root>/workgrove` before setup.
 The checkout must contain its own `.git` directory and have no tracked edits.
+Its object storage must have no alternates, partial-clone promises, or linked object directories.
+Strict permission checks cover installed runtime files, their directories, and Git metadata.
+Runtime files, runtime directories, and Git metadata must not contain symbolic links.
+Unrelated environments outside those directories retain their normal layout.
 An existing checkout needs no `--source`; `--revision`, when supplied, must match its current commit.
 Setup does not reset, switch, or update that checkout.
 Do not seed private investigation history or personal configuration into the public installation.
@@ -68,6 +72,12 @@ It preserves entry order and anchors relative include paths and conditions at th
 Path copying preserves symlink traversal before `..` components.
 Setup preserves Git's precedence: `$XDG_CONFIG_HOME/git/config` (normally `~/.config/git/config`) first, then `~/.gitconfig`.
 It adds `.worktrees/` to the persistent exclusion file.
+Each conditional exclusion file retains its patterns and receives `.worktrees/` too.
+Git's default global ignore patterns remain when no explicit exclusion file applies.
+Use absolute paths or `~/` paths for exclusion files.
+Other relative paths cause refusal because Git resolves them from each repository.
+Repeated identity selection retains personal settings without adding include layers or duplicate identity includes.
+For identity refreshes, select the original personal file or the active global configuration.
 The installer never invents an identity or copies a different user's sign-in.
 
 ## Trust a personal volume
@@ -200,6 +210,7 @@ It reports fixed issue codes without printing settings, identity values, environ
 A failed readiness check returns a nonzero status and a JSON report when `--json` is selected.
 
 Doctor checks the profile, storage, installation identity, compatibility links, tools, terminal descriptions, Git identity, and task exclusions.
+It checks installation object connectivity when Git is available.
 Deleted persistent agent directories block readiness and task creation; doctor never recreates personal data.
 Missing selected external agent directories also require explicit repair.
 An unavailable or unsupported Python runtime produces a fixed JSON issue.

@@ -227,6 +227,7 @@ def git(args, source=None, allowed=(0,)):
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_NO_LAZY_FETCH"] = "1"
     return run(["git", "-c", "core.hooksPath=/dev/null", "-c", "credential.helper=",
                 "-c", "credential.interactive=false", "-c", "core.fsmonitor=false", *args], cwd=source or "/", env=env, allowed=allowed)
 
@@ -324,11 +325,33 @@ def signatures(source):
 def validate_source(source, profile=None):
     require(source.is_dir() and (source / ".git").is_dir(), "standalone-installation-required")
     require(canonical(source / ".git") == source / ".git", "installation-identity-conflict")
+    objects = source / ".git/objects"
+    require(objects.is_dir() and not objects.is_symlink() and not (source / ".git/commondir").exists(),
+            "standalone-object-store-required")
+    require(not read(objects / "info/alternates", missing=True).strip(), "standalone-object-store-required")
+    require(not any((objects / "pack").glob("*.promisor")), "standalone-object-store-required")
+    paths = [source, source / "install.sh"]
+    for component in (".git", "bin", "lib", "home"):
+        require(source in canonical(source / component).parents, "installation-identity-conflict")
+        for directory, dirs, files in os.walk(source / component):
+            paths.extend((Path(directory), *(Path(directory) / name for name in dirs + files)))
+    for path in paths:
+        require(not path.is_symlink(), "installation-source-link-refused")
+        require(canonical(path) == path, "installation-identity-conflict")
+        info = path.lstat()
+        require(info.st_uid == os.getuid(), "installation-foreign-owner")
+        require(stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode), "installation-nonregular-file")
+        check_mode(path, info.st_mode, "installation-writable-by-others")
     for name in ("bin/wt", "install.sh", "lib/workgrove/portable.py", "home/.claude/AGENTS.md"):
         require((source / name).is_file() and canonical(source) in canonical(source / name).parents,
                 "installation-identity-conflict")
     if profile:
         require(signatures(source) == profile["signatures"], "installation-changed-run-full-setup")
+
+
+def validate_objects(source):
+    result = git(["fsck", "--connectivity-only", "--no-dangling"], source, allowed=range(256))
+    require(result.returncode == 0, "installation-object-store-incomplete")
 
 
 def validate_agent_args(value):
@@ -403,9 +426,33 @@ def select_agent_commands(root, migrations, previous):
     return commands
 
 
-def git_config_graph(start, destination):
+def augmented_excludes(path, destination, missing_text=""):
+    path = Path(path).expanduser()
+    require(path.is_absolute(), "absolute-git-exclusions-required")
+    text = read(path) if path.exists() else missing_text
+    if text.rstrip("\n").split("\n")[-1] != ".worktrees/":
+        text = text.rstrip("\n") + "\n.worktrees/\n"
+    write(destination, text)
+    return destination
+
+
+def git_owned_path(text, label, managed):
+    start, end = f"# >>> workgrove git {label}\n", f"# <<< workgrove git {label}\n"
+    require(text.count(start) == text.count(end) and text.count(start) <= 1, "managed-git-config-conflict")
+    if start not in text:
+        return None
+    body = text.split(start, 1)[1].split(end, 1)[0]
+    match = re.search(r'^\s*(?:path|excludesFile)\s*=\s*(.+)$', body, re.M | re.I)
+    require(match is not None, "managed-git-config-conflict")
+    value = match[1].strip()
+    path = canonical(json.loads(value) if value.startswith('"') else value)
+    return path if managed in path.parents else None
+
+
+def git_config_graph(start, destination, managed=None, skip=(), missing_excludes="", overlay=None):
     """Preserve Git entry order and anchor relative paths at their logical source locations."""
     mapping = {}
+    exclusions = []
 
     def visit(path):
         path = Path(path).expanduser().absolute()
@@ -432,12 +479,29 @@ def git_config_graph(start, destination):
                 include = Path(value).expanduser()
                 if not include.is_absolute():
                     include = path.parent / include
+                if path == Path(start).expanduser().absolute() and canonical(include) in skip:
+                    continue
+                if path == Path(start).expanduser().absolute() and overlay and canonical(include) == overlay[0]:
+                    entries.append(replace_block("", "git identity", '[include]\n\tpath = ' + git_quote(overlay[1])))
+                    continue
                 value = str(visit(include)) if include.is_file() else str(include)
                 if section == "includeif":
                     for prefix in ("gitdir:", "gitdir/i:", "worktree:", "worktree/i:"):
                         if subsection.startswith(prefix + "./"):
                             subsection = prefix + str(path.parent) + "/" + subsection[len(prefix) + 2:]
                             break
+            if key == "core.excludesfile":
+                require(separator and "%(" not in value and "\n" not in value, "unsupported-git-exclusions")
+                original = Path(value).expanduser()
+                require(original.is_absolute(), "absolute-git-exclusions-required")
+                selected = canonical(original)
+                legacy = (managed is not None and managed in selected.parents and selected.name == "ignore"
+                          and re.fullmatch(r"[0-9a-f]{32}", selected.parent.name))
+                if legacy or (path == Path(start).expanduser().absolute() and selected in skip):
+                    continue
+                copied = destination / f"excludes-{len(exclusions)}"
+                exclusions.append(copied)
+                value = str(augmented_excludes(original, copied, missing_excludes))
             header = section + (" " + git_quote(subsection, subsection=True) if subsection is not None else "")
             entries.append("[" + header + "]\n\t" + name + (" = " + git_quote(value) if separator else "") + "\n")
         write(target, "".join(entries))
@@ -448,38 +512,55 @@ def git_config_graph(start, destination):
 
 def prepare_git(root, identity, previous):
     destination = root / ".config/workgrove/git"
-    if previous and (destination / "global").is_file() and not identity:
-        return destination / "global"
+    active = destination / "global"
     configured = os.environ.get("GIT_CONFIG_GLOBAL")
     candidates = [Path(configured)] if configured is not None else [
         Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/config", Path.home() / ".gitconfig"]
     originals = [path for path in candidates if path.is_file()]
-    require(identity or originals, "personal-git-identity-required")
+    if previous and active.is_file() and not originals:
+        originals = [active]
+    adopting = bool(previous and active.is_file() and any(canonical(path) == active for path in originals))
+    if adopting:
+        originals = [active]
+    old_text = read(active) if adopting else ""
+    old_identity = git_owned_path(old_text, "identity", destination)
+    old_default = git_owned_path(old_text, "defaults", destination)
     if identity:
         require(Path(identity).is_file(), "personal-git-identity-required")
-    # A generation keeps already installed configurations intact if preparation fails.
+        selected = canonical(identity)
+        if adopting and selected in {active, old_identity}:
+            identity = None
+        else:
+            require(destination not in selected.parents, "managed-git-identity-source-refused")
+    require(identity or originals, "personal-git-identity-required")
     generation = destination / uuid.uuid4().hex
     mkdir(generation)
-    composite = generation / "global"
+    implicit = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/ignore"
+    legacy_text = ""
+    if adopting and old_default is None:
+        result = git(["config", "--includes", "--file", str(active), "--path", "--get", "core.excludesFile"], allowed=(0, 1))
+        selected = Path(result.stdout.strip())
+        if selected.is_absolute() and destination in selected.parents and selected.name == "ignore":
+            legacy_text = read(selected, missing=True)
+    fallback = augmented_excludes(old_default or implicit, generation / "defaults", legacy_text)
+    overlay = old_identity
     if identity and not any(canonical(identity) == canonical(path) for path in originals):
-        originals.append(Path(identity))
-    bases = [git_config_graph(path, generation / str(index)) for index, path in enumerate(originals)]
-    write(composite, "".join('[include]\n    path = ' + git_quote(base) + '\n' for base in bases))
+        overlay = git_config_graph(Path(identity), generation / "identity", destination)
+    skip = {old_default} if old_default is not None else set()
+    replacement = (old_identity, overlay) if old_identity is not None else None
+    bases = [git_config_graph(path, generation / str(index), destination, skip, legacy_text, replacement)
+             for index, path in enumerate(originals)]
+    contents = "".join(read(base) for base in bases)
+    contents = replace_block(contents, "git defaults", '[core]\n\texcludesFile = ' + git_quote(fallback), first=True)
+    if overlay and old_identity is None:
+        contents = replace_block(contents, "git identity", '[include]\n\tpath = ' + git_quote(overlay))
+    prospective = generation / "global"
+    write(prospective, contents)
     for key in ("user.name", "user.email"):
-        result = git(["config", "--includes", "--file", str(composite), "--get", key], allowed=(0, 1))
+        result = git(["config", "--includes", "--file", str(prospective), "--get", key], allowed=(0, 1))
         require(result.returncode == 0 and result.stdout.strip(), "personal-git-identity-required")
-    prior = git(["config", "--includes", "--file", str(composite), "--path", "--get", "core.excludesfile"],
-                allowed=(0, 1)).stdout.strip()
-    excludes = ""
-    if prior:
-        old = Path(prior).expanduser()
-        require(old.is_absolute(), "absolute-git-exclusions-required")
-        if old.exists():
-            excludes = read(old)
-    ignore = generation / "ignore"
-    write(ignore, excludes.rstrip("\n") + "\n.worktrees/\n")
-    git(["config", "--file", str(composite), "core.excludesFile", str(ignore)])
-    return composite
+    write(active, contents)
+    return active
 
 
 def backup(path, root):
@@ -725,6 +806,7 @@ def install(args):
     storage(root, policy, mount)
     source = root / "workgrove"
     validate_source(source)
+    validate_objects(source)
     revision = git(["rev-parse", "HEAD"], source).stdout.strip()
     require(not args.revision or args.revision == revision, "selected-revision-unavailable")
     require(not git(["status", "--porcelain", "--untracked-files=no"], source).stdout, "installation-has-local-edits")
@@ -885,12 +967,14 @@ def _readiness(root=None):
                     root = str(candidate)
     issues = []
     profile = None
+    source_valid = False
     try:
         profile = load_profile(canonical(root) if root else None)
         with volume_permissions(Path(profile["root"]), profile["storage"], profile["mount"],
                                 profile["trust_personal_volume"]):
             storage(Path(profile["root"]), profile["storage"], profile["mount"])
             validate_source(Path(profile["source"]), profile)
+            source_valid = True
             require_agent_roots(profile)
             for target, path in compatibility(profile):
                 private_path(path, detach=True)
@@ -917,6 +1001,11 @@ def _readiness(root=None):
                             env=environment, allowed=(0, 1)).returncode == 0
     if not all(tools.values()):
         issues.append("missing-prerequisites")
+    if source_valid and tools["git"]:
+        try:
+            validate_objects(Path(profile["source"]))
+        except Refusal as error:
+            issues.append(str(error))
     if profile and sys.version_info < (3, 9):
         issues.append("python-3.9-required")
     if not os.access(Path.home() / ".local/bin/wt", os.X_OK):
@@ -1034,6 +1123,8 @@ def main():
     try:
         args = parser.parse_args()
         require(sys.version_info >= ((3, 8) if args.command == "doctor" else (3, 9)), "python-3.9-required")
+        if args.command in {"bootstrap", "install", "restore", "reinstall"}:
+            os.umask(0o077)
         while True:
             try:
                 return args.run(args) or 0
