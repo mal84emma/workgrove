@@ -120,6 +120,7 @@ The description is `@<host> · <repo>`; the separator contains spaces and U+00B7
 The readers also accept older `<repo>:<name>` titles.
 `row_shell_prompt` in `cmux.sh` accepts a prompt ending in `$`, `#`, or `%` that names `user@host`.
 A two-line prompt may put that name on the preceding line.
+In that case, the final nonblank line must contain only `$`, `#`, or `%`, apart from trailing whitespace.
 
 ### The automation rule
 
