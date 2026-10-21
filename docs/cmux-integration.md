@@ -47,7 +47,7 @@ Angle brackets mark values supplied by the caller.
 | `cmux workspace create --name <repo-shell-title> --description <description> --cwd <repo>` | `cmd_task` in `bin/wt` creates a local repository shell through `cmux_create`. |
 | `cmux workspace select <id>` | `cmux_select` selects an existing row. |
 | `cmux workspace close <id> [--force]` | `close_row` uses `--force` for the caller's own row or a newly created row during failed setup. |
-| `cmux ssh <host> --name <title> [--no-focus] --command <command>` | `cmux_row_create_ssh` creates a VM row. `cmux_row_open_ssh` also interprets `--no-focus` when an existing row matches. |
+| `cmux ssh <host> --name <title> --no-focus --command <command>` | `cmux_row_create_ssh` creates a VM row before tagging it. Requested selection follows the description update. |
 | `cmux workspace-action --workspace <id> --action set-description --description <description>` | `cmux_row_create_ssh` and `cmux_row_open_ssh` write the second line. |
 | `cmux top --workspace <id> --json` | `row_agent` reads the caller identity and agent process counts before removal. |
 | `cmux top --json` | `doctor_mac` in `doctor.sh` checks the response shape. |
@@ -77,6 +77,10 @@ If SSH creation returns no reference, `cmux_row_create_ssh` waits one second and
 That lookup excludes preexisting IDs and requires the requested title, host, and an absent repository description.
 If a new row's description update fails, the adapter closes it and reports failure.
 An existing row's description update failure produces a diagnostic but preserves the row.
+SSH creation always uses `--no-focus`; explicit selection follows only when the caller requested focus.
+On cmux 0.65.1, focused replacement creation reproduced a generated title instead of the requested task title.
+Creating unfocused and then selecting preserved the title during live reattachment.
+A failed selection retains the identified row and task while reporting the failure.
 
 `close_row` accepts this exact error when the row has already disappeared:
 
