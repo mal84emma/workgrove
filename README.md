@@ -129,6 +129,8 @@ workgrove/
 │       ├── options.sh         wt command table, option parser, and command help
 │       ├── automation.sh      installer support for the native notification rule
 │       ├── install-files.sh   installer file replacement and JSON merge helpers
+│       ├── doctor.sh          Mac and VM contract checks and fixture recording
+│       ├── doctor-sanitize.jq redacts recorded cmux responses
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
 │       ├── version.sh         shared validation for installation version reports
@@ -195,6 +197,8 @@ workgrove/
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── bash5-smoke.sh         all five bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
+│   ├── doctor-smoke.sh        cmux contracts, VM hooks, and redacted fixture recording
+│   ├── fake-cmux.sh           serves recorded cmux contract responses
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with a fake gh
@@ -204,6 +208,7 @@ workgrove/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
     ├── azml-compute.md        Azure ML compute instances over ssh
+    ├── cmux-checklist.md       checks after a cmux update
     ├── vm-open-relay.md        native VM requests after cmux 0.65
     ├── vm-agent-status.md     agent status in VM rows after cmux 0.65
     ├── wt-json.md             the JSON status contract of wt list --json and wt show --json
@@ -553,6 +558,8 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   - Denied: a body file outside the repository, and `--template`.
   - Denied: a remote whose push URL leaves github.com, including when `wt pr` would push through that remote.
   - `settings.base.json` wires the hook and carries no rule that would override it.
+- **`bash test/doctor-smoke.sh`** checks cmux versions, methods, response shapes, hook paths, VM checks, and fixture redaction.
+  It uses `test/fake-cmux.sh` to serve and replay recorded contract responses.
 - **`bash test/native-relay-smoke.sh`** checks native VM requests, tmux identity, notification validation, and automation backups.
   It also checks that `wt run` gives the cmux-tui agent hooks the terminal ID from the task's tmux session.
   It uses a scratch home and fake commands.
@@ -698,6 +705,8 @@ misbehaves after it reconnects, find your symptom in this table:
 | `wt driver` | Open or select the `driver` row |
 | `wt update [--refresh-config]` | `git pull --ff-only` this repo, then re-run `install.sh` |
 | `wt repos [<name>] [--porcelain\|--table]` | List every repo (name, task count, location on a terminal; `name<TAB>path` when piped), or print one repo's path |
+| `wt doctor [--record DIR]` | Check cmux contracts and hook paths. Save redacted fixtures below `DIR/cmux-<version>/` |
+| `wt -H <vm> doctor` | Check VM tools, cmux-tui hooks, folders, and the protocol against the Mac |
 | `wt hosts [--json]` | Probe the Mac's configured SSH aliases for remote-command access and installed CPU, RAM and GPU hardware |
 | `wt path <name>`, `wt current`, `wt diff <name>`, `wt help` | Small helpers |
 | `wt -H <host> <sub> …` | Run a subcommand on a VM through ssh while the cmux row stays local. `show`, `rm`, `path`, `open` and `attach` need `-r <repo>` |
@@ -1030,6 +1039,8 @@ It also tells how to enable VM status on an existing VM.
 
 This log records cmux versions verified with workgrove. It does not establish support for untested versions.
 Run `cmux version` to check your installed version.
+Run `wt doctor` after an update, then follow the [cmux update checklist](docs/cmux-checklist.md).
+`WG_CMUX_SUPPORTED` in `lib/workgrove/cmux.sh` selects the single verified version for the probe.
 
 workgrove supports cmux 0.65.1 until a newer release passes verification. Version 0.65.2 is unverified.
 The log has one supported version at a time. Older rows record historical verification.

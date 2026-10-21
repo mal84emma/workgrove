@@ -5,6 +5,8 @@ The VM rows of cmux 0.65 did not show the agent's status, but local rows did.
 This page records the cause, the fix, and how to check it.
 [VM requests after cmux 0.65](vm-open-relay.md) covers the other requests from VM tasks.
 
+Use the [cmux update checklist](cmux-checklist.md) after each cmux update.
+
 ## Cause of the missing status
 
 Before native status support, workgrove's status relay supported only cmux 0.64 TCP relay rows.
