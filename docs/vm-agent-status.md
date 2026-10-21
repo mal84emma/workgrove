@@ -5,6 +5,9 @@ The VM rows of cmux 0.65 did not show the agent's status, but local rows did.
 This page records the cause, the fix, and how to check it.
 [VM requests after cmux 0.65](vm-open-relay.md) covers the other requests from VM tasks.
 
+The [cmux integration contract](cmux-integration.md) lists the commands, fields, and measured behavior.
+The [Mac–VM protocol](vm-protocol.md) defines remote commands, records, requests, and the tmux environment.
+
 Use the [cmux update checklist](cmux-checklist.md) after each cmux update.
 
 ## Cause of the missing status

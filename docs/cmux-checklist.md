@@ -34,7 +34,7 @@ The VM checks require a reachable VM and a task with a running agent.
    It reads one retained `notification.created` event without sending a notification.
    If no event exists, retry after an agent notification.
 10. Review the fixtures for personal information before committing them.
-    Record the cmux build and the VM results in the README compatibility log.
+    Record the cmux build and VM results in the [cmux compatibility log](cmux-integration.md#cmux-compatibility-log).
     After every check passes, update `WG_CMUX_SUPPORTED` in `lib/workgrove/cmux.sh`.
 
 `wt doctor` returns zero when every check passes.
