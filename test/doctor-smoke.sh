@@ -189,6 +189,14 @@ TMUX
   assert_grep 'folder failure' "$TEST_ROOT/output" 'FAIL WT_REPOS_DIR'
   CMUX_TUI_HOOK="$TEST_ROOT/missing-helper" invoke doctor
   assert_eq 'missing helper fails' 1 "$STATUS"
+  WT_CMUX_TUI_HOOK="$HOME/.local/bin/cmux-hook" CMUX_TUI_HOOK="$TEST_ROOT/missing-helper" invoke doctor
+  assert_eq 'a saved helper cannot hide a missing selected helper' 1 "$STATUS"
+  WT_CMUX_TUI_HOOK="$TEST_ROOT/missing-helper" CMUX_TUI_HOOK="$HOME/.local/bin/cmux-hook" invoke doctor
+  assert_eq 'a valid selected helper replaces a stale saved helper' 0 "$STATUS"
+  WT_CMUX_TUI_HOOK="$HOME/.local/bin/cmux-hook" CMUX_TUI_HOOK="$REPO/lib/workgrove/cmux-tui-hook.sh" invoke doctor
+  assert_eq 'the wrapper preserves a valid saved helper' 0 "$STATUS"
+  WT_CMUX_TUI_HOOK="$TEST_ROOT/missing-helper" CMUX_TUI_HOOK="$REPO/lib/workgrove/cmux-tui-hook.sh" invoke doctor
+  assert_eq 'the wrapper checks the saved helper' 1 "$STATUS"
   invoke doctor --record "$TEST_ROOT/vm-record"
   assert_eq 'a VM rejects recording' 1 "$STATUS"
   assert_absent "$TEST_ROOT" vm-record

@@ -328,11 +328,8 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
   # cmux 0.65 shows a VM agent's state through the cmux-tui hooks. Give them this row's terminal at each hook.
   # lib/workgrove/cmux-tui-hook.sh explains why the pane's own environment names the wrong terminal.
   if is_remote && [[ -n ${TMUX:-} && -x $WG_LIB_DIR/cmux-tui-hook.sh ]]; then
-    # A nested wt run keeps the saved helper. Match any checkout's wrapper: each spelling of wt gives another path.
-    case ${CMUX_TUI_HOOK:-} in
-      */lib/workgrove/cmux-tui-hook.sh) ;;
-      *) export WT_CMUX_TUI_HOOK="${CMUX_TUI_HOOK:-${XDG_DATA_HOME:-$HOME/.local/share}/cmux-tui/bin/cmux-tui-hook}" ;;
-    esac
+    WT_CMUX_TUI_HOOK=$(cmux_tui_agent_helper)
+    export WT_CMUX_TUI_HOOK
     export CMUX_TUI_HOOK="$WG_LIB_DIR/cmux-tui-hook.sh"
   fi
   "$agent" "${model_arg[@]}" "${extra[@]}" "${args[@]}" || rc=$?

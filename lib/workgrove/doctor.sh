@@ -186,8 +186,7 @@ doctor_vm() {
     grep -Eiq "^[[:space:]]*${provider}[[:space:]:]+installed([[:space:]]|$)" <<<"$raw" || rc=1
     doctor_result "$rc" "cmux-tui $provider hook" 'cmux-tui agent hook install claude codex'
   done
-  helper=${WT_CMUX_TUI_HOOK:-${CMUX_TUI_HOOK:-}}
-  case $helper in ''|*/lib/workgrove/cmux-tui-hook.sh) helper=${XDG_DATA_HOME:-$HOME/.local/share}/cmux-tui/bin/cmux-tui-hook ;; esac
+  helper=$(cmux_tui_agent_helper)
   rc=0; [[ -x $helper && -f $helper ]] || rc=1
   doctor_result "$rc" "cmux-tui hook helper $helper" 'unset CMUX_TUI_HOOK WT_CMUX_TUI_HOOK; cmux-tui agent hook install claude codex'
   raw=$(tmux -V 2>/dev/null) || raw=''
