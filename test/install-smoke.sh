@@ -303,6 +303,8 @@ zshenv_paths() {
 # again. So a scenario that sets it and forgets to clear it cannot leak a ZSH_CUSTOM or a FORCE_OS into the
 # next one. This suite must run clean under bash 3.2, and in 3.2 an empty array under `set -u` is an error.
 # So run_install spells these array expansions ${a[@]+"${a[@]}"} throughout.
+# SF_MONO_SRC points install_sf_mono at SF_MONO_FIXTURE, so no run copies the real fonts. A RUN_EXTRA_ENV
+# assignment comes later on the env line, so it overrides that default.
 RUN_EXTRA_ENV=()
 run_install() {
   local h="$1" log="$2" rc=0 extra
@@ -311,7 +313,7 @@ run_install() {
   extra=(${RUN_EXTRA_ENV[@]+"${RUN_EXTRA_ENV[@]}"})
   RUN_EXTRA_ENV=()
   env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT -u ZSH_CUSTOM \
-      HOME="$h" XDG_CONFIG_HOME="$h/.config" WT_HOST="$VM_HOST" \
+      HOME="$h" XDG_CONFIG_HOME="$h/.config" WT_HOST="$VM_HOST" SF_MONO_SRC="$SF_MONO_FIXTURE" \
       ${extra[@]+"${extra[@]}"} \
       "$INSTALL_BASH" "$REPO/install.sh" "$@" >"$log" 2>&1 </dev/null || rc=$?
   return "$rc"
@@ -363,16 +365,24 @@ UI_FLAG=--with-claude-ui             # the seventh flag: keys inside a copied fi
 CMUX_FLAG=--with-cmux-config
 CMUX_DST=.config/cmux/cmux.json
 CMUX_SRC=home/.config/cmux/cmux.json
+# The Ghostty config and its two themes come with cmux.json. Each one is its own link: ~/.config/ghostty stays
+# a real directory, because the tools that edit it write .bak files into it.
+GHOSTTY_FILES=(config themes/learning-dark themes/learning-light)
+# The stand-in for Terminal.app's font folder: two SF Mono files, and one file that the pattern must skip.
+SF_MONO_FIXTURE="$TEST_ROOT/sf-mono"
+SF_MONO_FONTS=(SF-Mono-Regular.otf SF-Mono-Bold.otf)
+mkdir -p "$SF_MONO_FIXTURE"
+for f in "${SF_MONO_FONTS[@]}" SFMono-Terminal.ttf; do printf 'font %s\n' "$f" >"$SF_MONO_FIXTURE/$f"; done
 THEME_DST=.oh-my-zsh/custom/themes/workgrove.zsh-theme
 THEME_SRC=home/.oh-my-zsh/custom/themes/workgrove.zsh-theme
 # assert_machinery <home> [cmux-linked yes|no]: everything that a default install owes every user, opinionated
 # or not. The list comes from the repo and is not hard-coded, so a new bin/ script or skill that install.sh
 # forgot to link fails here. The second argument, default "no", is for ~/.config/cmux/cmux.json. That file
 # was once linked on every Mac and is now the sixth opt-in file. So only a caller that gave
-# --with-cmux-config (or --opinionated-config) may expect the link. Either way it is exactly ONE assertion,
-# so the count is the same.
+# --with-cmux-config (or --opinionated-config) may expect the link, and the three Ghostty links with it.
+# Either way the number of assertions is the same.
 assert_machinery() {
-  local h="$1" cmux="${2:-no}" b n d
+  local h="$1" cmux="${2:-no}" b n d f
   assert_link "$h" .zshenv home/.zshenv
   assert_link "$h" .gitignore_global home/.gitignore_global
   assert_link "$h" .claude/AGENTS.md home/.claude/AGENTS.md
@@ -408,8 +418,14 @@ assert_machinery() {
   if [[ $OS == Darwin ]]; then
     if [[ $cmux == yes ]]; then
       assert_link "$h" "$CMUX_DST" "$CMUX_SRC"
+      for f in "${GHOSTTY_FILES[@]}"; do
+        assert_link "$h" ".config/ghostty/$f" "home/.config/ghostty/$f"
+      done
     else
       assert_not_link "$h" "$CMUX_DST"
+      for f in "${GHOSTTY_FILES[@]}"; do
+        assert_not_link "$h" ".config/ghostty/$f"
+      done
     fi
   fi
 }
@@ -1408,6 +1424,92 @@ scenario_cmux_config() {
   end_scenario
 }
 
+# The Ghostty config arrives with cmux.json as three separate links, and brings a copy of SF Mono. The run
+# stashes a regular config file, leaves a .bak file beside it, and never replaces a font file that is there.
+# It retires a Ghostty link whose source is gone, and it leaves a folder that a dotfile manager links alone.
+scenario_ghostty_config() {
+  local h log f bk
+  begin_scenario "17l. the Ghostty config links file by file, and SF Mono is copied only when missing" || return 0
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  RUN_EXTRA_ENV=(FORCE_OS=Linux)
+  if assert_install_ok "$h" "$log" "$CMUX_FLAG"; then
+    assert_absent "$h" .config/ghostty/config      # cmux and Ghostty's fonts are the Mac's only
+    assert_absent "$h" Library/Fonts
+  fi
+  if [[ $OS != Darwin ]]; then
+    end_scenario
+    return 0
+  fi
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  if assert_install_ok "$h" "$log"; then
+    assert_absent "$h" .config/ghostty/config      # no flag: no Ghostty config and no fonts
+    assert_absent "$h" Library/Fonts
+  fi
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  mkdir -p "$h/.config/ghostty" "$h/Library/Fonts"
+  printf '# STRANGER GHOSTTY\n' >"$h/.config/ghostty/config"
+  printf '# OLD GHOSTTY\n' >"$h/.config/ghostty/config.20260101-000000.bak"
+  printf 'the user font\n' >"$h/Library/Fonts/${SF_MONO_FONTS[0]}"
+  mkdir -p "$h/.config/ghostty/themes"
+  ln -s "$REPO/home/.config/ghostty/themes/retired-theme" "$h/.config/ghostty/themes/retired-theme"
+  if assert_install_ok "$h" "$log" "$CMUX_FLAG"; then
+    for f in "${GHOSTTY_FILES[@]}"; do
+      assert_link "$h" ".config/ghostty/$f" "home/.config/ghostty/$f"
+    done
+    assert_not_link "$h" .config/ghostty
+    assert_not_link "$h" .config/ghostty/themes
+    assert_regular "$h" .config/ghostty/config.20260101-000000.bak
+    bk="$(backup_dir "$h")"
+    assert_grep "the stranger's Ghostty config is in the backup dir" "$bk/.config/ghostty/config" "# STRANGER GHOSTTY"
+    assert_grep "the user's font file is kept" "$h/Library/Fonts/${SF_MONO_FONTS[0]}" 'the user font'
+    # shellcheck disable=SC2088   # the ~ is the label a failure prints, not a path to expand
+    assert_same_bytes "~/Library/Fonts/${SF_MONO_FONTS[1]} is the SF Mono file" \
+      "$h/Library/Fonts/${SF_MONO_FONTS[1]}" "$SF_MONO_FIXTURE/${SF_MONO_FONTS[1]}"
+    assert_absent "$h" Library/Fonts/SFMono-Terminal.ttf
+    assert_grep "install.sh counted the copied font" "$log" 'copied SF Mono into ~/Library/Fonts (1 files)'
+    assert_absent "$h" .config/ghostty/themes/retired-theme
+    if assert_install_ok "$h" "$log.2"; then
+      for f in "${GHOSTTY_FILES[@]}"; do
+        assert_link "$h" ".config/ghostty/$f" "home/.config/ghostty/$f"
+      done
+      assert_eq "a bare rerun copies no font" 0 "$(count_matches "$log.2" 'SF Mono')"
+    fi
+  fi
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  mkdir -p "$h.no-fonts"
+  RUN_EXTRA_ENV=(SF_MONO_SRC="$h.no-fonts")
+  if assert_install_ok "$h" "$log" "$CMUX_FLAG"; then
+    assert_link "$h" .config/ghostty/config home/.config/ghostty/config
+    assert_absent "$h" Library/Fonts
+    assert_grep "the summary names the missing font" "$log" 'SF Mono was not found in'
+  fi
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  mkdir -p "$h/.config" "$h/dotfiles/ghostty"
+  printf '# MANAGED GHOSTTY\n' >"$h/dotfiles/ghostty/config"
+  ln -s "$h/dotfiles/ghostty" "$h/.config/ghostty"
+  if assert_install_ok "$h" "$log" "$CMUX_FLAG"; then
+    assert_link "$h" "$CMUX_DST" "$CMUX_SRC"
+    assert_eq "the ~/.config/ghostty link is still the manager's" \
+      "$h/dotfiles/ghostty" "$(readlink "$h/.config/ghostty")"
+    assert_regular "$h" dotfiles/ghostty/config
+    assert_grep "the managed Ghostty config is unchanged" "$h/dotfiles/ghostty/config" "# MANAGED GHOSTTY"
+    assert_absent "$h" dotfiles/ghostty/themes
+    # shellcheck disable=SC2088   # the ~ is the text the summary prints, not a path to expand
+    assert_grep "the summary names the managed folder" "$log" '~/.config/ghostty is managed by a symlink'
+  fi
+  end_scenario
+}
+
 # On a Mac, ~/.zshenv points cmux's agent wrappers at the agent CLIs in ~/.local/bin. The stub uname tests
 # both platforms on either runner. One home has only codex, so CMUX_CUSTOM_CLAUDE_PATH must stay unset there.
 # The other has both agent CLIs, so each variable is checked set and unset.
@@ -1885,6 +1987,7 @@ main() {
   scenario_linux_unhooked_writable
   scenario_linux_managed_bashrc
   scenario_cmux_config
+  scenario_ghostty_config
   scenario_zshenv_cmux_paths
   lib_summary
 }

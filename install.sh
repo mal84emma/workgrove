@@ -12,9 +12,9 @@
 #
 # The script handles three classes of file:
 #   1. Stable files are SYMLINKED out of this repo. They are the shell, git and tmux dotfiles, the Claude and
-#      Codex instructions, the skills, the bin/ scripts and cmux.json. So edits (an agent's edits too) land in
-#      the repo, and `git diff` is the review. Six of these files are the author's taste, not machinery, so they
-#      are OPT-IN (see below).
+#      Codex instructions, the skills, the bin/ scripts, cmux.json and the Ghostty config. So edits (an agent's
+#      edits too) land in the repo, and `git diff` is the review. Six of these files are the author's taste, not
+#      machinery, so they are OPT-IN (see below).
 #   2. ~/.claude/settings.json, ~/.codex/config.toml and ~/.codex/hooks.json are machine-local COPIES of the
 #      versioned .base files, because the apps write local state into them. A normal run keeps an existing
 #      copy ("kept …"). Only --refresh-config stashes the copy and rewrites it. A refresh therefore drops
@@ -35,7 +35,9 @@
 #   ~/.tmux.conf                      --with-tmux-conf
 #   ~/.claude/keybindings.json        --with-keybindings
 #   ~/.claude/statusline-command.sh   --with-statusline
-#   ~/.config/cmux/cmux.json          --with-cmux-config, on a Mac only
+#   ~/.config/cmux/cmux.json          --with-cmux-config, on a Mac only. With it come the Ghostty config and
+#                                     its two themes, which cmux reads for the font, theme and colors, and a
+#                                     copy of the SF Mono font that the config names.
 # A seventh flag, --with-claude-ui, gates KEYS, not a file. Every machine gets ~/.claude/settings.json, because
 # its hooks and permissions are machinery. Voice, theme, and mouse preferences require this flag.
 # Fullscreen mode is the VM default; the Mac's fullscreen preference remains opt-in.
@@ -121,7 +123,12 @@ LINKS=(
   'home/.claude/AGENTS.md|.claude/AGENTS.md|'
   'home/.claude/CLAUDE.md|.claude/CLAUDE.md|'
   'home/.oh-my-zsh/custom/themes/workgrove.zsh-theme|ZC_REL/themes/workgrove.zsh-theme|WITH_ZSHRC'
+  'home/.config/ghostty/config|.config/ghostty/config|WITH_CMUX_CONFIG'
+  'home/.config/ghostty/themes/learning-dark|.config/ghostty/themes/learning-dark|WITH_CMUX_CONFIG'
+  'home/.config/ghostty/themes/learning-light|.config/ghostty/themes/learning-light|WITH_CMUX_CONFIG'
 )
+# SF_MONO_SRC: macOS ships SF Mono only inside Terminal.app. Only test/install-smoke.sh overrides it.
+SF_MONO_SRC="${SF_MONO_SRC:-/System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts}"
 BK=""                                # this run's backup dir; filled in by main
 SUMMARY_SKIPS=()
 SUMMARY_ACTIONS=()
@@ -307,10 +314,25 @@ stash() {
 }
 
 # link <repo-relative src> <home-relative dst>: point ~/dst at <repo>/src, and stash what was there.
+# Dotfile managers such as stow often link a whole ~/.config/<app> folder into the user's own repo. A link
+# under such a folder would move the user's file out of their repo and write this repo's link into it. So
+# link() skips a ~/.config destination when any folder above it is a symlink, and names the skip.
 link() {
-  local src="$R/$1" dst="$HOME/$2"
+  local src="$R/$1" dst="$HOME/$2" d
   if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
     return 0                         # already correct: say nothing, change nothing
+  fi
+  if [[ $2 == .config/* ]]; then
+    d="$(dirname "$dst")"
+    while [[ $d != "$HOME" ]]; do
+      if [[ -L $d ]]; then
+        # shellcheck disable=SC2088  # The summary prints a home-relative path.
+        SUMMARY_SKIPS+=("~/${d#"$HOME"/} is managed by a symlink, so ~/$2 was not linked")
+        echo "skipped ~/$2: ~/${d#"$HOME"/} is a symlink, so another tool manages it" >&2
+        return 0
+      fi
+      d="$(dirname "$d")"
+    done
   fi
   mkdir -p "$(dirname "$dst")"
   stash "$dst"
@@ -569,13 +591,42 @@ link_skills() {
 }
 
 # link_cmux_config: cmux runs only on the Mac. Its UI settings stay a link, so changes show in `git diff`.
+# The LINKS table links the Ghostty config and themes with cmux.json. Each file is its own link. Tools that
+# edit ~/.config/ghostty write .bak files into it, and a linked folder would put those files in the repo.
 link_cmux_config() {
   link_optins late-link
+  if [[ $OS == Darwin ]] && opted_in "$WITH_CMUX_CONFIG" .config/cmux/cmux.json; then
+    install_sf_mono
+  fi
+}
+
+# install_sf_mono: the linked Ghostty config names SF Mono. macOS keeps that font inside Terminal.app, where
+# Ghostty cannot find it, so Ghostty silently falls back to its default font. Copy each missing font file into
+# ~/Library/Fonts. Never replace a file or link that is already there: it may be the user's own copy.
+install_sf_mono() {
+  local path dst found=0 copied=0
+  for path in "$SF_MONO_SRC"/SF-Mono-*.otf; do
+    [[ -f $path ]] || continue          # nullglob is off: no match leaves the pattern itself
+    found=1
+    dst="$HOME/Library/Fonts/${path##*/}"
+    if [[ -e $dst || -L $dst ]]; then
+      continue
+    fi
+    mkdir -p "$HOME/Library/Fonts"
+    cp "$path" "$dst"
+    copied=$((copied + 1))
+  done
+  if [[ $found -eq 0 ]]; then
+    SUMMARY_SKIPS+=("SF Mono was not found in $SF_MONO_SRC; Ghostty uses its default font")
+    echo "skipped SF Mono: no SF-Mono-*.otf in $SF_MONO_SRC, so Ghostty uses its default font" >&2
+  elif [[ $copied -gt 0 ]]; then
+    echo "copied SF Mono into ~/Library/Fonts ($copied files)"
+  fi
 }
 
 # retired_src <home-relative dst>: print the repo-relative path that the linking steps above point that
 # destination at. our_link's tail test needs this path to recognize a link made before this clone moved.
-# Five of the eight directories mirror the repo's own layout, so for them the source is home/<dst>. This
+# Seven of the ten directories mirror the repo's own layout, so for them the source is home/<dst>. This
 # function used to infer that source for all of them. So once the clone had moved, the three exceptions below
 # could never be retired: their source is not their destination, so the tail never matched. A renamed skill or
 # script then outlived its rename on exactly the machines that this function exists for.
@@ -613,7 +664,7 @@ retired_src() {
 remove_retired_links() {
   local d e rel dirs
   dirs=("$HOME" "$HOME/.claude" "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.codex" \
-        "$HOME/.local/bin" "$HOME/.config/cmux")
+        "$HOME/.local/bin" "$HOME/.config/cmux" "$HOME/.config/ghostty" "$HOME/.config/ghostty/themes")
   if [[ -n $ZC_REL ]]; then
     dirs[${#dirs[@]}]="$ZC/themes"                       # where link_dotfiles put the theme; with ZSH_CUSTOM
   fi                                                     # set, that is not ~/.oh-my-zsh/custom

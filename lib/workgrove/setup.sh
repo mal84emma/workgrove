@@ -50,7 +50,7 @@ host_setup() {
   return "$status"
 }
 
-host_doctor() {
+host_environment_doctor() {
   local host=$1; shift
   local -A opts=()
   wt_opts "$(wt_spec doctor)" opts "$@"
@@ -68,7 +68,7 @@ cmd_setup() {
   wt_opts "$(wt_spec setup)" opts "$@"
   die 'setup: use wt -H <host> setup --root <persistent-root>'
 }
-cmd_doctor() {
+cmd_environment_doctor() {
   local -A opts=()
   wt_opts "$(wt_spec doctor)" opts "$@"
   local args=()

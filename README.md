@@ -18,6 +18,8 @@ VS Code opens only when you ask for it, through `wt open`.
 
 This section describes how `wt` names and finds rows, where it keeps task data, and which repos it uses.
 It also covers per-repo hooks and the logins that you supply.
+The [cmux integration contract](docs/cmux-integration.md) lists the commands, fields, environment variables, and measured behavior.
+The [Mac–VM protocol](docs/vm-protocol.md) defines remote commands, result records, relay requests, and the tmux environment.
 
 - **Identity.** Each row that a task owns has the task name `<name>` as its title.
   Each kind of row has its own title:
@@ -130,6 +132,8 @@ workgrove/
 │       ├── options.sh         wt command table, option parser, and command help
 │       ├── automation.sh      installer support for the native notification rule
 │       ├── install-files.sh   installer file replacement and JSON merge helpers
+│       ├── doctor.sh          Mac and VM contract checks and fixture recording
+│       ├── doctor-sanitize.jq redacts recorded cmux responses
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
 │       ├── version.sh         shared validation for installation version reports
@@ -174,7 +178,12 @@ workgrove/
 │   │   ├── config.base.toml
 │   │   └── hooks.base.json
 │   ├── .cmuxterm/automations.json  native VM notification rule
-│   └── .config/cmux/cmux.json
+│   ├── .config/cmux/cmux.json
+│   └── .config/ghostty/
+│       ├── config             the font, theme, and padding that cmux's terminals use
+│       └── themes/
+│           ├── learning-dark
+│           └── learning-light
 ├── vscode/
 │   ├── settings-snippet.jsonc six keys to paste; Settings Sync owns the rest
 │   └── extensions.txt
@@ -197,6 +206,8 @@ workgrove/
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── bash5-smoke.sh         all bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
+│   ├── doctor-smoke.sh        cmux contracts, VM hooks, and redacted fixture recording
+│   ├── fake-cmux.sh           serves recorded cmux contract responses
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── ssh-host-smoke.sh      offline SSH fragment registration tests
@@ -216,6 +227,9 @@ workgrove/
     ├── remote-setup.md        prepare and restore portable SSH hosts
     ├── runpod.md              Runpod preparation through the shared SSH workflow
     ├── ssh-hosts.md           register a supplied SSH fragment
+    ├── cmux-integration.md     cmux commands, fields, environment, and compatibility log
+    ├── vm-protocol.md          Mac–VM commands, records, requests, and tmux environment
+    ├── cmux-checklist.md       checks after a cmux update
     ├── vm-open-relay.md        native VM requests after cmux 0.65
     ├── vm-agent-status.md     agent status in VM rows after cmux 0.65
     ├── wt-json.md             the JSON status contract of wt list --json and wt show --json
@@ -249,7 +263,7 @@ It also describes what a run changes, the repo's test suites, and how to remove 
 - **tmux:** the VMs have tmux 3.2a, and `home/.tmux.conf` is written for that version.
 - **cmux:** workgrove supports 0.65.1 (build 110). Version 0.65.2 is unverified.
   Support moves to a newer release after verification, rather than automatically when that release appears.
-  See the [cmux compatibility log](#cmux-compatibility-log) for verified behavior and remaining checks.
+  See the [cmux compatibility log](docs/cmux-integration.md#cmux-compatibility-log) for verified behavior and remaining checks.
   `home/.config/cmux/cmux.json` is `schemaVersion: 1`.
 - **Other tools:** on a Mac, `Brewfile` installs `gh`, `fzf`, cmux itself, Claude Code, and Codex. On a VM,
   [docs/new-vm.md](docs/new-vm.md) installs them.
@@ -298,7 +312,7 @@ File classes). It is independent of the opt-in flags, and all of these flags com
 | `--with-keybindings` | `~/.claude/keybindings.json` | Nothing. Claude keeps its own keymap. |
 | `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing. Also, `install.sh` strips `statusLine` from the `~/.claude/settings.json` copy, because that key names a script that would not be there. |
 | `--with-claude-ui` | The `tui`, `voice`, and `theme` keys and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` in `~/.claude/settings.json`. | VMs use fullscreen mode. Other UI preferences remain unset. On the Mac, fullscreen remains opt-in too. Hooks and permissions arrive either way. |
-| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. | Nothing. Your `~/.config/cmux/cmux.json` stays untouched. |
+| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. With it come `~/.config/ghostty/config` and its two themes in `~/.config/ghostty/themes/`, each one a separate link. cmux renders its terminals with Ghostty and reads that config for the font, theme, and colors. The config names SF Mono, which macOS ships only inside Terminal.app. So `install.sh` copies each missing `SF-Mono-*.otf` file into `~/Library/Fonts`, and never replaces a file that is already there. When a symlink manages `~/.config/ghostty` or `~/.config/cmux`, for example from stow, `install.sh` links nothing into it and names the skip in its summary. | Nothing. Your `~/.config/cmux/cmux.json`, your Ghostty config, and your fonts stay untouched. |
 
 The full `~/.tmux.conf` from `--with-tmux-conf` tunes tmux with true color, a 10 ms `escape-time`,
 Shift+Enter, and focus events. It also makes the mouse wheel scroll instead of typing arrow keys.
@@ -363,7 +377,7 @@ The summary includes both flags because the existing copy cannot remember the re
 
 | Class | Files | Behavior |
 |---|---|---|
-| Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, and every opt-in file you asked for. `cmux.json` is one of them (Mac only, under `--with-cmux-config`). | Edits, including an agent's, land in the repo, so `git diff` is the review. |
+| Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, and every opt-in file you asked for. `cmux.json` and the three Ghostty files are among them (Mac only, under `--with-cmux-config`). | Edits, including an agent's, land in the repo, so `git diff` is the review. |
 | Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | `install.sh` creates them from the versioned `.base` files, minus the keys that this machine cannot use or did not ask for (listed below). The apps write local state into them. So a normal run keeps what is there, and only `install.sh --refresh-config` replaces them. A refresh preserves foreign hook commands and their group settings in the JSON files. |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides. The linked files source or include them, but `~/.zshrc.local` only when `~/.zshrc` is one of the linked files. |
 
@@ -568,6 +582,8 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   - Denied: a body file outside the repository, and `--template`.
   - Denied: a remote whose push URL leaves github.com, including when `wt pr` would push through that remote.
   - `settings.base.json` wires the hook and carries no rule that would override it.
+- **`bash test/doctor-smoke.sh`** checks cmux versions, methods, response shapes, hook paths, VM checks, and fixture redaction.
+  It uses `test/fake-cmux.sh` to serve and replay recorded contract responses.
 - **`bash test/native-relay-smoke.sh`** checks native VM requests, tmux identity, notification validation, and automation backups.
   It also checks that `wt run` gives the cmux-tui agent hooks the terminal ID from the task's tmux session.
   It uses a scratch home and fake commands.
@@ -603,6 +619,8 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
    - the skills under `~/.agents/skills/` and `~/.claude/skills/`
    - the `~/.local/bin/` entries
    - `~/.config/cmux/cmux.json` (a link only on a Mac with `--with-cmux-config`; otherwise it is your own file)
+   - `~/.config/ghostty/config`, `~/.config/ghostty/themes/learning-dark`, and
+     `~/.config/ghostty/themes/learning-light` (links under the same condition)
    - whichever opt-in files you asked for
 3. If `~/.zshrc` is opted in, delete the oh-my-zsh theme link. It is not in `$HOME` itself, so it never appears
    in an `ls -l ~`. It is at `~/.oh-my-zsh/custom/themes/workgrove.zsh-theme`, or under
@@ -613,11 +631,14 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
    someone else's repos, yours to delete or keep.
 5. If you do not want the three machine-local copies, delete them: `~/.claude/settings.json`,
    `~/.codex/config.toml`, and `~/.codex/hooks.json`.
-6. Copy your originals back out of the newest `~/.workgrove-backup/<timestamp>-<pid>/`, which mirrors `$HOME`.
+6. On a Mac with `--with-cmux-config`, decide whether to keep SF Mono. `install.sh` copied the
+   `SF-Mono-*.otf` files that were missing into `~/Library/Fonts`. They are copies, not links, so they stay
+   until you delete them.
+7. Copy your originals back out of the newest `~/.workgrove-backup/<timestamp>-<pid>/`, which mirrors `$HOME`.
    If you had your own `wt`, `agent-notify`, `cmux-hook`, or `azml-ssh-host` in `~/bin`, it is also there.
    `install.sh` retires those, because `~/bin` comes before `~/.local/bin` on `PATH`, and a copy there would
    shadow the link.
-7. Undo by hand the edits that `install.sh` made in place instead of replacing a file. They are not in the
+8. Undo by hand the edits that `install.sh` made in place instead of replacing a file. They are not in the
    backup:
    - On a VM: the lines it appended to `~/.zshenv.local`, and the `~/.zshenv` line at the top of `~/.bashrc`.
    - Without `--with-gitconfig` (for example, on a default run): the `core.excludesFile` and
@@ -714,6 +735,8 @@ misbehaves after it reconnects, find your symptom in this table:
 | `wt driver` | Open or select the `driver` row |
 | `wt update [--refresh-config]` | `git pull --ff-only` this repo, then re-run `install.sh` |
 | `wt repos [<name>] [--porcelain\|--table]` | List every repo (name, task count, location on a terminal; `name<TAB>path` when piped), or print one repo's path |
+| `wt doctor [--record DIR]` | Check cmux contracts and hook paths. Save redacted fixtures below `DIR/cmux-<version>/` |
+| `wt -H <vm> doctor` | Check VM tools, cmux-tui hooks, folders, and the protocol against the Mac |
 | `wt hosts [--json]` | Probe the Mac's configured SSH aliases for remote-command access and installed CPU, RAM and GPU hardware |
 | `wt path <name>`, `wt current`, `wt diff <name>`, `wt help` | Small helpers |
 | `wt -H <host> <sub> …` | Run a subcommand on a VM through ssh while the cmux row stays local. `show`, `rm`, `path`, `open` and `attach` need `-r <repo>` |
@@ -1045,25 +1068,7 @@ It also tells how to enable VM status on an existing VM.
 
 ### cmux compatibility log
 
-This log records cmux versions verified with workgrove. It does not establish support for untested versions.
-Run `cmux version` to check your installed version.
-
-workgrove supports cmux 0.65.1 until a newer release passes verification. Version 0.65.2 is unverified.
-The log has one supported version at a time. Older rows record historical verification.
-Support does not include the removed cmux 0.64 TCP relay paths.
-
-| cmux version | Status | Verified on | Verified behavior |
-|---|---|---|---|
-| 0.65.1 (build 110, `8a853dcc9`) | Supported; native VM and cross-window checks passed | 2026-10-16 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. |
-| 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
-
-[PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to cmux 0.65.0's row-closing behavior.
-Local self-removal uses cmux's `--force` only for the verified caller's own row.
-Native VM rows exit with their task's tmux session.
-The earlier `0.64 or newer` requirement did not guarantee compatibility with these changes.
-
-For each supported version, record the exact build, verified behavior, and remaining checks.
-[VM verification on cmux 0.65.1](docs/vm-open-relay.md#verification-on-cmux-0651) records the current live checks.
+See the [cmux compatibility log](docs/cmux-integration.md#cmux-compatibility-log) for verified versions, flows, and remaining checks.
 
 ### SSH row creation
 
@@ -1092,7 +1097,9 @@ All hotkeys use ⌃⌥⌘. The action type sets how a change to a hotkey takes e
   For this reason, `cmux.json` unbinds `toggleBrowserDesignMode` to free ⌃⌥⌘D.
 - **The Settings UI.** The Settings UI never writes `cmux.json`. It writes its toggles to macOS defaults.
   It writes terminal appearance settings to `config.ghostty`. This repo cannot carry those changes
-  to other machines, so make config changes in `cmux.json`.
+  to other machines. Make cmux config changes in `cmux.json`.
+  Make font, theme, and color changes in `home/.config/ghostty/config` or its themes.
+  Run `cmux reload-config` to apply a change to either file.
 
 ### Notifications
 
@@ -1173,7 +1180,7 @@ These rules apply:
 | Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. It rewrites `~/.codex/config.toml` from the `.base` file and drops Codex's hook trust hashes and folder trust. The refresh keeps existing cmux-tui hooks. On the VM, run `cmux-tui agent hook status claude codex`. If a provider shows `absent`, run `cmux-tui agent hook install claude codex`. Re-trust the hooks in `/hooks`, then restart the agent with `wt -H <vm> attach --restart-agent -r <repo> <name>` from the Mac. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
 | Update cmux, or repair local Codex state tracking | Back up the live (machine-local) `config.toml` and `hooks.json`. Run `cmux hooks codex install --yes`. Check that one turn returns to `idle`. | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit. | `wt -H <vm> update` |
-| Change `cmux.json` | The change applies after cmux reloads its config or relaunches (see Hotkeys and configuration). Commit. | n/a |
+| Change `cmux.json` or the Ghostty config | The change applies after cmux reloads its config or relaunches (see Hotkeys and configuration). A Ghostty config change applies after `cmux reload-config`. Commit. | n/a |
 | Repos in another folder | Add the folder to `WT_REPOS_DIR` in `~/.zshenv.local`. | Edit the `WT_REPOS_DIR` line that `install.sh` wrote in `~/.zshenv.local`. This file is never versioned. |
 | New tool | Add the tool to `Brewfile`, then run `brew bundle`. Commit. | Add the tool's install line to [docs/new-vm.md](docs/new-vm.md). Run that line by hand on each existing VM. |
 | Promote a machine-local setting into its `.base` file | Compare the live (machine-local) copy with its `.base` file. Copy only the portable keys into the `.base` file. Commit. | Never commit live (machine-local) copies or trust state. |

@@ -225,6 +225,10 @@ Other desktop preference flags belong to the original installation procedure.
 
 ## Check readiness
 
+Bare `wt doctor` checks cmux contracts.
+Use `wt doctor --environment` for portable readiness in text format.
+The `--root` and `--json` options also select portable readiness.
+
 Run the Mac-supplied read-only doctor:
 
 ```bash

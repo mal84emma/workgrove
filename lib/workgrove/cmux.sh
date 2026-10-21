@@ -8,9 +8,21 @@
 # Callers read the exported diagnostics and creation state.
 # shellcheck disable=SC2034
 CMUX_ERROR="" CMUX_ROW_EXISTING="" CMUX_ROW_ID=""
+# Only one cmux release is verified at a time.
+WG_CMUX_SUPPORTED=0.65.1
 CMUX_RUN=()
 
 cmux_error() { CMUX_ERROR=$*; return 1; }
+
+# Resolve the helper that wt run saves before it installs the task's hook wrapper.
+cmux_tui_agent_helper() {
+  local helper=${CMUX_TUI_HOOK:-}
+  case $helper in */lib/workgrove/cmux-tui-hook.sh) helper=${WT_CMUX_TUI_HOOK:-} ;; esac
+  case $helper in
+    ''|*/lib/workgrove/cmux-tui-hook.sh) helper=${XDG_DATA_HOME:-$HOME/.local/share}/cmux-tui/bin/cmux-tui-hook ;;
+  esac
+  printf '%s' "$helper"
+}
 
 cmux_bin() {
   local c="${CMUX_BUNDLED_CLI_PATH:-}"
