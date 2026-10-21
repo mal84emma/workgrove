@@ -76,16 +76,31 @@ Keep relay sockets and native terminal identities on runtime storage.
 ## Verification status
 
 Offline tests cover generic SSH registration, explicit restoration, allocation limits, and task recovery with synthetic fixtures.
-Live SSH checks on one active Pod verified fragment registration, doctor, and host inventory through an isolated Mac configuration.
-The GPU probe verified the visible allocation; hidden cgroup mounts left CPU and RAM allocation unknown.
-The inventory retained those unknown values instead of reporting the physical host's capacity.
+The following live results come from one active Pod on 2026-10-21, using workgrove revision `265acbd`.
+Paths, host aliases, identities, and private operational captures are omitted.
 
-Initial portable preparation encountered a permission blocker on that Pod.
-Its FUSE volume reports mode `777`, including for a new directory after `chmod 700`.
-The [installer](../lib/workgrove/portable.py) rejects those permissions under its default strict policy.
-The generic personal volume exception now supports explicit acceptance; live installation under that policy remains unverified.
-Use the documented policy to accept personal volume trust; preserve all other checks and personal identity requirements.
+| Check | Result |
+|---|---|
+| SSH registration and discovery | Passed isolated validation, authorized registration, ordinary discovery, and strict SSH verification. |
+| Hardware inventory | The visible GPU matched `nvidia-smi`. Hidden cgroup mounts left CPU and RAM unknown and prevented automatic capacity selection. |
+| Persistent setup | Passed with explicit personal volume acceptance. The FUSE filesystem reports mode `777` despite `chmod 700`. |
+| Idempotence and update | Repeated setup preserved configuration. A reviewed `wt update` preserved authentication and task files. |
+| Readiness and restoration | Doctor detected a deliberately removed compatibility link. Explicit restore-only repaired it and preserved 11 saved identity, configuration, and task files. |
+| Deferred tasks and uploads | Both agent tasks retained their briefs and verified uploaded files before attachment. |
+| Native rows and reconnection | Both rows connected. Their original tmux sessions survived a Wi-Fi interruption. |
+| Codex task | Produced the exact requested file and passed its Python assertion using individual command approvals. |
+| Reattachment and status | The same Codex process survived row closure and plain attach. Its response, Idle status, and completion notification reached the replacement row. |
+| Replacement row title | One replacement showed an unexpected title. Separate native SSH and tmux replacement checks did not reproduce it; its cause remains unverified. |
+| Editor requests | Mac-side open and VM-side relay opened the correct connected VS Code windows. |
+| Scoped removal | Removed a separate clean task's worktree, branch, and sidecar while preserving both original tasks and sessions. |
+| Claude task completion | Pending because the account reached its usage limit. Authentication, fullscreen startup, and Needs input status passed. |
+| Agent sandboxing | Blocked. Codex 0.163.0 could not create its sandbox namespaces; a no-op sandbox probe failed. |
+| Actual stop/start and endpoint refresh | Unverified. No provider API or lifecycle action ran. |
 
-Installation, live task behavior, agent sandboxing, native rows, relay, and stop/start recovery remain unverified.
-The live checks used no provider API and made no lifecycle changes.
-Lifecycle acceptance requires separate authorization and a bounded compute budget.
+Codex required the supported `--no-daemon` launch option because its control socket rejected the volume's directory permissions.
+That option preserved sandbox policy; individual approvals ran the acceptance commands outside the failed sandbox.
+Follow the [agent runtime compatibility checks](remote-setup.md#check-agent-runtime-compatibility) before treating an installation as ready for unattended agent work.
+The personal volume exception does not change agent sandbox requirements.
+
+Actual lifecycle acceptance requires separate authorization and a bounded compute budget.
+It must verify retained task files, endpoint refresh, environment repair, and explicit restart of selected lost agents.

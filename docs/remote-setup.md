@@ -216,6 +216,38 @@ Saved task models still override profile model options.
 Use options supported by the installed agent. Do not put credentials in launch arguments.
 Known credential-related argument names cause refusal.
 
+### Check agent runtime compatibility
+
+Portable readiness does not establish that an agent can start its background server or enforce its command sandbox.
+Verify those capabilities through a disposable task after personal authentication and folder trust.
+
+Codex 0.163.0 requires private directory permissions for its background server's control socket.
+A personal volume can pass workgrove's explicit trust policy while failing that separate agent check.
+If the installed Codex supports it, select its foreground mode through the private profile:
+
+```bash
+wt -H <host> setup --root <root> --codex-args-json '["--no-daemon"]'
+```
+
+The [Codex CLI reference](https://developers.openai.com/codex/cli/reference) documents this option.
+It changes the background-server behavior; it does not disable the command sandbox.
+This command replaces the saved Codex argument array, so include any other required nonsecret arguments.
+An existing agent must exit before explicit `attach --restart-agent` applies changed launch arguments.
+
+Codex's Linux sandbox also requires container capabilities that workgrove cannot grant.
+Check the installed runtime with a no-op command inside the disposable task:
+
+```bash
+codex sandbox /bin/true
+```
+
+If namespace creation fails, obtain a compatible execution environment through the host supplier.
+Individual approvals can permit commands outside the sandbox; those commands do not establish sandbox compatibility.
+Do not treat personal volume acceptance or `doctor` readiness as authorization to disable agent isolation.
+See [Codex's Linux sandbox description](https://github.com/openai/codex/blob/main/codex-rs/linux-sandbox/README.md) for its namespace requirements.
+
+### Preserve terminal settings and personal instructions
+
 `--with-tmux-conf` explicitly selects workgrove's terminal settings and remains sticky across updates.
 Existing unrelated shell content and personal instructions remain intact.
 Full setup copies linked personal instructions before adding workgrove's instructions.
@@ -305,6 +337,6 @@ They check installation, home replacement, persistent identity, preserved task s
 The [capacity fixtures](../test/capacity_test.py) check kernel limits and uncertain allocation.
 The existing remote and native-relay suites retain their ordinary VM checks.
 
-Initial [live Runpod checks](runpod.md#verification-status) verified SSH and read-only probes but found a persistent-volume permission blocker.
-The explicit [personal volume policy](#trust-a-personal-volume) supports acceptance without weakening the default checks.
-Live installation, task behavior, agent sandboxing, native rows, and cloud lifecycle recovery remain unverified.
+The [live Runpod results](runpod.md#verification-status) cover explicit personal volume acceptance, installation, update, restoration, tasks, and native relay.
+They also record an agent sandbox incompatibility and the remaining acceptance checks.
+Cloud lifecycle recovery remains unverified; simulated link restoration does not establish persistence across a real restart.

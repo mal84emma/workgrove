@@ -15,8 +15,8 @@ The supplier remains responsible for compute creation, billing, endpoint refresh
 Users perform those operations separately through their chosen supplier.
 
 The evidence below references workgrove's public source files and generic Linux host capabilities.
-The [verification status](runpod.md#verification-status) separates offline coverage from the limited live SSH checks.
-The full remote task workflow still requires live acceptance.
+The [verification status](runpod.md#verification-status) separates offline coverage, live workflow results, and remaining acceptance checks.
+Agent sandbox compatibility, Claude task completion, and actual cloud lifecycle recovery remain unresolved.
 
 A Runpod host must provide ordinary remote-command SSH and storage with an understood persistence policy.
 Do not assume that a running container has every package required by workgrove.
@@ -450,10 +450,10 @@ Live acceptance requires separate authorization and a bounded compute budget.
 Verify the selected root's persistence, effective CPU/RAM/GPU visibility, native relay, agent sandboxing, and refreshed-endpoint reconnect behavior.
 Verify task files across stop/start, explicit preparation when runtime setup is lost, and explicit restart for lost agents.
 Check final lifecycle and billing state through the supplier independently.
-Initial [live checks](runpod.md#verification-status) verified SSH registration and read-only probes on an active Pod.
-The initial persistent setup check found a volume permission blocker.
-Generic personal volume acceptance is now implemented; live setup under that policy remains unverified.
-Cloud lifecycle recovery and the complete remote task workflow remain unverified.
+The [live results](runpod.md#verification-status) verify explicit personal volume acceptance, installation, update, restoration, Codex task output, reconnection, and native relay.
+Codex's sandbox namespace initialization failed; individual command approvals do not establish sandbox compatibility.
+Claude task completion remains pending because of an account usage limit.
+Actual stop/start recovery and refreshed-endpoint behavior remain unverified.
 
 ## Recommended implementation order
 
