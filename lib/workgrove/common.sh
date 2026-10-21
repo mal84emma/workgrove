@@ -188,7 +188,7 @@ ssh_host_check() {
     warn 'managed SSH registration needs Python 3 for validation'
     return 1
   fi
-  python3 -B "$WG_VERSION_ROOT/lib/workgrove/ssh_host.py" -F "$config" check "$1"
+  python3 -B "$WG_VERSION_ROOT/lib/workgrove/ssh_host.py" check "$1"
 }
 # known_host <alias> — the alias is one that ssh_hosts prints. grep reads all its input (no -q),
 # so sort never gets SIGPIPE, and the answer stays correct under pipefail.

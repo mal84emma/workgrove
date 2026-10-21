@@ -4,22 +4,22 @@
 # Requires version.sh: wt_read_version.
 # Send public probes inline so missing remote installation links cannot hide prerequisites.
 host_probe_source() {
-  cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/probe-host.sh"
+  cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/probe-host.sh" "$WG_LIB_DIR/vm/python-runtime.sh"
   cat <<'WG_PROBE_HEADER'
-if command -v python3 >/dev/null 2>&1; then
-python3 -B - <<'WG_CAPACITY_SOURCE'
+if wg_select_python; then
+"$wg_python" -B - <<'WG_CAPACITY_SOURCE'
 WG_PROBE_HEADER
   cat "$WG_LIB_DIR/vm/capacity.py"
   cat <<'WG_PROBE_MIDDLE'
 WG_CAPACITY_SOURCE
-python3 -B - doctor --probe <<'WG_READINESS_SOURCE'
+"$wg_python" -B - doctor --probe <<'WG_READINESS_SOURCE'
 WG_PROBE_MIDDLE
   cat "$WG_LIB_DIR/portable.py"
   cat <<'WG_PROBE_END'
 WG_READINESS_SOURCE
 else
-printf 'capabilities\t%s\n' '{"schema":1,"capacity_verified":false,"cpu_logical":null,"memory_mib":null,"capacity_issues":["missing-python"]}'
-printf 'readiness\t%s\n' '{"schema":1,"ready":false,"status":"incomplete","issues":["missing-python"]}'
+printf 'capabilities\t{"schema":1,"capacity_verified":false,"cpu_logical":null,"memory_mib":null,"capacity_issues":["%s"]}\n' "$wg_python_issue"
+printf 'readiness\t{"schema":1,"ready":false,"status":"incomplete","issues":["%s"]}\n' "$wg_python_issue"
 fi
 WG_PROBE_END
 }

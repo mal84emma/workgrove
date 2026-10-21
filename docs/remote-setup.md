@@ -30,6 +30,7 @@ Package installation requires root or noninteractive `sudo` privileges.
 The adapter installs workgrove prerequisites and terminal descriptions; it does not configure services or install agent CLIs.
 
 Python 3.9 or later is required.
+Setup, doctor, inventory, and task preflight check the PATH interpreter, then `/usr/bin/python3`, for a supported version.
 If Python is absent, full setup can install the minimal Python runtime through the Ubuntu adapter before persistent setup begins.
 Restore-only never installs that runtime.
 
@@ -63,6 +64,8 @@ A new profile requires an explicit policy.
 `--git-identity <remote-path>` selects an existing personal Git configuration file.
 Without that option, setup uses the remote user's normal global Git configuration.
 It copies existing include files, preserves conditional includes and credential-helper configuration, and retains existing exclusion patterns.
+It preserves entry order and anchors relative include paths and conditions at their original logical locations.
+Setup preserves Git's precedence: `$XDG_CONFIG_HOME/git/config` (normally `~/.config/git/config`) first, then `~/.gitconfig`.
 It adds `.worktrees/` to the persistent exclusion file.
 The installer never invents an identity or copies a different user's sign-in.
 
@@ -195,6 +198,10 @@ It reports fixed issue codes without printing settings, identity values, environ
 A failed readiness check returns a nonzero status and a JSON report when `--json` is selected.
 
 Doctor checks the profile, storage, installation identity, compatibility links, tools, terminal descriptions, Git identity, and task exclusions.
+Deleted persistent agent directories block readiness and task creation; doctor never recreates personal data.
+Missing selected external agent directories also require explicit repair.
+An unavailable or unsupported Python runtime produces a fixed JSON issue.
+Task creation refuses an existing portable installation when Python cannot validate it.
 Agent executable availability and native-hook presence have separate fields.
 An SSH-only probe cannot verify native-row relay behavior or the user's hook trust decisions.
 Those checks remain separate from `ready`.

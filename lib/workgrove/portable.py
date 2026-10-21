@@ -218,9 +218,9 @@ def run(args, cwd=None, env=None, allowed=(0,)):
 
 
 def git(args, source=None, allowed=(0,)):
+    transport = {"GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL_FROM_USER", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH"}
     env = {key: value for key, value in os.environ.items()
-           if key not in {"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_TEMPLATE_DIR"}
-           and not key.startswith("GIT_CONFIG_")}
+           if not key.startswith("GIT_") or key in transport}
     # Public source acquisition must not inherit personal headers, URL rewrites, or credential commands.
     env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     env["GIT_CONFIG_NOSYSTEM"] = "1"
@@ -229,8 +229,11 @@ def git(args, source=None, allowed=(0,)):
                 "-c", "credential.interactive=false", "-c", "core.fsmonitor=false", *args], cwd=source or "/", env=env, allowed=allowed)
 
 
-def git_quote(value):
-    return json.dumps(str(value), ensure_ascii=False)
+def git_quote(value, subsection=False):
+    value = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    if not subsection:
+        value = value.replace("\n", "\\n").replace("\t", "\\t").replace("\b", "\\b")
+    return '"' + value + '"'
 
 
 def profile_path(root):
@@ -399,34 +402,43 @@ def select_agent_commands(root, migrations, previous):
 
 
 def git_config_graph(start, destination):
-    """Copy selected personal Git includes, preserving conditions and duplicate paths."""
+    """Preserve Git entry order and anchor relative paths at their logical source locations."""
     mapping = {}
 
     def visit(path):
-        path = canonical(path)
+        path = Path(os.path.abspath(Path(path).expanduser()))
         require(path.is_file(), "git-include-missing")
         if path in mapping:
             return mapping[path]
         require(len(mapping) < 64, "git-includes-too-deep")
         target = destination / f"config-{len(mapping)}"
         mapping[path] = target
-        write(target, read(path))
-        output = git(["config", "--file", str(path), "--no-includes", "--null", "--get-regexp",
-                      r"^(include|includeif\..*)\.path$"], allowed=(0, 1)).stdout
-        includes = {}
+        read(path)
+        output = git(["config", "--file", str(path), "--no-includes", "--null", "--list"]).stdout
+        entries = []
         for record in output.split("\0"):
             if not record:
                 continue
-            key, value = record.split("\n", 1)
-            require("%(" not in value and "\n" not in value, "unsupported-git-include")
-            include = Path(value).expanduser()
-            if not include.is_absolute():
-                include = path.parent / include
-            includes.setdefault(key, []).append(str(visit(include)) if include.is_file() else str(include))
-        for key, values in includes.items():
-            git(["config", "--file", str(target), "--unset-all", key], allowed=(0, 5))
-            for value in values:
-                git(["config", "--file", str(target), "--add", key, value])
+            key, separator, value = record.partition("\n")
+            section, _, name = key.partition(".")
+            subsection = None
+            if "." in name:
+                subsection, name = name.rsplit(".", 1)
+            if name == "path" and ((section == "include" and subsection is None) or
+                                   (section == "includeif" and subsection is not None)):
+                require(separator and "%(" not in value and "\n" not in value, "unsupported-git-include")
+                include = Path(value).expanduser()
+                if not include.is_absolute():
+                    include = path.parent / include
+                value = str(visit(include)) if include.is_file() else str(include)
+                if section == "includeif":
+                    for prefix in ("gitdir:", "gitdir/i:", "worktree:", "worktree/i:"):
+                        if subsection.startswith(prefix + "./"):
+                            subsection = prefix + str(path.parent) + "/" + subsection[len(prefix) + 2:]
+                            break
+            header = section + (" " + git_quote(subsection, subsection=True) if subsection is not None else "")
+            entries.append("[" + header + "]\n\t" + name + (" = " + git_quote(value) if separator else "") + "\n")
+        write(target, "".join(entries))
         return target
 
     return visit(start)
@@ -437,21 +449,20 @@ def prepare_git(root, identity, previous):
     if previous and (destination / "global").is_file() and not identity:
         return destination / "global"
     configured = os.environ.get("GIT_CONFIG_GLOBAL")
-    candidates = [Path(configured)] if configured else [Path.home() / ".gitconfig",
-                  Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/config"]
-    original = next((path for path in candidates if path.is_file()), None)
-    require(identity or original, "personal-git-identity-required")
+    candidates = [Path(configured)] if configured is not None else [
+        Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/config", Path.home() / ".gitconfig"]
+    originals = [path for path in candidates if path.is_file()]
+    require(identity or originals, "personal-git-identity-required")
     if identity:
         require(Path(identity).is_file(), "personal-git-identity-required")
     # A generation keeps already installed configurations intact if preparation fails.
     generation = destination / uuid.uuid4().hex
     mkdir(generation)
-    base = git_config_graph(original or Path(identity), generation)
     composite = generation / "global"
-    write(composite, '[include]\n    path = ' + git_quote(base) + '\n')
-    if identity and canonical(identity) != canonical(original or Path(identity)):
-        selected = git_config_graph(Path(identity), generation / "identity")
-        git(["config", "--file", str(composite), "--add", "include.path", str(selected)])
+    if identity and not any(canonical(identity) == canonical(path) for path in originals):
+        originals.append(Path(identity))
+    bases = [git_config_graph(path, generation / str(index)) for index, path in enumerate(originals)]
+    write(composite, "".join('[include]\n    path = ' + git_quote(base) + '\n' for base in bases))
     for key in ("user.name", "user.email"):
         result = git(["config", "--includes", "--file", str(composite), "--get", key], allowed=(0, 1))
         require(result.returncode == 0 and result.stdout.strip(), "personal-git-identity-required")
@@ -619,6 +630,15 @@ def preflight_files(profile, migrations, restoring):
     private_path(profile_path(root))
 
 
+def require_agent_roots(profile):
+    for agent, value in profile["agent_roots"].items():
+        target = Path(value)
+        if profile["persist_agents"]:
+            require(target.is_dir(), "persistent-agent-configuration-missing")
+        elif target != canonical(Path.home() / ("." + agent)) and Path(profile["root"]) not in target.parents:
+            require(target.is_dir(), "external-agent-configuration-missing")
+
+
 def install_files(profile, restoring=False):
     root, source = Path(profile["root"]), Path(profile["source"])
     for path in profile["agent_roots"].values():
@@ -756,10 +776,7 @@ def restore(args):
     validate_source(Path(profile["source"]), profile)
     preflight_files(profile, [], True)
     require((root / ".config/workgrove/git/global").is_file(), "personal-git-configuration-missing")
-    if profile["persist_agents"]:
-        for value in profile["agent_roots"].values():
-            target = Path(value)
-            require(target.is_dir(), "persistent-agent-configuration-missing")
+    require_agent_roots(profile)
     with installation_lock(root):
         require(read(profile_path(root)) == expected_profile, "profile-changed-retry-setup")
         install_files(profile, restoring=True)
@@ -872,6 +889,7 @@ def _readiness(root=None):
                                 profile["trust_personal_volume"]):
             storage(Path(profile["root"]), profile["storage"], profile["mount"])
             validate_source(Path(profile["source"]), profile)
+            require_agent_roots(profile)
             for target, path in compatibility(profile):
                 private_path(path, detach=True)
                 if not path.is_symlink() or canonical(path) != canonical(target):

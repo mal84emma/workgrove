@@ -484,8 +484,79 @@ sys.exit(module["main"]())
         self.install("--persist-agents")
         target = Path(self.profile()["agent_roots"]["codex"])
         shutil.rmtree(target)
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("persistent-agent-configuration-missing", report["issues"])
+        self.command("doctor", "--preflight", ok=False)
+        self.command("restore", "--root", str(self.root), ok=False)
         self.command("install", "--root", str(self.root), ok=False)
         self.assertFalse(target.exists())
+
+    def test_git_copy_preserves_order_duplicates_and_implicit_values(self):
+        child = self.home / "included"
+        child.write_text('[user]\n email = included@example.invalid\n')
+        original = self.home / ".gitconfig"
+        original.write_text('[include]\n path = ./included\n[user]\n name = Test User\n'
+                            ' email = outer@example.invalid\n[include]\n path = ./included\n'
+                            '[user]\n email = final@example.invalid\n[custom "Mixed.Case"]\n'
+                            ' flag\n value = "line\\nwith\\ttabs\\b\\\\\\\""\n')
+        with original.open("a") as stream:
+            stream.write('[custom "Tab\tSection"]\n value = preserved\n')
+        before = self.git("config", "--global", "--includes", "--null", "--list").stdout
+        self.install()
+        after = self.git("config", "--global", "--includes", "--null", "--list").stdout
+        def values(output):
+            return [item for item in output.split("\0") if item and not item.startswith(("include.path\n", "core.excludesfile\n"))]
+        self.assertEqual(values(after), values(before))
+        self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.email").stdout.strip(),
+                         "final@example.invalid")
+
+    def test_git_copy_anchors_nested_relative_conditions_at_logical_source(self):
+        store = self.base / "store"
+        store.mkdir()
+        original = self.home / ".gitconfig"
+        original.unlink()
+        original.symlink_to(store / "global")
+        (store / "global").write_text('[include]\n path = ./nested/config\n')
+        nested = self.home / "nested"
+        nested.mkdir()
+        (nested / "config").write_text('[user]\n name = Test User\n email = default@example.invalid\n'
+                                       '[includeIf "gitdir:./projects/"]\n path = ./project\n'
+                                       '[includeIf "gitdir/i:./PROJECTS/"]\n path = ./case-project\n')
+        (nested / "project").write_text('[user]\n email = project@example.invalid\n')
+        (nested / "case-project").write_text('[user]\n email = insensitive@example.invalid\n')
+        project = nested / "projects/example"
+        project.mkdir(parents=True)
+        self.git("init", "-q", str(project))
+        before = self.git("-C", str(project), "config", "--global", "--includes", "--get", "user.email").stdout
+        self.assertEqual(before.strip(), "insensitive@example.invalid")
+        self.install()
+        after = self.git("-C", str(project), "config", "--global", "--includes", "--get", "user.email").stdout
+        self.assertEqual(after, before)
+
+    def test_git_copy_preserves_both_global_sources_and_their_precedence(self):
+        self.env.pop("GIT_CONFIG_GLOBAL")
+        self.env["XDG_CONFIG_HOME"] = str(self.home / "xdg")
+        xdg = self.home / "xdg/git/config"
+        xdg.parent.mkdir(parents=True)
+        xdg.write_text('[user]\n name = XDG User\n email = xdg@example.invalid\n[custom]\n order = xdg\n')
+        (self.home / ".gitconfig").write_text('[custom]\n order = home\n')
+        self.install()
+        self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.email").stdout.strip(), "xdg@example.invalid")
+        self.assertEqual(self.git("config", "--global", "--includes", "--get-all", "custom.order").stdout.splitlines(), ["xdg", "home"])
+
+    def test_source_git_does_not_inherit_repository_or_object_storage(self):
+        external = self.base / "external-objects"
+        external.mkdir()
+        clone = self.base / "standalone"
+        variables = dict(GIT_OBJECT_DIRECTORY=str(external), GIT_ALTERNATE_OBJECT_DIRECTORIES=str(external),
+                         GIT_SHALLOW_FILE=str(self.base / "missing-shallow"), GIT_REPLACE_REF_BASE="refs/synthetic/",
+                         GIT_DIR=str(self.source / ".git"), GIT_WORK_TREE=str(self.source),
+                         GIT_INDEX_FILE=str(self.base / "foreign-index"))
+        with patch.dict(os.environ, dict(self.env, **variables), clear=True):
+            portable.git(["clone", "--no-local", str(self.source), str(clone)])
+        shutil.rmtree(external)
+        self.git("-C", str(clone), "fsck", "--full")
+        self.assertEqual(self.git("-C", str(clone), "rev-parse", "HEAD").stdout.strip(), self.revision)
 
     def test_dangling_configuration_links_never_create_external_files(self):
         directory = self.home / ".codex"
@@ -502,6 +573,17 @@ sys.exit(module["main"]())
         self.command("install", "--root", str(self.root), "--host", "test-host", "--storage", "os-disk",
                      "--persist-agents", env=dict(self.env, CODEX_HOME=str(missing)), ok=False)
         self.assertFalse(missing.exists())
+
+    def test_deleted_external_agent_configuration_blocks_doctor_and_restore(self):
+        external = self.base / "external-agent"
+        external.mkdir(mode=0o700)
+        self.env["CODEX_HOME"] = str(external)
+        self.install()
+        shutil.rmtree(external)
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("external-agent-configuration-missing", report["issues"])
+        self.command("restore", "--root", str(self.root), ok=False)
+        self.assertFalse(external.exists())
 
     def test_launch_arguments_reject_credentials_without_logging_them(self):
         self.install("--codex-args-json", json.dumps(["--api-key", CANARY]), ok=False)
@@ -771,21 +853,91 @@ sys.exit(1)
                                              'environment["PATH"] = ' + repr(str(empty)))
         remote_ssh.write_text(text)
         result = self.remote(environment, "doctor", "--json", ok=False)
-        self.assertIn("missing-python", json.loads(result.stdout)["issues"])
+        self.assertIn("missing-prerequisites", json.loads(result.stdout)["issues"])
+        self.assertNotIn("missing-python", json.loads(result.stdout)["issues"])
         # The system Python fallback can remain usable even when PATH no longer names Python.
         result = self.remote(environment, "setup", "--root", str(self.root), "--restore-only")
         self.assertIn("restored", result.stdout)
         client = self.base / "client"
         shutil.copytree(REPO / "bin", client / "bin")
         shutil.copytree(REPO / "lib", client / "lib")
-        setup = client / "lib/workgrove/setup.sh"
-        setup.write_text(setup.read_text().replace("/usr/bin/python3", str(self.base / "missing-system-python")))
+        runtime = client / "lib/workgrove/vm/python-runtime.sh"
+        runtime.write_text(runtime.read_text().replace("/usr/bin/python3", str(self.base / "missing-system-python")))
         result = subprocess.run([str(self.tools / "bash"), str(client / "bin/wt"), "-H", "test-host", "setup",
                                  "--root", str(self.root), "--restore-only"], env=environment,
                                 capture_output=True, text=True, timeout=30)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Python 3 is missing", result.stderr)
         self.assertTrue((self.root / ".config/workgrove/profile.json").exists())
+
+    def test_remote_runtime_fallback_and_unavailable_portable_preflight(self):
+        self.install("--persist-agents")
+        environment = self.transport()
+        old = self.tools / "python3"
+        old.unlink()
+        old.write_text("#!/bin/sh\nexit 1\n")
+        old.chmod(0o700)
+        client = self.base / "client"
+        shutil.copytree(REPO / "bin", client / "bin")
+        shutil.copytree(REPO / "lib", client / "lib")
+        runtime = client / "lib/workgrove/vm/python-runtime.sh"
+        original = runtime.read_text()
+        runtime.write_text(original.replace("/usr/bin/python3", sys.executable))
+        def client_command(*args):
+            return subprocess.run([str(self.tools / "bash"), str(client / "bin/wt"), "-H", "test-host", *args],
+                                  env=environment, capture_output=True, text=True, timeout=30)
+        def inventory():
+            source = subprocess.run([str(self.tools / "bash"), "-c",
+                                     'WG_LIB_DIR="$1/lib/workgrove"; source "$WG_LIB_DIR/hosts.sh"; host_probe_source',
+                                     "fixture", str(client)], env=self.env, capture_output=True, text=True, check=True).stdout
+            result = subprocess.run(["/bin/sh", "-s"], input=source, env=self.env,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return {key: json.loads(value) for key, value in (line.split("\t", 1) for line in result.stdout.splitlines() if "\t" in line)
+                    if key in {"capabilities", "readiness"}}
+        result = client_command("doctor", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(result.stdout)["ready"])
+        direct = subprocess.run([str(self.tools / "bash"), str(client / "bin/wt"), "doctor", "--json"],
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(direct.returncode, 0, direct.stderr)
+        self.assertTrue(json.loads(direct.stdout)["ready"])
+        self.assertTrue(inventory()["readiness"]["ready"])
+        result = client_command("setup", "--root", str(self.root), "--restore-only")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runtime.write_text(original.replace("/usr/bin/python3", str(self.base / "missing-system-python")))
+        result = client_command("doctor", "--json")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)["issues"], ["python-3.9-required"])
+        direct = subprocess.run([str(self.tools / "bash"), str(client / "bin/wt"), "doctor", "--json"],
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(direct.returncode, 0)
+        self.assertEqual(json.loads(direct.stdout)["issues"], ["python-3.9-required"])
+        report = inventory()
+        self.assertEqual(report["readiness"]["issues"], ["python-3.9-required"])
+        self.assertEqual(report["capabilities"]["capacity_issues"], ["python-3.9-required"])
+        result = client_command("new", "not-created", "-r", str(self.source), "--no-workspace", "-a", "none")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("python-3.9-required", result.stderr)
+        self.assertFalse((self.source / ".worktrees/not-created").exists())
+
+    def test_runtime_preserves_legacy_preflight_without_python(self):
+        runtime = (REPO / "lib/workgrove/vm/python-runtime.sh").read_text()
+        runtime = runtime.replace("/usr/bin/python3", str(self.base / "missing-system-python"))
+        empty = self.base / "empty"
+        empty.mkdir()
+        environment = dict(self.env, PATH=str(empty))
+        script = runtime + '\nwg_select_python && exit 2\nwg_has_portable_profile && exit 3\nexit 0\n'
+        result = subprocess.run(["/bin/sh", "-c", script], env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.install("--persist-agents")
+        script = runtime + '\nwg_select_python && exit 2\nwg_has_portable_profile || exit 3\nexit 0\n'
+        result = subprocess.run(["/bin/sh", "-c", script], env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ("profile.json", "env.sh"):
+            (self.home / ".config/workgrove" / name).unlink()
+        result = subprocess.run(["/bin/sh", "-c", script], env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_incomplete_portable_profile_blocks_new_tasks_without_repair(self):
         self.install("--persist-agents")

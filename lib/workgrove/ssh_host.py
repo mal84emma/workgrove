@@ -74,7 +74,7 @@ def tokens(line):
         elif char == "#" and not quoted:
             line = line[:index]
             break
-    require("'" not in line and "\\" not in line, "unsupported-quoting")
+    require("\\" not in line, "unsupported-quoting")
     lexer = shlex.shlex(line, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = "#"
@@ -163,7 +163,7 @@ def registrations(text):
             direction, alias = match.groups()
             require(bool(ALIAS.fullmatch(alias)), "malformed-managed-region")
             if direction == ">>>":
-                require(start is None and alias not in found, "malformed-managed-region")
+                require(start is None and alias.lower() not in found, "malformed-managed-region")
                 start = (alias, index, offset)
             else:
                 require(start is not None and start[0] == alias, "malformed-managed-region")
@@ -183,7 +183,7 @@ def registrations(text):
                 end = offset + len(line)
                 if index + 1 < len(lines) and lines[index + 1] == "\n":
                     end += 1
-                found[alias] = {"start": start[2], "end": end, "path": path, "pin": pin}
+                found[alias.lower()] = {"alias": alias, "start": start[2], "end": end, "path": path, "pin": pin}
                 start = None
         offset += len(line)
     require(start is None, "malformed-managed-region")
@@ -191,6 +191,7 @@ def registrations(text):
 
 
 def without_region(text, regions, alias):
+    alias = alias.lower()
     if alias not in regions:
         return text
     region = regions[alias]
@@ -290,13 +291,27 @@ def edit_config(config):
         yield config, backup, original
 
 
-def replace_config(config, backup, original, updated):
+def replace_config(config, backup, original, updated, validate=None):
     require(read_text(config, missing=True) == original, "config-changed")
+    existed = config.exists()
     if updated == original:
+        if validate:
+            validate()
         return
-    if config.exists():
-        private_write(backup, original)
     private_write(config, updated)
+    try:
+        if validate:
+            validate()
+        require(read_text(config) == updated, "config-changed")
+    except (Refusal, OSError, RuntimeError):
+        require(read_text(config) == updated, "config-changed")
+        if existed:
+            private_write(config, original)
+        else:
+            config.unlink()
+        raise
+    if existed:
+        private_write(backup, original)
 
 
 def ssh_run(args, timeout=15):
@@ -309,23 +324,27 @@ def ssh_run(args, timeout=15):
 
 
 def effective(text, alias, parent):
+    if text is None:
+        return effective_fields(ssh_run(["-G", alias]))
     fd, name = tempfile.mkstemp(prefix=".wt-ssh-host-check-", dir=str(parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
             stream.write(text)
-        result = ssh_run(["-G", "-F", name, alias])
-        require(result.returncode == 0, "effective-config-unavailable")
-        output = result.stdout.decode("utf-8", errors="replace")
-        fields = {}
-        for line in output.splitlines():
-            key, separator, value = line.partition(" ")
-            if separator and key in EFFECTIVE_KEYS:
-                fields.setdefault(key, []).append(value)
-        require(all(key in fields for key in ("hostname", "user", "port", "stricthostkeychecking")),
-                "effective-config-unavailable")
-        return fields
+        return effective_fields(ssh_run(["-G", "-F", name, alias]))
     finally:
         os.unlink(name)
+
+
+def effective_fields(result):
+    require(result.returncode == 0, "effective-config-unavailable")
+    fields = {}
+    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
+        key, separator, value = line.partition(" ")
+        if separator and key in EFFECTIVE_KEYS:
+            fields.setdefault(key, []).append(value)
+    require(all(key in fields for key in ("hostname", "user", "port", "stricthostkeychecking")),
+            "effective-config-unavailable")
+    return fields
 
 
 def validate_effective(config, alias, managed, updated):
@@ -351,14 +370,16 @@ def add(args):
     path = Path(args.fragment).expanduser().absolute()
     literal_path(str(path))
     fields = fragment(path)
-    managed = block(args.alias, path, fields.get("hostkeyalias"))
     with edit_config(Path(args.config)) as (config, backup, original):
         regions = registrations(original)
-        old = regions.get(args.alias)
+        old = regions.get(args.alias.lower())
+        alias = old["alias"] if old else args.alias
+        managed = block(alias, path, fields.get("hostkeyalias"))
+        require(alias.lower() in registrations(managed), "invalid-managed-region")
         if old:
             require(old["pin"] == fields.get("hostkeyalias"), "identity-change-requires-registration-removal")
-        for alias, region in regions.items():
-            if alias != args.alias:
+        for key, region in regions.items():
+            if key != alias.lower():
                 require(check_registration(region) == "configured", "invalid-existing-registration")
         rest = without_region(original, regions, args.alias)
         refuse_explicit_alias(rest, args.alias)
@@ -366,12 +387,17 @@ def add(args):
         if old and original[old["start"]:old["end"]] == managed:
             updated = original
         validate_effective(config, args.alias, managed, updated)
-        replace_config(config, backup, original, updated)
+        def validate_default():
+            if not args.alternate_config:
+                require(effective(None, args.alias, config.parent) == effective(managed, args.alias, config.parent),
+                        "effective-config-conflict")
+        replace_config(config, backup, original, updated, validate_default)
     # Keep the written registration after verification fails. Never print captured SSH output.
     for region in registrations(read_text(config)).values():
         require(check_registration(region) == "configured", "registered-but-unavailable")
     try:
-        result = ssh_run(["-F", str(config), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+        selected = ["-F", str(config)] if args.alternate_config else []
+        result = ssh_run([*selected, "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
                           "-o", "ConnectionAttempts=1", "-o", "StrictHostKeyChecking=yes",
                           "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1", args.alias, "true"])
     except Refusal:
@@ -385,7 +411,7 @@ def remove(args):
     require(bool(ALIAS.fullmatch(args.alias)), "invalid-alias")
     with edit_config(Path(args.config)) as (config, backup, original):
         regions = registrations(original)
-        require(args.alias in regions, "unregistered-alias")
+        require(args.alias.lower() in regions, "unregistered-alias")
         updated = without_region(original, regions, args.alias)
         replace_config(config, backup, original, updated)
     print("wt-ssh-host: registration removed")
@@ -394,8 +420,8 @@ def remove(args):
 def listing(args):
     text = read_text(physical(Path(args.config)), missing=True)
     regions = registrations(text)
-    rows = [{"alias": alias, "fragment": region["path"], "status": check_registration(region)}
-            for alias, region in regions.items()]
+    rows = [{"alias": region["alias"], "fragment": region["path"], "status": check_registration(region)}
+            for region in regions.values()]
     if args.json:
         print(json.dumps(rows))
     else:
@@ -410,19 +436,19 @@ def checking(args):
     regions = registrations(text)
     for region in regions.values():
         require(check_registration(region) == "configured", "invalid-managed-registration")
-    if args.alias in regions:
-        region = regions[args.alias]
-        managed = block(args.alias, Path(region["path"]), region["pin"])
+    if args.alias.lower() in regions:
+        region = regions[args.alias.lower()]
+        managed = block(region["alias"], Path(region["path"]), region["pin"])
         parent = Path(tempfile.gettempdir()).resolve()
         outside_git(parent)
         expected = effective(managed, args.alias, parent)
-        actual = effective(text, args.alias, parent)
+        actual = effective(text if args.alternate_config else None, args.alias, parent)
         require(expected == actual, "effective-config-conflict")
 
 
 def main():
     parser = PrivateArgumentParser(prog="wt-ssh-host", description=__doc__)
-    parser.add_argument("-F", dest="config", default=str(Path.home() / ".ssh/config"), metavar="CONFIG")
+    parser.add_argument("-F", dest="config", metavar="CONFIG")
     commands = parser.add_subparsers(dest="command", required=True)
     create = commands.add_parser("add", help="register a fragment and verify SSH")
     create.add_argument("alias")
@@ -442,6 +468,9 @@ def main():
         return 0
     try:
         args = parser.parse_args()
+        args.alternate_config = args.config is not None
+        if args.config is None:
+            args.config = str(Path.home() / ".ssh/config")
         args.run(args)
     except Refusal as error:
         print(f"wt-ssh-host: {error}", file=sys.stderr)

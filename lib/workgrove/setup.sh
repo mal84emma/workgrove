@@ -8,11 +8,9 @@ host_setup() {
   local args=() bootstrap policy=${opts[storage]:-volume} mount=${opts[mount]:-${opts[root]}}
   wt_opt_args opts args
   # Python receives standard input. The shell bootstrap never reads the uploaded source.
+  bootstrap=$(cat "$WG_LIB_DIR/vm/python-runtime.sh")$'\n'
   # shellcheck disable=SC2016
-  bootstrap='wg_python=$(command -v python3 || true)
-  if [ -z "$wg_python" ] || ! "$wg_python" -c "import sys; sys.exit(sys.version_info < (3, 9))" >/dev/null 2>&1; then
-    if /usr/bin/python3 -c "import sys; sys.exit(sys.version_info < (3, 9))" >/dev/null 2>&1; then wg_python=/usr/bin/python3
-    else
+  bootstrap+='if ! wg_select_python; then
     [ "$1" != restore ] || { echo "workgrove: Python 3 is missing; run full setup with an explicit storage policy" >&2; exit 1; }
     case "$2" in /*) ;; *) exit 1;; esac
     if [ "$3" = volume ]; then
@@ -23,8 +21,7 @@ host_setup() {
     if [ "$(id -u)" = 0 ]; then set -- env DEBIAN_FRONTEND=noninteractive apt-get;
     else command -v sudo >/dev/null 2>&1 && sudo -n true || { echo "workgrove: package-install-privilege-required" >&2; exit 1; }; set -- sudo -n env DEBIAN_FRONTEND=noninteractive apt-get; fi
     "$@" update </dev/null >/dev/null 2>&1 && "$@" install -y python3 </dev/null >/dev/null 2>&1 || { echo "workgrove: Python-install-failed" >&2; exit 1; }
-    wg_python=/usr/bin/python3
-    fi
+    wg_select_python || { echo "workgrove: supported-Python-unavailable" >&2; exit 1; }
   fi
   exec "$wg_python" -B - '
   local mode=full
@@ -59,8 +56,11 @@ host_doctor() {
   wt_opts "$(wt_spec doctor)" opts "$@"
   local args=()
   wt_opt_args opts args
+  local bootstrap
+  bootstrap=$(cat "$WG_LIB_DIR/vm/python-runtime.sh")$'\n'
   # shellcheck disable=SC2016
-  remote_sh "$host" "command -v python3 >/dev/null 2>&1 || { printf '%s\\n' '{\"schema\":1,\"status\":\"incomplete\",\"ready\":false,\"issues\":[\"missing-python\"],\"native_relay\":\"requires-row-check\"}'; exit 1; }; exec python3 -B - $(shell_join doctor "${args[@]}")" <"$WG_LIB_DIR/portable.py"
+  bootstrap+='wg_select_python || { wg_python_readiness_error; exit 1; }; exec "$wg_python" -B - '
+  remote_sh "$host" "$bootstrap$(shell_join doctor "${args[@]}")" <"$WG_LIB_DIR/portable.py"
 }
 
 cmd_setup() {
@@ -73,5 +73,8 @@ cmd_doctor() {
   wt_opts "$(wt_spec doctor)" opts "$@"
   local args=()
   wt_opt_args opts args
-  python3 -B "$WG_LIB_DIR/portable.py" doctor "${args[@]}"
+  # shellcheck source=lib/workgrove/vm/python-runtime.sh
+  source "$WG_LIB_DIR/vm/python-runtime.sh"
+  wg_select_python || { wg_python_readiness_error; return 1; }
+  "$wg_python" -B "$WG_LIB_DIR/portable.py" doctor "${args[@]}"
 }

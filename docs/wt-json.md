@@ -111,6 +111,7 @@ A private cgroup namespace can hide stricter ancestor bounds.
 Hidden bounds produce null effective values and `capacity_verified: false`.
 
 The probe recognizes an exposed initial v2 root through controller availability and the absence of non-root limit interfaces.
+Non-root limit interfaces expose potentially hidden ancestors even when container markers are absent.
 It refuses to certify a container's incomplete hierarchy as a full host allocation.
 A malformed enhanced report also becomes unverified; physical host values never replace its unknown effective values.
 Legacy reports without the enhanced protocol retain their previous CPU and RAM interpretation.

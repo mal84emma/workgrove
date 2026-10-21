@@ -46,13 +46,17 @@ wt-ssh-host -F <config-path> rm <host>
 ```
 
 An alternate configuration supports testing and separate SSH clients.
+Explicit `-F` follows OpenSSH's alternate-configuration behavior and excludes system configuration.
 Workgrove's ordinary discovery still reads `~/.ssh/config`.
 The helper preserves an existing configuration symlink when its physical destination passes the repository checks.
 It refuses a dangling configuration symlink.
 
 The helper validates the fragment before invoking OpenSSH, including `ssh -G`.
 It compares effective endpoint, identity, and trust settings against the isolated registration.
-Conflicting inherited settings cause `effective-config-conflict` without configuration replacement.
+Default validation includes system configuration, as ordinary workgrove connections do.
+Conflicting inherited settings cause `effective-config-conflict`.
+The helper restores the previous configuration and preserves its backup when default validation fails after writing.
+If another process changes the candidate configuration, the helper refuses to overwrite that change.
 The helper preserves unrelated configuration bytes and refuses explicit alias conflicts in the selected file.
 Included user configuration retains normal OpenSSH semantics; effective settings must still pass comparison.
 
@@ -60,6 +64,7 @@ A changed configuration replaces `<config-path>.bak` with the previous configura
 The helper writes configurations and backups atomically with mode `600`.
 It creates missing parent directories with mode `700` and retains a private sibling lock file.
 An unchanged registration leaves the configuration and backup untouched.
+Alias comparisons ignore letter case and retain the registered spelling.
 
 After writing, the helper makes one noninteractive SSH connection and runs `true`.
 A successful command reports `registered and SSH verified`.
@@ -74,7 +79,8 @@ Keywords are case-insensitive; duplicate keywords are invalid.
 Separate a keyword and value with whitespace or `=`.
 Use double quotes for values containing spaces.
 Comments begin with `#` outside double quotes.
-Single quotes and backslash escapes are unsupported in directive values.
+Single quotes do not delimit values; literal apostrophes are permitted inside double-quoted paths.
+Backslash escapes are unsupported in directive values.
 
 | Directive | Accepted value |
 |---|---|

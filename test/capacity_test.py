@@ -95,6 +95,19 @@ class CapacityTests(unittest.TestCase):
         self.assertTrue(report["capacity_verified"])
         self.assertEqual(report["environment"], "container")
 
+    def test_namespaced_root_without_container_markers_remains_unknown(self):
+        self.put("/proc/self/cgroup", "0::/\n")
+        self.put("/sys/fs/cgroup/cpu.max", "400000 100000")
+        self.put("/sys/fs/cgroup/memory.max", str(8 * 1024 ** 3))
+        report = self.report()
+        self.assertFalse(report["capacity_verified"])
+        self.assertIsNone(report["cpu_logical"])
+        self.assertIsNone(report["memory_mib"])
+        self.assertEqual(report["environment"], "unknown")
+        self.assertEqual(report["observed_cpu_logical"], 4)
+        self.assertEqual(report["observed_memory_mib"], 8192)
+        self.assertEqual(report["capacity_issues"], ["cpu-ancestors-hidden", "memory-ancestors-hidden"])
+
     def test_hidden_mount_ancestors_are_unknown(self):
         self.put("/proc/self/mountinfo", "10 1 0:1 /team /sys/fs/cgroup rw - cgroup2 cgroup rw\n")
         self.put("/sys/fs/cgroup/job/cpu.max", "200000 100000")

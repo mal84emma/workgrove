@@ -145,6 +145,7 @@ workgrove/
 │           ├── host-new-preflight.sh
 │           ├── capacity.py    effective Linux allocation from kernel limits
 │           ├── probe-host.sh
+│           ├── python-runtime.sh  supported remote interpreter selection
 │           ├── reinit-client-confirm.sh
 │           ├── reinit-client-detach.sh
 │           └── reinit-client-proof.sh

@@ -33,10 +33,21 @@ class RegistrationTests(unittest.TestCase):
         self.status.write_text("0")
         ssh = self.tools / "ssh"
         ssh.write_text(f'''#!{sys.executable}
-import json, os, subprocess, sys
+import json, os, pathlib, subprocess, sys, tempfile
 with open(os.environ["SSH_TEST_LOG"], "a") as stream:
     stream.write(json.dumps(sys.argv[1:]) + "\\n")
 if "-G" in sys.argv[1:]:
+    if "-F" not in sys.argv[1:]:
+        config = pathlib.Path(os.environ["HOME"]) / ".ssh/config"
+        text = config.read_text() if config.exists() else ""
+        text += "\\nHost *\\n" + os.environ.get("SSH_TEST_SYSTEM", "")
+        with tempfile.NamedTemporaryFile(mode="w") as stream:
+            stream.write(text)
+            stream.flush()
+            result = subprocess.run([{REAL_SSH!r}, "-F", stream.name, *sys.argv[1:]], check=False)
+        if os.environ.get("SSH_TEST_MUTATION"):
+            config.write_text(os.environ["SSH_TEST_MUTATION"])
+        sys.exit(result.returncode)
     sys.exit(subprocess.run([{REAL_SSH!r}, *sys.argv[1:]], check=False).returncode)
 print({CANARY!r}, file=sys.stderr)
 sys.exit(int(open(os.environ["SSH_TEST_STATUS"]).read()))
@@ -334,6 +345,74 @@ sys.exit(int(open(os.environ["SSH_TEST_STATUS"]).read()))
         before = len(self.calls())
         self.run_helper("check", "test-host", ok=False)
         self.assertEqual(len(self.calls()), before)
+
+    def test_apostrophes_and_spaces_round_trip_through_registration(self):
+        renamed = self.root / "user's fragment.conf"
+        self.fragment.rename(renamed)
+        self.fragment = renamed
+        self.add()
+        self.run_helper("check", "test-host")
+        self.assertEqual(json.loads(self.run_helper("list", "--json").stdout)[0]["fragment"], str(renamed))
+        self.run_helper("rm", "test-host")
+
+    def test_alias_case_variants_share_one_registration_and_policy(self):
+        self.run_helper("add", "Test-Host", "--fragment", str(self.fragment))
+        self.run_helper("add", "TEST-HOST", "--fragment", str(self.fragment))
+        self.assertEqual(len(json.loads(self.run_helper("list", "--json").stdout)), 1)
+        with self.config.open("a") as stream:
+            stream.write("Host *\n    IdentityFile /different/key\n")
+        self.assertIn("effective-config-conflict", self.run_helper("check", "test-host", ok=False).stderr)
+        self.assertIn("effective-config-conflict", self.run_helper("check", "TEST-HOST", ok=False).stderr)
+        self.run_helper("rm", "tEsT-hOsT")
+        self.assertEqual(json.loads(self.run_helper("list", "--json").stdout), [])
+
+    def test_duplicate_case_variant_managed_regions_are_refused(self):
+        self.add()
+        original = self.config.read_text()
+        self.config.write_text(original + original.replace("test-host", "TEST-HOST"))
+        for args in (("list",), ("check", "test-host"), ("rm", "TEST-HOST")):
+            self.assertIn("malformed-managed-region", self.run_helper(*args, ok=False).stderr)
+
+    def default_helper(self, *args, ok=True):
+        result = subprocess.run([str(REPO / "bin/wt-ssh-host"), *args], env=self.env,
+                                capture_output=True, text=True, timeout=30)
+        self.assertNotIn(CANARY, result.stdout + result.stderr)
+        self.assertEqual(result.returncode == 0, ok, result.stderr)
+        return result
+
+    def test_default_validation_includes_system_policy_and_rolls_back(self):
+        original = "# Original configuration.\n"
+        self.existing(original)
+        backup = self.config.with_name("config.bak")
+        backup.write_text("# Previous backup.\n")
+        self.env["SSH_TEST_SYSTEM"] = "IdentityFile /different/system-key\n"
+        result = self.default_helper("add", "test-host", "--fragment", str(self.fragment), ok=False)
+        self.assertIn("effective-config-conflict", result.stderr)
+        self.assertEqual(self.config.read_text(), original)
+        self.assertEqual(backup.read_text(), "# Previous backup.\n")
+        self.assertTrue(all("-G" in call for call in self.calls()))
+        self.config.unlink()
+        self.default_helper("add", "test-host", "--fragment", str(self.fragment), ok=False)
+        self.assertFalse(self.config.exists())
+        self.assertEqual(backup.read_text(), "# Previous backup.\n")
+
+    def test_default_check_and_verification_use_ordinary_transport_semantics(self):
+        self.default_helper("add", "test-host", "--fragment", str(self.fragment))
+        self.assertNotIn("-F", self.calls()[-1])
+        self.env["SSH_TEST_SYSTEM"] = "IdentityFile /different/system-key\n"
+        self.assertIn("effective-config-conflict", self.default_helper("check", "TEST-HOST", ok=False).stderr)
+        self.run_helper("check", "TEST-HOST")
+        self.add()
+
+    def test_default_validation_does_not_overwrite_concurrent_configuration(self):
+        original = "# Original configuration.\n"
+        self.existing(original)
+        self.env["SSH_TEST_SYSTEM"] = "IdentityFile /different/system-key\n"
+        self.env["SSH_TEST_MUTATION"] = "# Concurrent edit.\n"
+        result = self.default_helper("add", "test-host", "--fragment", str(self.fragment), ok=False)
+        self.assertIn("config-changed", result.stderr)
+        self.assertEqual(self.config.read_text(), "# Concurrent edit.\n")
+        self.assertFalse(self.config.with_name("config.bak").exists())
 
     def test_invalid_fragment_blocks_workgrove_transports(self):
         self.add()

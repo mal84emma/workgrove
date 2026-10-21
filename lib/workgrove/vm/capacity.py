@@ -148,7 +148,7 @@ def effective(view=None, affinity=None):
             base, point, nodes = mapped
             if base != PurePosixPath("/"):
                 namespace_hidden = True
-            if container:
+            if container or version == 2:
                 # A non-root v2 cgroup exposes cpu.max when its CPU controller is available.
                 available = view.read(point / "cgroup.controllers", optional=True) or ""
                 initial_root = version == 2 and "cpu" in available.split() and view.read(point / "cpu.max", optional=True) is None
@@ -202,7 +202,7 @@ def effective(view=None, affinity=None):
             base, point, nodes = mapped
             if base != PurePosixPath("/"):
                 namespace_hidden = True
-            if container:
+            if container or version == 2:
                 available = view.read(point / "cgroup.controllers", optional=True) or ""
                 initial_root = version == 2 and "memory" in available.split() and view.read(point / "memory.max", optional=True) is None
                 if not initial_root:
@@ -232,7 +232,8 @@ def effective(view=None, affinity=None):
         cpu = memory = None
         issues.append(str(error))
     return {"schema": 1, "capacity_verified": cpu is not None and memory is not None,
-            "cpu_logical": cpu, "memory_mib": memory, "environment": "container" if container else "host",
+            "cpu_logical": cpu, "memory_mib": memory,
+            "environment": "container" if container else "unknown" if any("ancestors-hidden" in item for item in issues) else "host",
             "capacity_issues": sorted(set(issues)), "observed_cpu_logical": observed_cpu,
             "observed_memory_mib": observed_memory}
 

@@ -80,15 +80,18 @@ wt_remote_args() {
 }
 
 host_preflight_source() {
-  cat "$WG_LIB_DIR/version.sh"
+  cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/python-runtime.sh"
   cat <<'WG_PREFLIGHT_HEADER'
 wg_portable_preflight() {
-if command -v python3 >/dev/null 2>&1; then
-python3 -B - doctor --preflight <<'WG_PREFLIGHT_SOURCE'
+if wg_select_python; then
+"$wg_python" -B - doctor --preflight <<'WG_PREFLIGHT_SOURCE'
 WG_PREFLIGHT_HEADER
   cat "$WG_LIB_DIR/portable.py"
   cat <<'WG_PREFLIGHT_END'
 WG_PREFLIGHT_SOURCE
+elif wg_has_portable_profile; then
+  printf 'workgrove: %s\n' "$wg_python_issue" >&2
+  return 1
 else return 0; fi
 }
 WG_PREFLIGHT_END
