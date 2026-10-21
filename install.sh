@@ -37,16 +37,16 @@
 #   ~/.claude/statusline-command.sh   --with-statusline
 #   ~/.config/cmux/cmux.json          --with-cmux-config, on a Mac only
 # A seventh flag, --with-claude-ui, gates KEYS, not a file. Every machine gets ~/.claude/settings.json, because
-# its hooks and permissions are machinery. But .tui, .voice, .theme and the env var that turns off mouse clicks
-# in the Claude Code TUI are taste, like the six files. So copy_config deletes them from the copy unless the
-# flag is given. --opinionated-config turns on all seven.
+# its hooks and permissions are machinery. Voice, theme, and mouse preferences require this flag.
+# Fullscreen mode is the VM default; the Mac's fullscreen preference remains opt-in.
+# --opinionated-config turns on all seven.
 #
 # The user never has to repeat any of the seven flags. For the six files, the destination itself is the
 # record: a destination that is already a link into this repo counts as asked for. So `wt update`, which
 # reruns this script bare, keeps what an earlier run installed. --with-claude-ui has no symlink to read, but it
 # has the same kind of record. Only a run that was given the flag can have written an existing
-# ~/.claude/settings.json that still has a top-level .tui key. claude_ui_opted_in reads that key with the same
-# jq probe that copy_config already makes for its kept-copy warning.
+# ~/.claude/settings.json that retains opt-in UI keys. Fullscreen alone does not select the other VM preferences.
+# claude_ui_opted_in uses the same probe as the kept-copy warning.
 # This stickiness is necessary. The one documented way to pick up a change to a .base file is
 # --refresh-config, and `wt update --refresh-config` cannot forward --with-claude-ui. So a non-sticky flag
 # would make the prescribed update command silently strip the UI keys off every machine that has them.
@@ -269,12 +269,15 @@ opted_in() {
   consenting_link "$HOME/$2" "${3:-home/$2}"
 }
 
-# claude_ui_opted_in: the same question for the seventh flag. (--with-cmux-config is the sixth, and the last of
-# the six that are FILES.) copy_config strips the top-level .tui key from every copy written without
-# --with-claude-ui. So an existing ~/.claude/settings.json that is a real file and still has that key was
-# written by a run that was given the flag. This read-back keeps `wt update --refresh-config`, which cannot
-# forward the flag, from silently deleting the UI keys of a machine that has them. The probe is the same jq
-# call that copy_config already makes eleven lines further down, so the two cannot drift.
+# Existing UI keys retain the opt-in across refreshes. A VM's default fullscreen key does not select other preferences.
+claude_ui_present() {
+  local probe='has("tui")'
+  if [[ $OS != Darwin ]]; then
+    probe='has("theme") or has("voice") or ((.env // {}) | has("CLAUDE_CODE_DISABLE_MOUSE_CLICKS"))'
+  fi
+  jq -e "$probe" "$HOME/.claude/settings.json" >/dev/null 2>&1
+}
+
 claude_ui_opted_in() {
   local dst="$HOME/.claude/settings.json"
   if [[ $WITH_CLAUDE_UI -eq 1 ]]; then
@@ -283,7 +286,7 @@ claude_ui_opted_in() {
   if [[ ! -f $dst || -L $dst ]]; then
     return 1
   fi
-  jq -e 'has("tui")' "$dst" >/dev/null 2>&1
+  claude_ui_present
 }
 
 # die <message>: stop with a message on stderr. The EXIT trap still reports where anything went.
@@ -333,7 +336,7 @@ refresh_config_action() {
 # It keeps an existing real file unless --refresh-config was given.
 #   Kind "claude" drops the voice keys on a VM, because a VM has no local microphone. It drops the UI keys
 #   unless --with-claude-ui (or the record of an earlier one) asked for them, because those keys are taste,
-#   not machinery. VM copies also reduce terminal motion for tmux rows.
+#   not machinery. VM copies always select fullscreen mode and reduce terminal motion for tmux rows.
 #   Kind "codex" drops the Keychain credential store on a VM, because only macOS has one. It also disables
 #   Codex's terminal animations there.
 # copy_config displaces a SYMLINK at $dst, and does so deliberately. This is the one place that does not leave
@@ -370,12 +373,11 @@ copy_config() {
     # The same trap applies to the keys that --with-claude-ui asks for. The flag only ever reaches a file
     # that is being WRITTEN. So on an already-installed machine, the flag changes nothing, and every line of
     # the run says success.
-    if [[ $kind == claude && $WITH_CLAUDE_UI -eq 1 ]] \
-       && ! jq -e 'has("tui")' "$dst" >/dev/null 2>&1; then
+    if [[ $kind == claude && $WITH_CLAUDE_UI -eq 1 ]] && ! claude_ui_present; then
       # shellcheck disable=SC2088  # The summary prints a home-relative path.
-      SUMMARY_SKIPS+=("~/$2 has no tui key")
+      SUMMARY_SKIPS+=("~/$2 has no opt-in UI keys")
       refresh_config_action
-      echo "…but the kept ~/$2 has no tui key, so --with-claude-ui changed nothing:" >&2
+      echo "…but the kept ~/$2 has no opt-in UI keys, so --with-claude-ui changed nothing:" >&2
       echo "rerun with --refresh-config to rewrite it (the old copy goes to the backup dir)" >&2
     fi
     return 0
@@ -396,6 +398,9 @@ copy_config() {
     # the two tests stay independent.
     if ! claude_ui_opted_in; then
       filter="$filter | del(.tui, .voice, .theme, .env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS)"
+    fi
+    if [[ $OS != Darwin ]]; then
+      filter="$filter | .tui = \"fullscreen\""
     fi
     if ! opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh; then
       filter="$filter | del(.statusLine)"                 # the script it names is opt-in: a command pointing at a

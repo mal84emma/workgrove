@@ -102,15 +102,17 @@ writes it. Separate the folders with colons, for example `"$HOME/work:$HOME"`. `
 - `~/.tmux.conf`
 - the Claude keymap
 - the Claude status line
-- the `tui`, `voice`, and `theme` keys of `~/.claude/settings.json`
+- the optional Claude theme and mouse preferences in `~/.claude/settings.json`
 
-If you remove the flag, the install leaves all six to you, and the core setup stays intact (see the README's
-[Install](../README.md#install) section).
+If you remove the flag, the install leaves these preferences to you.
+VM installations select Claude fullscreen mode by default and omit voice settings.
+The core setup stays intact (see the README's [Install](../README.md#install) section).
 
 You never have to repeat the flag for the first five items, which are files. After they are links into the
 repo, the bare `install.sh` rerun behind `wt update` keeps them. The machine-local copy itself records the
-user interface (UI) keys (`tui`, `voice`, and `theme`). A `settings.json` with a top-level `tui` key came from
-a run that got the flag. Thus `--refresh-config` keeps these keys instead of removing them.
+user interface (UI) preferences.
+VM copies record that opt-in through theme or mouse preferences; fullscreen alone does not select those preferences.
+Thus `--refresh-config` retains the selected UI preferences.
 
 **If the machine is not fresh** (an Azure ML compute instance usually is not fresh), read this part. On a
 fresh machine, skip it. `install.sh` moves whatever is in the way into `~/.workgrove-backup/<stamp>-<pid>/`

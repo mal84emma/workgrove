@@ -774,6 +774,26 @@ sys.exit(module["main"]())
         self.assertTrue(self.profile()["tmux"])
         self.assertEqual(self.profile()["agent_args"]["codex"], ["--no-alt-screen"])
 
+    def test_fullscreen_default_preserves_personal_ui_settings(self):
+        self.install()
+        path = Path(self.profile()["agent_roots"]["claude"]) / "settings.json"
+        settings = json.loads(path.read_text())
+        self.assertEqual(settings["tui"], "fullscreen")
+        self.assertNotIn("theme", settings)
+        self.assertNotIn("voice", settings)
+        self.assertNotIn("CLAUDE_CODE_DISABLE_MOUSE_CLICKS", settings.get("env", {}))
+        settings["tui"] = "personal-choice"
+        settings["personal"] = True
+        path.write_text(json.dumps(settings))
+        self.install()
+        self.assertEqual(json.loads(path.read_text())["tui"], "personal-choice")
+        settings.pop("tui")
+        path.write_text(json.dumps(settings))
+        self.install()
+        restored = json.loads(path.read_text())
+        self.assertEqual(restored["tui"], "fullscreen")
+        self.assertTrue(restored["personal"])
+
     def test_agent_configuration_and_foreign_hooks_survive_migration(self):
         claude = self.home / ".claude"
         codex = self.home / ".codex"

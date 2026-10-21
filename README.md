@@ -297,7 +297,7 @@ File classes). It is independent of the opt-in flags, and all of these flags com
 | `--with-tmux-conf` | `~/.tmux.conf`: tuning that makes Claude in tmux feel like a bare terminal (listed below the table) | Nothing. Your `~/.tmux.conf` stays untouched. |
 | `--with-keybindings` | `~/.claude/keybindings.json` | Nothing. Claude keeps its own keymap. |
 | `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing. Also, `install.sh` strips `statusLine` from the `~/.claude/settings.json` copy, because that key names a script that would not be there. |
-| `--with-claude-ui` | No file of its own: the `tui`, `voice`, and `theme` keys and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS`, kept in the `~/.claude/settings.json` copy | `install.sh` deletes those keys from the copy, so Claude keeps its own full-screen setting, voice mode, theme, and mouse handling. The hooks and permissions in the same file arrive either way. |
+| `--with-claude-ui` | The `tui`, `voice`, and `theme` keys and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` in `~/.claude/settings.json`. | VMs use fullscreen mode. Other UI preferences remain unset. On the Mac, fullscreen remains opt-in too. Hooks and permissions arrive either way. |
 | `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. | Nothing. Your `~/.config/cmux/cmux.json` stays untouched. |
 
 The full `~/.tmux.conf` from `--with-tmux-conf` tunes tmux with true color, a 10 ms `escape-time`,
@@ -348,8 +348,9 @@ which re-runs `install.sh` with at most `--refresh-config`, keeps what each mach
 
 `--with-claude-ui` is sticky too, but it has a different record. The other six are sticky because of the
 symlink itself, and keys inside a copied file leave no such trace. But the copy is its own record. A
-`~/.claude/settings.json` that already carries a top-level `tui` key was written by a run that was given the
-flag. So a later `--refresh-config` keeps those keys instead of stripping them.
+Mac copies use the `tui` key as that record.
+VM copies use theme, voice, or mouse preferences; fullscreen alone does not select the other preferences.
+A later `--refresh-config` preserves the recorded opt-in.
 
 If you give `--with-claude-ui` on its own (without `--refresh-config`) on a machine whose copy was written
 without it, the flag changes nothing. The run says so instead of reporting success.
@@ -382,7 +383,8 @@ The machine-local copies leave out these keys:
 
 - Voice and Keychain credential keys on VMs.
 - `statusLine` without `--with-statusline`.
-- `tui`, `voice`, `theme`, and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`.
+- `voice`, `theme`, and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`.
+- `tui` on the Mac without `--with-claude-ui`. VMs use `"tui": "fullscreen"` by default.
 
 VM copies also set Claude's `prefersReducedMotion` and disable the animations of the Codex TUI (terminal user
 interface) to keep tmux task rows steady. Mac copies leave both animations enabled.
@@ -589,8 +591,8 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
 > **Warning:** Before you delete anything, write down which opt-ins this machine has. Deleting the links
 > destroys that record. The symlink *is* the record, and there is no state file to consult. Without the
 > links, a later bare `install.sh`, and therefore `wt update`, would quietly install the default set instead of
-> what this machine had chosen. The same applies to `--with-claude-ui`, whose record is the `tui` key inside
-> the `~/.claude/settings.json` copy.
+> what this machine had chosen. The same applies to `--with-claude-ui`, whose record is inside the machine-local settings copy.
+> VM fullscreen alone does not record that opt-in.
 
 1. Get the list of opt-ins. A run names every file it links and every opt-in it left out. So the cheapest
    way to get the list is one more run of `install.sh` before you delete anything.

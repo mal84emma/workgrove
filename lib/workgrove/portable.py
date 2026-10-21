@@ -953,13 +953,15 @@ def install_files(profile, restoring=False, instruction_copies=None):
             current = json.loads(read(path))
         elif agent == "claude":
             current = dict(base)
-            for key in ("voice", "voiceEnabled", "theme", "tui", "statusLine"):
+            for key in ("voice", "voiceEnabled", "theme", "statusLine"):
                 current.pop(key, None)
             current.get("env", {}).pop("CLAUDE_CODE_DISABLE_MOUSE_CLICKS", None)
             if not current.get("env"):
                 current.pop("env", None)
         else:
             current = {}
+        if agent == "claude":
+            current.setdefault("tui", base["tui"])
         merged = merge_hooks(current, base)
         write(path, json.dumps(merged, indent=2) + "\n")
     path = Path(profile["agent_roots"]["codex"]) / "config.toml"
