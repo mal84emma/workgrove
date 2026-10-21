@@ -12,9 +12,9 @@
 #
 # The script handles three classes of file:
 #   1. Stable files are SYMLINKED out of this repo. They are the shell, git and tmux dotfiles, the Claude and
-#      Codex instructions, the skills, the bin/ scripts and cmux.json. So edits (an agent's edits too) land in
-#      the repo, and `git diff` is the review. Six of these files are the author's taste, not machinery, so they
-#      are OPT-IN (see below).
+#      Codex instructions, the skills, the bin/ scripts, cmux.json and the Ghostty config. So edits (an agent's
+#      edits too) land in the repo, and `git diff` is the review. Six of these files are the author's taste, not
+#      machinery, so they are OPT-IN (see below).
 #   2. ~/.claude/settings.json, ~/.codex/config.toml and ~/.codex/hooks.json are machine-local COPIES of the
 #      versioned .base files, because the apps write local state into them. A normal run keeps an existing
 #      copy ("kept …"). Only --refresh-config stashes the copy and rewrites it. A refresh therefore drops
@@ -35,7 +35,9 @@
 #   ~/.tmux.conf                      --with-tmux-conf
 #   ~/.claude/keybindings.json        --with-keybindings
 #   ~/.claude/statusline-command.sh   --with-statusline
-#   ~/.config/cmux/cmux.json          --with-cmux-config, on a Mac only
+#   ~/.config/cmux/cmux.json          --with-cmux-config, on a Mac only. With it come the Ghostty config and
+#                                     its two themes, which cmux reads for the font, theme and colors, and a
+#                                     copy of the SF Mono font that the config names.
 # A seventh flag, --with-claude-ui, gates KEYS, not a file. Every machine gets ~/.claude/settings.json, because
 # its hooks and permissions are machinery. But .tui, .voice, .theme and the env var that turns off mouse clicks
 # in the Claude Code TUI are taste, like the six files. So copy_config deletes them from the copy unless the
@@ -104,7 +106,12 @@ LINKS=(
   'home/.claude/AGENTS.md|.claude/AGENTS.md|'
   'home/.claude/CLAUDE.md|.claude/CLAUDE.md|'
   'home/.oh-my-zsh/custom/themes/workgrove.zsh-theme|ZC_REL/themes/workgrove.zsh-theme|WITH_ZSHRC'
+  'home/.config/ghostty/config|.config/ghostty/config|WITH_CMUX_CONFIG'
+  'home/.config/ghostty/themes/learning-dark|.config/ghostty/themes/learning-dark|WITH_CMUX_CONFIG'
+  'home/.config/ghostty/themes/learning-light|.config/ghostty/themes/learning-light|WITH_CMUX_CONFIG'
 )
+# SF_MONO_SRC: macOS ships SF Mono only inside Terminal.app. Only test/install-smoke.sh overrides it.
+SF_MONO_SRC="${SF_MONO_SRC:-/System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts}"
 BK=""                                # this run's backup dir; filled in by main
 SUMMARY_SKIPS=()
 SUMMARY_ACTIONS=()
@@ -547,8 +554,37 @@ link_skills() {
 }
 
 # link_cmux_config: cmux runs only on the Mac. Its UI settings stay a link, so changes show in `git diff`.
+# The LINKS table links the Ghostty config and themes with cmux.json. Each file is its own link. Tools that
+# edit ~/.config/ghostty write .bak files into it, and a linked folder would put those files in the repo.
 link_cmux_config() {
   link_optins late-link
+  if [[ $OS == Darwin ]] && opted_in "$WITH_CMUX_CONFIG" .config/cmux/cmux.json; then
+    install_sf_mono
+  fi
+}
+
+# install_sf_mono: the linked Ghostty config names SF Mono. macOS keeps that font inside Terminal.app, where
+# Ghostty cannot find it, so Ghostty silently falls back to its default font. Copy each missing font file into
+# ~/Library/Fonts. Never replace a file or link that is already there: it may be the user's own copy.
+install_sf_mono() {
+  local path dst found=0 copied=0
+  for path in "$SF_MONO_SRC"/SF-Mono-*.otf; do
+    [[ -f $path ]] || continue          # nullglob is off: no match leaves the pattern itself
+    found=1
+    dst="$HOME/Library/Fonts/${path##*/}"
+    if [[ -e $dst || -L $dst ]]; then
+      continue
+    fi
+    mkdir -p "$HOME/Library/Fonts"
+    cp "$path" "$dst"
+    copied=$((copied + 1))
+  done
+  if [[ $found -eq 0 ]]; then
+    SUMMARY_SKIPS+=("SF Mono was not found in $SF_MONO_SRC; Ghostty uses its default font")
+    echo "skipped SF Mono: no SF-Mono-*.otf in $SF_MONO_SRC, so Ghostty uses its default font" >&2
+  elif [[ $copied -gt 0 ]]; then
+    echo "copied $copied SF Mono font files into ~/Library/Fonts"
+  fi
 }
 
 # retired_src <home-relative dst>: print the repo-relative path that the linking steps above point that
@@ -591,7 +627,7 @@ retired_src() {
 remove_retired_links() {
   local d e rel dirs
   dirs=("$HOME" "$HOME/.claude" "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.codex" \
-        "$HOME/.local/bin" "$HOME/.config/cmux")
+        "$HOME/.local/bin" "$HOME/.config/cmux" "$HOME/.config/ghostty" "$HOME/.config/ghostty/themes")
   if [[ -n $ZC_REL ]]; then
     dirs[${#dirs[@]}]="$ZC/themes"                       # where link_dotfiles put the theme; with ZSH_CUSTOM
   fi                                                     # set, that is not ~/.oh-my-zsh/custom
