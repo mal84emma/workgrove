@@ -167,7 +167,12 @@ workgrove/
 │   │   ├── config.base.toml
 │   │   └── hooks.base.json
 │   ├── .cmuxterm/automations.json  native VM notification rule
-│   └── .config/cmux/cmux.json
+│   ├── .config/cmux/cmux.json
+│   └── .config/ghostty/
+│       ├── config             the font, theme, and padding that cmux's terminals use
+│       └── themes/
+│           ├── learning-dark
+│           └── learning-light
 ├── vscode/
 │   ├── settings-snippet.jsonc six keys to paste; Settings Sync owns the rest
 │   └── extensions.txt
@@ -280,7 +285,7 @@ File classes). It is independent of the opt-in flags, and all of these flags com
 | `--with-keybindings` | `~/.claude/keybindings.json` | Nothing. Claude keeps its own keymap. |
 | `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing. Also, `install.sh` strips `statusLine` from the `~/.claude/settings.json` copy, because that key names a script that would not be there. |
 | `--with-claude-ui` | No file of its own: the `tui`, `voice`, and `theme` keys and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS`, kept in the `~/.claude/settings.json` copy | `install.sh` deletes those keys from the copy, so Claude keeps its own full-screen setting, voice mode, theme, and mouse handling. The hooks and permissions in the same file arrive either way. |
-| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. | Nothing. Your `~/.config/cmux/cmux.json` stays untouched. |
+| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. With it come `~/.config/ghostty/config` and its two themes in `~/.config/ghostty/themes/`, each one a separate link. cmux renders its terminals with Ghostty and reads that config for the font, theme, and colors. The config names SF Mono, which macOS ships only inside Terminal.app. So `install.sh` copies each missing `SF-Mono-*.otf` file into `~/Library/Fonts`, and never replaces a file that is already there. When a symlink manages `~/.config/ghostty` or `~/.config/cmux`, for example from stow, `install.sh` links nothing into it and names the skip in its summary. | Nothing. Your `~/.config/cmux/cmux.json`, your Ghostty config, and your fonts stay untouched. |
 
 The full `~/.tmux.conf` from `--with-tmux-conf` tunes tmux with true color, a 10 ms `escape-time`,
 Shift+Enter, and focus events. It also makes the mouse wheel scroll instead of typing arrow keys.
@@ -344,7 +349,7 @@ The summary includes both flags because the existing copy cannot remember the re
 
 | Class | Files | Behavior |
 |---|---|---|
-| Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, and every opt-in file you asked for. `cmux.json` is one of them (Mac only, under `--with-cmux-config`). | Edits, including an agent's, land in the repo, so `git diff` is the review. |
+| Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, and every opt-in file you asked for. `cmux.json` and the three Ghostty files are among them (Mac only, under `--with-cmux-config`). | Edits, including an agent's, land in the repo, so `git diff` is the review. |
 | Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | `install.sh` creates them from the versioned `.base` files, minus the keys that this machine cannot use or did not ask for (listed below). The apps write local state into them. So a normal run keeps what is there, and only `install.sh --refresh-config` replaces them. A refresh preserves foreign hook commands and their group settings in the JSON files. |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides. The linked files source or include them, but `~/.zshrc.local` only when `~/.zshrc` is one of the linked files. |
 
@@ -579,6 +584,8 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
    - the skills under `~/.agents/skills/` and `~/.claude/skills/`
    - the `~/.local/bin/` entries
    - `~/.config/cmux/cmux.json` (a link only on a Mac with `--with-cmux-config`; otherwise it is your own file)
+   - `~/.config/ghostty/config`, `~/.config/ghostty/themes/learning-dark`, and
+     `~/.config/ghostty/themes/learning-light` (links under the same condition)
    - whichever opt-in files you asked for
 3. If `~/.zshrc` is opted in, delete the oh-my-zsh theme link. It is not in `$HOME` itself, so it never appears
    in an `ls -l ~`. It is at `~/.oh-my-zsh/custom/themes/workgrove.zsh-theme`, or under
@@ -589,11 +596,14 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
    someone else's repos, yours to delete or keep.
 5. If you do not want the three machine-local copies, delete them: `~/.claude/settings.json`,
    `~/.codex/config.toml`, and `~/.codex/hooks.json`.
-6. Copy your originals back out of the newest `~/.workgrove-backup/<timestamp>-<pid>/`, which mirrors `$HOME`.
+6. On a Mac with `--with-cmux-config`, decide whether to keep SF Mono. `install.sh` copied the
+   `SF-Mono-*.otf` files that were missing into `~/Library/Fonts`. They are copies, not links, so they stay
+   until you delete them.
+7. Copy your originals back out of the newest `~/.workgrove-backup/<timestamp>-<pid>/`, which mirrors `$HOME`.
    If you had your own `wt`, `agent-notify`, `cmux-hook`, or `azml-ssh-host` in `~/bin`, it is also there.
    `install.sh` retires those, because `~/bin` comes before `~/.local/bin` on `PATH`, and a copy there would
    shadow the link.
-7. Undo by hand the edits that `install.sh` made in place instead of replacing a file. They are not in the
+8. Undo by hand the edits that `install.sh` made in place instead of replacing a file. They are not in the
    backup:
    - On a VM: the lines it appended to `~/.zshenv.local`, and the `~/.zshenv` line at the top of `~/.bashrc`.
    - Without `--with-gitconfig` (for example, on a default run): the `core.excludesFile` and
@@ -1065,7 +1075,9 @@ All hotkeys use ⌃⌥⌘. The action type sets how a change to a hotkey takes e
   For this reason, `cmux.json` unbinds `toggleBrowserDesignMode` to free ⌃⌥⌘D.
 - **The Settings UI.** The Settings UI never writes `cmux.json`. It writes its toggles to macOS defaults.
   It writes terminal appearance settings to `config.ghostty`. This repo cannot carry those changes
-  to other machines, so make config changes in `cmux.json`.
+  to other machines. Make cmux config changes in `cmux.json`.
+  Make font, theme, and color changes in `home/.config/ghostty/config` or its themes.
+  Run `cmux reload-config` to apply a change to either file.
 
 ### Notifications
 
@@ -1146,7 +1158,7 @@ These rules apply:
 | Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. It rewrites `~/.codex/config.toml` from the `.base` file and drops Codex's hook trust hashes and folder trust. The refresh keeps existing cmux-tui hooks. On the VM, run `cmux-tui agent hook status claude codex`. If a provider shows `absent`, run `cmux-tui agent hook install claude codex`. Re-trust the hooks in `/hooks`, then restart the agent with `wt -H <vm> attach --restart-agent -r <repo> <name>` from the Mac. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
 | Update cmux, or repair local Codex state tracking | Back up the live (machine-local) `config.toml` and `hooks.json`. Run `cmux hooks codex install --yes`. Check that one turn returns to `idle`. | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit. | `wt -H <vm> update` |
-| Change `cmux.json` | The change applies after cmux reloads its config or relaunches (see Hotkeys and configuration). Commit. | n/a |
+| Change `cmux.json` or the Ghostty config | The change applies after cmux reloads its config or relaunches (see Hotkeys and configuration). A Ghostty config change applies after `cmux reload-config`. Commit. | n/a |
 | Repos in another folder | Add the folder to `WT_REPOS_DIR` in `~/.zshenv.local`. | Edit the `WT_REPOS_DIR` line that `install.sh` wrote in `~/.zshenv.local`. This file is never versioned. |
 | New tool | Add the tool to `Brewfile`, then run `brew bundle`. Commit. | Add the tool's install line to [docs/new-vm.md](docs/new-vm.md). Run that line by hand on each existing VM. |
 | Promote a machine-local setting into its `.base` file | Compare the live (machine-local) copy with its `.base` file. Copy only the portable keys into the `.base` file. Commit. | Never commit live (machine-local) copies or trust state. |

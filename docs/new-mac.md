@@ -96,7 +96,8 @@ preferences, not core setup (what a bare `install.sh` run installs):
 3. `~/.tmux.conf`
 4. the Claude keymap
 5. the status line
-6. cmux's own `cmux.json`
+6. cmux's own `cmux.json`, with the Ghostty config and themes that set its terminal font and colors, and a copy
+   of the SF Mono font
 7. the `tui`, `voice` and `theme` keys of `~/.claude/settings.json`
 
 The first six are files. `install.sh` installs `~/.claude/settings.json` with or without the flag, for its hooks
