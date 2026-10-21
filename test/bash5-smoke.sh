@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check all five scripts with /bin/bash and controlled Homebrew candidates.
+# Check all bin scripts with /bin/bash and controlled Homebrew candidates.
 # Copies use scratch paths, so the suite never changes installed interpreters.
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -12,7 +12,7 @@ source "$REPO/test/lib.sh"
 trap lib_cleanup EXIT
 
 BASH5=$BASH
-SCRIPTS=(wt azml-ssh-host github-guard cmux-hook agent-notify)
+SCRIPTS=(wt azml-ssh-host wt-ssh-host github-guard cmux-hook agent-notify)
 mkdir -p "$TEST_ROOT/home" "$TEST_ROOT/copies" "$TEST_ROOT/lib/workgrove" "$TEST_ROOT/nolib/bin"
 FIRST="$TEST_ROOT/first-bash"
 SECOND="$TEST_ROOT/second-bash"
@@ -21,9 +21,9 @@ for script in "${SCRIPTS[@]}"; do
     "$REPO/bin/$script" > "$TEST_ROOT/copies/$script"
 done
 # A copy loads the libraries from ../lib, as the scripts in bin/ do. So copies/ needs lib/ beside it.
-cp "$REPO"/lib/workgrove/*.sh "$TEST_ROOT/lib/workgrove/"
+cp "$REPO"/lib/workgrove/*.sh "$REPO"/lib/workgrove/*.py "$TEST_ROOT/lib/workgrove/"
 # These copies have no ../lib, so they test what each script does when it cannot load the library.
-for script in wt cmux-hook agent-notify; do
+for script in wt wt-ssh-host cmux-hook agent-notify; do
   cp "$REPO/bin/$script" "$TEST_ROOT/nolib/bin/$script"
 done
 cat > "$TEST_ROOT/bash-env" <<'BASH_ENV_FILE'
@@ -37,7 +37,7 @@ BASH_ENV_FILE
 run_script() {
   local script=$1 file=$2 interpreter=$3 expected_rc=$4 expected_bash=$5
   local rc=0 out remaining args=()
-  case $script in wt|azml-ssh-host) args=(help);; esac
+  case $script in wt|azml-ssh-host|wt-ssh-host) args=(help);; esac
   : > "$TEST_ROOT/trace"
   # A shared file descriptor lets the parent check how much input the hook consumed.
   exec 3<<<'{}'
@@ -56,6 +56,7 @@ run_script() {
   else
     case $script in
       wt) assert_grep 'wt receives its help argument' "$TEST_ROOT/out" 'wt new  [name]';;
+      wt-ssh-host) assert_grep 'wt-ssh-host receives its help argument' "$TEST_ROOT/out" 'wt-ssh-host';;
       azml-ssh-host) assert_grep 'azml-ssh-host receives its help argument' "$TEST_ROOT/out" 'azml-ssh-host help';;
       *) assert_eq "$script gives no hook answer" '' "$out"
          if [[ $script == cmux-hook ]]; then
@@ -77,19 +78,19 @@ scenario_direct_bash5() {
 scenario_direct_bash5
 
 scenario_missing_library() {
-  begin_scenario 'scripts with no library: wt stops and the hooks exit 0' || return 0
-  for script in wt cmux-hook agent-notify; do
+  begin_scenario 'scripts with no library: commands stop and hooks exit 0' || return 0
+  for script in wt wt-ssh-host cmux-hook agent-notify; do
     rc=0
     args=()
-    [[ $script == wt ]] && args=(help)
+    [[ $script == wt || $script == wt-ssh-host ]] && args=(help)
     exec 3<<<'{}'
     env -i PATH="$PATH" HOME="$TEST_ROOT/home" XDG_STATE_HOME="$TEST_ROOT/home/.local/state" \
       "$BASH5" "$TEST_ROOT/nolib/bin/$script" "${args[@]}" > "$TEST_ROOT/out" 2> "$TEST_ROOT/err" <&3 || rc=$?
     remaining=$(cat <&3)
     exec 3<&-
-    if [[ $script == wt ]]; then
-      assert_eq 'wt exit status with no library' 1 "$rc"
-      assert_grep 'wt says that it cannot load the library' "$TEST_ROOT/err" 'cannot load'
+    if [[ $script == wt || $script == wt-ssh-host ]]; then
+      assert_eq "$script exit status with no library" 1 "$rc"
+      assert_grep "$script says that it cannot load the library" "$TEST_ROOT/err" 'cannot load'
     else
       assert_eq "$script exit status with no library" 0 "$rc"
       assert_eq "$script gives no hook answer with no library" '' "$(cat "$TEST_ROOT/out")"
@@ -110,7 +111,7 @@ scenario_missing_library
 # install.sh links each script into ~/.local/bin. Here a relative link points to an absolute link, which
 # points to the script in this checkout. Each run starts in another folder, so only the link leads to lib/.
 mkdir -p "$TEST_ROOT/links/bin" "$TEST_ROOT/links/chain"
-for script in wt cmux-hook agent-notify; do
+for script in wt wt-ssh-host cmux-hook agent-notify; do
   ln -s "$REPO/bin/$script" "$TEST_ROOT/links/chain/$script"
   ln -s "../chain/$script" "$TEST_ROOT/links/bin/$script"
 done
@@ -120,6 +121,8 @@ scenario_linked_library() {
   assert_eq 'wt prints its help through the links' yes "$([[ $out == *'wt new  [name]'* ]] && echo yes || echo "$out")"
   out=$(cd "$TEST_ROOT/links/bin" && env -i PATH="$PATH" HOME="$TEST_ROOT/home" "$BASH5" wt help 2>&1) || true
   assert_eq 'bash wt, in the folder of the link, prints the help' yes "$([[ $out == *'wt new  [name]'* ]] && echo yes || echo "$out")"
+  out=$(cd "$TEST_ROOT/home" && env -i PATH="$PATH" HOME="$TEST_ROOT/home" "$TEST_ROOT/links/bin/wt-ssh-host" help 2>&1) || true
+  assert_eq 'wt-ssh-host loads through the links' yes "$([[ $out == *'wt-ssh-host'* && $out == *'{add,rm,check,list}'* ]] && echo yes || echo "$out")"
   cat > "$TEST_ROOT/cmux" <<'CMUX'
 #!/bin/sh
 printf '%s\n' "$*" >> "$CMUX_LOG"
@@ -172,7 +175,7 @@ scenario_candidate_selection() {
     major=${BASH_VERSINFO[0]}
     if [[ $chosen == /bin/bash ]]; then
       major=$SYS_MAJOR
-      case $script in wt|azml-ssh-host) rc=1;; esac
+      case $script in wt|azml-ssh-host|wt-ssh-host) rc=1;; esac
     fi
     run_script "$script" "$TEST_ROOT/copies/$script" /bin/bash "$rc" "$major:$chosen"
   done

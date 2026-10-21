@@ -3,6 +3,10 @@
 Use this procedure to set up an Ubuntu VM for workgrove tasks. The VM must already exist, and your Mac must
 already reach it with `ssh <vm>`. An Azure ML compute instance is also a VM for this procedure.
 
+For persistent-root installation and explicit restoration, use [portable SSH setup](remote-setup.md).
+That procedure also supports container hosts through the [Runpod guide](runpod.md).
+Existing installations require no migration.
+
 The setup takes about 20 minutes of wall time. About 5 minutes of it is machine time; the browser logins take
 the rest. The last block prints the elapsed wall time since the first line of block 1.
 
@@ -18,8 +22,8 @@ the rest. The last block prints the elapsed wall time since the first line of bl
 - `sudo` works on the VM without a password. Otherwise, block 1 asks for one.
 - The VM has enough free disk. Blocks 1 and 3 download about 1 GB. Before block 1, check the free disk on the
   VM with `df -h /`.
-- The VM has a regular OS disk, not an ephemeral one. An ephemeral disk loses its contents when the machine is
-  stopped, and the purpose of the tmux sessions is that they survive.
+- Task files use storage retained across the intended stop/start operation. Verify that guarantee independently.
+  Tmux processes survive SSH disconnects; they do not survive host shutdown.
 - The VM's inbound ssh rule is restricted to your own IP address. No other network rule is necessary: the rows
   are plain ssh, and the row's own shell starts tmux.
 
@@ -98,15 +102,17 @@ writes it. Separate the folders with colons, for example `"$HOME/work:$HOME"`. `
 - `~/.tmux.conf`
 - the Claude keymap
 - the Claude status line
-- the `tui`, `voice`, and `theme` keys of `~/.claude/settings.json`
+- the optional Claude theme and mouse preferences in `~/.claude/settings.json`
 
-If you remove the flag, the install leaves all six to you, and the core setup stays intact (see the README's
-[Install](../README.md#install) section).
+If you remove the flag, the install leaves these preferences to you.
+VM installations select Claude fullscreen mode by default and omit voice settings.
+The core setup stays intact (see the README's [Install](../README.md#install) section).
 
 You never have to repeat the flag for the first five items, which are files. After they are links into the
 repo, the bare `install.sh` rerun behind `wt update` keeps them. The machine-local copy itself records the
-user interface (UI) keys (`tui`, `voice`, and `theme`). A `settings.json` with a top-level `tui` key came from
-a run that got the flag. Thus `--refresh-config` keeps these keys instead of removing them.
+user interface (UI) preferences.
+VM copies record that opt-in through theme or mouse preferences; fullscreen alone does not select those preferences.
+Thus `--refresh-config` retains the selected UI preferences.
 
 **If the machine is not fresh** (an Azure ML compute instance usually is not fresh), read this part. On a
 fresh machine, skip it. `install.sh` moves whatever is in the way into `~/.workgrove-backup/<stamp>-<pid>/`

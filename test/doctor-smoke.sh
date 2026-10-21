@@ -42,6 +42,27 @@ invoke() {
   bash "$REPO/bin/wt" "$@" >"$TEST_ROOT/output" 2>&1 || STATUS=$?
 }
 
+scenario_readiness_dispatch() {
+  begin_scenario 'portable readiness options remain separate from contract checks' || return 0
+  invoke doctor --environment --json
+  if jq -e '.schema == 1 and (.issues | type == "array") and has("native_relay")' "$TEST_ROOT/output" >/dev/null; then
+    pass
+  else
+    fail 'explicit environment mode did not return readiness JSON'
+  fi
+  invoke doctor --json --root "$TEST_ROOT/missing-root"
+  if jq -e '.ready == false and (.issues | index("portable-profile-missing") != null)' "$TEST_ROOT/output" >/dev/null; then
+    pass
+  else
+    fail 'root and JSON options did not select readiness'
+  fi
+  invoke doctor --environment --record "$TEST_ROOT/mixed-record"
+  assert_eq 'mixed diagnostic modes fail' 1 "$STATUS"
+  assert_grep 'mixed modes explain the conflict' "$TEST_ROOT/output" 'doctor: --record cannot be combined'
+  assert_absent "$TEST_ROOT" mixed-record
+  end_scenario
+}
+
 scenario_mac() {
   begin_scenario 'Mac contract checks pass and detect unsupported releases and missing methods' || return 0
   invoke doctor
@@ -284,6 +305,14 @@ WT
   cat >"$HOME/.local/bin/wt" <<'WT'
 #!/usr/bin/env bash
 if [[ $1 == version ]]; then printf '{"commit":"fixture","protocol":1}\n'
+else printf 'workgrove: ready\n'; fi
+WT
+  invoke -H test-vm doctor
+  assert_eq 'an older portable doctor cannot certify cmux contracts' 1 "$STATUS"
+  assert_grep 'a portable-only VM needs its contract checker updated' "$TEST_ROOT/output" 'FAIL VM doctor unavailable'
+  cat >"$HOME/.local/bin/wt" <<'WT'
+#!/usr/bin/env bash
+if [[ $1 == version ]]; then printf '{"commit":"fixture","protocol":1}\n'
 else printf 'wt: unknown command doctor\n' >&2; exit 1; fi
 WT
   invoke -H test-vm doctor
@@ -311,6 +340,7 @@ SSH
   end_scenario
 }
 
+scenario_readiness_dispatch
 scenario_mac
 scenario_shapes_and_hooks
 scenario_record

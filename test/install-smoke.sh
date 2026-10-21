@@ -451,18 +451,22 @@ assert_settings_key() {
   assert_eq "the ~/.claude/settings.json $key key present" "$want" "$got"
 }
 
-# assert_claude_ui <home> <yes|no>: the whole settings.json contract in one call. .tui and .theme follow
-# --with-claude-ui exactly. .voice has TWO independent reasons to be absent: the flag, and a machine with no
+# assert_claude_ui checks optional UI settings. Fullscreen is always enabled on VMs; the Mac retains its opt-in.
+# Voice has two independent reasons to be absent: the flag, and a machine with no
 # microphone. So off a Mac it is absent even when the flag was given. This off-Mac case checks that the two
 # strips compose and do not replace one another. .model and .effortLevel are gone from the repo, so no path
 # may produce them. .hooks and .permissions are machinery: they are the reason that this file is installed
 # unconditionally. So they must survive every combination, or the gating has gone too far.
 assert_claude_ui() {
-  local h="$1" want="$2" voice="$2"
+  local h="$1" want="$2" voice="$2" tui="$2"
   if [[ $OS != Darwin ]]; then
     voice=no
+    tui=yes
   fi
-  assert_settings_key "$h" tui "$want"
+  assert_settings_key "$h" tui "$tui"
+  if [[ $tui == yes ]]; then
+    assert_eq "Claude uses fullscreen mode" fullscreen "$(jq -r '.tui' "$h/.claude/settings.json")"
+  fi
   assert_settings_key "$h" theme "$want"
   assert_settings_key "$h" voice "$voice"
   assert_settings_key "$h" model no
@@ -872,8 +876,8 @@ scenario_claude_ui_sticky() {
       assert_claude_ui "$h" yes
     fi
     # …and a LATER refresh with no flag keeps them. This is the stickiness rule of scenario 4a, in the one
-    # place where the record cannot be a symlink. Here, the .tui key of the file about to be rewritten is
-    # the record of the earlier flag. The one documented way to pick up a change to a .base file is
+    # place where the record cannot be a symlink. The optional UI keys record the earlier flag.
+    # The documented way to pick up a change to a .base file is
     # --refresh-config. `wt update --refresh-config` runs it, but `wt update` cannot forward
     # --with-claude-ui.
     # Without the record, that refresh would delete the UI keys of every machine that has them, while
@@ -883,8 +887,7 @@ scenario_claude_ui_sticky() {
       assert_eq "$UI_FLAG listed as skipped once it is installed" 0 "$(count_matches "$log.4" "$UI_FLAG")"
     fi
   fi
-  # The inverse makes the .tui key a record and not a default. A copy written WITHOUT the keys stays
-  # without them through a refresh. In the same way, a regular file at ~/.zshrc is not an opt-in.
+  # A default copy keeps optional UI keys absent through a refresh. VM fullscreen does not select them.
   h2="$(new_home)"
   guard_scratch_home "$h2"
   if assert_install_ok "$h2" "$h2.log"; then
@@ -1305,7 +1308,10 @@ scenario_linux_install() {
   log="$h.log"
   RUN_EXTRA_ENV=(FORCE_OS=Linux)
   if assert_install_ok "$h" "$log"; then
-    assert_settings_key "$h" tui no
+    assert_eq "VM Claude uses fullscreen without UI opt-in" fullscreen \
+      "$(jq -r '.tui' "$h/.claude/settings.json")"
+    assert_settings_key "$h" theme no
+    assert_mouse_key "$h" no
     assert_eq "VM Claude reduces terminal motion without UI opt-in" true \
       "$(jq -r '.prefersReducedMotion' "$h/.claude/settings.json")"
     assert_eq "VM Codex disables animations in its only [tui] table without UI opt-in" "1 1" \

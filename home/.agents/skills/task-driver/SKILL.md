@@ -42,10 +42,12 @@ The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥
    2. Convert each requested memory size to MiB:
       - Treat an unqualified "GB" as decimal: 1 GB = 10^9 bytes, about 953.7 MiB.
       - Use 1024 MiB for an explicit GiB.
-   3. Consider only entries with `status == "available"` and with known `cpu_logical` and `memory_mib` values that meet the requested minimums.
+   3. Consider only entries with `status == "available"` and known `cpu_logical` and `memory_mib` values that meet the requested minimums.
+      Exclude entries with `capacity_verified == false` or `workgrove_ready == false`.
+      Null or absent capability fields retain legacy compatibility; immediate task preflight still applies.
    4. Compare the converted thresholds with the reported usable RAM and GPU memory. Do not apply a percentage tolerance. The reported usable memory must meet a stated usable-memory requirement in full.
    5. For a GPU request, the host must also meet all of these conditions:
-      - `gpu_status == "ok"`.
+      - `gpu_status == "ok"` and `gpu_allocation_verified != false`.
       - `gpus` has at least the requested number of GPUs.
       - Each of these GPUs meets any requested model and memory minimum. A null GPU `memory_mib` cannot meet a memory minimum.
    6. If no host qualifies, report that and do not create a task. Otherwise, choose among the matching hosts with these preferences:

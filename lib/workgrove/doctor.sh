@@ -243,7 +243,7 @@ doctor_vm() {
   doctor_result "$rc" 'WT_REPOS_DIR folders' 'printf '\''export WT_REPOS_DIR="$HOME/repos"\n'\'' >> ~/.zshenv.local; mkdir -p "$HOME/repos"; source ~/.zshenv.local'
 }
 
-cmd_doctor() {
+cmd_contract_doctor() {
   local -A opts=()
   local DOCTOR_FAILED=0 DOCTOR_CMUX_VERSION='' DOCTOR_ROWS='' DOCTOR_TOP='' DOCTOR_NOTIFICATIONS='' DOCTOR_AUTOMATION=''
   local version rc=0
@@ -258,7 +258,7 @@ cmd_doctor() {
   [[ $DOCTOR_FAILED == 0 ]]
 }
 
-host_doctor() {
+host_contract_doctor() {
   local host=$1 version='' rc=0 failed=0 protocol='' output DOCTOR_FAILED=0
   printf 'VM checks for %s; run their repair commands on the VM.\n' "$host"
   # shellcheck disable=SC2016  # HOME belongs to the VM shell.
@@ -267,6 +267,9 @@ host_doctor() {
   if [[ $failed == 255 ]]; then
     doctor_result 1 'VM doctor connection from the Mac' "ssh $(shell_join "$host")"
     return 1
+  fi
+  if [[ $failed == 0 ]] && ! grep -Eq '^(PASS|FAIL|WARN) cmux-tui CLI$' <<<"$output"; then
+    failed=1
   fi
   if [[ $failed != 0 ]] && ! grep -Eq '^(FAIL|WARN) ' <<<"$output"; then
     doctor_result 1 'VM doctor unavailable' "wt -H $(shell_join "$host") update"
@@ -285,6 +288,30 @@ host_doctor() {
   fi
   [[ $failed == 0 && $DOCTOR_FAILED == 0 ]]
 }
+
+# JSON and root options retain the portable readiness interface. Bare doctor checks the cmux contract.
+doctor_dispatch() {
+  local context=$1 host=$2 mode=contract
+  shift 2
+  local -A opts=()
+  local args=()
+  wt_opts "$(wt_spec doctor "$context")" opts "$@"
+  if [[ -v opts[environment] || -v opts[root] || -v opts[json] ]]; then
+    [[ ! -v opts[record] ]] || die 'doctor: --record cannot be combined with portable readiness options'
+    mode=environment
+  else
+    need_jq
+  fi
+  wt_opt_args opts args environment
+  if [[ $context == remote ]]; then
+    "host_${mode}_doctor" "$host" "${args[@]}"
+  else
+    "cmd_${mode}_doctor" "${args[@]}"
+  fi
+}
+
+cmd_doctor() { doctor_dispatch local '' "$@"; }
+host_doctor() { local host=$1; shift; doctor_dispatch remote "$host" "$@"; }
 
 # Raw responses stay in shell variables. Only sanitized JSON reaches the destination.
 doctor_record() {

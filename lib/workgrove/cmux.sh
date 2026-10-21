@@ -357,10 +357,16 @@ cmux_notify() {
 # cmux_row_create_ssh <host> <title> <description> <command> [--no-focus]
 # The caller must provide a complete CMUX_ROWS_JSON snapshot from before creation.
 cmux_row_create_ssh() {
-  local host=$1 title=$2 description=$3 command=$4 out ref before; shift 4
+  local host=$1 title=$2 description=$3 command=$4 out ref before focus=1 arg args=(); shift 4
+  for arg; do
+    if [[ $arg == --no-focus ]]; then focus=0; else args+=("$arg"); fi
+  done
   [[ ${CMUX_ROWS_FULL:-0} == 1 ]] || { cmux_error "cannot create an SSH row without a complete row list"; return 1; }
+  ssh_host_check "$host" || return 1
   before=$(printf '%s' "$CMUX_ROWS_JSON" | jq -r '.workspaces[].id') || return 1
-  out=$(cmux_call ssh "$host" --name "$title" "$@" --command "$command" 2>&1) || {
+  # Focused native SSH creation can replace the requested title with a generated name.
+  # Establish the row's identity before selecting it.
+  out=$(cmux_call ssh "$host" --name "$title" --no-focus "${args[@]}" --command "$command" 2>&1) || {
     cmux_error "cmux ssh failed: $out"; return 1;
   }
   ref=$(printf '%s' "$out" | cmux_ref)
@@ -377,7 +383,10 @@ cmux_row_create_ssh() {
     cmux_error "cmux reported no row for $title on $host: $out; if a new row $title with no repo on its second line is open, close it"
     return 1;
   }
-  cmux_call workspace-action --workspace "$ref" --action set-description --description "$description" >/dev/null 2>&1 && return 0
+  if cmux_call workspace-action --workspace "$ref" --action set-description --description "$description" >/dev/null 2>&1; then
+    if ((focus)); then cmux_select "$ref" || return; fi
+    return 0
+  fi
   # The second line identifies the repo. Close an untagged new row to prevent duplicate rows on the next attach.
   # Keep the hook's three-second cleanup allowance when set-description exhausts its deadline.
   if DEADLINE=$(( ${DEADLINE:-0} + 3 )) close_row "$ref" new; then

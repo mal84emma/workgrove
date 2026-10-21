@@ -39,7 +39,8 @@ case "$1" in
             exit 0
           fi
           echo '[{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"}]' ;;
-  workspace) if [ "$CMUX_MODE" = partial-window ] && [ "${5:-}" = AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA ]; then exit 1; fi
+  workspace) if [ "$CMUX_MODE" = select-fail ] && [ "${2:-}" = select ]; then exit 1; fi
+             if [ "$CMUX_MODE" = partial-window ] && [ "${5:-}" = AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA ]; then exit 1; fi
              if [ "$CMUX_MODE" = no-ref-late ] && [ -e "$CMUX_LOG.created" ]; then
                echo lookup >>"$CMUX_LOG.after-create"
                echo '{"workspaces":[]}'
@@ -127,7 +128,9 @@ case "$1" in
         if [ "$REMOTE_OUTPUT_MODE" = machine ]; then
           printf 'Task details.\nWT_RESULT\t{"version":1,"command":"show","status":"found","name":"task","repo":"%s","session":"wt-repo-task","state":"none"}\n' "$REMOTE_REPO"
         else
-          printf '  repo: %s\n  session: wt-repo-task (none)\n' "$REMOTE_REPO"
+          state=none
+          [ "$REMOTE_OUTPUT_MODE" != running ] || state='agent running, detached'
+          printf '  repo: %s\n  session: wt-repo-task (%s)\n' "$REMOTE_REPO" "$state"
         fi ;;
 esac
 WT
@@ -238,7 +241,20 @@ TMUX
   run_wt wt-demo claude 'opus[1m]'
   check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'row: task @fakevm · repo'* ]] && echo yes)" 'healthy remote creation failed'
   check "$(grep -qF -- 'ssh fakevm --name task --no-focus ' "$TEST_ROOT/cmux.log" && grep -qxF -- 'workspace-action --workspace workspace:123 --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && echo yes)" 'new row did not get the task name as its title and the host and repo as its description'
+  check "$(if ! grep -q '^workspace select ' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'new task creation selected its row'
   check "$([[ $(grep -xcF -- '-m' "$TEST_ROOT/remote-new.args") -eq 1 && $(grep -xcF -- 'opus[1m]' "$TEST_ROOT/remote-new.args") -eq 1 ]] && echo yes)" 'remote model flag or value was not forwarded intact'
+
+  # cmux can lose the title during focused SSH creation. Tag before selecting a replacement row.
+  REMOTE_OUTPUT_MODE=running
+  : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
+  check "$([[ $WT_RC -eq 0 ]] && grep -qF -- 'ssh fakevm --name task --no-focus ' "$TEST_ROOT/cmux.log" && echo yes)" 'replacement row was created focused'
+  check "$(awk '/^workspace-action .*set-description / {tag=NR} /^workspace select workspace:123$/ {if (tag && tag<NR) selected=1} END {if (selected) print "yes"}' "$TEST_ROOT/cmux.log")" 'replacement row was selected before its identity was established'
+  CMUX_MODE=select-fail
+  : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
+  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux workspace select failed'* && -e "$TEST_ROOT/remote-new" ]] && ! grep -q '^workspace close ' "$TEST_ROOT/cmux.log" && echo yes)" 'failed selection removed an identified replacement row or its task'
+  CMUX_MODE=alive REMOTE_OUTPUT_MODE=normal
   rm "$TEST_ROOT/remote-new"
 
   # An old VM parser rejects the -m option before it makes a task, and the Mac names the update command.
