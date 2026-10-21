@@ -121,7 +121,7 @@ scenario_shapes_and_hooks() {
   # shellcheck disable=SC2016  # The parser must not confuse HOME_UNSET with HOME.
   for command in 'PATH=/missing bash -c true' 'env PATH=/missing bash -c true' \
       '/usr/bin/env -u PATH bash -c true' 'env -i bash -c true' \
-      'HOME=/missing sh -c true' '"$HOME_UNSET/hook"' 'cd /missing; true'; do
+      'HOME=/missing sh -c true' "'SOURCE=Claude' true" "SOUR'CE'=Claude true" '"$HOME_UNSET/hook"' 'cd /missing; true'; do
     jq --arg command "$command" '.hooks.Stop[0].hooks[0].command=$command' \
       "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
     invoke doctor

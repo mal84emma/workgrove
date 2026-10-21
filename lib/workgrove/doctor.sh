@@ -20,7 +20,7 @@ doctor_json() {
 # Accept static shell words and command separators without evaluating hook text.
 # Dynamic expansions require an executable helper file instead of an inline hook.
 doctor_words() {
-  local rest=$1 word segment kind
+  local rest=$1 word segment kind assignment
   local bare='^[A-Za-z0-9_./:=@%+,!-]+' single="^'([^']*)'" double='^"([^"\\]*)"' escaped='^\\(.)'
   local blank='^[[:blank:]]+' operator=$'^(&&|\\|\\||[;|\n])'
   DOCTOR_WORDS=() DOCTOR_KINDS=()
@@ -30,10 +30,12 @@ doctor_words() {
       DOCTOR_WORDS+=("${BASH_REMATCH[0]}"); DOCTOR_KINDS+=(operator)
       rest=${rest:${#BASH_REMATCH[0]}}; continue
     fi
-    word='' kind=''
+    word='' kind='' assignment=0
     while [[ -n $rest ]]; do
       if [[ $rest =~ $bare ]]; then
-        segment=${BASH_REMATCH[0]}; word+=$segment; rest=${rest:${#segment}}
+        segment=${BASH_REMATCH[0]}
+        if [[ -z $kind && $segment =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then assignment=1; fi
+        word+=$segment; rest=${rest:${#segment}}
       elif [[ $rest =~ $single ]]; then
         word+=${BASH_REMATCH[1]}; rest=${rest:${#BASH_REMATCH[0]}}
       elif [[ $rest =~ $double ]]; then
@@ -52,6 +54,8 @@ doctor_words() {
       kind=word
     done
     [[ $kind == word ]] || return 2
+    # Quoting the assignment name makes it a command word in shell syntax.
+    if [[ $word =~ ^[A-Za-z_][A-Za-z0-9_]*= && $assignment == 0 ]]; then return 2; fi
     DOCTOR_WORDS+=("$word"); DOCTOR_KINDS+=(word)
   done
 }
