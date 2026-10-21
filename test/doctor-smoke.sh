@@ -256,6 +256,24 @@ WT
   assert_eq 'an older VM without doctor fails' 1 "$STATUS"
   assert_grep 'the missing VM command is named' "$TEST_ROOT/output" 'FAIL VM doctor unavailable'
   assert_grep 'the missing VM command names its repair' "$TEST_ROOT/output" 'Fix: wt -H test-vm update'
+  rm "$HOME/.local/bin/wt"
+  ln -s "$REPO/bin/wt" "$HOME/.local/bin/wt"
+  cat >"$TEST_ROOT/version-disconnect" <<'SSH'
+case $cmd in *' version') exit 255 ;; esac
+SSH
+  make_fake_ssh "$TEST_ROOT/bin/ssh" "$TEST_ROOT/version-disconnect"
+  invoke -H test-vm doctor
+  assert_eq 'a disconnect during the version query fails' 1 "$STATUS"
+  assert_grep 'the version connection failure is named' "$TEST_ROOT/output" 'FAIL VM version connection from the Mac'
+  assert_grep 'the version connection names the connection repair' "$TEST_ROOT/output" 'Fix: ssh test-vm'
+  printf '#!/bin/sh\nexit 255\n' >"$TEST_ROOT/bin/ssh"
+  invoke -H test-vm doctor
+  assert_eq 'an SSH connection failure fails doctor' 1 "$STATUS"
+  assert_grep 'the transport failure is named' "$TEST_ROOT/output" 'FAIL VM doctor connection from the Mac'
+  assert_grep 'the transport failure names the connection repair' "$TEST_ROOT/output" 'Fix: ssh test-vm'
+  if grep -Eq 'VM protocol|Fix: wt -H .* update' "$TEST_ROOT/output"; then
+    fail 'a connection failure suggests an update or a protocol comparison'
+  else pass; fi
   end_scenario
 }
 

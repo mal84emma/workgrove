@@ -242,21 +242,23 @@ cmd_doctor() {
 host_doctor() {
   local host=$1 version='' rc=0 failed=0 protocol='' output DOCTOR_FAILED=0
   printf 'VM checks for %s; run their repair commands on the VM.\n' "$host"
-  output=$(remote_wt "$host" doctor 2>&1) || failed=$?
+  # shellcheck disable=SC2016  # HOME belongs to the VM shell.
+  output=$(remote_sh_raw "$host" 'exec "$HOME/.local/bin/wt" doctor' 2>&1) || failed=$?
   printf '%s\n' "$output"
+  if [[ $failed == 255 ]]; then
+    doctor_result 1 'VM doctor connection from the Mac' "ssh $(shell_join "$host")"
+    return 1
+  fi
   if [[ $failed != 0 ]] && ! grep -Eq '^(FAIL|WARN) ' <<<"$output"; then
-    if [[ $failed == 255 ]]; then
-      doctor_result 1 'VM doctor connection' "ssh $(shell_join "$host")"
-    else
-      doctor_result 1 'VM doctor unavailable' "wt -H $(shell_join "$host") update"
-    fi
+    doctor_result 1 'VM doctor unavailable' "wt -H $(shell_join "$host") update"
   fi
   printf 'Mac comparison:\n'
-  version=$(host_version "$host" 2>/dev/null) || rc=1
-  if [[ $rc == 0 ]]; then
-    protocol=$(jq -r '.protocol' <<<"$version")
-    [[ $protocol == "$WT_PROTOCOL" ]] || rc=1
-  fi
+  version=$(host_version "$host" 2>/dev/null) || {
+    doctor_result 1 'VM version connection from the Mac' "ssh $(shell_join "$host")"
+    return 1
+  }
+  protocol=$(jq -r '.protocol' <<<"$version")
+  [[ $protocol == "$WT_PROTOCOL" ]] || rc=1
   if [[ $protocol =~ ^[0-9]+$ ]] && ((protocol > WT_PROTOCOL)); then
     doctor_result "$rc" "VM protocol ${protocol:-unavailable}; Mac protocol $WT_PROTOCOL" 'wt update'
   else
