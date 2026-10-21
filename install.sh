@@ -67,14 +67,21 @@ umask 077
 # every link made under the first spelling would read as "not ours" under the second.
 R="$(cd "$(dirname "$0")" && pwd -P)"   # this repo
 # Portable installations use their own profile instead of applying desktop preferences.
+portable_python() {
+  # shellcheck source=lib/workgrove/vm/python-runtime.sh
+  source "$R/lib/workgrove/vm/python-runtime.sh"
+  wg_select_python || { printf 'workgrove: %s\n' "$wg_python_issue" >&2; return 1; }
+}
 if [[ ${1:-} == --remote-root ]]; then
   [[ $# -ge 2 ]] || { echo 'install.sh: --remote-root needs a path' >&2; exit 2; }
   remote_root=$2
   shift 2
-  exec python3 -B "$R/lib/workgrove/portable.py" install --root "$remote_root" "$@"
+  portable_python
+  exec "$wg_python" -B "$R/lib/workgrove/portable.py" install --root "$remote_root" "$@"
 fi
 if [[ -f $HOME/.config/workgrove/profile.json ]]; then
-  exec python3 -B "$R/lib/workgrove/portable.py" reinstall --source "$R" "$@"
+  portable_python
+  exec "$wg_python" -B "$R/lib/workgrove/portable.py" reinstall --source "$R" "$@"
 fi
 OS="${FORCE_OS:-$(uname -s)}"        # FORCE_OS exists only so that test/install-smoke.sh can drive the
                                      # Linux-only steps from a Mac: above all hook_bashrc, the most intricate

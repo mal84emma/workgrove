@@ -30,7 +30,7 @@ Package installation requires root or noninteractive `sudo` privileges.
 The adapter installs workgrove prerequisites and terminal descriptions; it does not configure services or install agent CLIs.
 
 Python 3.9 or later is required.
-Setup, doctor, inventory, and task preflight check the PATH interpreter, then `/usr/bin/python3`, for a supported version.
+Setup, installer reruns, doctor, inventory, and task preflight check PATH Python, then `/usr/bin/python3`, for a supported version.
 If Python is absent, full setup can install the minimal Python runtime through the Ubuntu adapter before persistent setup begins.
 Restore-only never installs that runtime.
 
@@ -65,6 +65,7 @@ A new profile requires an explicit policy.
 Without that option, setup uses the remote user's normal global Git configuration.
 It copies existing include files, preserves conditional includes and credential-helper configuration, and retains existing exclusion patterns.
 It preserves entry order and anchors relative include paths and conditions at their original logical locations.
+Path copying preserves symlink traversal before `..` components.
 Setup preserves Git's precedence: `$XDG_CONFIG_HOME/git/config` (normally `~/.config/git/config`) first, then `~/.gitconfig`.
 It adds `.worktrees/` to the persistent exclusion file.
 The installer never invents an identity or copies a different user's sign-in.
@@ -72,6 +73,7 @@ The installer never invents an identity or copies a different user's sign-in.
 ## Trust a personal volume
 
 Strict permission checks are the default.
+These checks cover existing target files and directories as well as their parents.
 Some mounted filesystems report writable permissions for every local user even after `chmod`.
 Setup refuses those permissions unless you explicitly accept the personal volume policy.
 Acceptance does not repair filesystem permissions or establish exclusive access to the volume.

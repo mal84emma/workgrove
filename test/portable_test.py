@@ -149,6 +149,41 @@ sys.exit(module["main"]())
         self.assertIn("shared-configuration-parent", report["issues"])
         self.assertEqual(report["storage_permission_policy"], "trusted-personal-volume")
 
+    def test_strict_permissions_check_existing_target_files_and_directories(self):
+        external = self.base / "external-agent"
+        external.mkdir(mode=0o755)
+        self.env["CODEX_HOME"] = str(external)
+        self.install()
+        hooks = external / "hooks.json"
+        original = hooks.read_bytes()
+        hooks.chmod(0o666)
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("shared-configuration-target", report["issues"])
+        self.install(ok=False)
+        self.command("restore", "--root", str(self.root), ok=False)
+        self.assertEqual(hooks.read_bytes(), original)
+        self.assertEqual(hooks.stat().st_mode & 0o777, 0o666)
+        hooks.chmod(0o600)
+        self.install()
+        external.chmod(0o777)
+        with self.assertRaisesRegex(portable.Refusal, "shared-configuration-target"):
+            portable.private_path(external)
+
+    def test_personal_volume_target_exception_stays_inside_the_selected_mount(self):
+        external = self.base / "external-agent"
+        external.mkdir(mode=0o755)
+        self.env["CODEX_HOME"] = str(external)
+        self.volume_install("--trust-personal-volume", "--persist-agents")
+        internal = Path(self.profile()["agent_roots"]["claude"]) / "settings.json"
+        internal.chmod(0o666)
+        self.assertTrue(json.loads(self.volume_command("doctor", "--json").stdout)["ready"])
+        self.volume_install()
+        self.assertEqual(internal.stat().st_mode & 0o777, 0o666)
+        (external / "hooks.json").chmod(0o666)
+        report = json.loads(self.volume_command("doctor", "--json", ok=False).stdout)
+        self.assertIn("shared-configuration-target", report["issues"])
+        self.volume_install(ok=False)
+
     def test_bootstrap_forwards_saved_volume_acceptance_to_selected_installer(self):
         import argparse
         self.volume_install("--trust-personal-volume")
@@ -421,6 +456,40 @@ sys.exit(module["main"]())
         self.assertTrue(self.profile()["tmux"])
         self.assertEqual(self.profile()["root"], str(self.root))
 
+    def test_portable_installer_and_update_share_supported_python_selection(self):
+        runtime = self.source / "lib/workgrove/vm/python-runtime.sh"
+        original = runtime.read_text()
+        runtime.write_text(original.replace("/usr/bin/python3", sys.executable))
+        self.git("add", str(runtime))
+        self.git("commit", "-qm", "Configure the synthetic Python fallback")
+        self.install("--persist-agents")
+        upstream = self.base / "local-upstream.git"
+        self.git("clone", "--bare", str(self.source), str(upstream))
+        self.git("remote", "add", "origin", str(upstream))
+        self.git("fetch", "--quiet", "origin")
+        branch = self.git("branch", "--show-current").stdout.strip()
+        self.git("branch", "--set-upstream-to", "origin/" + branch)
+        old = self.tools / "python3"
+        old.unlink()
+        old.write_text("#!/bin/sh\nexit 1\n")
+        old.chmod(0o700)
+        commands = ([str(self.source / "install.sh")],
+                    [str(self.source / "install.sh"), "--remote-root", str(self.root)],
+                    [str(self.source / "bin/wt"), "update"])
+        for command in commands:
+            with self.subTest(command=Path(command[0]).name, args=command[1:]):
+                result = subprocess.run([str(self.tools / "bash"), *command], env=self.env,
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        before = self.profile()
+        runtime.write_text(original.replace("/usr/bin/python3", str(self.base / "missing-system-python")))
+        for command in commands:
+            result = subprocess.run([str(self.tools / "bash"), *command], env=self.env,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("python-3.9-required", result.stderr)
+            self.assertEqual(self.profile(), before)
+
     def test_bootstrap_uses_selected_installation_without_changing_git(self):
         result = self.command("bootstrap", "--root", str(self.root), "--host", "test-host", "--storage", "os-disk",
                               "--revision", self.revision)
@@ -543,6 +612,20 @@ sys.exit(module["main"]())
         self.install()
         self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.email").stdout.strip(), "xdg@example.invalid")
         self.assertEqual(self.git("config", "--global", "--includes", "--get-all", "custom.order").stdout.splitlines(), ["xdg", "home"])
+
+    def test_git_copy_traverses_symlink_directories_before_parent_components(self):
+        target = self.base / "elsewhere/deep"
+        (target / "directory").mkdir(parents=True)
+        (self.home / "link").symlink_to(target / "directory")
+        (self.home / ".gitconfig").write_text('[include]\n path = ./link/../child\n')
+        (self.home / "child").write_text('[user]\n name = Test User\n email = lexical@example.invalid\n')
+        (target / "child").write_text('[user]\n name = Test User\n email = parent@example.invalid\n'
+                                      '[include]\n path = ./nested\n')
+        (target / "nested").write_text('[user]\n email = intended@example.invalid\n')
+        before = self.git("config", "--global", "--includes", "--get", "user.email").stdout
+        self.assertEqual(before.strip(), "intended@example.invalid")
+        self.install()
+        self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.email").stdout, before)
 
     def test_source_git_does_not_inherit_repository_or_object_storage(self):
         external = self.base / "external-objects"

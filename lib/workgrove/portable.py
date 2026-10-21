@@ -152,6 +152,8 @@ def private_path(path, detach=False):
         require(not stat.S_ISREG(info.st_mode) or info.st_nlink == 1, "hardlinked-file")
         require(stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode) or
                 (detach and stat.S_ISLNK(info.st_mode)), "nonregular-file")
+        if not stat.S_ISLNK(info.st_mode):
+            check_mode(target, info.st_mode, "shared-configuration-target")
     for ancestor in reversed(target.parents):
         if ancestor.is_dir():
             mode = ancestor.stat().st_mode
@@ -406,7 +408,7 @@ def git_config_graph(start, destination):
     mapping = {}
 
     def visit(path):
-        path = Path(os.path.abspath(Path(path).expanduser()))
+        path = Path(path).expanduser().absolute()
         require(path.is_file(), "git-include-missing")
         if path in mapping:
             return mapping[path]

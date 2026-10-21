@@ -121,6 +121,15 @@ def nodes_for(controller, members, mounts):
     return base, point, nodes
 
 
+def initial_root(view, version, controller, point):
+    if version == 1:
+        # This interface exists only at the initial hierarchy root.
+        return view.read(point / "cgroup.sane_behavior", optional=True) in {"0", "1"}
+    available = view.read(point / "cgroup.controllers", optional=True) or ""
+    interface = "cpu.max" if controller == "cpu" else "memory.max"
+    return controller in available.split() and view.read(point / interface, optional=True) is None
+
+
 def effective(view=None, affinity=None):
     view = view or KernelView()
     issues = []
@@ -148,12 +157,8 @@ def effective(view=None, affinity=None):
             base, point, nodes = mapped
             if base != PurePosixPath("/"):
                 namespace_hidden = True
-            if container or version == 2:
-                # A non-root v2 cgroup exposes cpu.max when its CPU controller is available.
-                available = view.read(point / "cgroup.controllers", optional=True) or ""
-                initial_root = version == 2 and "cpu" in available.split() and view.read(point / "cpu.max", optional=True) is None
-                if not initial_root:
-                    namespace_hidden = True
+            if not initial_root(view, version, "cpu", point):
+                namespace_hidden = True
             for node in nodes:
                 if not view.path(node).is_dir():
                     raise Unknown("cgroup-node-hidden")
@@ -170,10 +175,14 @@ def effective(view=None, affinity=None):
                             if parts[0] != "max":
                                 quota = min(quota, Fraction(unsigned(parts[0], zero=False), period))
                     else:
-                        value = view.read(node / "cpu.cfs_quota_us")
-                        period = unsigned(view.read(node / "cpu.cfs_period_us"), zero=False)
-                        if value != "-1":
-                            quota = min(quota, Fraction(unsigned(value, zero=False), period))
+                        value = view.read(node / "cpu.cfs_quota_us", optional=node == point)
+                        period = view.read(node / "cpu.cfs_period_us", optional=node == point)
+                        if (value is None) != (period is None):
+                            raise Unknown("cpu-limit-interface-missing")
+                        if value is not None or period is not None:
+                            period = unsigned(period, zero=False)
+                            if value != "-1":
+                                quota = min(quota, Fraction(unsigned(value, zero=False), period))
                 if controller in {"v2", "cpuset"}:
                     name = "cpuset.cpus.effective" if version == 2 else "cpuset.effective_cpus"
                     value = view.read(node / name, optional=True)
@@ -202,11 +211,8 @@ def effective(view=None, affinity=None):
             base, point, nodes = mapped
             if base != PurePosixPath("/"):
                 namespace_hidden = True
-            if container or version == 2:
-                available = view.read(point / "cgroup.controllers", optional=True) or ""
-                initial_root = version == 2 and "memory" in available.split() and view.read(point / "memory.max", optional=True) is None
-                if not initial_root:
-                    namespace_hidden = True
+            if not initial_root(view, version, "memory", point):
+                namespace_hidden = True
             for node in nodes:
                 if not view.path(node).is_dir():
                     raise Unknown("cgroup-node-hidden")

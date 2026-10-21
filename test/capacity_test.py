@@ -123,7 +123,7 @@ class CapacityTests(unittest.TestCase):
         self.put("/proc/self/cgroup", "0::/team/job (deleted)\n")
         self.assertFalse(self.report()["capacity_verified"])
 
-    def test_cgroup_v1_ancestor_limits_and_unlimited_memory(self):
+    def v1_hierarchy(self):
         self.put("/proc/self/cgroup", "2:cpu,cpuacct:/team/job\n3:memory:/team/job\n4:cpuset:/team/job\n")
         self.put("/proc/self/mountinfo", "10 1 0:1 / /cg/cpu rw - cgroup cgroup rw,cpu,cpuacct\n"
                  "11 1 0:2 / /cg/memory rw - cgroup cgroup rw,memory\n"
@@ -133,13 +133,56 @@ class CapacityTests(unittest.TestCase):
             self.put("/cg/cpu" + suffix + "/cpu.cfs_period_us", "100000")
             self.put("/cg/memory" + suffix + "/memory.limit_in_bytes", str((1 << 63) - 4096))
             self.put("/cg/cpuset" + suffix + "/cpuset.cpus", "0-15")
+        for point in ("/cg/cpu", "/cg/memory", "/cg/cpuset"):
+            self.put(point + "/cgroup.sane_behavior", "0")
         self.put("/cg/cpu/team/cpu.cfs_quota_us", "350000")
         self.put("/cg/memory/team/memory.limit_in_bytes", str(4096 * 1024 * 1024))
         self.put("/cg/cpuset/team/job/cpuset.cpus", "0-3")
+
+    def test_cgroup_v1_ancestor_limits_and_unlimited_memory(self):
+        self.v1_hierarchy()
         report = self.report()
         self.assertTrue(report["capacity_verified"])
         self.assertEqual(report["cpu_logical"], 3)
         self.assertEqual(report["memory_mib"], 4096)
+
+    def test_cgroup_v1_markerless_namespace_does_not_certify_hidden_ancestors(self):
+        self.v1_hierarchy()
+        for point in ("/cg/cpu", "/cg/memory", "/cg/cpuset"):
+            self.view.path(point + "/cgroup.sane_behavior").unlink()
+        for member in ("/", "/team/job"):
+            with self.subTest(member=member):
+                self.put("/proc/self/cgroup", f"2:cpu,cpuacct:{member}\n3:memory:{member}\n4:cpuset:{member}\n")
+                self.put("/cg/cpu/cpu.cfs_quota_us", "400000")
+                self.put("/cg/memory/memory.limit_in_bytes", str(8 * 1024 ** 3))
+                report = self.report()
+                self.assertFalse(report["capacity_verified"])
+                self.assertIsNone(report["cpu_logical"])
+                self.assertIsNone(report["memory_mib"])
+                self.assertEqual(report["environment"], "unknown")
+                self.assertEqual(report["capacity_issues"], ["cpu-ancestors-hidden", "memory-ancestors-hidden"])
+
+    def test_cgroup_v1_root_evidence_is_checked_per_mount(self):
+        self.v1_hierarchy()
+        self.view.path("/cg/memory/cgroup.sane_behavior").unlink()
+        report = self.report()
+        self.assertEqual(report["cpu_logical"], 3)
+        self.assertIsNone(report["memory_mib"])
+        self.put("/cg/memory/cgroup.sane_behavior", "invalid")
+        self.assertIsNone(self.report()["memory_mib"])
+        self.put("/cg/memory/cgroup.sane_behavior", "1")
+        self.put("/.dockerenv", "")
+        self.assertTrue(self.report()["capacity_verified"])
+
+    def test_cgroup_v1_initial_root_can_omit_cpu_quota_interfaces(self):
+        self.v1_hierarchy()
+        for name in ("cpu.cfs_quota_us", "cpu.cfs_period_us"):
+            self.view.path("/cg/cpu/" + name).unlink()
+        report = self.report()
+        self.assertTrue(report["capacity_verified"])
+        self.assertEqual(report["cpu_logical"], 3)
+        self.put("/cg/cpu/cpu.cfs_quota_us", "-1")
+        self.assertIn("cpu-limit-interface-missing", self.report()["capacity_issues"])
 
     def test_malformed_and_oversized_cpu_sets_are_unknown(self):
         for value in ("x", "4-1", "0-999999999", "1,,2"):
