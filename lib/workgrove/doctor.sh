@@ -38,6 +38,7 @@ doctor_words() {
         word+=${BASH_REMATCH[1]}; rest=${rest:${#BASH_REMATCH[0]}}
       elif [[ $rest =~ $double ]]; then
         segment=${BASH_REMATCH[1]}; rest=${rest:${#BASH_REMATCH[0]}}
+        [[ ! $segment =~ \$HOME[A-Za-z0-9_] ]] || return 2
         segment=${segment//\$\{HOME\}/$HOME}; segment=${segment//\$HOME/$HOME}
         [[ $segment != *'$'* && $segment != *'`'* ]] || return 2
         word+=$segment
@@ -61,22 +62,27 @@ doctor_simple_hook() {
     case $1 in
       exec|command) shift ;;
       *)
-        if [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then shift
+        if [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+          doctor_static_environment "${1%%=*}" || return 2
+          shift
         else break; fi ;;
     esac
   done
   (($#)) || return 2
   path=$1; shift
-  case $path in if|then|else|fi|for|while|do|done|case|"esac"|function|source|.) return 2 ;; esac
+  case $path in
+    if|then|else|fi|for|while|do|done|case|"esac"|function|source|.|cd|pushd|popd|export|unset|eval|set|trap|alias|hash|builtin) return 2 ;;
+  esac
   if [[ $path != */* ]]; then path=$(type -P -- "$path") || return 1; fi
   [[ -f $path && -x $path ]] || return 1
   case ${path##*/} in
     env)
       while (($#)); do
         case $1 in
-          -u|--unset) (($# >= 2)) || return 1; shift 2 ;;
-          -i|--ignore-environment|--) shift ;;
-          --unset=*) shift ;;
+          -u|--unset) (($# >= 2)) || return 1; doctor_static_environment "$2" || return 2; shift 2 ;;
+          -i|--ignore-environment) return 2 ;;
+          --) shift; break ;;
+          --unset=*) doctor_static_environment "${1#*=}" || return 2; shift ;;
           -*) return 2 ;;
           *) break ;;
         esac
@@ -99,6 +105,11 @@ doctor_simple_hook() {
       done
       (($#)) && [[ -f $1 && -r $1 ]] || return 1 ;;
   esac
+}
+
+# These variables can change executable lookup or a nested shell's initialization.
+doctor_static_environment() {
+  case $1 in PATH|HOME|ENV|BASH_ENV|ZDOTDIR|SHELL) return 1 ;; esac
 }
 
 doctor_hook_path() {

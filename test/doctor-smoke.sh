@@ -116,6 +116,18 @@ scenario_shapes_and_hooks() {
     assert_eq "a missing later hook fails: $command" 1 "$STATUS"
     assert_grep 'a missing later helper is reported' "$TEST_ROOT/output" 'FAIL hook command'
   done
+  mkdir -p "${HOME}_UNSET"
+  cp "$HOME/.local/bin/cmux-hook" "${HOME}_UNSET/hook"
+  # shellcheck disable=SC2016  # The parser must not confuse HOME_UNSET with HOME.
+  for command in 'PATH=/missing bash -c true' 'env PATH=/missing bash -c true' \
+      '/usr/bin/env -u PATH bash -c true' 'env -i bash -c true' \
+      'HOME=/missing sh -c true' '"$HOME_UNSET/hook"' 'cd /missing; true'; do
+    jq --arg command "$command" '.hooks.Stop[0].hooks[0].command=$command' \
+      "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
+    invoke doctor
+    assert_eq "environment-dependent lookup cannot pass: $command" 1 "$STATUS"
+    assert_grep 'lookup changes receive an explicit warning' "$TEST_ROOT/output" 'WARN hook command needs a static helper'
+  done
   # shellcheck disable=SC2016  # Dynamic shell code must receive a warning without running.
   jq --arg command 'd=$(touch "$HOME/executed"); true' '.hooks.Stop[0].hooks[0].command=$command' \
     "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
