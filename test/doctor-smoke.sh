@@ -52,7 +52,12 @@ scenario_mac() {
     assert_eq "$version warns" 1 "$STATUS"
     assert_grep 'warning names the verified release' "$TEST_ROOT/output" 'verified 0.65.1'
     assert_grep 'warning explains the support policy' "$TEST_ROOT/output" 'older and newer versions need verification'
-    assert_grep 'warning includes a repair' "$TEST_ROOT/output" 'Fix: brew reinstall --cask cmux'
+    assert_grep 'repair downloads the verified release' "$TEST_ROOT/output" 'releases/download/v0.65.1/cmux-macos.dmg'
+    assert_grep 'repair installs the app from that release' "$TEST_ROOT/output" "ditto \"\$d/mount/cmux.app\" /Applications/cmux.app"
+    assert_grep 'repair warns before replacing the app' "$TEST_ROOT/output" 'Quit cmux before running this command.'
+    local repair_command
+    repair_command=$(sed -n 's/^  Fix: //p' "$TEST_ROOT/output" | head -1)
+    if bash -n <<<"$repair_command"; then pass; else fail 'the installer command is not valid shell syntax'; fi
   done
   FAKE_CMUX_MISSING_METHOD=workspace.remote.reconnect invoke doctor
   assert_eq 'a missing method fails' 1 "$STATUS"

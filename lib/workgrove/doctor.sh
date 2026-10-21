@@ -6,7 +6,9 @@
 doctor_result() {
   if [[ $1 == 0 ]]; then printf 'PASS %s\n' "$2"
   else
-    printf '%s %s\n  Fix: %s\n' "${4:-FAIL}" "$2" "$3"
+    printf '%s %s\n' "${4:-FAIL}" "$2"
+    [[ -z ${5:-} ]] || printf '  %s\n' "$5"
+    printf '  Fix: %s\n' "$3"
     DOCTOR_FAILED=1
   fi
 }
@@ -133,22 +135,25 @@ doctor_hooks() {
 
 doctor_mac() {
   local version='' raw='' methods='' method rc repair automation
-  repair='brew reinstall --cask cmux'
+  local installer="https://github.com/manaflow-ai/cmux/releases/download/v$WG_CMUX_SUPPORTED/cmux-macos.dmg"
+  local warning='Quit cmux before running this command. It replaces /Applications/cmux.app with the verified release.'
+  # shellcheck disable=SC2016  # The user runs this repair; the probe only prints it.
+  printf -v repair 'd=$(mktemp -d) && curl -fL %s -o "$d/cmux.dmg" && hdiutil attach -nobrowse -mountpoint "$d/mount" "$d/cmux.dmg" && ditto "$d/mount/cmux.app" /Applications/cmux.app && hdiutil detach "$d/mount" && open -a cmux' "$installer"
   raw=$(cmux_call version 2>/dev/null) || raw=''
   if [[ $raw =~ ^cmux[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+)([[:space:]]|$) ]]; then version=${BASH_REMATCH[1]}; fi
   DOCTOR_CMUX_VERSION=$version
   rc=0; [[ $version == "$WG_CMUX_SUPPORTED" ]] || rc=1
-  doctor_result "$rc" "cmux ${version:-unavailable}; verified $WG_CMUX_SUPPORTED. workgrove supports only the latest verified release; older and newer versions need verification." "$repair" WARN
+  doctor_result "$rc" "cmux ${version:-unavailable}; verified $WG_CMUX_SUPPORTED. workgrove supports only the latest verified release; older and newer versions need verification." "$repair" WARN "$warning"
 
   methods=$(cmux_call capabilities 2>/dev/null) || methods=''
   for method in workspace.list workspace.create workspace.action workspace.close workspace.select \
       workspace.remote.reconnect notification.list notification.dismiss system.top surface.read_text; do
     rc=0
     jq -e --arg method "$method" '.methods | type == "array" and index($method) != null' <<<"$methods" >/dev/null 2>&1 || rc=1
-    doctor_result "$rc" "cmux method $method" "$repair"
+    doctor_result "$rc" "cmux method $method" "$repair" FAIL "$warning"
   done
   rc=0; cmux_rows_load checked || rc=1
-  doctor_result "$rc" 'cmux window and row JSON' "$repair"
+  doctor_result "$rc" 'cmux window and row JSON' "$repair" FAIL "$warning"
   DOCTOR_ROWS=${CMUX_ROWS_JSON:-}
   raw=$(cmux_call top --json 2>/dev/null) || raw=''
   DOCTOR_TOP=$raw
@@ -157,14 +162,14 @@ doctor_mac() {
     and (.caller.workspace_id == null or (.caller.workspace_id | type == "string"))
     and (.coding_agents | type == "array" and all(.[];
       .resources.process_count | type == "number" and . >= 0))' || rc=1
-  doctor_result "$rc" 'cmux top JSON' "$repair"
+  doctor_result "$rc" 'cmux top JSON' "$repair" FAIL "$warning"
   raw=$(cmux_notifications 2>/dev/null) || raw=''
   DOCTOR_NOTIFICATIONS=$raw
   rc=0
   doctor_json "$raw" 'type == "array" and all(.[]; (.id | type == "string" and length > 0)
     and (.workspace_id | type == "string" and length > 0)
     and (.title | type == "string") and (.body | type == "string"))' || rc=1
-  doctor_result "$rc" 'cmux notification JSON' "$repair"
+  doctor_result "$rc" 'cmux notification JSON' "$repair" FAIL "$warning"
   automation=$(cmux_call automation show wt-native-relay 2>/dev/null) || automation=''
   DOCTOR_AUTOMATION=$automation
   rc=0

@@ -7,6 +7,8 @@ The VM checks require a reachable VM and a task with a running agent.
 1. On the Mac, run `wt doctor`.
    Each failed check prints a repair command.
    A version warning names the verified release.
+   Its repair command installs that release from its versioned disk image.
+   Quit cmux before running the installer command, then run `wt doctor` again.
    workgrove supports one verified release at a time.
    Older and newer versions require verification.
 2. From the Mac, run `wt -H <vm> doctor`.
