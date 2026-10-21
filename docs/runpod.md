@@ -95,7 +95,8 @@ Paths, host aliases, identities, and private operational captures are omitted.
 | Replacement row title | Focused creation reproduced an unexpected generated title. The shared adapter fix preserved the task title by creating unfocused before explicit selection. |
 | Editor requests | Mac-side open and VM-side relay opened the correct connected VS Code windows. |
 | Scoped removal | Removed a separate clean task's worktree, branch, and sidecar while preserving both original tasks and sessions. |
-| Claude task completion | Pending because the account reached its usage limit. Authentication, fullscreen startup, and Needs input status passed. |
+| Claude task completion | Passed after the usage limit reset. Claude read the uploaded input, produced the exact requested file, and ran the Python assertion successfully. |
+| Claude status and task separation | Running and Idle status and the completion notification reached the correct row. Both tasks retained their inputs, tracked files, and history. |
 | Agent sandboxing | Blocked. Codex 0.163.0 could not create its sandbox namespaces; a no-op sandbox probe failed. |
 | Actual stop/start and endpoint refresh | Unverified. No provider API or lifecycle action ran. |
 
@@ -103,6 +104,7 @@ Codex required the supported `--no-daemon` launch option because its control soc
 That option preserved sandbox policy; individual approvals ran the acceptance commands outside the failed sandbox.
 Follow the [agent runtime compatibility checks](remote-setup.md#check-agent-runtime-compatibility) before treating an installation as ready for unattended agent work.
 The personal volume exception does not change agent sandbox requirements.
+Claude completed the workflow test in its existing auto mode; that result does not establish operating-system sandbox isolation.
 
 ### Sandbox compatibility check
 

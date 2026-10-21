@@ -16,7 +16,8 @@ Users perform those operations separately through their chosen supplier.
 
 The evidence below references workgrove's public source files and generic Linux host capabilities.
 The [verification status](runpod.md#verification-status) separates offline coverage, live workflow results, and remaining acceptance checks.
-Agent sandbox compatibility, Claude task completion, and actual cloud lifecycle recovery remain unresolved.
+Codex sandbox compatibility remains unresolved.
+Actual cloud lifecycle recovery remains unverified optional validation.
 
 A Runpod host must provide ordinary remote-command SSH and storage with an understood persistence policy.
 Do not assume that a running container has every package required by workgrove.
@@ -452,7 +453,8 @@ Verify task files across stop/start, explicit preparation when runtime setup is 
 Check final lifecycle and billing state through the supplier independently.
 The [live results](runpod.md#verification-status) verify explicit personal volume acceptance, installation, update, restoration, Codex task output, reconnection, and native relay.
 Codex's sandbox namespace initialization failed; individual command approvals do not establish sandbox compatibility.
-Claude task completion remains pending because of an account usage limit.
+Claude completed its bounded task after its usage limit reset.
+Its row reported Running and Idle, and the completion notification reached the correct row.
 Actual stop/start recovery and refreshed-endpoint behavior remain unverified.
 
 ## Recommended implementation order
