@@ -285,7 +285,7 @@ File classes). It is independent of the opt-in flags, and all of these flags com
 | `--with-keybindings` | `~/.claude/keybindings.json` | Nothing. Claude keeps its own keymap. |
 | `--with-statusline` | `~/.claude/statusline-command.sh` | Nothing. Also, `install.sh` strips `statusLine` from the `~/.claude/settings.json` copy, because that key names a script that would not be there. |
 | `--with-claude-ui` | No file of its own: the `tui`, `voice`, and `theme` keys and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS`, kept in the `~/.claude/settings.json` copy | `install.sh` deletes those keys from the copy, so Claude keeps its own full-screen setting, voice mode, theme, and mouse handling. The hooks and permissions in the same file arrive either way. |
-| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. With it come `~/.config/ghostty/config` and its two themes in `~/.config/ghostty/themes/`, each one a separate link. cmux renders its terminals with Ghostty and reads that config for the font, theme, and colors. The config names SF Mono, which macOS ships only inside Terminal.app. So `install.sh` copies each missing `SF-Mono-*.otf` file into `~/Library/Fonts`, and never replaces a file that is already there. | Nothing. Your `~/.config/cmux/cmux.json`, your Ghostty config, and your fonts stay untouched. |
+| `--with-cmux-config` | `~/.config/cmux/cmux.json` (Mac only). It holds the palette, the sound overrides, the sidebar layout, the three ⌃⌥⌘ hotkeys, and the tab-bar buttons. With it come `~/.config/ghostty/config` and its two themes in `~/.config/ghostty/themes/`, each one a separate link. cmux renders its terminals with Ghostty and reads that config for the font, theme, and colors. The config names SF Mono, which macOS ships only inside Terminal.app. So `install.sh` copies each missing `SF-Mono-*.otf` file into `~/Library/Fonts`, and never replaces a file that is already there. When a symlink manages `~/.config/ghostty` or `~/.config/cmux`, for example from stow, `install.sh` links nothing into it and names the skip in its summary. | Nothing. Your `~/.config/cmux/cmux.json`, your Ghostty config, and your fonts stay untouched. |
 
 The full `~/.tmux.conf` from `--with-tmux-conf` tunes tmux with true color, a 10 ms `escape-time`,
 Shift+Enter, and focus events. It also makes the mouse wheel scroll instead of typing arrow keys.
@@ -596,11 +596,14 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
    someone else's repos, yours to delete or keep.
 5. If you do not want the three machine-local copies, delete them: `~/.claude/settings.json`,
    `~/.codex/config.toml`, and `~/.codex/hooks.json`.
-6. Copy your originals back out of the newest `~/.workgrove-backup/<timestamp>-<pid>/`, which mirrors `$HOME`.
+6. On a Mac with `--with-cmux-config`, decide whether to keep SF Mono. `install.sh` copied the
+   `SF-Mono-*.otf` files that were missing into `~/Library/Fonts`. They are copies, not links, so they stay
+   until you delete them.
+7. Copy your originals back out of the newest `~/.workgrove-backup/<timestamp>-<pid>/`, which mirrors `$HOME`.
    If you had your own `wt`, `agent-notify`, `cmux-hook`, or `azml-ssh-host` in `~/bin`, it is also there.
    `install.sh` retires those, because `~/bin` comes before `~/.local/bin` on `PATH`, and a copy there would
    shadow the link.
-7. Undo by hand the edits that `install.sh` made in place instead of replacing a file. They are not in the
+8. Undo by hand the edits that `install.sh` made in place instead of replacing a file. They are not in the
    backup:
    - On a VM: the lines it appended to `~/.zshenv.local`, and the `~/.zshenv` line at the top of `~/.bashrc`.
    - Without `--with-gitconfig` (for example, on a default run): the `core.excludesFile` and

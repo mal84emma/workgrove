@@ -301,9 +301,10 @@ zshenv_paths() {
 # stdin is /dev/null, so ask_vm_host can never block on a read.
 # RUN_EXTRA_ENV adds `env` arguments (an assignment, or a -u) for ONE call, and run_install empties it
 # again. So a scenario that sets it and forgets to clear it cannot leak a ZSH_CUSTOM or a FORCE_OS into the
-# next one. SF_MONO_SRC points install_sf_mono at SF_MONO_FIXTURE, so no run copies the real fonts. A
-# RUN_EXTRA_ENV assignment comes later on the env line, so it overrides that default. This suite must run clean under bash 3.2, and in 3.2 an empty array under `set -u` is an error.
+# next one. This suite must run clean under bash 3.2, and in 3.2 an empty array under `set -u` is an error.
 # So run_install spells these array expansions ${a[@]+"${a[@]}"} throughout.
+# SF_MONO_SRC points install_sf_mono at SF_MONO_FIXTURE, so no run copies the real fonts. A RUN_EXTRA_ENV
+# assignment comes later on the env line, so it overrides that default.
 RUN_EXTRA_ENV=()
 run_install() {
   local h="$1" log="$2" rc=0 extra
@@ -1419,6 +1420,7 @@ scenario_cmux_config() {
 
 # The Ghostty config arrives with cmux.json as three separate links, and brings a copy of SF Mono. The run
 # stashes a regular config file, leaves a .bak file beside it, and never replaces a font file that is there.
+# It retires a Ghostty link whose source is gone, and it leaves a folder that a dotfile manager links alone.
 scenario_ghostty_config() {
   local h log f bk
   begin_scenario "17l. the Ghostty config links file by file, and SF Mono is copied only when missing" || return 0
@@ -1448,6 +1450,8 @@ scenario_ghostty_config() {
   printf '# STRANGER GHOSTTY\n' >"$h/.config/ghostty/config"
   printf '# OLD GHOSTTY\n' >"$h/.config/ghostty/config.20260101-000000.bak"
   printf 'the user font\n' >"$h/Library/Fonts/${SF_MONO_FONTS[0]}"
+  mkdir -p "$h/.config/ghostty/themes"
+  ln -s "$REPO/home/.config/ghostty/themes/retired-theme" "$h/.config/ghostty/themes/retired-theme"
   if assert_install_ok "$h" "$log" "$CMUX_FLAG"; then
     for f in "${GHOSTTY_FILES[@]}"; do
       assert_link "$h" ".config/ghostty/$f" "home/.config/ghostty/$f"
@@ -1462,7 +1466,8 @@ scenario_ghostty_config() {
     assert_same_bytes "~/Library/Fonts/${SF_MONO_FONTS[1]} is the SF Mono file" \
       "$h/Library/Fonts/${SF_MONO_FONTS[1]}" "$SF_MONO_FIXTURE/${SF_MONO_FONTS[1]}"
     assert_absent "$h" Library/Fonts/SFMono-Terminal.ttf
-    assert_grep "install.sh counted the copied font" "$log" 'copied 1 SF Mono font files into ~/Library/Fonts'
+    assert_grep "install.sh counted the copied font" "$log" 'copied SF Mono into ~/Library/Fonts (1 files)'
+    assert_absent "$h" .config/ghostty/themes/retired-theme
     if assert_install_ok "$h" "$log.2"; then
       for f in "${GHOSTTY_FILES[@]}"; do
         assert_link "$h" ".config/ghostty/$f" "home/.config/ghostty/$f"
@@ -1479,6 +1484,22 @@ scenario_ghostty_config() {
     assert_link "$h" .config/ghostty/config home/.config/ghostty/config
     assert_absent "$h" Library/Fonts
     assert_grep "the summary names the missing font" "$log" 'SF Mono was not found in'
+  fi
+  h="$(new_home)"
+  guard_scratch_home "$h"
+  log="$h.log"
+  mkdir -p "$h/.config" "$h/dotfiles/ghostty"
+  printf '# MANAGED GHOSTTY\n' >"$h/dotfiles/ghostty/config"
+  ln -s "$h/dotfiles/ghostty" "$h/.config/ghostty"
+  if assert_install_ok "$h" "$log" "$CMUX_FLAG"; then
+    assert_link "$h" "$CMUX_DST" "$CMUX_SRC"
+    assert_eq "the ~/.config/ghostty link is still the manager's" \
+      "$h/dotfiles/ghostty" "$(readlink "$h/.config/ghostty")"
+    assert_regular "$h" dotfiles/ghostty/config
+    assert_grep "the managed Ghostty config is unchanged" "$h/dotfiles/ghostty/config" "# MANAGED GHOSTTY"
+    assert_absent "$h" dotfiles/ghostty/themes
+    # shellcheck disable=SC2088   # the ~ is the text the summary prints, not a path to expand
+    assert_grep "the summary names the managed folder" "$log" '~/.config/ghostty is managed by a symlink'
   fi
   end_scenario
 }

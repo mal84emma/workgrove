@@ -294,10 +294,25 @@ stash() {
 }
 
 # link <repo-relative src> <home-relative dst>: point ~/dst at <repo>/src, and stash what was there.
+# Dotfile managers such as stow often link a whole ~/.config/<app> folder into the user's own repo. A link
+# under such a folder would move the user's file out of their repo and write this repo's link into it. So
+# link() skips a ~/.config destination when any folder above it is a symlink, and names the skip.
 link() {
-  local src="$R/$1" dst="$HOME/$2"
+  local src="$R/$1" dst="$HOME/$2" d
   if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
     return 0                         # already correct: say nothing, change nothing
+  fi
+  if [[ $2 == .config/* ]]; then
+    d="$(dirname "$dst")"
+    while [[ $d != "$HOME" ]]; do
+      if [[ -L $d ]]; then
+        # shellcheck disable=SC2088  # The summary prints a home-relative path.
+        SUMMARY_SKIPS+=("~/${d#"$HOME"/} is managed by a symlink, so ~/$2 was not linked")
+        echo "skipped ~/$2: ~/${d#"$HOME"/} is a symlink, so another tool manages it" >&2
+        return 0
+      fi
+      d="$(dirname "$d")"
+    done
   fi
   mkdir -p "$(dirname "$dst")"
   stash "$dst"
@@ -583,13 +598,13 @@ install_sf_mono() {
     SUMMARY_SKIPS+=("SF Mono was not found in $SF_MONO_SRC; Ghostty uses its default font")
     echo "skipped SF Mono: no SF-Mono-*.otf in $SF_MONO_SRC, so Ghostty uses its default font" >&2
   elif [[ $copied -gt 0 ]]; then
-    echo "copied $copied SF Mono font files into ~/Library/Fonts"
+    echo "copied SF Mono into ~/Library/Fonts ($copied files)"
   fi
 }
 
 # retired_src <home-relative dst>: print the repo-relative path that the linking steps above point that
 # destination at. our_link's tail test needs this path to recognize a link made before this clone moved.
-# Five of the eight directories mirror the repo's own layout, so for them the source is home/<dst>. This
+# Seven of the ten directories mirror the repo's own layout, so for them the source is home/<dst>. This
 # function used to infer that source for all of them. So once the clone had moved, the three exceptions below
 # could never be retired: their source is not their destination, so the tail never matched. A renamed skill or
 # script then outlived its rename on exactly the machines that this function exists for.
