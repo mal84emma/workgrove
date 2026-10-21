@@ -149,7 +149,7 @@ doctor_hooks() {
     rc=0
     fix="vi $(shell_join "$file") # correct hook paths; put dynamic shell code in an executable helper file"
     commands=$(jq -ec '[.hooks | objects | .. | objects | select(.type? == "command") | .command
-      | if type == "string" and length > 0 and (contains("\u0000") | not) then . else error("invalid hook command") end]
+      | if type == "string" and length > 0 and (explode | index(0) == null) then . else error("invalid hook command") end]
       | if length > 0 then . else error("no command hooks") end' "$file" 2>/dev/null) || rc=1
     doctor_result "$rc" "hook configuration $file" "$fix"
     [[ $rc == 0 ]] || continue

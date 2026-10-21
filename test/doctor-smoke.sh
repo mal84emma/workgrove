@@ -91,6 +91,13 @@ scenario_shapes_and_hooks() {
   assert_eq 'an unresolved substitution fails' 1 "$STATUS"
   assert_absent "$TEST_ROOT" executed
   mv "$TEST_ROOT/settings.json" "$HOME/.claude/settings.json"
+  cp "$HOME/.claude/settings.json" "$TEST_ROOT/settings.json"
+  jq '.hooks.Stop[0].hooks[0].command = "bad\u0000command"' \
+    "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
+  invoke doctor
+  assert_eq 'NUL bytes fail configuration validation' 1 "$STATUS"
+  assert_grep 'a NUL byte names the invalid configuration' "$TEST_ROOT/output" 'FAIL hook configuration'
+  mv "$TEST_ROOT/settings.json" "$HOME/.claude/settings.json"
   local command
   cp "$HOME/.claude/settings.json" "$TEST_ROOT/settings.json"
   # shellcheck disable=SC2016  # The probe reads these shell expressions without executing them.
@@ -159,9 +166,13 @@ scenario_record() {
     assert_regular "$dir" "$file.json"
     if jq -e . "$dir/$file.json" >/dev/null; then pass; else fail "$file is invalid JSON"; fi
   done
-  if rg 'secretvm|secretuser|private-title|private-window|/Users/|/home/|secret-repo' "$dir"; then
-    fail 'recorded fixtures contain private text'
-  else pass; fi
+  local search_status=0
+  grep -RE 'secretvm|secretuser|private-title|private-window|/Users/|/home/|secret-repo' "$dir" >"$TEST_ROOT/private-text" 2>&1 || search_status=$?
+  case $search_status in
+    0) fail 'recorded fixtures contain private text' ;;
+    1) pass ;;
+    *) fail "privacy search failed with status $search_status" ;;
+  esac
   assert_grep 'records are marked as redacted' "$dir/REDACTED.txt" Redacted
   assert_eq 'event identity still matches its notification' \
     "$(jq -r '.[0].id' "$dir/notifications.json")" "$(jq -r '.payload.notification_id' "$dir/event.json")"
