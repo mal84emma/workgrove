@@ -76,7 +76,9 @@ Keep relay sockets and native terminal identities on runtime storage.
 ## Verification status
 
 Offline tests cover generic SSH registration, explicit restoration, allocation limits, and task recovery with synthetic fixtures.
-The following live results come from one active Pod on 2026-10-21, using workgrove revision `265acbd`.
+The following live results come from one active Pod on 2026-10-21.
+The remote installation reached workgrove revision `265acbd` through the tested update procedure.
+Replacement row checks also used shared adapter revision `02e1564` on the Mac.
 Paths, host aliases, identities, and private operational captures are omitted.
 
 | Check | Result |
@@ -90,7 +92,7 @@ Paths, host aliases, identities, and private operational captures are omitted.
 | Native rows and reconnection | Both rows connected. Their original tmux sessions survived a Wi-Fi interruption. |
 | Codex task | Produced the exact requested file and passed its Python assertion using individual command approvals. |
 | Reattachment and status | The same Codex process survived row closure and plain attach. Its response, Idle status, and completion notification reached the replacement row. |
-| Replacement row title | One replacement showed an unexpected title. Separate native SSH and tmux replacement checks did not reproduce it; its cause remains unverified. |
+| Replacement row title | Focused creation reproduced an unexpected generated title. The shared adapter fix preserved the task title by creating unfocused before explicit selection. |
 | Editor requests | Mac-side open and VM-side relay opened the correct connected VS Code windows. |
 | Scoped removal | Removed a separate clean task's worktree, branch, and sidecar while preserving both original tasks and sessions. |
 | Claude task completion | Pending because the account reached its usage limit. Authentication, fullscreen startup, and Needs input status passed. |
