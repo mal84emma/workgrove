@@ -59,17 +59,6 @@ doctor_simple_hook() {
   local word path
   while (($#)); do
     case $1 in
-      env)
-        shift
-        while (($#)); do
-          case $1 in
-            -u|--unset) (($# >= 2)) || return 1; shift 2 ;;
-            -i|--ignore-environment|--) shift ;;
-            --unset=*) shift ;;
-            -*) return 2 ;;
-            *) break ;;
-          esac
-        done ;;
       exec|command) shift ;;
       *)
         if [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then shift
@@ -82,6 +71,17 @@ doctor_simple_hook() {
   if [[ $path != */* ]]; then path=$(type -P -- "$path") || return 1; fi
   [[ -f $path && -x $path ]] || return 1
   case ${path##*/} in
+    env)
+      while (($#)); do
+        case $1 in
+          -u|--unset) (($# >= 2)) || return 1; shift 2 ;;
+          -i|--ignore-environment|--) shift ;;
+          --unset=*) shift ;;
+          -*) return 2 ;;
+          *) break ;;
+        esac
+      done
+      doctor_simple_hook "$@" ;;
     sh|bash|zsh)
       while (($#)); do
         word=$1; shift

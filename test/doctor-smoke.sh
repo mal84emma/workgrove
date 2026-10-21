@@ -95,6 +95,7 @@ scenario_shapes_and_hooks() {
   cp "$HOME/.claude/settings.json" "$TEST_ROOT/settings.json"
   # shellcheck disable=SC2016  # The probe reads these shell expressions without executing them.
   for command in 'env SOURCE=Claude ~/.local/bin/cmux-hook' \
+      '/usr/bin/env SOURCE=Claude ~/.local/bin/cmux-hook' \
       'bash -c "~/.local/bin/cmux-hook"' \
       'sh "$HOME/.local/bin/a hook"' \
       'env -u OLD ~/.local/bin/cmux-hook' \
@@ -107,7 +108,7 @@ scenario_shapes_and_hooks() {
     invoke doctor
     assert_eq "a valid hook resolves: $command" 0 "$STATUS"
   done
-  for command in 'true && /missing/hook' 'printf data | /missing/hook' \
+  for command in '/usr/bin/env /missing/hook' '/missing/env true' 'true && /missing/hook' 'printf data | /missing/hook' \
       $'true\n/missing/hook' 'bash -c "true && /missing/hook"'; do
     jq --arg command "$command" '.hooks.Stop[0].hooks[0].command=$command' \
       "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
