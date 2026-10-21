@@ -9,11 +9,12 @@ def public_keys: [
   "rate_limit","interval_seconds","maximum","methods","access_mode","redacted_fields",
   "body_length","title_length","subtitle_length","delivery","replaced_notification_ids"
 ];
-def public_values: [
-  "cmux-tui","connected","disconnected","suspended","connecting","local","event",
-  "notification.created","wt-native-relay","run","store","title","subtitle","body",
-  "~/.local/bin/cmux-hook --event"
-];
+def public_value($key; $value):
+  {backend:["cmux-tui"], state:["connected","disconnected","suspended","connecting"],
+   type:["event"], name:["notification.created"], event:["notification.created"],
+   id:["wt-native-relay"], rule_id:["wt-native-relay"], action:["run"], delivery:["store"],
+   redacted_fields:["title","subtitle","body"], command:["~/.local/bin/cmux-hook --event"]}
+  | (.[$key] // []) | index($value) != null;
 def methods: ["workspace.list","workspace.create","workspace.action","workspace.close","workspace.select",
   "workspace.remote.reconnect","notification.list","notification.dismiss","system.top","surface.read_text"];
 . as $input
@@ -32,14 +33,14 @@ def methods: ["workspace.list","workspace.create","workspace.action","workspace.
     elif type == "array" then map(scrub($key))
     elif type == "string" then
       . as $value
-      | if ($ids | index($value)) != null then
-          identity($value)
-        elif (public_values | index($value)) != null then .
-        elif $key == "methods" and (methods | index($value)) != null then .
-        elif $key == "destination" then "<test-vm>"
+      | if $key == "destination" then "<test-vm>"
         elif $key == "description" then "@<test-vm> · <repo>"
         elif $key == "title" then "<title>"
+        elif $key == "body" or $key == "subtitle" then "<redacted>"
         elif $key == "current_directory" then "<path>"
+        elif ($ids | index($value)) != null then identity($value)
+        elif public_value($key; $value) then .
+        elif $key == "methods" and (methods | index($value)) != null then .
         else "<redacted>" end
     else . end;
 $input | scrub("")

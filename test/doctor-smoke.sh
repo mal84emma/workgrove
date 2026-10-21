@@ -162,6 +162,11 @@ scenario_record() {
   invoke doctor --record "$TEST_ROOT/recorded"
   assert_eq 'record succeeds' 0 "$STATUS"
   local dir="$TEST_ROOT/recorded/cmux-0.65.1" file
+  printf '%s\n' '{"title":"run","body":"local","subtitle":"notification.created","description":"cmux-tui","current_directory":"run","remote":{"destination":"connected","state":"connected","backend":"cmux-tui"}}' \
+    | jq -cf "$REPO/lib/workgrove/doctor-sanitize.jq" >"$TEST_ROOT/enum-collisions.json"
+  assert_eq 'free text cannot bypass redaction by matching an enum' \
+    '{"title":"<title>","body":"<redacted>","subtitle":"<redacted>","description":"@<test-vm> · <repo>","current_directory":"<path>","remote":{"destination":"<test-vm>","state":"connected","backend":"cmux-tui"}}' \
+    "$(cat "$TEST_ROOT/enum-collisions.json")"
   for file in rows windows top notifications automation capabilities event rows_by_window; do
     assert_regular "$dir" "$file.json"
     if jq -e . "$dir/$file.json" >/dev/null; then pass; else fail "$file is invalid JSON"; fi
