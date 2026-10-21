@@ -19,6 +19,7 @@ VS Code opens only when you ask for it, through `wt open`.
 This section describes how `wt` names and finds rows, where it keeps task data, and which repos it uses.
 It also covers per-repo hooks and the logins that you supply.
 The [cmux integration contract](docs/cmux-integration.md) lists the commands, fields, environment variables, and measured behavior.
+The [Mac–VM protocol](docs/vm-protocol.md) defines remote commands, result records, relay requests, and the tmux environment.
 
 - **Identity.** Each row that a task owns has the task name `<name>` as its title.
   Each kind of row has its own title:
@@ -210,6 +211,7 @@ workgrove/
     ├── new-vm.md              set up an Ubuntu VM
     ├── azml-compute.md        Azure ML compute instances over ssh
     ├── cmux-integration.md     cmux commands, fields, environment, and compatibility log
+    ├── vm-protocol.md          Mac–VM commands, records, requests, and tmux environment
     ├── cmux-checklist.md       checks after a cmux update
     ├── vm-open-relay.md        native VM requests after cmux 0.65
     ├── vm-agent-status.md     agent status in VM rows after cmux 0.65

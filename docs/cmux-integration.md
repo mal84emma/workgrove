@@ -2,6 +2,7 @@
 
 This page lists the cmux interfaces that workgrove uses and the behaviors that its implementation depends on.
 A row is a cmux workspace, shown as one entry in the sidebar.
+The [Mac–VM protocol](vm-protocol.md) defines task results, relay requests, and the tmux environment.
 Use the [cmux update checklist](cmux-checklist.md) to verify a release.
 
 ## What the probe checks
@@ -171,6 +172,9 @@ Adapter state such as `CMUX_ROWS_JSON` and `CMUX_RUN` is internal shell state, n
 | `WT_CLOSE_WAIT_SECONDS` | `bin/wt`: `cmd_rm`. | Relay teardown waits 22 seconds by default. Invalid values use the default. |
 | `WG_POLL_INTERVAL` | `common.sh`: `wg_sleep`. | Tests can replace the normal one-second lookup and recovery waits. |
 | `CMUX_CUSTOM_CODEX_PATH`, `CMUX_CUSTOM_CLAUDE_PATH`, `HOME` | [home/.zshenv](../home/.zshenv): top-level Darwin block. | Unset or empty overrides receive executable agent paths from `~/.local/bin`, which prevents wrapper recursion. |
+
+The [tmux environment contract](vm-protocol.md#the-tmux-session-environment) records the exact empty and removed-value rules.
+The [VM protocol](vm-protocol.md#result-records-and-versions) defines `WT_MACHINE` and result versions.
 
 ## Recorded behavior and limits
 
