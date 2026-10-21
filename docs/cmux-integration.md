@@ -55,6 +55,7 @@ Angle brackets mark values supplied by the caller.
 | `cmux send --workspace <id> <text>` | `send_tmux_line` sends the tmux attachment command. |
 | `cmux send-key --workspace <id> enter` | `send_tmux_line` submits that command. |
 | `cmux diff --branch --repo <path> --base <ref> --layout split --title <title> --focus true` | `cmd_show` in `bin/wt` opens the diff through `cmux_diff`. |
+| `cmux diff --branch --layout split --focus true` | [cmux.json](../home/.config/cmux/cmux.json): `.actions["wt-diff"].command` opens the configured Diff action. cmux selects the repository and base. |
 | `cmux --json list-notifications` | `cmux_notifications` supplies records to the Mac hook and `doctor_mac`. |
 | `cmux dismiss-notification --id <uuid>` | `cmux_dismiss` removes a successfully handled open or attach request. |
 | `cmux version` | `doctor_mac` in `doctor.sh` parses the version. |
@@ -204,9 +205,14 @@ The [relay investigation](vm-open-relay.md#fix) records additional upstream limi
 The automation default admits one event per second; the repository rule uses a 0.001-second interval and maximum 1024.
 In cmux 0.65.1, [AutomationEngine.swift](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/AutomationEngine.swift) enforces the default in `admit`.
 Its `receive` function permits 32 concurrent automation firings and drops excess requests with `skipped_backpressure`.
+
 The [native notification gate](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Packages/macOS/CmuxCloud/Sources/CmuxCloud/Notifications/CloudMachineNotificationGate.swift) initially permits five notifications per machine and replenishes one per second.
 Its `Configuration`, `TokenBucket.refill`, and `admit` implement these limits and the five-second content window.
-`deliver` in [CloudNotificationLocalDelivery.swift](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/Cloud/CloudNotificationLocalDelivery.swift) leaves rate-limited requests pending for later updates.
+`Configuration` also permits a burst of 30 notifications across all machines and replenishes one notification every 0.1 seconds.
+`admit` requires available capacity under both limits.
+`deliver` in [CloudNotificationLocalDelivery.swift](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/Cloud/CloudNotificationLocalDelivery.swift) leaves requests pending when either rate limit prevents delivery.
+Later updates retry those requests.
+
 `doctor_mac` checks the configured rule, not these upstream runtime limits.
 
 ## cmux compatibility log
