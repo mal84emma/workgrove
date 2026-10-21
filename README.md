@@ -18,6 +18,7 @@ VS Code opens only when you ask for it, through `wt open`.
 
 This section describes how `wt` names and finds rows, where it keeps task data, and which repos it uses.
 It also covers per-repo hooks and the logins that you supply.
+The [cmux integration contract](docs/cmux-integration.md) lists the commands, fields, environment variables, and measured behavior.
 
 - **Identity.** Each row that a task owns has the task name `<name>` as its title.
   Each kind of row has its own title:
@@ -208,6 +209,7 @@ workgrove/
     ├── new-mac.md             set up a Mac
     ├── new-vm.md              set up an Ubuntu VM
     ├── azml-compute.md        Azure ML compute instances over ssh
+    ├── cmux-integration.md     cmux commands, fields, environment, and compatibility log
     ├── cmux-checklist.md       checks after a cmux update
     ├── vm-open-relay.md        native VM requests after cmux 0.65
     ├── vm-agent-status.md     agent status in VM rows after cmux 0.65
@@ -241,7 +243,7 @@ It also describes what a run changes, the repo's test suites, and how to remove 
 - **tmux:** the VMs have tmux 3.2a, and `home/.tmux.conf` is written for that version.
 - **cmux:** workgrove supports 0.65.1 (build 110). Version 0.65.2 is unverified.
   Support moves to a newer release after verification, rather than automatically when that release appears.
-  See the [cmux compatibility log](#cmux-compatibility-log) for verified behavior and remaining checks.
+  See the [cmux compatibility log](docs/cmux-integration.md#cmux-compatibility-log) for verified behavior and remaining checks.
   `home/.config/cmux/cmux.json` is `schemaVersion: 1`.
 - **Other tools:** on a Mac, `Brewfile` installs `gh`, `fzf`, cmux itself, Claude Code, and Codex. On a VM,
   [docs/new-vm.md](docs/new-vm.md) installs them.
@@ -1037,27 +1039,7 @@ It also tells how to enable VM status on an existing VM.
 
 ### cmux compatibility log
 
-This log records cmux versions verified with workgrove. It does not establish support for untested versions.
-Run `cmux version` to check your installed version.
-Run `wt doctor` after an update, then follow the [cmux update checklist](docs/cmux-checklist.md).
-`WG_CMUX_SUPPORTED` in `lib/workgrove/cmux.sh` selects the single verified version for the probe.
-
-workgrove supports cmux 0.65.1 until a newer release passes verification. Version 0.65.2 is unverified.
-The log has one supported version at a time. Older rows record historical verification.
-Support does not include the removed cmux 0.64 TCP relay paths.
-
-| cmux version | Status | Verified on | Verified behavior |
-|---|---|---|---|
-| 0.65.1 (build 110, `8a853dcc9`) | Supported; native VM and cross-window checks passed | 2026-10-16 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. |
-| 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
-
-[PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to cmux 0.65.0's row-closing behavior.
-Local self-removal uses cmux's `--force` only for the verified caller's own row.
-Native VM rows exit with their task's tmux session.
-The earlier `0.64 or newer` requirement did not guarantee compatibility with these changes.
-
-For each supported version, record the exact build, verified behavior, and remaining checks.
-[VM verification on cmux 0.65.1](docs/vm-open-relay.md#verification-on-cmux-0651) records the current live checks.
+See the [cmux compatibility log](docs/cmux-integration.md#cmux-compatibility-log) for verified versions, flows, and remaining checks.
 
 ### SSH row creation
 
