@@ -15,87 +15,119 @@ doctor_json() {
   jq -e "$2" <<<"$1" >/dev/null 2>&1
 }
 
-# Split shell words without evaluating hook commands or command substitutions.
+# Accept static shell words and command separators without evaluating hook text.
+# Dynamic expansions require an executable helper file instead of an inline hook.
 doctor_words() {
-  local text=$1 char quote='' word='' active=0 escape=0 depth=0 i
-  DOCTOR_WORDS=()
-  for ((i=0; i<${#text}; i++)); do
-    char=${text:i:1}
-    if [[ $escape == 1 ]]; then word+=$char; active=1; escape=0; continue; fi
-    # Keep a command substitution inside its assignment word without running it.
-    if [[ ${text:i:2} == \$\( && $quote != "'" ]]; then
-      depth=$((depth + 1)); word+="\$("; active=1; i=$((i + 1)); continue
+  local rest=$1 word segment kind
+  local bare='^[A-Za-z0-9_./:=@%+,!-]+' single="^'([^']*)'" double='^"([^"\\]*)"' escaped='^\\(.)'
+  local blank='^[[:blank:]]+' operator=$'^(&&|\\|\\||[;|\n])'
+  DOCTOR_WORDS=() DOCTOR_KINDS=()
+  while [[ -n $rest ]]; do
+    if [[ $rest =~ $blank ]]; then rest=${rest:${#BASH_REMATCH[0]}}; continue; fi
+    if [[ $rest =~ $operator ]]; then
+      DOCTOR_WORDS+=("${BASH_REMATCH[0]}"); DOCTOR_KINDS+=(operator)
+      rest=${rest:${#BASH_REMATCH[0]}}; continue
     fi
-    if ((depth > 0)); then
-      word+=$char
-      case $char in '(') depth=$((depth + 1)) ;; ')') depth=$((depth - 1)) ;; esac
-      continue
-    fi
-    case $char in
-      \\) if [[ $quote != "'" ]]; then escape=1; else word+=$char; fi ;;
-      \"|\')
-        if [[ -z $quote ]]; then quote=$char
-        elif [[ $quote == "$char" ]]; then quote=''
-        else word+=$char; fi
-        active=1 ;;
-      ' '|$'\t'|$'\n'|';'|'&'|'|')
-        if [[ -n $quote ]]; then word+=$char
-        elif [[ $active == 1 ]]; then DOCTOR_WORDS+=("$word"); word=''; active=0; fi ;;
-      *) word+=$char; active=1 ;;
+    word='' kind=''
+    while [[ -n $rest ]]; do
+      if [[ $rest =~ $bare ]]; then
+        segment=${BASH_REMATCH[0]}; word+=$segment; rest=${rest:${#segment}}
+      elif [[ $rest =~ $single ]]; then
+        word+=${BASH_REMATCH[1]}; rest=${rest:${#BASH_REMATCH[0]}}
+      elif [[ $rest =~ $double ]]; then
+        segment=${BASH_REMATCH[1]}; rest=${rest:${#BASH_REMATCH[0]}}
+        segment=${segment//\$\{HOME\}/$HOME}; segment=${segment//\$HOME/$HOME}
+        [[ $segment != *'$'* && $segment != *'`'* ]] || return 2
+        word+=$segment
+      elif [[ $rest == \~/* && -z $kind ]]; then
+        word+=$HOME/; rest=${rest:2}
+      elif [[ $rest == "\${HOME}"* ]]; then word+=$HOME; rest=${rest:7}
+      elif [[ $rest =~ ^\$HOME([^A-Za-z0-9_]|$) ]]; then word+=$HOME; rest=${rest:5}
+      elif [[ $rest =~ $escaped ]]; then
+        word+=${BASH_REMATCH[1]}; rest=${rest:${#BASH_REMATCH[0]}}
+      else break; fi
+      kind=word
+    done
+    [[ $kind == word ]] || return 2
+    DOCTOR_WORDS+=("$word"); DOCTOR_KINDS+=(word)
+  done
+}
+
+doctor_simple_hook() {
+  local word path
+  while (($#)); do
+    case $1 in
+      env)
+        shift
+        while (($#)); do
+          case $1 in
+            -u|--unset) (($# >= 2)) || return 1; shift 2 ;;
+            -i|--ignore-environment|--) shift ;;
+            --unset=*) shift ;;
+            -*) return 2 ;;
+            *) break ;;
+          esac
+        done ;;
+      exec|command) shift ;;
+      *)
+        if [[ $1 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then shift
+        else break; fi ;;
     esac
   done
-  [[ -z $quote && $escape == 0 && $depth == 0 ]] || return 1
-  [[ $active == 0 ]] || DOCTOR_WORDS+=("$word")
+  (($#)) || return 2
+  path=$1; shift
+  case $path in if|then|else|fi|for|while|do|done|case|"esac"|function|source|.) return 2 ;; esac
+  if [[ $path != */* ]]; then path=$(type -P -- "$path") || return 1; fi
+  [[ -f $path && -x $path ]] || return 1
+  case ${path##*/} in
+    sh|bash|zsh)
+      while (($#)); do
+        word=$1; shift
+        case $word in
+          --) break ;;
+          -c) (($#)) && doctor_hook_path "$1"; return ;;
+          --norc|--noprofile|--posix) ;;
+          -o|+o) (($#)) || return 1; shift ;;
+          --rcfile|--init-file) (($#)) && [[ -f $1 ]] || return 1; shift ;;
+          -*)
+            [[ $word =~ ^-[A-Za-z]+$ ]] || return 2
+            if [[ $word == *c* ]]; then (($#)) && doctor_hook_path "$1"; return; fi ;;
+          *) set -- "$word" "$@"; break ;;
+        esac
+      done
+      (($#)) && [[ -f $1 && -r $1 ]] || return 1 ;;
+  esac
 }
 
 doctor_hook_path() {
-  local command=$1 word path index=0
-  local -a DOCTOR_WORDS=()
-  doctor_words "$command" || return 1
+  local command=$1 i rc=0
+  local -a DOCTOR_WORDS=() DOCTOR_KINDS=() words=()
   bash -n <<<"$command" 2>/dev/null || return 1
-  for word in "${DOCTOR_WORDS[@]}"; do
-    index=$((index + 1))
-    [[ $word != env && ! $word =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
-    path=${word/#\~\//$HOME/}
-    path=${path//\$\{HOME\}/$HOME}
-    path=${path//\$HOME/$HOME}
-    if [[ $path != */* ]]; then path=$(type -P -- "$path") || return 1; fi
-    [[ -f $path && -x $path ]] || return 1
-    # Check a script argument as well when a shell starts the hook.
-    case ${path##*/} in
-      sh|bash|zsh)
-        word=${DOCTOR_WORDS[index]:-}
-        if [[ $word == -*c* ]]; then
-          word=${DOCTOR_WORDS[index+1]:-}
-          [[ -n $word ]] && doctor_hook_path "$word"
-          return
-        fi
-        while [[ $word == -* ]]; do index=$((index + 1)); word=${DOCTOR_WORDS[index]:-}; done
-        [[ -n $word ]] || return 1
-        path=${word/#\~\//$HOME/}
-        path=${path//\$\{HOME\}/$HOME}
-        path=${path//\$HOME/$HOME}
-        [[ -f $path ]] || return 1 ;;
-    esac
-    return 0
+  doctor_words "$command" || return $?
+  for ((i=0; i<${#DOCTOR_WORDS[@]}; i++)); do
+    if [[ ${DOCTOR_KINDS[i]} == operator ]]; then
+      if ((${#words[@]})); then doctor_simple_hook "${words[@]}" || return $?; words=(); fi
+    else words+=("${DOCTOR_WORDS[i]}"); fi
   done
-  return 1
+  if ((${#words[@]})); then doctor_simple_hook "${words[@]}" || rc=$?; fi
+  return "$rc"
 }
 
 doctor_hooks() {
   local file commands command rc fix
-  fix='wt update --refresh-config && cmux hooks codex install --yes'
   for file in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"; do
     rc=0
-    commands=$(jq -er '[.hooks | objects | .. | objects | select(.type? == "command") | .command
-      | if type == "string" and length > 0 then . else error("invalid hook command") end]
-      | if length > 0 then .[] else error("no command hooks") end' "$file" 2>/dev/null) || rc=1
+    fix="vi $(shell_join "$file") # correct hook paths; put dynamic shell code in an executable helper file"
+    commands=$(jq -ec '[.hooks | objects | .. | objects | select(.type? == "command") | .command
+      | if type == "string" and length > 0 and (contains("\u0000") | not) then . else error("invalid hook command") end]
+      | if length > 0 then . else error("no command hooks") end' "$file" 2>/dev/null) || rc=1
     doctor_result "$rc" "hook configuration $file" "$fix"
     [[ $rc == 0 ]] || continue
-    while IFS= read -r command; do
-      rc=0; doctor_hook_path "$command" || rc=1
-      doctor_result "$rc" "hook command $command" "$fix"
-    done <<<"$commands"
+    while IFS= read -r -d '' command; do
+      rc=0; doctor_hook_path "$command" || rc=$?
+      if [[ $rc == 2 ]]; then doctor_result 1 "hook command needs a static helper: $command" "$fix" WARN
+      else doctor_result "$rc" "hook command $command" "$fix"; fi
+    done < <(jq -j '.[] | ., "\u0000"' <<<"$commands")
   done
 }
 

@@ -92,12 +92,31 @@ scenario_shapes_and_hooks() {
   for command in 'env SOURCE=Claude ~/.local/bin/cmux-hook' \
       'bash -c "~/.local/bin/cmux-hook"' \
       'sh "$HOME/.local/bin/a hook"' \
-      'd="${TMPDIR:-/tmp}/starts"; s=$(printf data); [ -n "$s" ] && true'; do
+      'env -u OLD ~/.local/bin/cmux-hook' \
+      'bash --norc -e -c "~/.local/bin/cmux-hook"' \
+      'true && ~/.local/bin/cmux-hook' \
+      'printf data | ~/.local/bin/cmux-hook' \
+      $'true\n~/.local/bin/cmux-hook'; do
     jq --arg command "$command" '.hooks.Stop[0].hooks[0].command=$command' \
       "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
     invoke doctor
     assert_eq "a valid hook resolves: $command" 0 "$STATUS"
   done
+  for command in 'true && /missing/hook' 'printf data | /missing/hook' \
+      $'true\n/missing/hook' 'bash -c "true && /missing/hook"'; do
+    jq --arg command "$command" '.hooks.Stop[0].hooks[0].command=$command' \
+      "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
+    invoke doctor
+    assert_eq "a missing later hook fails: $command" 1 "$STATUS"
+    assert_grep 'a missing later helper is reported' "$TEST_ROOT/output" 'FAIL hook command'
+  done
+  # shellcheck disable=SC2016  # Dynamic shell code must receive a warning without running.
+  jq --arg command 'd=$(touch "$HOME/executed"); true' '.hooks.Stop[0].hooks[0].command=$command' \
+    "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
+  invoke doctor
+  assert_eq 'dynamic shell code cannot pass static validation' 1 "$STATUS"
+  assert_grep 'dynamic shell code has an explicit warning' "$TEST_ROOT/output" 'WARN hook command needs a static helper'
+  assert_absent "$HOME" executed
   jq --arg command 'bash -c "/missing/hook"' '.hooks.Stop[0].hooks[0].command=$command' \
     "$TEST_ROOT/settings.json" >"$HOME/.claude/settings.json"
   invoke doctor

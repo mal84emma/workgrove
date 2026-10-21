@@ -37,6 +37,11 @@ The VM checks require a reachable VM and a task with a running agent.
 
 `wt doctor` returns zero when every check passes.
 It returns nonzero for failures and version warnings, while reporting the remaining checks.
+Hook checks support static commands, environment assignments, shell script arguments, and command separators.
+Dynamic expansions or unsupported shell syntax produce a warning instead of a passing result.
+Move such code into an executable helper file, then use its path as the hook command.
+The probe never executes hook commands.
+
 `--record` runs only on the Mac and requires a writable destination.
 Recording keeps JSON types and contract fields but replaces free text and identities with placeholders.
 The `REDACTED.txt` file marks the fixture folder as redacted.
