@@ -13,6 +13,7 @@ rm|remove|host_rm|Remove a task.|name;--force,-f:force:=1;--keep-branch:keep:=1;
 path||forward with -r|Print a task path.|name;-r,--repo:repo:a repo|
 open||host_open|Open a task in VS Code.|name;-r,--repo:repo:a repo|
 repos||host_repos|List or locate repositories.|name!repos;--porcelain:mode:=porcelain;--table:mode:=table|
+doctor||host_doctor|Check cmux and VM contracts.|!unknown;--record:record:a directory|!none|
 version||forward|Show commit and protocol.|!none|
 update||host_update|Update workgrove.|!unknown;--refresh-config,--opinionated-config,--with-*:pass_flag:=1|
 help|-h,--help|forward|Show usage.|!unknown|

@@ -49,6 +49,7 @@
 #                                                             the task picker: choose where, kind, repo, name and brief,
 #                                                             then start the task (on the Mac; needs fzf)
 #   wt driver                                                 open (or select) the driver row (@local)
+#   wt doctor [--record DIR]                                 check cmux contracts; save redacted fixtures below DIR
 #   wt version                                              print the repository commit and protocol number as JSON
 #   wt update [--refresh-config]                              show what git pull would bring in. After you confirm,
 #                                                             wt pulls this repo and re-runs install.sh
@@ -176,6 +177,9 @@ if ! source "$WG_LIB_DIR/picker.sh" 2>/dev/null; then
   printf 'wt: cannot load %s/picker.sh; reinstall workgrove or check the link to bin/wt\n' "$WG_LIB_DIR" >&2
   exit 1
 fi
+
+# shellcheck source=lib/workgrove/doctor.sh
+source "$WG_LIB_DIR/doctor.sh"
 
 usage() { wt_usage; }
 

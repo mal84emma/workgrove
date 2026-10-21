@@ -8,6 +8,8 @@
 # Callers read the exported diagnostics and creation state.
 # shellcheck disable=SC2034
 CMUX_ERROR="" CMUX_ROW_EXISTING="" CMUX_ROW_ID=""
+# Only one cmux release is verified at a time.
+WG_CMUX_SUPPORTED=0.65.1
 CMUX_RUN=()
 
 cmux_error() { CMUX_ERROR=$*; return 1; }
