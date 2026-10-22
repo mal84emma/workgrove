@@ -674,14 +674,15 @@ def prepare_git(root, identity, previous):
 
 
 def display_path(path, root, profile=None):
-    for base, prefix in ((root, ""), (Path.home(), "~/")):
-        if path == base or base in path.parents:
-            return prefix + str(path.relative_to(base))
     if profile:
         for agent, value in profile["agent_roots"].items():
             base = Path(value)
-            if path == base or base in path.parents:
+            defaults = {root / ".config" / agent, Path.home() / ("." + agent)}
+            if base not in defaults and (path == base or base in path.parents):
                 return "<" + agent + "-root>/" + str(path.relative_to(base))
+    for base, prefix in ((root, ""), (Path.home(), "~/")):
+        if path == base or base in path.parents:
+            return prefix + str(path.relative_to(base))
     return "<configuration>"
 
 
@@ -1078,11 +1079,11 @@ def install(args):
             finally:
                 if temporary.exists():
                     shutil.rmtree(temporary)
-            backup(old, root)
+            backup(old, root, display_path(old, root, profile))
         if global_contents is not None:
             write(global_target, global_contents)
             for old in global_originals:
-                backup(old, root)
+                backup(old, root, display_path(old, root, profile))
         global_path = root / ".config/workgrove/git/global"
         if canonical(personal) != canonical(global_path):
             write(global_path, '[include]\n    path = ' + git_quote(personal) + '\n')

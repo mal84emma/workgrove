@@ -936,6 +936,25 @@ sys.exit(module["main"]())
         self.assertEqual(result.stderr, "workgrove: restore-link-conflict: ~/.claude/skills/" + path.name + "\n")
         self.assertEqual(path.read_text(), "personal skill")
 
+    def check_custom_agent_root_diagnostics(self, base):
+        selected = base / CANARY
+        selected.mkdir(mode=0o700)
+        self.env["CLAUDE_CONFIG_DIR"] = str(selected)
+        self.install()
+        path = next((selected / "skills").iterdir())
+        path.unlink()
+        path.write_text("personal skill")
+        result = self.command("restore", "--root", str(self.root), ok=False)
+        self.assertEqual(result.stderr, "workgrove: restore-link-conflict: <claude-root>/skills/" + path.name + "\n")
+        result = self.install()
+        self.assertIn("backed up <claude-root>/skills/" + path.name + " to .local/state/workgrove/backups/", result.stderr)
+
+    def test_custom_agent_root_inside_home_stays_private_in_diagnostics(self):
+        self.check_custom_agent_root_diagnostics(self.home)
+
+    def test_custom_agent_root_inside_persistent_root_stays_private_in_diagnostics(self):
+        self.check_custom_agent_root_diagnostics(self.root)
+
     def test_fixed_conflicts_name_paths_and_keep_refusal_codes(self):
         directory = self.home / ".local/bin/wt"
         directory.mkdir(parents=True)

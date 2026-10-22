@@ -199,7 +199,7 @@ Missing selected persistent agent roots still cause refusal.
 
 Restore-only and full setup report each backup on stderr.
 The line names the home path with `~/` and the backup folder relative to `<root>`.
-External agent locations use placeholders such as `<claude-root>`.
+Custom agent locations use placeholders such as `<claude-root>`.
 When the newest backup of the same original path has identical bytes, setup removes the duplicate and names the existing backup.
 Backup records identify the original path and move order without using filesystem modification times.
 Conflicts at fixed link and shell locations include the path after the refusal code.
