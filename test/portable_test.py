@@ -1186,6 +1186,30 @@ sys.exit(module["main"]())
         self.assertIn("remote-wt-missing", json.loads(result.stdout)["issues"])
         self.assertFalse((self.root / ".config/workgrove").exists())
 
+    def test_replaced_home_doctor_explains_explicit_root_recovery(self):
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        result = self.command("doctor", "--json", ok=False)
+        self.assertEqual(json.loads(result.stdout)["issues"], ["profile-missing", "remote-wt-missing"])
+        hint = ("A host whose home folder was replaced looks new. "
+                "Run: wt -H <host> doctor --root <root> --json; "
+                "then wt -H <host> setup --root <root> --restore-only. "
+                "If doctor reports missing prerequisites, run full setup: wt -H <host> setup --root <root>.")
+        self.assertEqual(result.stderr, hint + "\n")
+        text = self.command("doctor", ok=False)
+        self.assertIn("workgrove: incomplete\n", text.stdout)
+        self.assertIn("  profile-missing\n  remote-wt-missing\n", text.stdout)
+        self.assertIn(hint, text.stdout)
+        self.assertEqual(text.stderr, "")
+        explicit = self.command("doctor", "--root", str(self.root), "--json", ok=False)
+        self.assertEqual(json.loads(explicit.stdout)["issues"],
+                         ["compatibility-links-missing", "remote-wt-missing"])
+        self.assertEqual(explicit.stderr, "")
+        supplied = self.command("doctor", "--json", ok=False,
+                                env=dict(self.env, WT_REMOTE_ROOT=str(self.root)))
+        self.assertEqual(json.loads(supplied.stdout), json.loads(explicit.stdout))
+
     def test_restore_detects_replaced_installation(self):
         self.install()
         (self.source / "bin/wt").write_text("#!/bin/sh\nexit 0\n")
@@ -1899,10 +1923,20 @@ sys.exit(subprocess.run(["/bin/sh", "-c", sys.argv[-1]], env=environment, check=
 
     def test_remote_setup_and_doctor_work_before_remote_wt_exists(self):
         environment = self.transport()
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        mac_before = {str(path.relative_to(environment["HOME"])) for path in Path(environment["HOME"]).rglob("*")}
         missing = self.remote(environment, "repos", ok=False)
-        self.assertIn("setup --root", missing.stderr)
+        self.assertEqual(missing.returncode, 127)
+        self.assertIn("doctor --root <root> --json", missing.stderr)
+        self.assertIn("setup --root <root> --restore-only", missing.stderr)
         result = self.remote(environment, "doctor", "--json", ok=False)
         self.assertIn("remote-wt-missing", json.loads(result.stdout)["issues"])
+        self.assertIn(result.stderr.strip().replace("<host>", "test-host"), missing.stderr)
+        self.assertIn("A host whose home folder was replaced looks new.", result.stderr)
+        self.assertIn("doctor --root <root> --json", result.stderr)
+        self.assertIn("setup --root <root> --restore-only", result.stderr)
+        mac_after = {str(path.relative_to(environment["HOME"])) for path in Path(environment["HOME"]).rglob("*")}
+        self.assertEqual(mac_after, mac_before)
         self.remote(environment, "setup", "--root", str(self.root), "--storage", "os-disk",
                     "--revision", self.revision, "--persist-agents")
         self.assertTrue(json.loads(self.remote(environment, "doctor", "--json").stdout)["ready"])

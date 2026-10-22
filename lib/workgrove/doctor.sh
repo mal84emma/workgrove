@@ -261,10 +261,15 @@ cmd_contract_doctor() {
 host_contract_doctor() {
   local host=$1 version='' rc=0 failed=0 protocol='' output DOCTOR_FAILED=0
   printf 'VM checks for %s; run their repair commands on the VM.\n' "$host"
-  output=$(vm_wt "$host" doctor) || failed=$?
+  # Report recovery once, with the unavailable doctor result.
+  output=$(VM_WT_RECOVERY_HINT=0 vm_wt "$host" doctor) || failed=$?
   printf '%s\n' "$output"
   if [[ $failed == 255 ]]; then
     doctor_result 1 'VM doctor connection from the Mac' "ssh $(shell_join "$host")"
+    return 1
+  fi
+  if [[ $failed == 127 ]]; then
+    doctor_result 1 'VM doctor unavailable' "$(host_recovery_hint "$host")"
     return 1
   fi
   if [[ $failed == 0 ]] && ! grep -Eq '^(PASS|FAIL|WARN) cmux-tui CLI$' <<<"$output"; then

@@ -303,7 +303,10 @@ wt hosts --json
 ```
 
 Doctor works even when the remote `wt` compatibility link is missing.
-Use `doctor --root <root> --json` when the home profile link was lost.
+Use `wt -H <host> doctor --root <root> --json` when the home profile link was lost.
+A host whose home folder was replaced looks new without its root.
+When doctor reports `profile-missing` and `remote-wt-missing` together, it prints recovery instructions.
+With `--json`, those instructions go to stderr; stdout contains only the JSON report.
 It reports fixed issue codes without printing settings, identity values, environment dumps, or captured command diagnostics.
 A failed readiness check returns a nonzero status and a JSON report when `--json` is selected.
 
@@ -330,13 +333,23 @@ Start the existing host and refresh its SSH endpoint through its supplier.
 Keep the same alias and independently verify any changed host identity.
 Workgrove does not start compute or repair the supplier's SSH configuration.
 
-Check doctor before choosing environment repair.
+Start with doctor and the saved persistent root:
+
+```bash
+wt -H <host> doctor --root <root> --json
+```
+
 If only links and environment were lost, run:
 
 ```bash
 wt -H <host> setup --root <root> --restore-only
-wt -H <host> doctor --json
+wt -H <host> doctor --root <root> --json
 ```
+
+A supplier can export `WT_REMOTE_ROOT=<root>` from its own start environment.
+If `.bashrc` sources the supplier's environment file, put that source before the non-interactive return.
+Doctor reads `WT_REMOTE_ROOT` first when no `--root` is supplied.
+Workgrove does not write the supplier's environment file or store the root on the Mac.
 
 Restore-only uses the durable installation and Python's standard library.
 It performs no download, package installation, Git update, login, or agent restart.
@@ -344,6 +357,7 @@ It backs up regular home files that the host's start command writes, including `
 Each stderr line names the displaced file and its backup folder under `<root>`.
 An identical newest backup of that path prevents another copy.
 Directories, foreign symbolic links, and regular files at root-side link locations still cause refusal before any file changes.
+
 Setup, restore-only, and doctor apply the same safety checks to managed personal configuration files.
 They check ownership, permissions, repository boundaries, and link targets without requiring agent authentication.
 If packages or Python were also lost, run full setup with the saved root and explicit storage policy.

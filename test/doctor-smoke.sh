@@ -352,6 +352,14 @@ WT
   assert_grep 'the missing VM command is named' "$TEST_ROOT/output" 'FAIL VM doctor unavailable'
   assert_grep 'the missing VM command names its repair' "$TEST_ROOT/output" 'Fix: wt -H test-vm update'
   rm "$HOME/.local/bin/wt"
+  invoke -H test-vm doctor
+  assert_eq 'a missing remote wt fails doctor' 1 "$STATUS"
+  assert_grep 'the missing executable names doctor with the root' "$TEST_ROOT/output" 'wt -H test-vm doctor --root <root> --json'
+  assert_grep 'the missing executable names restore-only' "$TEST_ROOT/output" 'wt -H test-vm setup --root <root> --restore-only'
+  assert_eq 'the recovery hint appears once' 1 "$(grep -c 'A host whose home folder was replaced looks new.' "$TEST_ROOT/output")"
+  if grep -Fq 'wt -H test-vm update' "$TEST_ROOT/output"; then
+    fail 'a missing remote wt recommends update'
+  else pass; fi
   ln -s "$REPO/bin/wt" "$HOME/.local/bin/wt"
   cat >"$TEST_ROOT/version-disconnect" <<'SSH'
 case $cmd in *' version') exit 255 ;; esac

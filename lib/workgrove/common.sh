@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Reads globals: BASHPID, BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_EXIT_PID, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
-#   VM_SSH_RUN, VM_WT_CAPTURE_FAILURE, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL, WT_TMPFILES.
+#   VM_SSH_RUN, VM_WT_CAPTURE_FAILURE, VM_WT_RECOVERY_HINT, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT,
+#   WT_PROTOCOL, WT_TMPFILES.
 # Requires no functions from other modules. Loads cmux.sh, task.sh, options.sh, and version.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
@@ -209,16 +210,22 @@ vm_wt_failure() {
   return 0
 }
 
+host_recovery_hint() {
+  local command="wt -H $(shell_join "$1")"
+  printf '%s\n' "A host whose home folder was replaced looks new. Run: $command doctor --root <root> --json; then $command setup --root <root> --restore-only. If doctor reports missing prerequisites, run full setup: $command setup --root <root>."
+}
+
 # Preserve SSH's exit status. Callers decide how to report transport failures.
 vm_wt() {
-  local host=$1 machine='' tty=() guard rc=0; shift
+  local host=$1 machine='' tty=() guard hint='remote wt is missing' rc=0; shift
   case ${1:-} in
     --machine) machine="WT_MACHINE=$WT_PROTOCOL "; shift ;;
     --tty) [[ ! -t 0 ]] || tty=(-t); shift ;;
   esac
   # shellcheck disable=SC2016
   guard='test -x "$HOME/.local/bin/wt" || { printf "%s\n" '
-  guard+="$(shell_join "remote wt is missing; run: wt -H $host doctor --json; wt -H $host setup --root <persistent-root>")"
+  if [[ ${VM_WT_RECOVERY_HINT:-1} == 1 ]]; then hint+="; $(host_recovery_hint "$host")"; fi
+  guard+="$(shell_join "$hint")"
   guard+=' >&2; exit 127; }; '
   vm_ssh "$host" "$guard$machine$(vm_wt_line "$@")" "${tty[@]}" || rc=$?
   # vm_result adds recovery advice after it reads both captured streams.

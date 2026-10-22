@@ -1384,6 +1384,12 @@ def doctor(args):
         for issue in result["issues"]:
             print("  " + issue)
         print("native relay and hook trust require a separate native-row check")
+    if {"profile-missing", "remote-wt-missing"}.issubset(result["issues"]):
+        print("A host whose home folder was replaced looks new. "
+              "Run: wt -H <host> doctor --root <root> --json; "
+              "then wt -H <host> setup --root <root> --restore-only. "
+              "If doctor reports missing prerequisites, run full setup: wt -H <host> setup --root <root>.",
+              file=sys.stderr if args.json else sys.stdout)
     return 0 if result["ready"] is not False else 1
 
 
