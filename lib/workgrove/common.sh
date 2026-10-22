@@ -174,10 +174,24 @@ vm_wt_failure() {
   local host=$1 sub=$2 rc=$3 hint=${4:-} signal='' detail=''
   if ((rc != 0 && rc != 255)); then
     if ((rc > 128)); then
-      if signal=$(kill -l "$((rc - 128))" 2>/dev/null); then
-        detail=" (SIG${signal#SIG})"
+      # Ubuntu VMs use Linux signal numbers, which differ from the Mac's numbers.
+      local number=$((rc - 128))
+      local names=('' HUP INT QUIT ILL TRAP ABRT BUS FPE KILL USR1 SEGV USR2 PIPE ALRM TERM
+        STKFLT CHLD CONT STOP TSTP TTIN TTOU URG XCPU XFSZ VTALRM PROF WINCH IO PWR SYS)
+      if ((number < ${#names[@]})); then
+        signal="SIG${names[number]}"
+      # Ubuntu's thread library reserves signal numbers 32 and 33.
+      elif ((number == 34)); then
+        signal=SIGRTMIN
+      elif ((number == 64)); then
+        signal=SIGRTMAX
+      elif ((number > 34 && number < 64)); then
+        signal="SIGRTMIN+$((number - 34))"
+      fi
+      if [[ -n $signal ]]; then
+        detail=" ($signal)"
       else
-        detail=" (unknown signal $((rc - 128)))"
+        detail=" (unknown signal $number)"
       fi
     fi
     printf 'wt %s on %s exited %s%s%s\n' "$sub" "$host" "$rc" "$detail" "${hint:+; $hint}" >&2
@@ -240,6 +254,7 @@ vm_result() {
       __hint="the worktree may exist; inspect with: wt -H $__host list"
       [[ -z $__repo ]] || __hint+=" -r $(shell_join "$__repo")"
       __hint+=' before retrying'
+      # WT_COMPAT: Remove when every VM accepts the model option.
       case $__stdout$'\n'$__stderr in
         *'new: unknown option -m'*|*'new: unknown option --model'*) __hint+="; update with: wt -H $__host update" ;;
       esac ;;

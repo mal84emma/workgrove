@@ -611,6 +611,8 @@ scenario_vm_failures() {
   REMOTE_FAIL_STATUS=1 REMOTE_FAIL_STDERR='wt: new: unknown option -m'
   invoke_wt -H fakevm new task -r wt-demo -a claude -m opus
   check "$(grep -xF 'wt new on fakevm exited 1; the worktree may exist; inspect with: wt -H fakevm list -r wt-demo before retrying; update with: wt -H fakevm update' <<<"$WT_STDERR" >/dev/null && echo yes)" 'model compatibility failure omitted its update command from the summary'
+  assert_eq 'model compatibility advice appears once' 1 \
+    "$(grep -cF 'wt -H fakevm update' <<<"$WT_STDERR")"
 
   REMOTE_FAIL_SUB=show REMOTE_FAIL_STATUS=42 REMOTE_FAIL_STDERR='VM diagnostic: unchanged'
   invoke_wt -H fakevm attach task -r '/repos/two words'
@@ -633,13 +635,25 @@ scenario_vm_failures() {
   done
 
   REMOTE_FAIL_SUB=list REMOTE_FAIL_STDOUT='partial report' REMOTE_FAIL_STDERR='VM diagnostic: unchanged'
-  for status in 42 137 200; do
+  for status in 42 135 137 138 140 159 160 161 162 163 192 200; do
     REMOTE_FAIL_STATUS=$status
     invoke_wt -H fakevm list -r wt-demo
     assert_eq 'forwarded failure preserves status' "$status" "$WT_RC"
     assert_eq 'forwarded failure preserves stdout' 'partial report' "$WT_STDOUT"
     local detail=''
-    case $status in 137) detail=' (SIGKILL)' ;; 200) detail=' (unknown signal 72)' ;; esac
+    case $status in
+      135) detail=' (SIGBUS)' ;;
+      137) detail=' (SIGKILL)' ;;
+      138) detail=' (SIGUSR1)' ;;
+      140) detail=' (SIGUSR2)' ;;
+      159) detail=' (SIGSYS)' ;;
+      160) detail=' (unknown signal 32)' ;;
+      161) detail=' (unknown signal 33)' ;;
+      162) detail=' (SIGRTMIN)' ;;
+      163) detail=' (SIGRTMIN+1)' ;;
+      192) detail=' (SIGRTMAX)' ;;
+      200) detail=' (unknown signal 72)' ;;
+    esac
     assert_eq 'VM stderr precedes exactly one summary' \
       "VM diagnostic: unchanged"$'\n'"wt list on fakevm exited $status$detail" "$WT_STDERR"
   done

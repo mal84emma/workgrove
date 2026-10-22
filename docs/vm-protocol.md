@@ -206,8 +206,8 @@ The tmux queries read `/dev/null`, so the helper receives the agent payload on s
 
 When the VM's `wt` fails, `vm_wt` prints one summary line on standard error and preserves the command's exit status.
 The line names the subcommand, host, and status: `wt show on <vm> exited 141 (SIGPIPE)`.
-For statuses above 128, the line includes the signal name when the Mac recognizes the signal number.
-Otherwise, it includes `unknown signal` and the signal number.
+For statuses above 128, the line uses the Ubuntu VM's [Linux signal numbers](https://man7.org/linux/man-pages/man7/signal.7.html), including real-time signals.
+For unknown or reserved signal numbers, it includes `unknown signal` and the number.
 
 The VM's own standard error also reaches the user.
 For `vm_result` calls, a failed `show` includes the inspection command used by attach recovery.

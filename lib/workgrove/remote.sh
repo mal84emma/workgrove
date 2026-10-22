@@ -113,11 +113,6 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   [[ -z $err ]] || printf '%s\n' "$err" >&2
   if [[ $rc != 0 ]]; then
     [[ -z "$out" ]] || printf '%s\n' "$out" >&2
-    # WT_COMPAT: Remove when every VM accepts the model option.
-    case $out$'\n'$err in
-      *'new: unknown option -m'*|*'new: unknown option --model'*)
-        warn "$host has an older wt without -m; update it with: wt -H $host update" ;;
-    esac
     if [[ $rc -eq 255 ]]; then
       warn "SSH disconnected during creation on $host; could not confirm whether a worktree was created; inspect with: $inspect"
       warn "a disconnected create may still be finishing; recheck before starting the same task elsewhere"
