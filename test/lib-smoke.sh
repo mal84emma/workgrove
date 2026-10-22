@@ -51,10 +51,10 @@ SHELL
 scenario_fake_ssh
 
 close_row_result() (
-  local reply=$1 status=$2 rc=0
+  local reply=$1 close_status=$2 rc=0
   fake_cmux_init "$TEST_ROOT/close-state"
   export CMUX_BUNDLED_CLI_PATH="$REPO/test/fakes/cmux"
-  fake_queue workspace-close "$reply" "$status"
+  fake_queue workspace-close "$reply" "$close_status"
   CMUX_ERROR=''
   close_row row-test || rc=$?
   printf '%s\n%s' "$rc" "$CMUX_ERROR"
@@ -119,6 +119,91 @@ scenario_results() {
 }
 scenario_results
 
+scenario_vm_results() {
+  begin_scenario 'VM results preserve command status and reject invalid identities' || return 0
+  local sample output expected
+  for sample in facts text malformed version wrong-name wrong-session missing wrong-repo path-old path-facts transport; do
+    case $sample in
+      facts) expected='0|0|visible|task|wt-repo-task|false|true|' ;;
+      text) expected='0|0|created task
+  repo: /repo
+  session: wt-repo-task|task|wt-repo-task|||' ;;
+      malformed|wrong-name|wrong-session|wrong-repo) expected=1 ;;
+      version) expected=3 ;;
+      missing) expected='0|1||task||||' ;;
+      path-old|path-facts) expected='0|0|/repo/.worktrees/task|task||||/repo/.worktrees/task' ;;
+      transport) expected='2|255|connection lost|task||||' ;;
+    esac
+    output=$(
+      vm_wt() {
+        case $sample in
+          text) printf 'created task\n  repo: /repo\n  session: wt-repo-task\n'; return ;;
+          malformed) printf 'WT_RESULT\t{broken\n'; return ;;
+          transport) printf 'connection lost\n'; return 255 ;;
+        esac
+        local command=show sample_name=task repo=/repo session=wt-repo-task sample_status=found facts='{"agent":false,"attached":false,"started":true}'
+        case $sample in
+          version) printf 'WT_RESULT\t{"version":2,"command":"show"}\n'; return ;;
+          wrong-name) sample_name=other ;;
+          wrong-session) session=main ;;
+          missing|wrong-repo) command=path; sample_status=missing; session=''; facts='{}' ;;
+          path-old|path-facts) command=path; session=''; facts='{}' ;;
+        esac
+        [[ $sample != wrong-repo ]] || repo=/other
+        case $sample in
+          path-old|path-facts) printf '/repo/.worktrees/task\n' ;;
+          missing|wrong-repo) ;;
+          *) printf 'visible\n' ;;
+        esac
+        [[ $sample != path-facts ]] || facts='{"path":"/repo/.worktrees/task"}'
+        WG_MACHINE_RESULT=1 wt_result "$command" "$sample_status" "$sample_name" "$repo" "$session" 'changed wording' "$facts"
+        [[ $sample_status != missing ]] || return 1
+        return 0
+      }
+      local -A record=()
+      local visible rc parsed=0 sub=show
+      case $sample in text) sub=new ;; missing|wrong-repo|path-*) sub=path ;; esac
+      vm_result fixture "$sub" record visible rc -- task -r /repo || parsed=$?
+      case $sample in
+        malformed|version|wrong-name|wrong-session|wrong-repo) printf '%s' "$parsed" ;;
+        *) printf '%s|%s|%s|%s|%s|%s|%s|%s' "$parsed" "$rc" "$visible" \
+          "${record[name]-}" "${record[session]-}" "${record[agent]-}" "${record[started]-}" "${record[path]-}" ;;
+      esac
+    )
+    assert_eq "$sample VM result" "$expected" "$output"
+  done
+  for sample in agent attached started path; do
+    output=$(WG_MACHINE_RESULT=1 wt_result show found task /repo wt-repo-task '' "{\"$sample\":7}")
+    local rc=0
+    wt_read_result "$output" show >/dev/null || rc=$?
+    assert_eq "$sample rejects an invalid type" 1 "$rc"
+  done
+  end_scenario
+}
+scenario_vm_results
+
+scenario_vm_ssh() {
+  begin_scenario 'VM commands share SSH options and preserve argument quoting' || return 0
+  local output
+  output=$(
+    ssh_host_check() { return 0; }
+    # shellcheck disable=SC2329  # VM_SSH_RUN invokes this function.
+    vm_capture() { printf '%s\n' "$@"; return 42; }
+    VM_SSH_RUN=(vm_capture)
+    rc=0
+    vm_wt fixture --machine show task -r '/repos/two words' || rc=$?
+    printf 'status=%s' "$rc"
+  )
+  assert_eq 'VM commands use keepalives' true "$([[ $output == *$'ServerAliveInterval=5\n'* ]] && echo true || echo false)"
+  assert_eq 'VM commands preserve SSH failures' true "$([[ $output == *status=42 ]] && echo true || echo false)"
+  # shellcheck disable=SC2016  # HOME belongs to the VM shell.
+  assert_eq 'machine requests stay inline' true "$([[ $output == *'WT_MACHINE=1 exec "$HOME/.local/bin/wt" show task -r /repos/two\ words'* ]] && echo true || echo false)"
+  # shellcheck disable=SC2016
+  assert_eq 'run commands quote the repository' '"$HOME/.local/bin/wt" run task -r /repos/two\ words' "$(vm_run_line task '/repos/two words')"
+  end_scenario
+}
+scenario_vm_ssh
+
 scenario_protocol_hint() {
   begin_scenario 'unsupported results name wt update in creation and recovery' || return 0
   local command output rc
@@ -130,8 +215,7 @@ scenario_protocol_hint() {
       # shellcheck source=lib/workgrove/recovery.sh
       source "$REPO/lib/workgrove/recovery.sh"
       host_new_preflight() { :; }
-      remote_wt_result_raw() { printf 'WT_RESULT\t{"version":2,"command":"new"}\n'; }
-      remote_wt_result() { printf 'WT_RESULT\t{"version":2,"command":"show"}\n'; }
+      vm_wt() { printf 'WT_RESULT\t{"version":2,"command":"%s"}\n' "$3"; }
       if [[ $command == new ]]; then host_new fixture task -r /repo --no-workspace 2>&1
       else host_attach fixture task -r /repo 2>&1; fi
     ) || rc=$?
@@ -172,7 +256,7 @@ WT
     parsed=$(
       # shellcheck source=lib/workgrove/remote.sh
       source "$REPO/lib/workgrove/remote.sh"
-      remote_sh_raw() { printf '%s\n' "$reply"; }
+      vm_wt() { printf '%s\n' "$reply"; }
       host_version fixture
     )
     assert_eq "$sample update version becomes null" '{"commit":null,"protocol":null}' "$parsed"

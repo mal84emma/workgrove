@@ -261,8 +261,7 @@ cmd_contract_doctor() {
 host_contract_doctor() {
   local host=$1 version='' rc=0 failed=0 protocol='' output DOCTOR_FAILED=0
   printf 'VM checks for %s; run their repair commands on the VM.\n' "$host"
-  # shellcheck disable=SC2016  # HOME belongs to the VM shell.
-  output=$(remote_sh_raw "$host" 'exec "$HOME/.local/bin/wt" doctor' 2>&1) || failed=$?
+  output=$(vm_wt "$host" doctor 2>&1) || failed=$?
   printf '%s\n' "$output"
   if [[ $failed == 255 ]]; then
     doctor_result 1 'VM doctor connection from the Mac' "ssh $(shell_join "$host")"

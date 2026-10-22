@@ -1,46 +1,24 @@
 # shellcheck shell=bash
 # Reads globals: CMUX_ROW_EXISTING, HOME, WG_LIB_DIR.
 # Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
-# Requires common.sh: die, hook_safe_path, row_title, shell_join, tmux_cmd, usage, valid_name, warn,
-#   wt_read_result, wt_session, wt_version, WT_PROTOCOL.
+# Requires common.sh: die, hook_safe_path, row_title, shell_join, tmux_cmd, usage, vm_result, vm_run_line,
+#   vm_ssh, vm_tmux, vm_wt, warn, wt_session, wt_version.
 # Requires version.sh: wt_read_version.
 # Requires options.sh: wt_opt_args, wt_opts, wt_spec.
 # Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent.
 # ---------------------------------------------------------------- wt -H <host> …
-remote_sh_raw() { # keep SSH's exit status intact for callers that must tell a refusal from a dropped connection
-  ssh_host_check "$1" || return 1
-  ssh -o BatchMode=yes -o ConnectTimeout=5 "$1" "$2"
+remote_sh_raw() { vm_ssh "$1" "$2"; }
+remote_sh() {
+  local rc=0
+  remote_sh_raw "$@" || rc=$?
+  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $1)"
+  return "$rc"
 }
-remote_sh() { # remote_sh <host> <command> — one ssh call; 255 means transport failure
-  local host="$1" cmd="$2" rc=0
-  remote_sh_raw "$host" "$cmd" || rc=$?
-  if [[ $rc -eq 255 ]]; then die "host unreachable: is the VM running? (ssh $host)"; fi
-  return $rc
-}
-remote_wt_guard() {
-  # shellcheck disable=SC2016
-  printf '%s' 'test -x "$HOME/.local/bin/wt" || { printf "%s\n" ' \
-    "$(shell_join "remote wt is missing; run: wt -H $1 doctor --json; wt -H $1 setup --root <persistent-root>")" \
-    ' >&2; exit 127; }; '
-}
-remote_wt() { local host="$1"; shift; remote_sh "$host" "$(remote_wt_guard "$host")exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_wt_result() { local host="$1"; shift; remote_sh "$host" "$(remote_wt_guard "$host")WT_MACHINE=$WT_PROTOCOL exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_wt_result_raw() { local host="$1"; shift; remote_sh_raw "$host" "$(remote_wt_guard "$host")WT_MACHINE=$WT_PROTOCOL exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_sh_tty() { # remote_sh_tty <host> <command> — remote_sh, but lends the VM this terminal when there is one,
-                  # so a command that asks before it acts (wt update) can read the answer. Never use it for a
-                  # caller that captures stdout: a pty folds stderr into stdout and turns every \n into \r\n.
-                  # Without a local terminal there is nothing to lend, and the VM's own refusal is correct.
-  local host="$1" cmd="$2" rc=0 tty=()
-  ssh_host_check "$host" || return 1
-  [[ -t 0 ]] && tty=(-t)                                   # -t works with BatchMode=yes, which only blocks prompts
-  ssh -o BatchMode=yes -o ConnectTimeout=5 "${tty[@]}" "$host" "$cmd" || rc=$?
-  if [[ $rc -eq 255 ]]; then die "host unreachable: is the VM running? (ssh $host)"; fi
-  return $rc
-}
-remote_wt_tty() { local host="$1"; shift; remote_sh_tty "$host" "$(remote_wt_guard "$host")exec \"\$HOME/.local/bin/wt\" $(shell_join "$@")"; }
-remote_run_cmd() {
-  # shellcheck disable=SC2016  # $HOME belongs to the VM shell, not this Mac
-  printf '"$HOME/.local/bin/wt" run %s -r %s' "$1" "$(shell_join "$2")"
+remote_wt() {
+  local rc=0
+  vm_wt "$@" || rc=$?
+  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $1)"
+  return "$rc"
 }
 
 remote_row() { # remote_row <host> <session> <title> <repo> <command> [shared] [cmux flags…]
@@ -129,11 +107,10 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   host_new_preflight "$host" "$repo_request" "$requested_agent"
   inspect="wt -H $host list"
   [[ -z "$repo_request" ]] || inspect+=" -r $(shell_join "$repo_request")"
-  local out name repo session rc result result_rc=0
-  if out=$(printf '%s' "$prompt" | remote_wt_result_raw "$host" new --no-workspace --prompt-stdin "${args[@]}" 2>&1); then
-    :
-  else
-    rc=$?
+  local out name repo session rc result_rc=0
+  local -A result=()
+  vm_result "$host" new result out rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
+  if [[ $rc != 0 ]]; then
     [[ -z "$out" ]] || printf '%s\n' "$out" >&2
     # WT_COMPAT: Remove when every VM accepts the model option.
     if [[ "$out" == *'new: unknown option -m'* || "$out" == *'new: unknown option --model'* ]]; then
@@ -145,22 +122,14 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
     fi
     return "$rc"
   fi
-  printf '%s\n' "$out"
-  result=$(wt_read_result "$out" new 2>/dev/null) || result_rc=$?
+  [[ -z "$out" ]] || printf '%s\n' "$out"
   case $result_rc in
-    0)
-      [[ $(jq -r .status <<<"$result") == created ]] || die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying"
-      name=$(jq -r .name <<<"$result"); repo=$(jq -r .repo <<<"$result"); session=$(jq -r .session <<<"$result") ;;
-    # WT_COMPAT: Remove when every VM emits protocol 1 task results.
-    2)
-      name=$(printf '%s\n' "$out" | sed -n 's/^created //p' | head -1)
-      repo=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
-      session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1) ;;
+    0) [[ ${result[status]} == created ]] || die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying" ;;
+    2) die "$host did not report created/repo/session; the worktree may exist; inspect with: $inspect before retrying" ;;
     3) die "unsupported result protocol from $host; run wt update on the Mac; the worktree may exist; inspect with: $inspect before retrying" ;;
     *) die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying" ;;
   esac
-  [[ -n "$name" && -n "$repo" && -n "$session" ]] || die "$host did not report created/repo/session; the worktree may exist; inspect with: $inspect before retrying"
-  valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$repo")" ]] || die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying"
+  name=${result[name]} repo=${result[repo]} session=${result[session]}
   if [[ $no_workspace -eq 1 ]]; then
     printf 'start later: wt -H %s attach -r %s %s\n' "$host" "$(shell_join "$repo")" "$(shell_join "$name")"
     return 0
@@ -170,7 +139,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
     warn "close the stale row in cmux, then recover with: wt -H $host attach --restart-agent -r $(shell_join "$repo") $(shell_join "$name")"
     return 1
   fi
-  if ! (remote_row "$host" "$session" "$(row_title "$name")" "$repo" "$(remote_run_cmd "$name" "$repo")" --no-focus); then
+  if ! (remote_row "$host" "$session" "$(row_title "$name")" "$repo" "$(vm_run_line "$name" "$repo")" --no-focus); then
     warn "the worktree was created on $host; do not run new again"
     warn "inspect: wt -H $host show -r $(shell_join "$repo") $(shell_join "$name")"
     warn "if an agent is running: wt -H $host attach -r $(shell_join "$repo") $(shell_join "$name")"
@@ -184,7 +153,7 @@ agent_on_vm() { # agent_on_vm <host> <session> — use the Mac's checked probe, 
   local script
   # shellcheck disable=SC2016  # $1 belongs to the remote Bash command.
   script="$(declare -f tmux_agent)"$'\n''tmux_agent "$1"'
-  remote_sh "$1" "bash -c $(shell_join "$script" wt "$2")" >/dev/null
+  remote_sh "$1" "bash -s -- $(shell_join "$2")" <<<"$script" >/dev/null
 }
 
 host_open() { # VS Code Remote-SSH on a VM worktree
@@ -195,7 +164,17 @@ host_open() { # VS Code Remote-SSH on a VM worktree
   repo=${opts[repo]-$repo}
   need_r "$host" open "$@"
   [[ -n "$name" ]] || die "open: worktree name required (wt -H $host open -r <repo> <name>)"
-  local p; p=$(remote_wt "$host" path "$name" -r "$repo")
+  local p out rc result_rc=0
+  local -A result=()
+  vm_result "$host" path result out rc -- "$name" -r "$repo" || result_rc=$?
+  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
+  if [[ $rc != 0 ]]; then
+    [[ -z $out ]] || printf '%s\n' "$out" >&2
+    return "$rc"
+  fi
+  [[ $result_rc != 3 ]] || die "unsupported result protocol from $host; run wt update on the Mac"
+  [[ $result_rc == 0 && ${result[status]} == found ]] || die "unexpected output from $host"
+  p=${result[path]}
   hook_safe_path "$p" || die "open: refusing an unsafe path from $host ($p)"
   open_code "vscode-remote://ssh-remote+$host$p/" "$host:$p"
 }
@@ -223,7 +202,7 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   esac
   remote_wt "$host" rm "${args[@]}"
   cmux_require close_row "$(cmux_row_field "$title" "$repo" id "$host")"
-  remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
+  vm_tmux "$host" kill-session "$session" >/dev/null 2>&1 || true
 }
 
 host_list() {
@@ -249,8 +228,7 @@ wt_update_record() {
 
 host_version() {
   local output rc=0
-  # shellcheck disable=SC2016  # HOME belongs to the VM shell.
-  output=$(remote_sh_raw "$1" 'exec "$HOME/.local/bin/wt" version' 2>/dev/null) || rc=$?
+  output=$(vm_wt "$1" version 2>/dev/null) || rc=$?
   [[ $rc != 255 ]] || { warn "host unreachable: is the VM running? (ssh $1)"; return 1; }
   if [[ $rc == 0 ]] && output=$(wt_read_version <<<"$output" 2>/dev/null); then
     printf '%s\n' "$output"
@@ -265,7 +243,10 @@ host_update() {
   version=$(host_version "$host") || return $?
   wt_update_record before Mac "$(wt_version)"
   wt_update_record before VM "$version"
-  remote_wt_tty "$host" update "${@:2}" || return $?
+  local rc=0
+  vm_wt "$host" --tty update "${@:2}" || rc=$?
+  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
+  [[ $rc == 0 ]] || return "$rc"
   version=$(host_version "$host" 2>/dev/null) || version='{"commit":null,"protocol":null}'
   if ! jq -e '.commit != null and .protocol != null' <<<"$version" >/dev/null; then
     warn "update on $host succeeded; could not read its version (ssh $host)"
