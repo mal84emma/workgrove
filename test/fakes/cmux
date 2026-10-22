@@ -13,6 +13,9 @@ state=${FAKE_CMUX_STATE:-}
 if [[ -n $state ]]; then
   printf '%s\n' "$*" >>"$state/$(if [[ ${0##*/} == cmux-tui && -f $state/native-log ]]; then echo native-calls.log; else echo calls.log; fi)"
 fi
+apply_effects() {
+  if [[ -d $state/after/$key ]]; then cp -R "$state/after/$key/." "$state/"; fi
+}
 screen_append() {
   if [[ $key == read-screen && -f $state/screen-append ]]; then
     if [[ ! -f $state/screen-append-hidden ]]; then cat "$state/screen-append"; fi
@@ -42,6 +45,7 @@ if [[ -n $state ]]; then
       rc=$(cat "$entry/status")
       rm -r "$entry"
       screen_append
+      if [[ $rc == 0 ]]; then apply_effects; fi
       exit "$rc"
     done
   fi
@@ -57,7 +61,7 @@ if [[ -n $state ]]; then
     exit 1
   fi
   if [[ $key == top && ! -f $state/$file ]]; then file=top.json; fi
-  if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; exit 0; fi
+  if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; apply_effects; exit 0; fi
 fi
 case "$key" in
   version)
