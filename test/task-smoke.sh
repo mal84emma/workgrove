@@ -113,6 +113,7 @@ scenario_subshell_cleanup() {
       touch "$2/subshell-pending"
       wt_register_tmpfile "$2/subshell-pending"
       kill -TERM "$BASHPID"
+      exit 99
     )
     printf "%s\n" "$?" >"$2/subshell-status"
     [[ -e $2/parent-pending && ! -e $2/subshell-pending && ! -e $LOG ]] || exit 8
@@ -120,6 +121,8 @@ scenario_subshell_cleanup() {
       touch "$2/background-pending"
       wt_register_tmpfile "$2/background-pending"
       kill -TERM "$BASHPID"
+      # Bash 5.2 skips EXIT when a final builtin leaves TERM pending.
+      exit 99
     ) &
     wait "$!"
     printf "%s\n" "$?" >"$2/background-status"
