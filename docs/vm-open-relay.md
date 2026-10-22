@@ -75,6 +75,7 @@ It backs up an existing regular file before replacement.
 It preserves other rules and leaves managed symlinks or unreadable configurations unchanged.
 It replaces a changed `wt-native-relay` rule and preserves an explicit `enabled: false` setting.
 It reports unknown schema versions on stderr and skips their merge.
+A missing or nonnumeric version uses the malformed-file message and skips the merge.
 Each install ends with a summary of skips and follow-up actions.
 
 After an authorized installation, run `cmux automation reload` on the Mac.

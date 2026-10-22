@@ -298,7 +298,7 @@ row_shell_prompt() { # row_shell_prompt <id> <last line output>
   __lines=$(printf '%s\n' "$__screen" | sed -e 's/[[:space:]]*$//' -e '/^$/d' | tail -2)
   __shell_last=${__lines##*"$__nl"}
   [[ "$__lines" != *"$__nl"* ]] || __above=${__lines%%"$__nl"*}
-  [[ "$__shell_last" =~ $__end ]] || return 1
+  [[ "$__shell_last" =~ $__end ]] || { cmux_error "no shell prompt in cmux row $__id"; return 1; }
   [[ "$__shell_last" =~ $__who ]] || { [[ "$__shell_last" =~ $__bare && "$__above" =~ $__who ]]; }
 }
 
@@ -331,7 +331,7 @@ row_by_title() {
 from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifying row is an SSH row to that host.
   # The native automation event supplies the row ID. Check that row's SSH destination against the request.
   # This runs in the caller's shell, not a subshell, so attach_row then uses the snapshot that this loads.
-  [[ -n $1 ]] || return 1
+  [[ -n $1 ]] || { cmux_error "no sending cmux row ID"; return 1; }
   ws_load || return 1
   printf '%s' "$WS_JSON" \
     | jq -e --arg w "$1" --arg h "$2" 'any((.workspaces? // .)[]; .id == $w and .remote.enabled and (.remote.destination // "") == $h)' >/dev/null 2>&1; }
@@ -346,7 +346,8 @@ cmux_notify() {
     # cmux suppresses identical terminal/title/body content for five seconds, regardless of notification ID.
     request_id=$(LC_ALL=C od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
     [[ $request_id =~ ^[a-f0-9]{32}$ ]] || { cmux_error "cannot create a native request ID; run the line below on the Mac"; return 1; }
-    body=$(printf '%s' "$body" | jq -c --arg id "$request_id" '. + {request_id:$id}') || return 1
+    body=$(printf '%s' "$body" | jq -c --arg id "$request_id" '. + {request_id:$id}') \
+      || { cmux_error "cannot encode a native request; run the line below on the Mac"; return 1; }
     # Native terminal IDs differ from the Mac's workspace UUIDs. Do not pass --workspace.
     env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" notify --surface "$relay_tui_terminal" --title "$title" --body "$body" >/dev/null 2>&1 \
       || { cmux_error "cmux-tui notify failed; run the line below on the Mac"; return 1; }
@@ -362,8 +363,9 @@ cmux_row_create_ssh() {
     if [[ $arg == --no-focus ]]; then focus=0; else args+=("$arg"); fi
   done
   [[ ${CMUX_ROWS_FULL:-0} == 1 ]] || { cmux_error "cannot create an SSH row without a complete row list"; return 1; }
-  ssh_host_check "$host" || return 1
-  before=$(printf '%s' "$CMUX_ROWS_JSON" | jq -r '.workspaces[].id') || return 1
+  ssh_host_check "$host" || { cmux_error "SSH host validation failed for $host"; return 1; }
+  before=$(printf '%s' "$CMUX_ROWS_JSON" | jq -r '.workspaces[].id') \
+    || { cmux_error "cannot read existing cmux row IDs"; return 1; }
   # Focused native SSH creation can replace the requested title with a generated name.
   # Establish the row's identity before selecting it.
   out=$(cmux_call ssh "$host" --name "$title" --no-focus "${args[@]}" --command "$command" 2>&1) || {

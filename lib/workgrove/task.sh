@@ -14,7 +14,7 @@ DEFAULT_AGENT="${WT_AGENT:-claude}"
 
 cmux_require() {
   CMUX_ERROR=''
-  "$@" || die "$CMUX_ERROR"
+  "$@" || die "${CMUX_ERROR:-$1 failed}"
   [[ -z $CMUX_ERROR ]] || warn "$CMUX_ERROR"
   return 0
 }

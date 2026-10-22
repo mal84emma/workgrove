@@ -448,7 +448,9 @@ cmd_show() {
   printf '\n--- working tree\n'; git -C "$path" status --short 2>/dev/null | sed -n '1,20p'
   if [[ $diff -eq 1 ]]; then
     cmux_ok || die "cmux is not running"
-    cmux_diff --branch --repo "$path" --base "$base" --layout split --title "$name vs $base" --focus true >/dev/null && printf 'opened cmux diff pane\n'
+    cmux_diff --branch --repo "$path" --base "$base" --layout split --title "$name vs $base" --focus true >/dev/null \
+      || { local rc=$?; warn "$CMUX_ERROR"; return "$rc"; }
+    printf 'opened cmux diff pane\n'
   fi
 }
 

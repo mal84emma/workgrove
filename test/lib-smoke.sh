@@ -103,6 +103,53 @@ scenario_close_row() {
 }
 scenario_close_row
 
+scenario_cmux_require() {
+  begin_scenario 'wrapped cmux failures always explain the cause' || return 0
+  local mode rc out expected
+  local CMUX_ROWS_FULL=1 CMUX_ROWS_JSON='{"workspaces":null}'
+  for mode in empty explicit warning; do
+    rc=0
+    out=$(
+      # shellcheck disable=SC2329  # cmux_require invokes this function.
+      wrapped_failure() {
+        case $mode in
+          empty) return 1 ;;
+          explicit) cmux_error 'specific cause' ;;
+          warning) CMUX_ERROR='nonfatal cause'; return 0 ;;
+        esac
+      }
+      CMUX_ERROR='stale cause'
+      cmux_require wrapped_failure >"$TEST_ROOT/wrapped.out" 2>"$TEST_ROOT/wrapped.err"
+    ) || rc=$?
+    expected=1
+    [[ $mode != warning ]] || expected=0
+    assert_eq "$mode keeps the wrapper exit status" "$expected" "$rc"
+    assert_eq "$mode emits no stdout" '' "$out$(cat "$TEST_ROOT/wrapped.out")"
+    case $mode in
+      empty) expected='wt: wrapped_failure failed' ;;
+      explicit) expected='wt: specific cause' ;;
+      warning) expected='wt: nonfatal cause' ;;
+    esac
+    assert_eq "$mode explains the cause on stderr" "$expected" "$(cat "$TEST_ROOT/wrapped.err")"
+    if grep -xF 'wt: ' "$TEST_ROOT/wrapped.err" >/dev/null; then fail 'the wrapper printed an empty diagnostic'; else pass; fi
+  done
+  for mode in host rows; do
+    rc=0
+    out=$(
+      # shellcheck disable=SC2329  # cmux_row_create_ssh invokes this function.
+      ssh_host_check() { [[ $mode != host ]]; }
+      cmux_require cmux_row_create_ssh test-vm task '@test-vm · repo' true 2>"$TEST_ROOT/create.err"
+    ) || rc=$?
+    assert_eq "$mode prevents SSH row creation" 1 "$rc"
+    assert_eq "$mode emits no stdout" '' "$out"
+    if [[ $mode == host ]]; then expected='wt: SSH host validation failed for test-vm'
+    else expected='wt: cannot read existing cmux row IDs'; fi
+    assert_grep "$mode reports the creation failure" "$TEST_ROOT/create.err" "$expected"
+  done
+  end_scenario
+}
+scenario_cmux_require
+
 scenario_results() {
   begin_scenario 'versioned wt results' || return 0
   record=$(WG_MACHINE_RESULT=1 wt_result new created task '/repos/two words' wt-two-words-task)
