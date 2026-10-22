@@ -64,6 +64,45 @@ if [[ -n $state ]]; then
   if [[ $key == top && ! -f $state/$file ]]; then file=top.json; fi
   if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; apply_effects; exit 0; fi
 fi
+if [[ -f $state/mutate ]]; then
+  case $key in
+    ssh|workspace-create)
+      # Keep stable UUIDs in row lists and return cmux's workspace ref from creation.
+      count=$(cat "$state/next-row" 2>/dev/null || echo 1)
+      printf '%s\n' "$((count + 1))" >"$state/next-row"
+      printf -v id '00000000-0000-4000-8000-%012d' "$count"
+      ref=workspace:$count host='' title='<title>' description='' cwd=''
+      if [[ $key == ssh ]]; then host=$2; fi
+      while (($#)); do
+        case $1 in
+          --name) title=$2; shift ;;
+          --description) description=$2; shift ;;
+          --cwd) cwd=$2; shift ;;
+        esac
+        shift
+      done
+      # shellcheck source=test/fakes/rows.sh
+      source "$HERE/rows.sh"
+      row=$(fake_row "$id" "$title" "$description" "$host" | jq -c --arg ref "$ref" --arg cwd "$cwd" '.ref=$ref | .current_directory=$cwd')
+      jq --argjson row "$row" '.workspaces += [$row]' "$state/rows.json" >"$state/rows.tmp"
+      mv "$state/rows.tmp" "$state/rows.json"
+      printf '%s\n' "$ref"
+      exit 0 ;;
+    workspace-close)
+      jq --arg id "$3" '.workspaces |= map(select(.id != $id and .ref != $id))' "$state/rows.json" >"$state/rows.tmp"
+      mv "$state/rows.tmp" "$state/rows.json" ;;
+    workspace-action)
+      id='' description=''
+      while (($#)); do
+        case $1 in --workspace) id=$2; shift ;; --description) description=$2; shift ;; esac
+        shift
+      done
+      jq --arg id "$id" --arg description "$description" \
+        '(.workspaces[] | select(.id == $id or .ref == $id) | .description)=$description' "$state/rows.json" >"$state/rows.tmp"
+      mv "$state/rows.tmp" "$state/rows.json"
+      exit 0 ;;
+  esac
+fi
 case "$key" in
   version)
     if [[ -n ${FAKE_CMUX_VERSION:-} ]]; then printf 'cmux %s\n' "$FAKE_CMUX_VERSION"
