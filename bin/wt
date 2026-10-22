@@ -431,7 +431,18 @@ cmd_show() {
     state=$(session_state "$name")
     printf '  session: %s (%s)\n' "$(wt_session "$name" "$REPO")" "$state"
   fi
-  wt_result show found "$name" "$REPO" "$(wt_session "$name" "$REPO")" "$state"
+  local facts='{}' agent=false attached=false started=false clients session
+  if [[ -n ${WG_MACHINE_RESULT:-} ]]; then
+    session=$(wt_session "$name" "$REPO")
+    if is_remote; then
+      if tmux_agent "$session" >/dev/null 2>&1; then agent=true; fi
+      if clients=$(tmux list-clients -t "=$session" 2>/dev/null) && [[ -n $clients ]]; then attached=true; fi
+    fi
+    [[ ! -e "$(wt_started "$name")" ]] || started=true
+    facts=$(jq -cn --argjson agent "$agent" --argjson attached "$attached" --argjson started "$started" \
+      '{agent:$agent,attached:$attached,started:$started}')
+  fi
+  wt_result show found "$name" "$REPO" "$(wt_session "$name" "$REPO")" "$state" "$facts"
   printf '\n--- commits vs %s\n' "$base"; git -C "$path" log --oneline "$base..HEAD" 2>/dev/null | head -20
   printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$path" diff --stat "$base...HEAD" 2>/dev/null | tail -15
   printf '\n--- working tree\n'; git -C "$path" status --short 2>/dev/null | head -20
@@ -664,7 +675,9 @@ cmd_path() {
   repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "path: worktree name required"
   resolve_repo "$repo"; local path branch; require_wt "$name" path branch "path"; printf '%s\n' "$path"
-  wt_result path found "$name" "$REPO"
+  local facts='{}'
+  if [[ -n ${WG_MACHINE_RESULT:-} ]]; then facts=$(jq -cn --arg path "$path" '{path:$path}'); fi
+  wt_result path found "$name" "$REPO" "" "" "$facts"
 }
 # The table dispatcher passes arguments; the picker intentionally passes none.
 # shellcheck disable=SC2120

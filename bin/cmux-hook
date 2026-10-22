@@ -50,6 +50,7 @@ log() { # Keep diagnostics in this log so the native automation response stays u
   return 0; }
 PERL=$(command -v perl || true)
 DEADLINE=$(( $(date +%s) + 15 ))
+# shellcheck disable=SC2329  # CMUX_RUN and VM_SSH_RUN invoke this function.
 capped() { # capped <cmd…>: one cmux call, inside what is left of that budget. `workspace list --json`
            # answers in ~0.02 s, and `cmux ssh` in ~4 s. The 1.2-2.9 s quoted in the notes is how long a
            # row takes to *paint*: UI work that happens after the CLI has already returned. So the cap is
@@ -78,6 +79,7 @@ quiet_control() { event_handled; printf '%s\n' '{"effects":{"record":false,"mark
 CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
 CMUX=$(cmux_bin) || { log "cmux executable not found"; exit 0; }
 CMUX_RUN=(capped "$CMUX")
+VM_SSH_RUN=(capped ssh)
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
 
 attach_row() { # attach_row <host> <session> <title> <repo id> <command>
@@ -147,7 +149,7 @@ case $t in
     if request_valid; then
       # valid_name, repo_id, row_title and wt_session come from lib/workgrove/common.sh, which wt loads too.
       # attach_row writes the description in the format of row_tag in wt.
-      id=$(repo_id "$r"); printf -v q '%q' "$r"
+      id=$(repo_id "$r")
       # Synchronous on purpose: cmux authorizes the socket by process ancestry. The moment this hook
       # exits, a backgrounded child is reparented away from the cmux tree. The app then refuses that
       # child ("Access denied - only processes started inside cmux can connect"). Creating the row costs
@@ -155,7 +157,7 @@ case $t in
       #
       # Dismiss successful requests by ID. Native notifications arrive before the automation runs.
       # The automation cannot suppress delivery effects. Keep diagnostics in $LOG.
-      if attach_row "$h" "$(wt_session "$n" "$r")" "$(row_title "$n")" "$id" "\"\$HOME/.local/bin/wt\" run $n -r $q" >/dev/null 2>&1; then
+      if attach_row "$h" "$(wt_session "$n" "$r")" "$(row_title "$n")" "$id" "$(vm_run_line "$n" "$r")" >/dev/null 2>&1; then
         quiet
       else
         log "ignored wt-attach: could not attach row for workspace $ws"
@@ -168,22 +170,18 @@ case $t in
        from_row_on_host "$ws" "$h"; then
       id=$(repo_id "$r"); sess=$(wt_session "$n" "$r")
       if [[ $(row_by_title "$(row_title "$n")" "$id" "$h") == "$ws" ]]; then
-        printf -v q '%q' "$r"; rc=0
-        gone=$(capped ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" "WT_MACHINE=1 exec \"\$HOME/.local/bin/wt\" path $n -r $q" 2>&1) || rc=$?
-        result_rc=0; missing=0
-        result=$(wt_read_result "$gone" path) || result_rc=$?
-        if [[ $rc -eq 1 ]]; then
-          if [[ $result_rc -eq 0 ]]; then
-            if jq -e --arg n "$n" --arg r "$r" '.status == "missing" and .name == $n and .repo == $r' <<<"$result" >/dev/null; then missing=1; fi
-          # WT_COMPAT: Remove when every VM emits protocol 1 path results.
-          elif [[ $result_rc -eq 2 && $gone == *"no worktree named '$n' in $r"* ]]; then missing=1; fi
-        fi
-        if [[ $missing -ne 1 ]]; then
+        rc=0; result_rc=0; missing=0
+        declare -A result=()
+        vm_result "$h" path result gone gone_error rc -- "$n" -r "$r" || result_rc=$?
+        if [[ $rc == 1 && $result_rc == 0 && ${result[status]} == missing ]]; then missing=1; fi
+        if [[ $result_rc == 3 ]]; then
+          log "ignored wt-close for task $n of $id on $h: unsupported result protocol; run wt update on the Mac"
+        elif [[ $missing -ne 1 ]]; then
           log "ignored wt-close for task $n of $id on $h: could not confirm its worktree is gone"
         elif close_row "$ws" self >/dev/null 2>&1; then
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
-          if capped ssh -o BatchMode=yes -o ConnectTimeout=4 "$h" "exec tmux kill-session -t '=$sess'" >/dev/null 2>&1; then
+          if vm_tmux "$h" kill-session "$sess" >/dev/null 2>&1; then
             quiet_control
           else
             log "could not stop tmux session $sess on $h after closing $ws"

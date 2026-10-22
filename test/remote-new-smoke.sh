@@ -68,6 +68,7 @@ prepare_cmux() {
 cat >"$TEST_ROOT/local/bin/ssh.fixture" <<'SSH'
 #!/usr/bin/env bash
 printf '%s\n' "$cmd" >>"$SSH_LOG"
+[[ ${REMOTE_OUTPUT_MODE:-} != text && ${REMOTE_OUTPUT_MODE:-} != legacy ]] || printf 'SSH warning\n' >&2
 if [[ "$SSH_MODE" == lost && "$cmd" == *' new '* ]]; then
   HOME="$REMOTE_HOME" CMUX_SSH_ATTEMPT_ID=1 WT_REPOS_DIR="$REMOTE_HOME/discovery" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
     REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" fake_ssh_run "$cmd" >/dev/null
@@ -101,7 +102,20 @@ if [[ $1 == new ]]; then : >"$REMOTE_NEW_MARKER"; fi
 case $REMOTE_OUTPUT_MODE in
   bad) echo 'created ???' ;;
   malformed) printf '%s\n' "$output" | sed $'s/^WT_RESULT\t.*/WT_RESULT\t{broken/' ;;
-  old) printf '%s\n' "$output" | sed $'/^WT_RESULT\t/d' ;;
+  old|text) printf '%s\n' "$output" | sed $'/^WT_RESULT\t/d' ;;
+  legacy|facts)
+    while IFS= read -r line; do
+      if [[ $line == WT_RESULT$'\t'* ]]; then
+        record=${line#*$'\t'}
+        if [[ $REMOTE_OUTPUT_MODE == legacy ]]; then
+          record=$(jq -c 'del(.agent,.attached,.started,.path)' <<<"$record")
+        else
+          record=$(jq -c 'if .command == "show" then .state="changed wording" else . end' <<<"$record")
+        fi
+        printf 'WT_RESULT\t%s\n' "$record"
+      elif [[ $REMOTE_OUTPUT_MODE == legacy ]]; then printf '%s\n' "$line"
+      fi
+    done <<<"$output" ;;
   machine) printf '%s\n' "$output" | sed -n $'/^WT_RESULT\t/p' ;;
   *) printf '%s\n' "$output" ;;
 esac
@@ -119,6 +133,10 @@ for tool in claude codex; do
   printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/remote/.local/bin/$tool"
 done
 printf '#!/bin/sh\nexit 1\n' >"$TEST_ROOT/local/bin/fzf"   # wt task needs fzf only for the pickers that --where and -a skip
+cat >"$TEST_ROOT/local/bin/code" <<'CODE'
+#!/bin/sh
+printf '%s\n' "$*" >"$HOME/code.log"
+CODE
 chmod +x "$TEST_ROOT/local/bin/"* "$TEST_ROOT/remote/.local/bin/"*
 
 for tool in bash jq git python3; do
@@ -145,7 +163,7 @@ invoke_wt() {
     fi
     rm -rf "$TEST_ROOT/remote/repo/.git/wt"
   fi
-  WT_OUT=$(env -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u WT_HOST -u WT_AGENT \
+  WT_OUT=$(env -u CODEX_SANDBOX -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u WT_HOST -u WT_AGENT \
     HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
     CMUX_BUNDLED_CLI_PATH="$TEST_ROOT/local/bin/cmux" CMUX_LOG="$TEST_ROOT/cmux.log" \
     REAL_WT="$REPO/bin/wt" FAKE_CMUX_STATE="$FAKE_CMUX_STATE" \
@@ -424,6 +442,38 @@ scenario_real_vm() {
   end_scenario
 }
 scenario_real_vm
+
+scenario_result_versions() {
+  begin_scenario 'VM result compatibility for deferred tasks and open' || return 0
+  local mode
+  CMUX_MODE=alive SSH_MODE=ok
+  for mode in text legacy facts; do
+    REMOTE_OUTPUT_MODE=$mode
+    invoke_wt -H fakevm new task -r wt-demo --no-workspace
+    assert_eq "$mode creation succeeds" 0 "$WT_RC"
+    check "$([[ $WT_OUT != *WT_RESULT* ]] && echo yes)" "$mode exposed a result record"
+    : >"$TEST_ROOT/ssh.log"
+    invoke_wt -H fakevm attach task -r "$TEST_ROOT/remote/repo"
+    assert_eq "$mode starts a deferred task" 0 "$WT_RC"
+    if [[ $mode == facts ]]; then
+      check "$(if ! grep -qF '.git/wt/' "$TEST_ROOT/ssh.log"; then echo yes; fi)" 'facts attach read a sidecar path'
+      check "$(if ! grep -qF 'sh -s --' "$TEST_ROOT/ssh.log"; then echo yes; fi)" 'facts attach used the compatibility script'
+    fi
+    : >"$TEST_ROOT/remote/repo/.git/wt/task.started"
+    invoke_wt -H fakevm attach task -r "$TEST_ROOT/remote/repo"
+    assert_eq "$mode refuses an agent that was lost" 1 "$WT_RC"
+    check "$([[ $WT_OUT == *--restart-agent* ]] && echo yes)" "$mode omitted the recovery flag"
+    invoke_wt -H fakevm open task -r "$TEST_ROOT/remote/repo"
+    assert_eq "$mode opens the worktree" 0 "$WT_RC"
+    if [[ $mode != facts ]]; then check "$([[ $WT_OUT == *'SSH warning'* ]] && echo yes)" "$mode hid the SSH warning"; fi
+    assert_eq "$mode opens the reported path" "--folder-uri vscode-remote://ssh-remote+fakevm$TEST_ROOT/remote/repo/.worktrees/task/" \
+      "$(cat "$TEST_ROOT/local/code.log")"
+    rm "$TEST_ROOT/remote/repo/.git/wt/task.started" "$TEST_ROOT/remote-new"
+  done
+  REMOTE_OUTPUT_MODE=normal
+  end_scenario
+}
+scenario_result_versions
 
 scenario_prompt_order() {
   begin_scenario 'remote briefs preserve explicit and stdin argument order' || return 0

@@ -34,6 +34,7 @@ cat > "$TEST_ROOT/bin/ssh" <<'SSH'
 #!/bin/sh
 case "$*" in
   *' path task -r /vm/repos/repo')
+    if [ -n "${REMOTE_PATH_RESULT:-}" ]; then printf '%s\n' "$REMOTE_PATH_RESULT" >&2; exit 1; fi
     [ "$REMOTE_EXISTS" = 1 ] && { echo /vm/repos/repo/.worktrees/task; exit 0; }
     echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
     exit 1 ;;
@@ -362,6 +363,34 @@ scenario_native_attach_close() {
   end_scenario
 }
 scenario_native_attach_close
+
+scenario_close_record_controls() {
+  begin_scenario 'close checks reject field injection in unknown record strings' || return 0
+  local extra out malicious
+  for extra in '{"extra":"ok\u0000status\u0000missing"}' '{"extra\u0000status":"missing"}'; do
+    record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+    malicious=$(WG_MACHINE_RESULT=1 wt_result path found task /vm/repos/repo '' '' "$extra")
+    out=$(REMOTE_PATH_RESULT="$malicious" hook)
+    assert_eq 'an invalid record retains the notification' '' "$out"
+    lacks "$CMUX_LOG" 'workspace close'
+    has "$XDG_STATE_HOME/cmux-hook.log" 'could not confirm its worktree is gone'
+  done
+  end_scenario
+}
+scenario_close_record_controls
+
+scenario_close_protocol_hint() {
+  begin_scenario 'newer VM results retain the row and name the Mac update command' || return 0
+  local future out
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  future=$(WG_MACHINE_RESULT=2 WT_PROTOCOL=2 wt_result path missing task /vm/repos/repo)
+  out=$(REMOTE_PATH_RESULT="$future" hook)
+  assert_eq 'an unsupported version retains the notification' '' "$out"
+  lacks "$CMUX_LOG" 'workspace close'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'unsupported result protocol; run wt update on the Mac'
+  end_scenario
+}
+scenario_close_protocol_hint
 
 scenario_notification_budget() {
   begin_scenario 'notification bursts do not consume the open request budget' || return 0

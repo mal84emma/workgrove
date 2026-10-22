@@ -826,7 +826,31 @@ scenario_list_show_path() {
   assert_wt_ok "machine show" show machine -r "$ra"
   assert_eq "show result identity" "found|machine|$ra|$(wt_session machine "$ra")" \
     "$(wt_read_result "$WT_OUT" show | jq -r '[.status,.name,.repo,.session] | join("|" )')"
+  assert_eq 'show emits boolean facts without changing protocol 1' '1|false|false|false' \
+    "$(wt_read_result "$WT_OUT" show | jq -r '[.version,.agent,.attached,.started] | map(tostring) | join("|" )')"
+  : >"$ra/.git/wt/machine.started"
+  assert_wt_ok 'machine show reports a started task' show machine -r "$ra"
+  assert_eq 'show reads the started marker' true "$(wt_read_result "$WT_OUT" show | jq -r .started)"
+  local facts_bin="$TEST_ROOT/show-facts-bin"
+  mkdir -p "$facts_bin"
+  cat >"$facts_bin/tmux" <<'TMUX'
+#!/bin/sh
+case "$1" in
+  has-session) exit 0 ;;
+  list-panes) echo /dev/pts/3 ;;
+  list-clients) echo 'attached client' ;;
+esac
+TMUX
+  printf '#!/bin/sh\nexit 0\n' >"$facts_bin/pgrep"
+  chmod +x "$facts_bin/"*
+  WT_PATH_PREFIX="$facts_bin"
+  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=test WT_HOST=fakevm)
+  assert_wt_ok 'machine show reports a running attached agent' show machine -r "$ra"
+  assert_eq 'show emits observed agent and attachment facts' 'true|true|true' \
+    "$(wt_read_result "$WT_OUT" show | jq -r '[.agent,.attached,.started] | map(tostring) | join("|" )')"
+  WT_PATH_PREFIX='' WT_RELAY_ENV=()
   assert_wt_ok "machine path" path machine -r "$ra"
+  assert_eq 'path result carries its path' "$ra/.worktrees/machine" "$(wt_read_result "$WT_OUT" path | jq -r .path)"
   assert_eq "found path status" found "$(wt_read_result "$WT_OUT" path | jq -r .status)"
   assert_wt_fails 1 "no worktree named 'nosuch'" path nosuch -r "$ra"
   assert_eq "missing path identity" "missing|nosuch|$ra" \
@@ -1767,7 +1791,7 @@ STUB
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_ACTIVE=1")
   : >"$CMUX_LOG"
   assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
-  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$CMUX_LOG")" "tmux_agent"
+  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$CMUX_LOG")" "bash -s --"
   assert_lacks "an older VM wt cannot remove the active task" "$(cat "$CMUX_LOG")" "rm active-vm"
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_QUERY_FAIL=1")
   : >"$CMUX_LOG"
@@ -1874,11 +1898,19 @@ done
 output=$(PATH="$FAKE_VM_BIN:$PATH" CMUX_SSH_ATTEMPT_ID=1 FAKE_SHOW_PROBE=1 WT_MACHINE=1 "$FAKE_VM_WT" "${args[@]}")
 while IFS= read -r line; do
   if [[ $line == WT_RESULT$'\t'* ]]; then
-    [[ $REMOTE_WT_FORMAT == machine ]] || continue
+    [[ $REMOTE_WT_FORMAT != text ]] || continue
+    record=${line#*$'\t'}
+    if [[ $REMOTE_WT_FORMAT == machine ]]; then
+      record=$(jq -c 'del(.agent,.attached,.started,.path)' <<<"$record")
+    else
+      record=$(jq -c '.state="changed wording"' <<<"$record")
+    fi
+    line=WT_RESULT$'\t'$record
     # Change only the session field when a scenario injects naming drift.
     if [[ $REMOTE_WT_SESSION != wt-project-task ]]; then
       line=WT_RESULT$'\t'$(jq -c --arg session "$REMOTE_WT_SESSION" '.session=$session' <<<"${line#*$'\t'}")
     fi
+  elif [[ $REMOTE_WT_FORMAT == facts ]]; then continue
   elif [[ $REMOTE_WT_SESSION != wt-project-task ]]; then
     line=${line//wt-project-task/$REMOTE_WT_SESSION}
   fi
@@ -2005,9 +2037,12 @@ STUB
   done
   REMOTE_WT_SESSION=""
 
-  REMOTE_WT_FORMAT=machine
-  assert_wt_ok "machine show preserves connected client replacement" -H fakevm attach task -r /vm/repos/project
-  assert_has "machine show keeps the replacement recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
+  local format
+  for format in text machine facts; do
+    REMOTE_WT_FORMAT=$format
+    assert_wt_ok "$format show preserves connected client replacement" -H fakevm attach task -r /vm/repos/project
+    assert_has "$format show keeps the replacement recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
+  done
   REMOTE_WT_FORMAT=text
 
   # A row that never dropped needs the same fresh prompt and detached-session proof before any send.
@@ -2020,6 +2055,15 @@ STUB
   assert_lacks "a detached session was not replaced" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
   assert_eq "the detached session got one return" 1 "$(grep -c '^send-key --workspace remote-row enter$' "$CMUX_LOG" || true)"
   assert_has "the detached report was verified again" "$(cat "$TEST_ROOT/remote-log")" 'tmux has-session -t =wt-project-task'
+
+  for format in machine facts; do
+    REMOTE_WT_FORMAT=$format
+    : >"$CMUX_LOG"
+    assert_wt_ok "$format detached session is re-attached" -H fakevm attach task -r /vm/repos/project
+    assert_eq "$format detached session gets one tmux command" 1 "$(tmux_sends)"
+    assert_has "$format detached session reports reattachment" "$WT_OUT" '(re-attached)'
+  done
+  REMOTE_WT_FORMAT=text
 
   # A shell-shaped screen cannot prove that a native row has finished reconnecting.
   local remote_state

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
-#   WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL.
+#   VM_SSH_RUN, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL, WT_TMPFILES.
 # Requires no functions from other modules. Loads cmux.sh, task.sh, options.sh, and version.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
@@ -86,12 +86,14 @@ valid_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]]; }
 
 wt_result() {
   [[ ${WG_MACHINE_RESULT:-} =~ ^[1-9][0-9]*$ ]] || return 0
+  local facts=${7-}
+  [[ -n $facts ]] || facts='{}'
   # WT_COMPAT: Keep version 1 emission until no Mac requests protocol 1.
   printf 'WT_RESULT\t'
   jq -cn --arg command "$1" --arg status "$2" --arg name "$3" --arg repo "$4" \
-    --arg session "${5:-}" --arg state "${6:-}" \
+    --arg session "${5:-}" --arg state "${6:-}" --argjson facts "$facts" \
     --argjson protocol "$WT_PROTOCOL" --arg requested "$WG_MACHINE_RESULT" \
-    '{version:([$protocol, ($requested | tonumber)] | min), command:$command, status:$status, name:$name, repo:$repo, session:$session, state:$state}'
+    '{version:([$protocol, ($requested | tonumber)] | min), command:$command, status:$status, name:$name, repo:$repo, session:$session, state:$state} + $facts'
 }
 
 wt_version() (
@@ -131,7 +133,137 @@ wt_read_result() {
   jq -ec --argjson protocol "$WT_PROTOCOL" '
       if .version == 1 and .version <= $protocol
         and all(.status, .name, .repo, .session, .state; type == "string" and (explode | all(. >= 32 and . != 127)))
+        and all(to_entries[]; (.key | explode | all(. >= 32 and . != 127))
+          and (.value | if type == "string" then (explode | all(. >= 32 and . != 127)) else true end))
+        and all(to_entries[]; if .key == "agent" or .key == "attached" or .key == "started"
+          then (.value | type == "boolean")
+          elif .key == "path" then (.value | type == "string" and (explode | all(. >= 32 and . != 127)))
+          else true end)
       then . else error("invalid wt result") end' <<<"$parsed" 2>/dev/null || return 1
+}
+
+# Decode only after validation rejects control characters in every key and string value.
+wt_read_result_into() {
+  local -n __result_fields=$3
+  local __result_json __field_key __field_value
+  __result_fields=()
+  __result_json=$(wt_read_result "$1" "$2" 2>/dev/null) || return $?
+  while IFS= read -r -d '' __field_key && IFS= read -r -d '' __field_value; do
+    [[ -n $__field_key ]] || continue
+    # shellcheck disable=SC2004  # The output names an associative array.
+    __result_fields[$__field_key]=$__field_value
+  done < <(jq -j 'to_entries[] | .key, "\u0000", (.value | tostring), "\u0000"' <<<"$__result_json")
+}
+
+# These builders do not run commands or report errors.
+# shellcheck disable=SC2016  # HOME belongs to the VM shell.
+vm_wt_line() { printf 'exec "$HOME/.local/bin/wt" %s' "$(shell_join "$@")"; }
+# shellcheck disable=SC2016  # HOME belongs to the VM shell.
+vm_run_line() { printf '"$HOME/.local/bin/wt" run %s' "$(shell_join "$1" -r "$2")"; }
+
+# The hook injects its deadline runner here, as it does for cmux calls.
+VM_SSH_RUN=(ssh)
+vm_ssh() {
+  local host=$1 line=$2; shift 2
+  ssh_host_check "$host" || return 1
+  "${VM_SSH_RUN[@]}" -o BatchMode=yes -o ConnectTimeout=5 \
+    -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$@" "$host" "$line"
+}
+
+# Preserve SSH's exit status. Callers decide how to report transport failures.
+vm_wt() {
+  local host=$1 machine='' tty=() guard; shift
+  case ${1:-} in
+    --machine) machine="WT_MACHINE=$WT_PROTOCOL "; shift ;;
+    --tty) [[ ! -t 0 ]] || tty=(-t); shift ;;
+  esac
+  # shellcheck disable=SC2016
+  guard='test -x "$HOME/.local/bin/wt" || { printf "%s\n" '
+  guard+="$(shell_join "remote wt is missing; run: wt -H $host doctor --json; wt -H $host setup --root <persistent-root>")"
+  guard+=' >&2; exit 127; }; '
+  vm_ssh "$host" "$guard$machine$(vm_wt_line "$@")" "${tty[@]}"
+}
+
+vm_tmux() {
+  local q; q=$(shell_join "=$3")
+  case $2 in
+    kill-session|has-session) vm_ssh "$1" "exec tmux $2 -t $q" ;;
+    detached) vm_ssh "$1" "tmux has-session -t $q 2>/dev/null && c=\$(tmux list-clients -t $q 2>/dev/null) && [ -z \"\$c\" ]" ;;
+    *) return 2 ;;
+  esac
+}
+
+# vm_result <host> <sub> <record array> <stdout> <stderr> <command status> -- <args...>
+# Return the parser status separately from the command status. Never retry a command.
+# Return 2 when text output lacks the required identity, 1 for invalid records, and 3 for newer protocols.
+vm_result() {
+  local __host=$1 __sub=$2
+  local __fields_output=$3
+  local -n __vm_record=$3 __visible=$4 __errors=$5 __vm_rc=$6
+  shift 7
+  local __raw __stdout __stderr __stderr_file __parse=0 __value __name='' __repo='' __arg __want_repo=0
+  __vm_record=() __visible='' __errors='' __vm_rc=0
+  for __arg in "$@"; do
+    if [[ $__want_repo == 1 ]]; then __repo=$__arg; __want_repo=0; continue; fi
+    case $__arg in
+      -r|--repo) __want_repo=1 ;;
+      --repo=*) __repo=${__arg#*=} ;;
+      -*) ;;
+      *) [[ -n $__name ]] || __name=$__arg ;;
+    esac
+  done
+  __stderr_file=$(mktemp "${TMPDIR:-/tmp}/wt-vm-stderr.XXXXXX") || { __vm_rc=1; return 1; }
+  WT_TMPFILES+=("$__stderr_file")
+  __stdout=$(vm_wt "$__host" --machine "$__sub" "$@" 2>"$__stderr_file") || __vm_rc=$?
+  __stderr=$(cat "$__stderr_file")
+  rm -f "$__stderr_file"
+  __raw=$__stdout$'\n'$__stderr
+  __visible=$(printf '%s\n' "$__stdout" | sed $'/^WT_RESULT\t/d')
+  __errors=$(printf '%s\n' "$__stderr" | sed $'/^WT_RESULT\t/d')
+  wt_read_result_into "$__raw" "$__sub" "$__fields_output" || __parse=$?
+  case $__parse in
+    0)
+      [[ ${__vm_record["name"]} == "$__name" || $__sub == new ]] || return 1
+      if [[ $__sub == path && ${__vm_record["status"]} == missing ]]; then
+        [[ ${__vm_record["repo"]} == "$__repo" ]] || return 1
+        return 0
+      fi ;;
+    2)
+      # WT_COMPAT: Remove text decoding when every VM emits protocol 1 records.
+      case $__sub in
+        new|show)
+          __vm_record["repo"]=$(sed -n 's/^ *repo: *//p' <<<"$__visible" | head -1)
+          __value=$(sed -n 's/^ *session: *//p' <<<"$__visible" | head -1)
+          __vm_record["session"]=${__value%% *}
+          if [[ $__sub == new ]]; then
+            __vm_record["name"]=$(sed -n 's/^created //p' <<<"$__visible" | head -1)
+            __vm_record["status"]=created
+          else
+            __vm_record["name"]=$__name __vm_record["status"]=found
+            __value=${__value#*(}; __vm_record["state"]=${__value%)}
+          fi ;;
+        path)
+          __vm_record["name"]=$__name __vm_record["repo"]=$__repo
+          if [[ $__vm_rc == 1 && $__raw == *"no worktree named '$__name' in $__repo"* ]]; then
+            __vm_record["status"]=missing
+          elif [[ $__vm_rc == 0 ]]; then
+            __vm_record["status"]=found __vm_record["path"]=$__visible
+          else return 2; fi
+          return 0 ;;
+        *) return 2 ;;
+      esac ;;
+    *) return "$__parse" ;;
+  esac
+  case $__sub in
+    new|show)
+      [[ -n ${__vm_record["name"]} && -n ${__vm_record["repo"]} && -n ${__vm_record["session"]} ]] || return 2
+      valid_name "${__vm_record["name"]}" &&
+        [[ ${__vm_record["session"]} == "$(wt_session "${__vm_record["name"]}" "${__vm_record["repo"]}")" ]] || return 1 ;;
+    path)
+      # WT_COMPAT: Protocol 1 originally sent the path only in display text.
+      [[ -v __vm_record["path"] ]] || __vm_record["path"]=$__visible ;;
+  esac
+  return 0
 }
 
 # cmux authorizes relay requests against the current row's identity. A reattach changes the tmux session

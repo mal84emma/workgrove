@@ -2,17 +2,15 @@
 # Reads globals: RANDOM, WG_LIB_DIR.
 # Requires cmux.sh: close_row, cmux_row_field, cmux_screen, cmux_select, row_label,
 #   row_remote_field, row_shell_prompt, send_tmux_line.
-# Requires common.sh: die, row_title, shell_join, tmux_cmd, usage, valid_name, warn, wg_sleep,
-#   wt_read_result, wt_session.
+# Requires common.sh: die, row_title, shell_join, tmux_cmd, usage, vm_result, vm_run_line,
+#   vm_tmux, warn, wg_sleep.
 # Requires options.sh: wt_opts, wt_spec.
-# Requires remote.sh: agent_on_vm, remote_row, remote_run_cmd, remote_sh, remote_sh_raw,
-#   remote_wt_result.
+# Requires remote.sh: agent_on_vm, remote_row, remote_sh, remote_sh_raw.
 # Requires task.sh: cmux_require, row_tag.
 
 vm_session_detached() { # vm_session_detached <host> <session> — 0 only when the VM has that tmux session and lists no
                         # client on it. One ssh call; any failure, ssh's own included, counts as "not proven"
-  local q; q=$(shell_join "=$2")
-  remote_sh_raw "$1" "tmux has-session -t $q 2>/dev/null && c=\$(tmux list-clients -t $q 2>/dev/null) && [ -z \"\$c\" ]" >/dev/null 2>&1
+  vm_tmux "$1" detached "$2" >/dev/null 2>&1
 }
 
 reattach_shell_row() { # reattach_shell_row <id> <session> <last line output> [host]
@@ -64,23 +62,32 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   need_r "$host" attach "$@"
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
-  local out session state title id path what=selected result result_rc=0
-  out=$(remote_wt_result "$host" show "$name" -r "$repo")
-  result=$(wt_read_result "$out" show 2>/dev/null) || result_rc=$?
+  local out err session state title id path what=selected rc result_rc=0 agent attached started
+  local -A result=()
+  vm_result "$host" show result out err rc -- "$name" -r "$repo" || result_rc=$?
+  [[ -z $err ]] || printf '%s\n' "$err" >&2
+  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
+  if [[ $rc != 0 ]]; then
+    [[ -z $out ]] || printf '%s\n' "$out" >&2
+    return "$rc"
+  fi
   case $result_rc in
-    0)
-      [[ $(jq -r .status <<<"$result") == found && $(jq -r .name <<<"$result") == "$name" ]] || die "unexpected output from $host"
-      session=$(jq -r .session <<<"$result"); path=$(jq -r .repo <<<"$result"); state=$(jq -r .state <<<"$result") ;;
-    # WT_COMPAT: Remove when every VM emits protocol 1 task results.
-    2)
-      session=$(printf '%s\n' "$out" | sed -n 's/^ *session: *//p' | head -1)
-      path=$(printf '%s\n' "$out" | sed -n 's/^ *repo: *//p' | head -1)
-      state="${session#*(}"; state="${state%)}"; session="${session%% *}" ;;
+    0) [[ ${result[status]} == found ]] || die "unexpected output from $host" ;;
+    2) die "$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))" ;;
     3) die "unsupported result protocol from $host; run wt update on the Mac" ;;
     *) die "unexpected output from $host" ;;
   esac
-  [[ -n "$session" && -n "$path" ]] || die "$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))"
-  valid_name "$name" && [[ "$session" == "$(wt_session "$name" "$path")" ]] || die "unexpected output from $host"
+  session=${result[session]} path=${result[repo]} state=${result[state]-}
+  agent=${result[agent]-} attached=${result[attached]-} started=${result[started]-}
+  # WT_COMPAT: Keep wording checks for VMs that omit the boolean fields.
+  if [[ -z $agent ]]; then
+    agent=false
+    case $state in "agent running"|"agent running, detached") agent=true ;; esac
+  fi
+  if [[ -z $attached ]]; then
+    attached=true
+    [[ $state != *detached && $state != none ]] || attached=false
+  fi
   title=$(row_title "$name")
   id=$(cmux_row_field "$title" "$path" id "$host" checked) || die "cannot list cmux rows; not creating a row on a lookup that failed"
   if [[ $reattach -eq 1 ]]; then
@@ -102,7 +109,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
       1) ;;
       *) die "cannot check the agent in tmux session $session on $host; kept the session" ;;
     esac
-    remote_sh "$host" "exec tmux kill-session -t $(shell_join "=$session")" >/dev/null 2>&1 || true
+    vm_tmux "$host" kill-session "$session" >/dev/null 2>&1 || true
     cmux_require close_row "$(cmux_row_field "$title" "$path" id "$host")"
     for _ in 1 2 3; do                     # remote_row creates a row only when no row is left, so wait for that
       [[ -n "$(cmux_row_field "$title" "$path" id "$host")" ]] || break
@@ -110,24 +117,31 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     done
     [[ -z "$(cmux_row_field "$title" "$path" id "$host")" ]] \
       || die "row $(row_label "$title" "$path" "$host") is still open; close it in cmux, then re-run: wt -H $host attach --restart-agent -r $(shell_join "$repo") $name"
-    remote_row "$host" "$session" "$title" "$path" "$(remote_run_cmd "$name" "$path")" --no-focus
+    remote_row "$host" "$session" "$title" "$path" "$(vm_run_line "$name" "$path")" --no-focus
     return 0
   fi
-  if [[ "$state" == none && -z "$id" ]]; then
-    # No tmux session and no started marker means that this task has never run. Restarting a lost agent
-    # must stay a deliberate choice.
-    if remote_sh "$host" "test ! -e $(shell_join "$path/.git/wt/$name.started") && ! tmux has-session -t $(shell_join "=$session") 2>/dev/null"; then
-      remote_row "$host" "$session" "$title" "$path" "$(remote_run_cmd "$name" "$path")" --no-focus
+  if [[ $agent == false && $attached == false && -z $id ]]; then
+    local never_started=false session_rc=0
+    if [[ -n $started ]]; then
+      if [[ $started == false ]]; then
+        vm_tmux "$host" has-session "$session" >/dev/null 2>&1 || session_rc=$?
+        [[ $session_rc != 1 ]] || never_started=true
+      fi
+    # WT_COMPAT: Older VMs do not report whether the task has started.
+    elif [[ $state == none ]]; then
+      remote_sh "$host" "sh -s -- $(shell_join "$path" "$name" "$session")" <<'WT_STARTED' && never_started=true
+test ! -e "$1/.git/wt/$2.started" && ! tmux has-session -t "=$3" 2>/dev/null
+WT_STARTED
+    fi
+    if [[ $never_started == true ]]; then
+      remote_row "$host" "$session" "$title" "$path" "$(vm_run_line "$name" "$path")" --no-focus
       return 0
     fi
   fi
-  case "$state" in
-    "agent running"|"agent running, detached") ;;
-    *) die "$name on $host has no agent pane ($state); restart it: wt -H $host attach --restart-agent -r $(shell_join "$repo") $name; if an agent is visibly running there, the VM's wt is older than the Mac's: wt -H $host update" ;;
-  esac
+  [[ $agent == true ]] || die "$name on $host has no agent pane ($state); restart it: wt -H $host attach --restart-agent -r $(shell_join "$repo") $name; if an agent is visibly running there, the VM's wt is older than the Mac's: wt -H $host update"
   [[ -n "$id" ]] || { remote_row "$host" "$session" "$title" "$path" ""; return 0; }
   local _last
-  if [[ "$state" == *detached ]]; then   # show may be stale; prove the prompt and detached session again
+  if [[ $attached == false ]]; then   # show may be stale; prove the prompt and detached session again
     if reattach_shell_row "$id" "$session" _last "$host"; then what=re-attached
     else warn "did not re-attach $title $(row_tag "$host" "$path"); inspect the row, then use: wt -H $host attach --reattach -r $(shell_join "$repo") $name"
     fi
