@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: CMUX_ERROR, CMUX_SSH_ATTEMPT_ID, CODEX_SANDBOX, HOME, PWD, REPO, REPOS_PATH,
-#   ROW_SEP, WG_EXIT_HANDLERS, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_HOST, WT_REPOS_DIR,
+#   ROW_SEP, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_HOST, WT_REPOS_DIR,
 #   WT_TMPFILES, WT_TMPFILES_PID.
 # Requires cmux.sh: cmux_notify, cmux_ok, cmux_row_field, row_label.
 # Requires common.sh: die, have, hook_safe_path, on_exit, repo_id, row_title, shell_join,
@@ -28,8 +28,6 @@ wt_register_tmpfile() {
     # A subshell owns only its new paths. Do not run its parent's EXIT callbacks.
     WT_TMPFILES=()
     WT_TMPFILES_PID=$BASHPID
-    # shellcheck disable=SC2034  # The exit dispatcher reads this array.
-    WG_EXIT_HANDLERS=()
     on_exit wt_cleanup
   fi
   WT_TMPFILES+=("$@")

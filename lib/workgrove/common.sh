@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
+# Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_EXIT_PID, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
 #   VM_SSH_RUN, VM_WT_CAPTURE_FAILURE, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL, WT_TMPFILES.
 # Requires no functions from other modules. Loads cmux.sh, task.sh, options.sh, and version.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
@@ -42,7 +42,12 @@ need_jq() { have jq || die "jq not found (brew install jq, or sudo apt-get insta
 
 # Each callback receives the original exit status, in registration order.
 WG_EXIT_HANDLERS=()
+WG_EXIT_PID=$BASHPID
 on_exit() {
+  if [[ $WG_EXIT_PID != "$BASHPID" ]]; then
+    WG_EXIT_HANDLERS=()
+    WG_EXIT_PID=$BASHPID
+  fi
   WG_EXIT_HANDLERS+=("$1")
   trap 'wg_on_exit "$?"' EXIT
 }

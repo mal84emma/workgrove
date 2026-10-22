@@ -172,6 +172,32 @@ scenario_foreground_signal() {
   end_scenario
 }
 
+scenario_subshell_callbacks() {
+  begin_scenario 'subshell registration preserves callbacks added in that shell' || return 0
+  local rc=0
+  bash -c '
+    source "$1/lib/workgrove/common.sh"
+    root=$2
+    parent() { printf "parent\n" >"$root/own-parent-callback"; }
+    child() { printf "child\n" >"$root/own-child-callback"; }
+    touch "$root/own-parent-pending"
+    wt_register_tmpfile "$root/own-parent-pending"
+    on_exit parent
+    (
+      on_exit child
+      touch "$root/own-child-pending"
+      wt_register_tmpfile "$root/own-child-pending"
+    )
+    [[ -e $root/own-child-callback && ! -e $root/own-parent-callback && -e $root/own-parent-pending ]] || exit 8
+  ' bash "$REPO" "$TEST_ROOT" || rc=$?
+  assert_eq 'the child keeps its own callback without running the parent callback' 0 "$rc"
+  assert_eq 'the child callback runs' child "$(cat "$TEST_ROOT/own-child-callback" 2>/dev/null || true)"
+  assert_eq 'the parent callback runs at parent exit' parent "$(cat "$TEST_ROOT/own-parent-callback")"
+  assert_absent "$TEST_ROOT" own-child-pending
+  assert_absent "$TEST_ROOT" own-parent-pending
+  end_scenario
+}
+
 scenario_setup_signal() {
   begin_scenario 'remote setup removes its diagnostic file after TERM' || return 0
   local rc=0
@@ -235,6 +261,7 @@ scenario_cleanup_signal
 LOG="$TEST_ROOT/parent-callback"
 scenario_subshell_cleanup
 scenario_foreground_signal
+scenario_subshell_callbacks
 scenario_setup_signal
 scenario_host_signal
 lib_summary
