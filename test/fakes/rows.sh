@@ -32,7 +32,7 @@ fake_identity_records() {
     '$rows + ($references | to_entries | map({id:.key,ref:.value}))'
 }
 
-# Keep each seed's reference stable. An explicit reference must be unused by other seeds.
+# Keep each seed's reference stable and its identities distinct from other rows.
 fake_ref() {
   local id=$1 requested=${2:-} root registry existing records ref registry_json='{}'
   root=$(fake_identity_root) || return
@@ -50,12 +50,15 @@ fake_ref() {
   elif [[ -n $requested ]]; then
     [[ $requested =~ ^workspace:[1-9][0-9]*$ ]] || return 64
     ref=$requested
+  elif [[ $id =~ ^workspace:[1-9][0-9]*$ ]]; then
+    ref=$id
   else
-    ref=$(jq -r '[.[].ref | strings | select(test("^workspace:[1-9][0-9]*$")) | split(":")[1] | tonumber]
+    ref=$(jq -r '[.[] | .id, .ref | strings | select(test("^workspace:[1-9][0-9]*$")) | split(":")[1] | tonumber]
       | "workspace:" + (((max // 0) + 1) | tostring)' <<<"$records") || return
   fi
-  if jq -e --arg id "$id" --arg ref "$ref" 'any(.[]; .id != $id and .ref == $ref)' <<<"$records" >/dev/null; then
-    printf 'fake workspace reference already belongs to another row: %s\n' "$ref" >&2
+  if jq -e --arg id "$id" --arg ref "$ref" \
+    'any(.[]; .id != $id and (.ref == $id or .id == $ref or .ref == $ref))' <<<"$records" >/dev/null; then
+    printf 'fake row identities overlap another row: %s (%s)\n' "$id" "$ref" >&2
     return 64
   fi
   mkdir -p "$root"

@@ -318,8 +318,8 @@ scenario_fake_seeded_rows() {
   fake_cmux_init "$FAKE_CMUX_STATE"
   : >"$FAKE_CMUX_STATE/mutate"
   fake_windows "$first" "$second" >"$FAKE_CMUX_STATE/windows.json"
-  seed=$(fake_row 00000000-0000-4000-8000-000000000001 seed old test-vm | jq -c '.ref="workspace:7"')
-  other=$(fake_row 00000000-0000-4000-8000-000000000002 other old test-vm | jq -c '.ref="workspace:3"')
+  seed=$(fake_row 00000000-0000-4000-8000-000000000001 seed old test-vm connected cmux-tui null workspace:7)
+  other=$(fake_row 00000000-0000-4000-8000-000000000002 other old test-vm connected cmux-tui null workspace:3)
   fake_rows "$seed" >"$FAKE_CMUX_STATE/rows.json"
   fake_rows "$seed" >"$FAKE_CMUX_STATE/rows/$first.json"
   fake_rows "$other" >"$FAKE_CMUX_STATE/rows/$second.json"
@@ -383,6 +383,52 @@ scenario_fake_seed_refs() {
   end_scenario
 }
 scenario_fake_seed_refs
+
+scenario_fake_legacy_refs() {
+  begin_scenario 'legacy row IDs cannot alias another row reference' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/legacy-ref-state"
+  local fake="$REPO/test/fakes/cmux" first second row collision rc
+  local window=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  touch "$FAKE_CMUX_STATE/mutate"
+  fake_windows "$window" >"$FAKE_CMUX_STATE/windows.json"
+  first=$(fake_row workspace:2 first original test-vm)
+  second=$(fake_row workspace:1 second original test-vm)
+  assert_eq 'a legacy ID defaults to its own reference' workspace:2 "$(jq -r .ref <<<"$first")"
+  assert_eq 'reverse seed order preserves a distinct legacy alias' workspace:1 "$(jq -r .ref <<<"$second")"
+  fake_rows "$first" "$second" >"$FAKE_CMUX_STATE/rows.json"
+  fake_window_rows "$window" "$first" "$second" >"$FAKE_CMUX_STATE/rows/$window.json"
+  "$fake" workspace-action --workspace workspace:1 --action set-description --description changed
+  assert_eq 'a legacy alias updates only its global row' '["original","changed"]' "$(jq -c '[.workspaces[].description]' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'a legacy alias updates only its scoped row' '["original","changed"]' "$(jq -c '[.workspaces[].description]' "$FAKE_CMUX_STATE/rows/$window.json")"
+  "$fake" workspace close workspace:1 --force
+  assert_eq 'closing a legacy alias preserves the other global row' workspace:2 "$(jq -r '.workspaces[].id' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'closing a legacy alias preserves the other scoped row' workspace:2 "$(jq -r '.workspaces[].id' "$FAKE_CMUX_STATE/rows/$window.json")"
+
+  FAKE_CMUX_STATE="$TEST_ROOT/legacy-ref-collision-state"
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  fake_windows "$window" >"$FAKE_CMUX_STATE/windows.json"
+  row=$(fake_row workspace:9 legacy original test-vm connected cmux-tui null workspace:1)
+  assert_eq 'a legacy seed can keep an explicit distinct reference' workspace:1 "$(jq -r .ref <<<"$row")"
+  fake_rows "$row" >"$FAKE_CMUX_STATE/rows.json"
+  fake_window_rows "$window" "$row" >"$FAKE_CMUX_STATE/rows/$window.json"
+  cat "$FAKE_CMUX_STATE/rows.json" "$FAKE_CMUX_STATE/rows/$window.json" "$FAKE_CMUX_STATE/references.json" >"$TEST_ROOT/alias-before"
+  for collision in reference id; do
+    rc=0
+    case $collision in
+      reference) fake_row other-row collision '' test-vm connected cmux-tui null workspace:9 >"$TEST_ROOT/alias-output" 2>&1 || rc=$? ;;
+      id) fake_row workspace:1 collision '' test-vm >"$TEST_ROOT/alias-output" 2>&1 || rc=$? ;;
+    esac
+    assert_eq "a new $collision cannot alias another row" 64 "$rc"
+    cat "$FAKE_CMUX_STATE/rows.json" "$FAKE_CMUX_STATE/rows/$window.json" "$FAKE_CMUX_STATE/references.json" >"$TEST_ROOT/alias-after"
+    if cmp -s "$TEST_ROOT/alias-before" "$TEST_ROOT/alias-after"; then pass
+    else fail "a rejected $collision collision changed state"; fi
+  done
+  assert_eq 'automatic allocation reserves legacy IDs as well as references' workspace:10 "$(fake_row automatic-row automatic '' test-vm | jq -r .ref)"
+  assert_eq 'rebuilding a legacy seed preserves its existing binding' workspace:1 "$(fake_row workspace:9 legacy original test-vm | jq -r .ref)"
+  end_scenario
+}
+scenario_fake_legacy_refs
 
 scenario_fake_unsupported_action() {
   begin_scenario 'unsupported workspace actions preserve every snapshot' || return 0
