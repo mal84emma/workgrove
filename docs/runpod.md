@@ -65,8 +65,25 @@ Deletion or persistent-storage loss cannot be repaired through `wt attach`.
 Verify lifecycle and storage guarantees through the supplier's documentation.
 
 After an authorized stop/start, follow the [shared VM recovery checklist](remote-setup.md#restore-after-a-host-restart).
-Refresh SSH first, check doctor, and repair only missing environment.
+Check SSH first and ask the supplier to refresh the endpoint if needed.
+Doctor without `--root` reports a replaced home folder as a new host.
+Run doctor with the saved root to see the real state:
+
+```bash
+wt -H <host> doctor --root <root> --json
+```
+
 Use restore-only when compatibility links were lost; use full setup when prerequisites were also lost.
+If the host's start command writes `~/.gitconfig`, restore-only refuses with `restore-link-conflict`.
+Until [#132](https://github.com/mal84emma/workgrove/issues/132) changes that behavior, run full setup with the saved root:
+
+```bash
+wt -H <host> setup --root <root>
+```
+
+This command keeps the saved storage policy and volume trust when the root and mount are unchanged.
+
+Run doctor again to check readiness before task recovery.
 Then inspect and attach selected tasks using the ordinary Azure VM attachment decisions.
 
 Do not add installation commands to container entrypoints, supplier startup hooks, or shell startup files.
@@ -76,7 +93,7 @@ Keep relay sockets and native terminal identities on runtime storage.
 ## Verification status
 
 Offline tests cover generic SSH registration, explicit restoration, allocation limits, and task recovery with synthetic fixtures.
-The following live results come from one active Pod on 2026-10-21.
+The following table records live results from one active Pod on 2026-10-21.
 The remote installation reached workgrove revision `265acbd` through the tested update procedure.
 Replacement row checks also used shared adapter revision `02e1564` on the Mac.
 Paths, host aliases, identities, and private operational captures are omitted.
@@ -98,13 +115,31 @@ Paths, host aliases, identities, and private operational captures are omitted.
 | Claude task completion | Passed after the usage limit reset. Claude read the uploaded input, produced the exact requested file, and ran the Python assertion successfully. |
 | Claude status and task separation | Running and Idle status and the completion notification reached the correct row. Both tasks retained their inputs, tracked files, and history. |
 | Agent sandboxing | Blocked. Codex 0.163.0 could not create its sandbox namespaces; a no-op sandbox probe failed. |
-| Actual stop/start and endpoint refresh | Unverified. No provider API or lifecycle action ran. |
+| Actual stop/start and endpoint refresh | See the [2026-10-22 results](#restart-on-2026-10-22); endpoint changes and refresh remain unverified. |
 
 Codex required the supported `--no-daemon` launch option because its control socket rejected the volume's directory permissions.
 That option preserved sandbox policy; individual approvals ran the acceptance commands outside the failed sandbox.
 Follow the [agent runtime compatibility checks](remote-setup.md#check-agent-runtime-compatibility) before treating an installation as ready for unattended agent work.
 The personal volume exception does not change agent sandbox requirements.
 Claude completed the workflow test in its existing auto mode; that result does not establish operating-system sandbox isolation.
+
+### Restart on 2026-10-22
+
+A real stop/start on 2026-10-22 gave the following results for a Pod with a portable profile.
+
+| Check | Result |
+|---|---|
+| Persistent files | The checkout, profile, `env.sh`, saved Git config, agent configs and sign-ins, skill links, and backups under `<root>` survived. |
+| Home folder | The home folder was replaced, and all home links and the `~/.bashrc` block were gone. |
+| Doctor without `--root` | It reported `profile-missing` and `remote-wt-missing`, the same as a new host. |
+| Doctor with `--root` | It reported `compatibility-links-missing` and `remote-wt-missing`. |
+| Restore-only | It refused with `restore-link-conflict` because the Pod's start script had written a regular `~/.gitconfig`. |
+| Full setup | It repaired the host, backed up `~/.gitconfig`, recreated the links, and left doctor reporting ready. |
+| Update and tasks | `wt update` moved the host to `fa622e9`, and `new`, `show`, `attach`, and a Claude task worked. |
+| Agent sandbox | `codex sandbox /bin/true` still failed to create namespaces. |
+
+The SSH alias kept working; no endpoint change or refresh was tested.
+The tasks were created after the restart, so recovery of a task running before the stop remains unverified.
 
 ### Sandbox compatibility check
 
@@ -167,6 +202,8 @@ That alternative changes the execution location; it does not validate Codex isol
 
 ### Optional lifecycle validation
 
-Stop/start recovery is optional follow-up validation for this integration.
-Actual lifecycle acceptance requires separate authorization and a bounded compute budget.
-It must verify retained task files, endpoint refresh, environment repair, and explicit restart of selected lost agents.
+The 2026-10-22 restart verified persistent file retention and environment repair through full setup.
+Endpoint changes and refresh remain unverified.
+Recovery of a task running before the stop with `wt -H <host> attach --restart-agent -r <repo> <name>` remains unverified.
+Restore-only after a start command writes `~/.gitconfig` still requires the live check in [#132](https://github.com/mal84emma/workgrove/issues/132).
+Further lifecycle validation requires separate authorization and a bounded compute budget.
