@@ -175,6 +175,34 @@ If the saved profile is missing, an ordinary rerun refuses and requires explicit
 Processes, tmux sockets, relay sockets, temporary agent status, and native terminal identities remain runtime state.
 A persistent pathname cannot preserve a running process across host shutdown.
 
+### Keep the installation separate from tasks
+
+When `WT_REMOTE_ROOT` is set, `<root>/workgrove` is the installation.
+`wt repos`, `wt list --all`, and the task picker omit it.
+`wt new` refuses tasks in it, including tasks requested from an existing installation worktree.
+For workgrove development, use a separate clone with another name, such as `<root>/workgrove-dev`.
+Without `WT_REMOTE_ROOT`, workgrove checkouts remain normal task repositories.
+
+Tasks in the installation can change its `.git/config` and cause `installation-changed-run-full-setup`.
+If an older version created such a task, inspect it by installation path:
+
+```bash
+wt -H <host> show -r <root>/workgrove <task>
+wt -H <host> path -r <root>/workgrove <task>
+```
+
+Preserve any work before removing the task.
+Remove it by installation path, then run full setup to record the current installation configuration:
+
+```bash
+wt -H <host> rm -r <root>/workgrove <task>
+wt -H <host> setup --root <root>
+wt -H <host> doctor --json
+```
+
+`wt -H <host> update` also runs the installer and records the current configuration.
+Restore-only cannot record configuration changes.
+
 ## Preserve agent configuration
 
 Before migrating configuration directories, stop the affected agent processes.
