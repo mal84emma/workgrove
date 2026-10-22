@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Reads globals: CMUX_ERROR, CMUX_SSH_ATTEMPT_ID, CODEX_SANDBOX, HOME, PWD, REPO, REPOS_PATH,
+# Reads globals: BASHPID, CMUX_ERROR, CMUX_SSH_ATTEMPT_ID, CODEX_SANDBOX, HOME, PWD, REPO, REPOS_PATH,
 #   ROW_SEP, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_HOST, WT_REPOS_DIR,
 #   WT_TMPFILES, WT_TMPFILES_PID.
 # Requires cmux.sh: cmux_notify, cmux_ok, cmux_row_field, row_label.
