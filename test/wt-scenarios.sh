@@ -7,6 +7,7 @@ wt_scenarios() {
   "$@" scenario_base_resolution "2. wt new: the base is canonicalised, so rm and prune can trust it"
   "$@" scenario_names_and_collisions "3. wt new: tidied names, generated names, refused names, taken names"
   "$@" scenario_list_show_path "4. wt list / show / path / open"
+  "$@" scenario_show_limits "4b. wt show keeps every section for long task reports"
   "$@" scenario_include_and_setup "5. .wt-include copies ignored files; .wt-setup runs in the new worktree"
   "$@" scenario_rm_refusals "6. wt rm refuses to destroy work, and --force is the one way past it"
   "$@" scenario_squash_merge "6b. wt rm after a squash merge: work that landed is not a reason, work that did not still is"

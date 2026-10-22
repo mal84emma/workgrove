@@ -45,7 +45,7 @@ cmux_call() {
   return "$rc"
 }
 
-cmux_ref() { grep -oE 'workspace:[0-9]+' | head -1 || true; }
+cmux_ref() { grep -oE 'workspace:[0-9]+' | sed -n '1p' || true; }
 cmux_select() { cmux_call workspace select "$1" >/dev/null 2>&1 || cmux_error "cmux workspace select failed for $1"; }
 cmux_screen() { cmux_call read-screen --workspace "$1"; }
 cmux_create() { cmux_call workspace create "$@"; }

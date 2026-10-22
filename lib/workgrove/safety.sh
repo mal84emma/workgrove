@@ -223,7 +223,7 @@ fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as or
   local base="$1" remote
   [[ "$base" == */* ]] || return 2
   remote="${base%%/*}"
-  git -C "$REPO" remote 2>/dev/null | grep -qxF "$remote" || return 2
+  git -C "$REPO" remote 2>/dev/null | grep -xF "$remote" >/dev/null || return 2
   case "${WT_BASE_FETCHES[$base]:-}" in
     ok) return 3 ;;
     failed) return 1 ;;

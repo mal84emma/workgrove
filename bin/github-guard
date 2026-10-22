@@ -587,7 +587,7 @@ check_git_push() {
   [[ ${#pos[@]} -eq 2 ]] || deny "name the remote and the branch; $form"
   local remote=${pos[0]} spec=${pos[1]} src dst url repo='' r def
   [[ $remote =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || deny "push to a named remote, not '$remote'"
-  git -C "$cwd" remote 2>/dev/null | grep -qxF -- "$remote" || deny "'$remote' is not a remote of this repository"
+  git -C "$cwd" remote 2>/dev/null | grep -xF -- "$remote" >/dev/null || deny "'$remote' is not a remote of this repository"
   # Find the real push target: --push applies pushurl and pushInsteadOf, and a plain get-url would not.
   for url in $(git -C "$cwd" remote get-url --push --all "$remote" 2>/dev/null); do
     r=$(github_repo "$url") || deny "remote '$remote' pushes to $url, which is not a github.com repository"

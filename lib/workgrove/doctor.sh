@@ -261,7 +261,7 @@ cmd_contract_doctor() {
 host_contract_doctor() {
   local host=$1 version='' rc=0 failed=0 protocol='' output DOCTOR_FAILED=0
   printf 'VM checks for %s; run their repair commands on the VM.\n' "$host"
-  output=$(vm_wt "$host" doctor 2>&1) || failed=$?
+  output=$(vm_wt "$host" doctor) || failed=$?
   printf '%s\n' "$output"
   if [[ $failed == 255 ]]; then
     doctor_result 1 'VM doctor connection from the Mac' "ssh $(shell_join "$host")"
@@ -274,7 +274,7 @@ host_contract_doctor() {
     doctor_result 1 'VM doctor unavailable' "wt -H $(shell_join "$host") update"
   fi
   printf 'Mac comparison:\n'
-  version=$(host_version "$host" 2>/dev/null) || {
+  version=$(host_version "$host") || {
     doctor_result 1 'VM version connection from the Mac' "ssh $(shell_join "$host")"
     return 1
   }

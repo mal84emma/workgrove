@@ -947,6 +947,39 @@ SHIM
   end_scenario
 }
 
+# 4b. Long reports retain every section and the display limits.
+scenario_show_limits() {
+  begin_scenario "$1" || return 0
+  local r path i subject filename
+  r=$(new_repo show-limits)
+  stub_cmux dead
+  assert_wt_ok 'create a task for a long report' new long --no-workspace -r "$r"
+  path="$r/.worktrees/long"
+  printf -v subject '%8192s' x
+  for ((i=1; i<=21; i++)); do
+    fixture_git "$path" commit -qm "commit-$i $subject" --allow-empty
+    printf -v filename 'changed-%03d' "$i"
+    : >"$path/$filename"
+  done
+  assert_eq 'the task has 21 commits' 21 "$(fixture_git "$path" rev-list --count main..HEAD)"
+  assert_eq 'the task has 21 changed files' 21 "$(fixture_git "$path" status --short | wc -l | tr -d ' ')"
+  assert_wt_ok 'show succeeds with 21 commits and 21 changed files' show long -r "$r"
+  assert_has 'show retains the commit section' "$WT_OUT" '--- commits vs main'
+  assert_has 'show retains the diff section' "$WT_OUT" '--- diff --stat vs main (committed)'
+  assert_has 'show retains the working tree section' "$WT_OUT" '--- working tree'
+  assert_eq 'show limits commits to 20' 20 \
+    "$(awk '/^--- commits / {section=1; next} /^--- / {section=0} section && NF {n++} END {print n+0}' <<<"$WT_OUT")"
+  assert_eq 'show limits changed files to 20' 20 \
+    "$(awk '/^--- working tree/ {section=1; next} section && NF {n++} END {print n+0}' <<<"$WT_OUT")"
+  # Long status output must exceed the pipe buffer independently of the commit report.
+  printf -v filename '%180s' x
+  for ((i=22; i<=2048; i++)); do : >"$path/$filename-$i"; done
+  assert_wt_ok 'show succeeds with a large status report' show long -r "$r"
+  assert_eq 'large status output still lists 20 changed files' 20 \
+    "$(awk '/^--- working tree/ {section=1; next} section && NF {n++} END {print n+0}' <<<"$WT_OUT")"
+  end_scenario
+}
+
 # 5. The two per-repo hooks.
 scenario_include_and_setup() {
   begin_scenario "$1" || return 0

@@ -41,7 +41,12 @@ repo_menu() { # repo_menu [table] — lays out cmd_repos' "<name><tab><path>[<ta
 }
 pick() { # pick <prompt> [fzf args…] — a line of stdin, or whatever was typed (fzf --print-query: query, selection)
   local out rc=0 q s p="$1"; shift
-  out=$(fzf --print-query --prompt "$p> " --height 40% --reverse "$@") || rc=$?
+  out=$(
+    fzf --print-query --prompt "$p> " --height 40% --reverse "$@" || rc=$?
+    # A selection or cancellation can finish before the producer writes all rows.
+    cat >/dev/null
+    exit "$rc"
+  ) || rc=$?
   [[ $rc -le 1 ]] || return 1                                   # 130: aborted
   q=$(printf '%s\n' "$out" | sed -n '1p'); s=$(printf '%s\n' "$out" | sed -n '2p')
   printf '%s' "${s:-$q}"
