@@ -92,7 +92,7 @@ scenario_results() {
   for request in 0 -1 invalid 1.5; do
     assert_eq "invalid request $request stays silent" '' "$(WG_MACHINE_RESULT=$request wt_result new created task /repo)"
   done
-  for sample in text empty malformed duplicate blank-duplicate version command control missing duplicate-status duplicate-name duplicate-repo duplicate-version escaped-key nested multiple-objects; do
+  for sample in text empty malformed duplicate blank-duplicate version command control missing duplicate-status duplicate-name duplicate-repo duplicate-version escaped-key nested multiple-objects nul-value nul-key extra-control; do
     rc=0
     case $sample in
       text) output='created task'; expected=2 ;;
@@ -110,6 +110,9 @@ scenario_results() {
       duplicate-version) output=${record/\"version\":/\"version\":2,\"version\":}; expected=1 ;;
       escaped-key) output=${record/\"status\":/\"st\\u0061tus\":\"found\",\"status\":}; expected=1 ;;
       nested) output=${record/\"status\":/\"extra\":\{\"value\":1\},\"status\":}; expected=1 ;;
+      nul-value) output=${record%\}}',"extra":"ok\u0000status\u0000missing"}'; expected=1 ;;
+      nul-key) output=${record%\}}',"extra\u0000status":"missing"}'; expected=1 ;;
+      extra-control) output=${record%\}}',"extra":"line\nnext"}'; expected=1 ;;
       multiple-objects) output=$'WT_RESULT\t{"version":1} {"command":"new","status":"created","name":"task","repo":"/repo","session":"session","state":""}'; expected=1 ;;
     esac
     wt_read_result "$output" new >/dev/null 2>&1 || rc=$?
@@ -122,13 +125,13 @@ scenario_results
 scenario_vm_results() {
   begin_scenario 'VM results preserve command status and reject invalid identities' || return 0
   local sample output expected
-  for sample in facts text malformed version wrong-name wrong-session missing wrong-repo path-old path-facts transport; do
+  for sample in facts text malformed version wrong-name wrong-session missing wrong-repo path-old path-facts transport field-injection; do
     case $sample in
       facts) expected='0|0|visible|task|wt-repo-task|false|true|' ;;
       text) expected='0|0|created task
   repo: /repo
   session: wt-repo-task|task|wt-repo-task|||' ;;
-      malformed|wrong-name|wrong-session|wrong-repo) expected=1 ;;
+      malformed|wrong-name|wrong-session|wrong-repo|field-injection) expected=1 ;;
       version) expected=3 ;;
       missing) expected='0|1||task||||' ;;
       path-old|path-facts) expected='0|0|/repo/.worktrees/task|task||||/repo/.worktrees/task' ;;
@@ -148,6 +151,7 @@ scenario_vm_results() {
           wrong-session) session=main ;;
           missing|wrong-repo) command=path; sample_status=missing; session=''; facts='{}' ;;
           path-old|path-facts) command=path; session=''; facts='{}' ;;
+          field-injection) command=path; session=''; facts='{"extra":"ok\u0000status\u0000missing"}' ;;
         esac
         [[ $sample != wrong-repo ]] || repo=/other
         case $sample in
@@ -157,15 +161,16 @@ scenario_vm_results() {
         esac
         [[ $sample != path-facts ]] || facts='{"path":"/repo/.worktrees/task"}'
         WG_MACHINE_RESULT=1 wt_result "$command" "$sample_status" "$sample_name" "$repo" "$session" 'changed wording' "$facts"
-        [[ $sample_status != missing ]] || return 1
+        [[ $sample_status != missing && $sample != field-injection ]] || return 1
         return 0
       }
       local -A record=()
-      local visible rc parsed=0 sub=show
-      case $sample in text) sub=new ;; missing|wrong-repo|path-*) sub=path ;; esac
-      vm_result fixture "$sub" record visible rc -- task -r /repo || parsed=$?
+      local visible errors rc parsed=0 sub=show
+      case $sample in text) sub=new ;; missing|wrong-repo|path-*|field-injection) sub=path ;; esac
+      vm_result fixture "$sub" record visible errors rc -- task -r /repo || parsed=$?
+      [[ -z $errors ]] || printf 'unexpected diagnostic: %s' "$errors"
       case $sample in
-        malformed|version|wrong-name|wrong-session|wrong-repo) printf '%s' "$parsed" ;;
+        malformed|version|wrong-name|wrong-session|wrong-repo|field-injection) printf '%s' "$parsed" ;;
         *) printf '%s|%s|%s|%s|%s|%s|%s|%s' "$parsed" "$rc" "$visible" \
           "${record[name]-}" "${record[session]-}" "${record[agent]-}" "${record[started]-}" "${record[path]-}" ;;
       esac
@@ -181,6 +186,33 @@ scenario_vm_results() {
   end_scenario
 }
 scenario_vm_results
+
+scenario_vm_streams() {
+  begin_scenario 'VM result decoding keeps diagnostics out of legacy paths' || return 0
+  local mode output
+  for mode in text legacy facts; do
+    output=$(
+      vm_wt() {
+        printf 'SSH warning\n' >&2
+        if [[ $mode != facts ]]; then printf '/repo/.worktrees/task\n'; fi
+        if [[ $mode != text ]]; then
+          local facts='{}'
+          [[ $mode != facts ]] || facts='{"path":"/repo/.worktrees/task"}'
+          WG_MACHINE_RESULT=1 wt_result path found task /repo '' '' "$facts"
+        fi
+      }
+      local -A fields=()
+      local stdout stderr rc parsed=0
+      vm_result fixture path fields stdout stderr rc -- task -r /repo || parsed=$?
+      printf '%s|%s|%s|%s|%s' "$parsed" "$rc" "${fields[path]-}" "$stderr" "$stdout"
+    )
+    local visible_path=/repo/.worktrees/task
+    [[ $mode != facts ]] || visible_path=''
+    assert_eq "$mode keeps the path and diagnostic separate" "0|0|/repo/.worktrees/task|SSH warning|$visible_path" "$output"
+  done
+  end_scenario
+}
+scenario_vm_streams
 
 scenario_vm_ssh() {
   begin_scenario 'VM commands share SSH options and preserve argument quoting' || return 0

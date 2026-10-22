@@ -172,7 +172,7 @@ case $t in
       if [[ $(row_by_title "$(row_title "$n")" "$id" "$h") == "$ws" ]]; then
         rc=0; result_rc=0; missing=0
         declare -A result=()
-        vm_result "$h" path result gone rc -- "$n" -r "$r" || result_rc=$?
+        vm_result "$h" path result gone gone_error rc -- "$n" -r "$r" || result_rc=$?
         if [[ $rc == 1 && $result_rc == 0 && ${result[status]} == missing ]]; then missing=1; fi
         if [[ $missing -ne 1 ]]; then
           log "ignored wt-close for task $n of $id on $h: could not confirm its worktree is gone"

@@ -62,9 +62,10 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   need_r "$host" attach "$@"
   [[ -n "$name" ]] || die "attach: worktree name required (wt -H $host attach -r <repo> <name>)"
   if [[ $restart -eq 1 && $reattach -eq 1 ]]; then die "attach: --reattach and --restart-agent do opposite things; pick one"; fi
-  local out session state title id path what=selected rc result_rc=0 agent attached started
+  local out err session state title id path what=selected rc result_rc=0 agent attached started
   local -A result=()
-  vm_result "$host" show result out rc -- "$name" -r "$repo" || result_rc=$?
+  vm_result "$host" show result out err rc -- "$name" -r "$repo" || result_rc=$?
+  [[ -z $err ]] || printf '%s\n' "$err" >&2
   [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
   if [[ $rc != 0 ]]; then
     [[ -z $out ]] || printf '%s\n' "$out" >&2
@@ -120,19 +121,19 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
     return 0
   fi
   if [[ $agent == false && $attached == false && -z $id ]]; then
-    local never_started=1 session_rc=0
+    local never_started=false session_rc=0
     if [[ -n $started ]]; then
       if [[ $started == false ]]; then
         vm_tmux "$host" has-session "$session" >/dev/null 2>&1 || session_rc=$?
-        [[ $session_rc != 1 ]] || never_started=0
+        [[ $session_rc != 1 ]] || never_started=true
       fi
     # WT_COMPAT: Older VMs do not report whether the task has started.
     elif [[ $state == none ]]; then
-      remote_sh "$host" "sh -s -- $(shell_join "$path" "$name" "$session")" <<'WT_STARTED' && never_started=0
+      remote_sh "$host" "sh -s -- $(shell_join "$path" "$name" "$session")" <<'WT_STARTED' && never_started=true
 test ! -e "$1/.git/wt/$2.started" && ! tmux has-session -t "=$3" 2>/dev/null
 WT_STARTED
     fi
-    if [[ $never_started == 0 ]]; then
+    if [[ $never_started == true ]]; then
       remote_row "$host" "$session" "$title" "$path" "$(vm_run_line "$name" "$path")" --no-focus
       return 0
     fi

@@ -68,6 +68,7 @@ prepare_cmux() {
 cat >"$TEST_ROOT/local/bin/ssh.fixture" <<'SSH'
 #!/usr/bin/env bash
 printf '%s\n' "$cmd" >>"$SSH_LOG"
+[[ ${REMOTE_OUTPUT_MODE:-} != text && ${REMOTE_OUTPUT_MODE:-} != legacy ]] || printf 'SSH warning\n' >&2
 if [[ "$SSH_MODE" == lost && "$cmd" == *' new '* ]]; then
   HOME="$REMOTE_HOME" CMUX_SSH_ATTEMPT_ID=1 WT_REPOS_DIR="$REMOTE_HOME/discovery" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
     REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" fake_ssh_run "$cmd" >/dev/null
@@ -464,6 +465,7 @@ scenario_result_versions() {
     check "$([[ $WT_OUT == *--restart-agent* ]] && echo yes)" "$mode omitted the recovery flag"
     invoke_wt -H fakevm open task -r "$TEST_ROOT/remote/repo"
     assert_eq "$mode opens the worktree" 0 "$WT_RC"
+    if [[ $mode != facts ]]; then check "$([[ $WT_OUT == *'SSH warning'* ]] && echo yes)" "$mode hid the SSH warning"; fi
     assert_eq "$mode opens the reported path" "--folder-uri vscode-remote://ssh-remote+fakevm$TEST_ROOT/remote/repo/.worktrees/task/" \
       "$(cat "$TEST_ROOT/local/code.log")"
     rm "$TEST_ROOT/remote/repo/.git/wt/task.started" "$TEST_ROOT/remote-new"

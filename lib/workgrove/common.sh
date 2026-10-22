@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
-#   VM_SSH_RUN, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL.
+#   VM_SSH_RUN, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL, WT_TMPFILES.
 # Requires no functions from other modules. Loads cmux.sh, task.sh, options.sh, and version.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
@@ -133,11 +133,26 @@ wt_read_result() {
   jq -ec --argjson protocol "$WT_PROTOCOL" '
       if .version == 1 and .version <= $protocol
         and all(.status, .name, .repo, .session, .state; type == "string" and (explode | all(. >= 32 and . != 127)))
+        and all(to_entries[]; (.key | explode | all(. >= 32 and . != 127))
+          and (.value | if type == "string" then (explode | all(. >= 32 and . != 127)) else true end))
         and all(to_entries[]; if .key == "agent" or .key == "attached" or .key == "started"
           then (.value | type == "boolean")
           elif .key == "path" then (.value | type == "string" and (explode | all(. >= 32 and . != 127)))
           else true end)
       then . else error("invalid wt result") end' <<<"$parsed" 2>/dev/null || return 1
+}
+
+# Decode only after validation rejects control characters in every key and string value.
+wt_read_result_into() {
+  local -n __result_fields=$3
+  local __result_json __field_key __field_value
+  __result_fields=()
+  __result_json=$(wt_read_result "$1" "$2" 2>/dev/null) || return $?
+  while IFS= read -r -d '' __field_key && IFS= read -r -d '' __field_value; do
+    [[ -n $__field_key ]] || continue
+    # shellcheck disable=SC2004  # The output names an associative array.
+    __result_fields[$__field_key]=$__field_value
+  done < <(jq -j 'to_entries[] | .key, "\u0000", (.value | tostring), "\u0000"' <<<"$__result_json")
 }
 
 # These builders do not run commands or report errors.
@@ -178,15 +193,16 @@ vm_tmux() {
   esac
 }
 
-# vm_result <host> <sub> <record array> <visible output> <command status> -- <args...>
+# vm_result <host> <sub> <record array> <stdout> <stderr> <command status> -- <args...>
 # Return the parser status separately from the command status. Never retry a command.
 # Return 2 when text output lacks the required identity, 1 for invalid records, and 3 for newer protocols.
 vm_result() {
   local __host=$1 __sub=$2
-  local -n __vm_record=$3 __visible=$4 __vm_rc=$5
-  shift 6
-  local __raw __json __parse=0 __key __value __name='' __repo='' __arg __want_repo=0
-  __vm_record=() __visible='' __vm_rc=0
+  local __fields_output=$3
+  local -n __vm_record=$3 __visible=$4 __errors=$5 __vm_rc=$6
+  shift 7
+  local __raw __stdout __stderr __stderr_file __parse=0 __value __name='' __repo='' __arg __want_repo=0
+  __vm_record=() __visible='' __errors='' __vm_rc=0
   for __arg in "$@"; do
     if [[ $__want_repo == 1 ]]; then __repo=$__arg; __want_repo=0; continue; fi
     case $__arg in
@@ -196,16 +212,17 @@ vm_result() {
       *) [[ -n $__name ]] || __name=$__arg ;;
     esac
   done
-  __raw=$(vm_wt "$__host" --machine "$__sub" "$@" 2>&1) || __vm_rc=$?
-  __visible=$(printf '%s\n' "$__raw" | sed $'/^WT_RESULT\t/d')
-  __json=$(wt_read_result "$__raw" "$__sub" 2>/dev/null) || __parse=$?
+  __stderr_file=$(mktemp "${TMPDIR:-/tmp}/wt-vm-stderr.XXXXXX") || { __vm_rc=1; return 1; }
+  WT_TMPFILES+=("$__stderr_file")
+  __stdout=$(vm_wt "$__host" --machine "$__sub" "$@" 2>"$__stderr_file") || __vm_rc=$?
+  __stderr=$(cat "$__stderr_file")
+  rm -f "$__stderr_file"
+  __raw=$__stdout$'\n'$__stderr
+  __visible=$(printf '%s\n' "$__stdout" | sed $'/^WT_RESULT\t/d')
+  __errors=$(printf '%s\n' "$__stderr" | sed $'/^WT_RESULT\t/d')
+  wt_read_result_into "$__raw" "$__sub" "$__fields_output" || __parse=$?
   case $__parse in
     0)
-      while IFS= read -r -d '' __key && IFS= read -r -d '' __value; do
-        [[ -n $__key ]] || continue
-        # shellcheck disable=SC2004  # The output names an associative array.
-        __vm_record[$__key]=$__value
-      done < <(jq -j 'to_entries[] | .key, "\u0000", (.value | tostring), "\u0000"' <<<"$__json")
       [[ ${__vm_record["name"]} == "$__name" || $__sub == new ]] || return 1
       if [[ $__sub == path && ${__vm_record["status"]} == missing ]]; then
         [[ ${__vm_record["repo"]} == "$__repo" ]] || return 1
@@ -227,7 +244,7 @@ vm_result() {
           fi ;;
         path)
           __vm_record["name"]=$__name __vm_record["repo"]=$__repo
-          if [[ $__vm_rc == 1 && $__visible == *"no worktree named '$__name' in $__repo"* ]]; then
+          if [[ $__vm_rc == 1 && $__raw == *"no worktree named '$__name' in $__repo"* ]]; then
             __vm_record["status"]=missing
           elif [[ $__vm_rc == 0 ]]; then
             __vm_record["status"]=found __vm_record["path"]=$__visible

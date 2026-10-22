@@ -107,15 +107,17 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   host_new_preflight "$host" "$repo_request" "$requested_agent"
   inspect="wt -H $host list"
   [[ -z "$repo_request" ]] || inspect+=" -r $(shell_join "$repo_request")"
-  local out name repo session rc result_rc=0
+  local out err name repo session rc result_rc=0
   local -A result=()
-  vm_result "$host" new result out rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
+  vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
+  [[ -z $err ]] || printf '%s\n' "$err" >&2
   if [[ $rc != 0 ]]; then
     [[ -z "$out" ]] || printf '%s\n' "$out" >&2
     # WT_COMPAT: Remove when every VM accepts the model option.
-    if [[ "$out" == *'new: unknown option -m'* || "$out" == *'new: unknown option --model'* ]]; then
-      warn "$host has an older wt without -m; update it with: wt -H $host update"
-    fi
+    case $out$'\n'$err in
+      *'new: unknown option -m'*|*'new: unknown option --model'*)
+        warn "$host has an older wt without -m; update it with: wt -H $host update" ;;
+    esac
     if [[ $rc -eq 255 ]]; then
       warn "SSH disconnected during creation on $host; could not confirm whether a worktree was created; inspect with: $inspect"
       warn "a disconnected create may still be finishing; recheck before starting the same task elsewhere"
@@ -164,9 +166,10 @@ host_open() { # VS Code Remote-SSH on a VM worktree
   repo=${opts[repo]-$repo}
   need_r "$host" open "$@"
   [[ -n "$name" ]] || die "open: worktree name required (wt -H $host open -r <repo> <name>)"
-  local p out rc result_rc=0
+  local p out err rc result_rc=0
   local -A result=()
-  vm_result "$host" path result out rc -- "$name" -r "$repo" || result_rc=$?
+  vm_result "$host" path result out err rc -- "$name" -r "$repo" || result_rc=$?
+  [[ -z $err ]] || printf '%s\n' "$err" >&2
   [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
   if [[ $rc != 0 ]]; then
     [[ -z $out ]] || printf '%s\n' "$out" >&2
