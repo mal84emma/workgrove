@@ -232,8 +232,8 @@ TMUX
   run_wt wt-demo claude
   check "$([[ $WT_RC -ne 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'could not confirm whether a worktree was created'* && "$WT_OUT" == *'wt -H fakevm list -r wt-demo'* ]] && echo yes)" 'ambiguous SSH outcome was treated as safe to retry'
   SSH_MODE=ok
-  invoke_wt -H fakevm list -r "$TEST_ROOT/remote/repo"
-  check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *task* ]] && echo yes)" 'remote list ignored a repo outside WT_REPOS_DIR'
+  invoke_wt -H fakevm list -r "$TEST_ROOT/remote/repo" --json
+  check "$([[ $WT_RC -eq 0 ]] && jq -e --arg repo "$TEST_ROOT/remote/repo" 'length == 1 and .[0].name == "task" and .[0].repo == $repo' <<<"$WT_OUT" >/dev/null && echo yes)" 'remote list ignored a repo outside WT_REPOS_DIR'
   rm "$TEST_ROOT/remote-new"
 
   # A healthy path still creates and reports the row. The row's title is the task name, and its description

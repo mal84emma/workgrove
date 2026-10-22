@@ -423,7 +423,7 @@ stub_cmux() {
 # The window IDs must have UUID format, because the adapter validates them before querying each window.
 stub_windows() {
   local u
-  printf '%s\n' "$@" | jq -Rsc 'split("\n")[:-1] | to_entries | map({id:.value, index:.key})' >"$WT_WINDOWS"
+  fake_windows "$@" >"$WT_WINDOWS"
   for u in "$@"; do
     printf '{"workspaces":[]}\n' >"$WT_ROWS_DIR/$u.json"
   done

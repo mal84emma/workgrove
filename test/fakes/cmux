@@ -14,7 +14,7 @@ if [[ -n $state ]]; then
   printf '%s\n' "$*" >>"$state/$(if [[ ${0##*/} == cmux-tui && -f $state/native-log ]]; then echo native-calls.log; else echo calls.log; fi)"
 fi
 apply_effects() {
-  if [[ -d $state/after/$key ]]; then cp -R "$state/after/$key/." "$state/"; fi
+  if [[ -n $state && -d $state/after/$key ]]; then cp -R "$state/after/$key/." "$state/"; fi
 }
 screen_append() {
   if [[ $key == read-screen && -f $state/screen-append ]]; then
@@ -64,7 +64,7 @@ if [[ -n $state ]]; then
   if [[ $key == top && ! -f $state/$file ]]; then file=top.json; fi
   if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; apply_effects; exit 0; fi
 fi
-if [[ -f $state/mutate ]]; then
+if [[ -n $state && -f $state/mutate ]]; then
   case $key in
     ssh|workspace-create)
       # Keep stable UUIDs in row lists and return cmux's workspace ref from creation.
@@ -87,6 +87,7 @@ if [[ -f $state/mutate ]]; then
       jq --argjson row "$row" '.workspaces += [$row]' "$state/rows.json" >"$state/rows.tmp"
       mv "$state/rows.tmp" "$state/rows.json"
       printf '%s\n' "$ref"
+      apply_effects
       exit 0 ;;
     workspace-close)
       jq --arg id "$3" '.workspaces |= map(select(.id != $id and .ref != $id))' "$state/rows.json" >"$state/rows.tmp"
@@ -100,6 +101,7 @@ if [[ -f $state/mutate ]]; then
       jq --arg id "$id" --arg description "$description" \
         '(.workspaces[] | select(.id == $id or .ref == $id) | .description)=$description' "$state/rows.json" >"$state/rows.tmp"
       mv "$state/rows.tmp" "$state/rows.json"
+      apply_effects
       exit 0 ;;
   esac
 fi
@@ -133,3 +135,4 @@ case "$key" in
   read-screen) exit 1 ;;
   *) printf 'fake cmux: unexpected command: %s\n' "$*" >&2; exit 64 ;;
 esac
+apply_effects
