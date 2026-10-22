@@ -67,7 +67,7 @@ host_environment_doctor() {
   bootstrap=$(cat "$WG_LIB_DIR/vm/python-runtime.sh")$'\n'
   # shellcheck disable=SC2016
   bootstrap+='wg_select_python || { wg_python_readiness_error; exit 1; }; exec "$wg_python" -B - '
-  remote_sh "$host" "$bootstrap$(shell_join doctor "${args[@]}")" <"$WG_LIB_DIR/portable.py"
+  remote_sh "$host" "$bootstrap$(shell_join doctor --host "$host" "${args[@]}")" <"$WG_LIB_DIR/portable.py"
 }
 
 cmd_setup() {

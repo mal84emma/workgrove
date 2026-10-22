@@ -14,12 +14,189 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from argparse import Namespace
 
 REPO = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("portable", REPO / "lib/workgrove/portable.py")
 portable = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(portable)
 CANARY = "SYNTHETIC-CONFIDENTIAL-CANARY"
+
+
+class RootDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(dir=os.environ.get("TEST_ROOT"))
+        self.addCleanup(self.scratch.cleanup)
+        self.mount = Path(self.scratch.name).resolve()
+        self.original_mount_list = getattr(portable, "mount_list", None)
+        self.mounts = patch.object(portable, "mount_list", return_value=[(self.mount, "ext4")], create=True)
+        self.mounts.start()
+        self.addCleanup(self.mounts.stop)
+
+    def candidate(self, relative="owner/root", host="test-host"):
+        root = self.mount / relative
+        path = root / ".config/workgrove/profile.json"
+        path.parent.mkdir(parents=True)
+        profile = dict(schema=1, root=str(root), source=str(root / "workgrove"), revision="a" * 40,
+                       host=host, storage="volume", mount=str(self.mount), persist_agents=True,
+                       agent_roots={name: str(root / name) for name in ("claude", "codex")},
+                       agent_commands=dict(claude=None, codex=None), tmux=False, agent_args={},
+                       signatures={name: "b" * 64 for name in ("bin/wt", "install.sh", "lib/workgrove/portable.py")})
+        path.write_text(json.dumps(profile))
+        return root
+
+    def discover(self):
+        return portable.discover_root("test-host")
+
+    def test_found_and_machine_record_states(self):
+        root = self.candidate()
+        record = root / ".local/state/workgrove/machine"
+        for value, expected in ((None, None), (portable.socket.gethostname(), True), ("other-machine", False)):
+            with self.subTest(expected=expected):
+                if value is not None:
+                    record.parent.mkdir(parents=True, exist_ok=True)
+                    record.write_text(value + "\n")
+                before = record.read_bytes() if record.exists() else None
+                self.assertEqual(self.discover(), dict(status="found", root=str(root), same_machine=expected))
+                self.assertEqual(record.read_bytes() if record.exists() else None, before)
+
+    def test_none_other_alias_and_ambiguous_disclose_no_candidates(self):
+        self.assertEqual(self.discover(), dict(status="none", root=None, same_machine=None))
+        secret = self.candidate("private/other", "private-alias")
+        self.assertEqual(self.discover()["status"], "none")
+        self.candidate()
+        report = self.discover()
+        self.assertEqual(report["status"], "found")
+        self.assertNotIn(str(secret), json.dumps(report))
+        self.assertNotIn("private-alias", json.dumps(report))
+        self.candidate("second/root")
+        self.assertEqual(self.discover(), dict(status="ambiguous", root=None, same_machine=None))
+
+    def test_duplicate_mounts_and_canonical_roots_count_once(self):
+        root = self.candidate()
+        with patch.object(portable, "mount_list", return_value=[(self.mount, "ext4"), (self.mount, "ext4"),
+                                                               (self.mount / ".", "ext4")]):
+            self.assertEqual(self.discover()["root"], str(root))
+
+    def test_mountinfo_decodes_spaces_and_optional_fields(self):
+        root = self.candidate("space root")
+        profile = portable.profile_path(root)
+        data = json.loads(profile.read_text())
+        data["mount"] = str(root)
+        profile.write_text(json.dumps(data))
+        escaped = str(root).replace(" ", r"\040")
+        content = "10 1 0:1 / " + escaped + " rw shared:2 master:1 - fuse.test source rw\n"
+        original = portable.read
+        with patch.object(portable, "mount_list", wraps=self.original_mount_list), \
+                patch.object(portable, "read", side_effect=lambda path, **kw: content if str(path) == "/proc/self/mountinfo" else original(path, **kw)), \
+                patch.object(Path, "is_file", autospec=True, side_effect=lambda path: True if str(path) == "/proc/self/mountinfo" else path.exists()):
+            self.assertEqual(portable.mount_list(), [(root, "fuse.test")])
+            self.assertTrue(portable.mounted(root))
+            self.assertEqual(self.discover()["root"], str(root))
+
+    def test_missing_mountinfo_and_excluded_mount_types(self):
+        root = self.candidate()
+        with patch.object(portable, "mount_list", wraps=self.original_mount_list), \
+                patch.object(Path, "is_file", return_value=False):
+            self.assertEqual(self.discover()["status"], "none")
+        for kind in ("proc", "sysfs", "tmpfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "mqueue", "overlay", "squashfs"):
+            with self.subTest(kind=kind), patch.object(portable, "mount_list", return_value=[(self.mount, kind)]):
+                self.assertEqual(self.discover()["status"], "none")
+        with patch.object(portable, "mount_list", return_value=[(Path("/"), "ext4"), (portable.profile_path(root), "ext4")]):
+            self.assertEqual(self.discover()["status"], "none")
+
+    def test_links_hidden_folders_and_excess_depth_are_not_followed(self):
+        root = self.candidate()
+        for relative in (".config/workgrove/profile.json", ".config/workgrove", ".config"):
+            with self.subTest(relative=relative):
+                path = root / relative
+                saved = self.mount / "saved"
+                path.rename(saved)
+                path.symlink_to(saved)
+                self.assertEqual(self.discover()["status"], "none")
+                path.unlink()
+                saved.rename(path)
+        self.candidate(".hidden/root")
+        self.candidate("too/deep/root")
+        linked = self.mount / "linked"
+        root.rename(self.mount / ".saved")
+        linked.symlink_to(self.mount / ".saved")
+        self.assertEqual(self.discover()["status"], "none")
+
+    def test_candidate_exceptions_do_not_change_readiness(self):
+        root = self.candidate()
+        bad = self.candidate("broken/root")
+        path = portable.profile_path(bad)
+        data = json.loads(path.read_text())
+        data["root"] = 42
+        path.write_text(json.dumps(data))
+        baseline = dict(ready=False, issues=["profile-missing", "remote-wt-missing"])
+        args = Namespace(root=None, host="test-host", preflight=False, probe=False, json=True)
+        output = io.StringIO()
+        with patch.object(portable, "readiness", return_value=baseline.copy()), \
+                patch("sys.stdout", output), patch("sys.stderr", io.StringIO()):
+            self.assertEqual(portable.doctor(args), 1)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["issues"], baseline["issues"])
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["root_discovery"]["root"], str(root))
+        self.assertNotIn(str(bad), output.getvalue())
+        self.assertFalse((root / ".local/state/workgrove/machine").exists())
+        original = portable.load_profile
+        def load(candidate):
+            if candidate == bad:
+                raise Exception("private")
+            return original(candidate)
+        with patch.object(portable, "load_profile", side_effect=load):
+            self.assertEqual(self.discover()["root"], str(root))
+
+    def test_unreadable_folders_and_profile_scope_mismatches_are_skipped(self):
+        root = self.candidate()
+        with patch.object(portable.os, "access", return_value=False):
+            self.assertEqual(self.discover()["status"], "none")
+        path = portable.profile_path(root)
+        original = json.loads(path.read_text())
+        for updates in ({"storage": "os-disk"}, {"mount": str(root)}, {"root": str(self.mount)}):
+            with self.subTest(updates=updates):
+                path.write_text(json.dumps(dict(original, **updates)))
+                self.assertEqual(self.discover()["status"], "none")
+
+    def test_folder_and_monotonic_time_limits_discard_partial_matches(self):
+        self.candidate("")
+        for index in range(4096):
+            (self.mount / ("folder-%04d" % index)).mkdir()
+        self.assertEqual(self.discover(), dict(status="incomplete", root=None, same_machine=None))
+        original = portable.os.scandir
+        with patch.object(portable.time, "monotonic", return_value=0) as clock:
+            def expire(path):
+                clock.return_value = 11
+                return original(path)
+            with patch.object(portable.os, "scandir", side_effect=expire):
+                self.assertEqual(self.discover(), dict(status="incomplete", root=None, same_machine=None))
+        with patch.object(portable.time, "monotonic", side_effect=[0, 0, 11]):
+            self.assertEqual(self.discover(), dict(status="incomplete", root=None, same_machine=None))
+
+    def test_doctor_discovery_gates_and_probe_record(self):
+        baseline = dict(ready=False, issues=["profile-missing", "remote-wt-missing"])
+        for overrides in ({"probe": True}, {"preflight": True}, {"root": str(self.mount)}, {"host": None},
+                          {"issues": ["profile-missing"]}):
+            args = Namespace(root=None, host="test-host", preflight=False, probe=False, json=True)
+            report = baseline.copy()
+            for key, value in overrides.items():
+                if key == "issues":
+                    report[key] = value
+                else:
+                    setattr(args, key, value)
+            output = io.StringIO()
+            with self.subTest(overrides=overrides), patch.object(portable, "readiness", return_value=report), \
+                    patch.object(portable, "discover_root") as discovery, patch("sys.stdout", output), patch("sys.stderr", io.StringIO()):
+                portable.doctor(args)
+                discovery.assert_not_called()
+                if args.probe:
+                    self.assertEqual(json.loads(output.getvalue().split("\t", 1)[1]), baseline)
+                elif not args.preflight:
+                    self.assertEqual(json.loads(output.getvalue())["root_discovery"],
+                                     dict(status="not-run", root=None, same_machine=None))
 
 
 class PortableTests(unittest.TestCase):
@@ -80,6 +257,119 @@ class PortableTests(unittest.TestCase):
     def profile(self):
         return json.loads((self.root / ".config/workgrove/profile.json").read_text())
 
+    def test_restore_requires_explicit_matching_host_before_home_changes(self):
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        record = self.root / ".local/state/workgrove/machine"
+        before = record.read_bytes() if record.exists() else None
+        for mode in ("restore", "bootstrap", "install", "reinstall"):
+            for host in (None, "different-host"):
+                with self.subTest(mode=mode, host=host):
+                    args = [mode, "--root", str(self.root)]
+                    if mode == "reinstall":
+                        args.extend(("--source", str(self.source)))
+                    if mode != "restore":
+                        args.append("--restore-only")
+                    if host:
+                        args.extend(("--host", host))
+                    result = self.command(*args, ok=False, env=dict(self.env, WT_HOST="test-host"))
+                    self.assertIn("restore-host-mismatch" if host else "host-alias-required", result.stderr)
+                    if host:
+                        self.assertIn("full setup with the new alias changes the saved alias", result.stderr)
+                    self.assertEqual(list(self.home.iterdir()), [])
+                    self.assertEqual(record.read_bytes() if record.exists() else None, before)
+        for extra in ([], ["--host", "different-host"]):
+            result = subprocess.run([str(self.tools / "bash"), str(self.source / "install.sh"),
+                                     "--restore-only", *extra], env=dict(self.env, PYTHONDONTWRITEBYTECODE="1"),
+                                    capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("restore-host-mismatch" if extra else "host-alias-required", result.stderr)
+            self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_machine_record_waits_for_success_under_the_installation_lock(self):
+        import fcntl
+        self.install()
+        record = self.root / ".local/state/workgrove/machine"
+        record.write_text("previous-machine\n")
+        def fail_install(*args, **kwargs):
+            self.assertEqual(record.read_text(), "previous-machine\n")
+            with (self.root / ".config/workgrove/setup.lock").open() as lock:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            raise portable.Refusal("synthetic-install-failure")
+        for mode in ("install", "restore"):
+            with self.subTest(mode=mode), patch.dict(os.environ, self.env, clear=True), \
+                    patch.object(portable, "install_files", side_effect=fail_install) as files, \
+                    patch.object(sys, "argv", ["portable.py", mode, "--root", str(self.root), "--host", "test-host"]), \
+                    patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+                old_mask = os.umask(0o077)
+                try:
+                    self.assertEqual(portable.main(), 1)
+                finally:
+                    os.umask(old_mask)
+                files.assert_called_once()
+                self.assertEqual(record.read_text(), "previous-machine\n")
+
+    def test_full_setup_can_change_alias_and_records_machine_only_after_success(self):
+        import socket
+        self.install()
+        record = self.root / ".local/state/workgrove/machine"
+        self.assertEqual(record.read_text(), socket.gethostname() + "\n")
+        record.write_text("previous-machine\n")
+        self.command("doctor", "--json")
+        self.assertEqual(record.read_text(), "previous-machine\n")
+        self.install("--host", "different-host")
+        self.assertEqual(self.profile()["host"], "different-host")
+        self.assertEqual(record.read_text(), socket.gethostname() + "\n")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        record.write_text("before-restore\n")
+        result = self.command("bootstrap", "--root", str(self.root), "--host", "different-host", "--restore-only",
+                              env=dict(self.env, PATH=""))
+        self.assertIn("alias different-host", result.stderr)
+        self.assertEqual(record.read_text(), socket.gethostname() + "\n")
+
+    def test_restore_summary_reports_persistence_and_sign_in_presence_without_contents(self):
+        self.install()
+        for persist in (False, True):
+            if persist:
+                self.install("--persist-agents")
+            profile = self.profile()
+            for claude_present, codex_present in ((False, False), (True, False), (False, True), (True, True)):
+                with self.subTest(persist=persist, claude=claude_present, codex=codex_present):
+                    for agent, present in (("claude", claude_present), ("codex", codex_present)):
+                        name = ".credentials.json" if agent == "claude" else "auth.json"
+                        path = Path(profile["agent_roots"][agent]) / name
+                        if present:
+                            path.write_text(CANARY)
+                        elif path.exists():
+                            path.unlink()
+                    result = self.command("restore", "--host", "test-host", "--root", str(self.root))
+                    self.assertEqual(result.stdout, "workgrove: portable links and environment restored; run doctor before recovery\n")
+                    self.assertIn("restored root " + str(self.root) + "; alias test-host", result.stderr)
+                    self.assertIn("persist_agents: " + ("yes" if persist else "no"), result.stderr)
+                    self.assertIn(".credentials.json: " + ("present" if claude_present else "absent"), result.stderr)
+                    self.assertIn("auth.json: " + ("present" if codex_present else "absent"), result.stderr)
+                    self.assertIn("~/.gitconfig links to the saved Git config", result.stderr)
+                    self.assertIn("inside root: " + ("yes" if persist else "no"), result.stderr)
+                    if not persist:
+                        self.assertIn("<claude-root>", result.stderr)
+                        self.assertIn("<codex-root>", result.stderr)
+                        for value in profile["agent_roots"].values():
+                            self.assertNotIn(value, result.stderr)
+
+    def test_restore_summary_hides_selected_external_agent_roots(self):
+        for agent, variable in (("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME")):
+            path = self.base / ("private-" + agent)
+            path.mkdir(mode=0o700)
+            self.env[variable] = str(path)
+        self.install("--persist-agents")
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root))
+        for agent in ("claude", "codex"):
+            self.assertIn("<" + agent + "-root>; inside root: no", result.stderr)
+            self.assertNotIn(str(self.base / ("private-" + agent)), result.stderr)
+
     def claude_lookup(self):
         fixture = ('import json,os; from pathlib import Path; '
                    'print(json.dumps([os.environ.get("CLAUDE_CONFIG_DIR"), '
@@ -103,7 +393,7 @@ class PortableTests(unittest.TestCase):
         self.install()
         shutil.rmtree(self.home)
         self.home.mkdir(mode=0o700)
-        self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=str(self.base / "no-tools")))
+        self.command("restore", "--host", "test-host", "--root", str(self.root), env=dict(self.env, PATH=str(self.base / "no-tools")))
         self.assertEqual(self.claude_lookup(), [selected, state])
 
     def test_existing_explicit_claude_root_keeps_its_own_identity(self):
@@ -152,7 +442,7 @@ class PortableTests(unittest.TestCase):
         self.assertEqual(state.read_text(), "selected global state")
         shutil.rmtree(self.home)
         self.home.mkdir(mode=0o700)
-        self.command("restore", "--root", str(self.root))
+        self.command("restore", "--host", "test-host", "--root", str(self.root))
         self.assertEqual(self.claude_lookup(), [str(selected), "selected global state"])
 
     def test_replacement_home_and_environment_cannot_replace_durable_git(self):
@@ -283,7 +573,7 @@ class PortableTests(unittest.TestCase):
                 path.write_bytes(before + b"\n# Modified runtime input.\n")
                 report = json.loads(self.command("doctor", "--json", ok=False).stdout)
                 self.assertIn("installation-changed-run-full-setup", report["issues"])
-                self.command("restore", "--root", str(self.root), ok=False,
+                self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False,
                              env=dict(self.env, PATH=str(self.base / "no-tools")))
                 self.assertIn("installation-has-local-edits", self.install(ok=False).stderr)
                 path.write_bytes(before)
@@ -292,7 +582,7 @@ class PortableTests(unittest.TestCase):
         self.git("add", str(path))
         self.git("commit", "-qm", "Update synthetic runtime")
         self.install()
-        self.command("restore", "--root", str(self.root))
+        self.command("restore", "--host", "test-host", "--root", str(self.root))
         self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
 
     def test_task_branch_config_invalidates_manifest_and_allows_cleanup(self):
@@ -344,7 +634,7 @@ class PortableTests(unittest.TestCase):
         self.git("config", "--unset", "core.worktree")
         self.install()
         self.git("config", "core.worktree", str(external))
-        self.command("restore", "--root", str(self.root), ok=False)
+        self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.command("doctor", "--json", ok=False)
 
     def test_git_status_cannot_hide_modified_runtime_contents(self):
@@ -387,14 +677,14 @@ class PortableTests(unittest.TestCase):
                              for name in ("bin/wt", "install.sh", "lib/workgrove/portable.py")}
         del old["runtime_manifest"], old["claude_config_dir"]
         path.write_text(json.dumps(old))
-        self.assertIn("profile-upgrade-run-full-setup", self.command("restore", "--root", str(self.root), ok=False).stderr)
+        self.assertIn("profile-upgrade-run-full-setup", self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False).stderr)
         report = json.loads(self.command("doctor", "--json", ok=False).stdout)
         self.assertIn("profile-upgrade-run-full-setup", report["issues"])
         (self.home / ".claude.json").write_text("stranded global state")
         self.install()
         self.assertEqual(self.profile()["schema"], 2)
         self.assertEqual(self.claude_lookup()[1], "stranded global state")
-        self.command("restore", "--root", str(self.root))
+        self.command("restore", "--host", "test-host", "--root", str(self.root))
 
     def test_every_managed_personal_file_has_the_same_safety_checks(self):
         self.install("--persist-agents")
@@ -408,7 +698,7 @@ class PortableTests(unittest.TestCase):
                 report = json.loads(self.command("doctor", "--json", ok=False).stdout)
                 self.assertIn("shared-configuration-target", report["issues"])
                 self.command("doctor", "--preflight", ok=False)
-                self.assertIn("shared-configuration-target", self.command("restore", "--root", str(self.root), ok=False).stderr)
+                self.assertIn("shared-configuration-target", self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False).stderr)
                 self.assertIn("shared-configuration-target", self.install(ok=False).stderr)
                 path.chmod(0o600)
         self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
@@ -419,7 +709,7 @@ class PortableTests(unittest.TestCase):
         path = codex / "config.toml"
         path.unlink()
         path.symlink_to(self.source / "home/.codex/config.base.toml")
-        for command in (("doctor", "--json"), ("restore", "--root", str(self.root)),
+        for command in (("doctor", "--json"), ("restore", "--host", "test-host", "--root", str(self.root)),
                         ("install", "--root", str(self.root))):
             result = self.command(*command, ok=False)
             self.assertIn("repository-destination", result.stdout + result.stderr)
@@ -428,7 +718,7 @@ class PortableTests(unittest.TestCase):
         original = self.base / "authentication"
         original.write_text(CANARY)
         os.link(original, codex / "auth.json")
-        for command in (("doctor", "--json"), ("restore", "--root", str(self.root)),
+        for command in (("doctor", "--json"), ("restore", "--host", "test-host", "--root", str(self.root)),
                         ("install", "--root", str(self.root))):
             result = self.command(*command, ok=False)
             self.assertIn("hardlinked-file", result.stdout + result.stderr)
@@ -439,7 +729,7 @@ class PortableTests(unittest.TestCase):
                      Path(self.profile()["agent_roots"]["codex"]) / "config.toml"):
             path.chmod(0o666)
         self.assertTrue(json.loads(self.volume_command("doctor", "--json").stdout)["ready"])
-        self.volume_command("restore", "--root", str(self.root))
+        self.volume_command("restore", "--host", "test-host", "--root", str(self.root))
         self.volume_install()
         self.volume_install("--strict-permissions", ok=False)
         self.assertTrue(self.profile()["trust_personal_volume"])
@@ -495,7 +785,7 @@ class PortableTests(unittest.TestCase):
         self.install()
         shutil.rmtree(self.home)
         self.home.mkdir(mode=0o700)
-        self.command("restore", "--root", str(self.root))
+        self.command("restore", "--host", "test-host", "--root", str(self.root))
         self.assertEqual((claude / "nested/internal").read_text(), "synthetic session")
         self.assertEqual((claude / "absolute-internal").read_text(), "synthetic session")
 
@@ -536,7 +826,7 @@ class PortableTests(unittest.TestCase):
         self.assertEqual(link.read_text(), "synthetic shared state")
         shutil.rmtree(self.home)
         self.home.mkdir(mode=0o700)
-        self.command("restore", "--root", str(self.root))
+        self.command("restore", "--host", "test-host", "--root", str(self.root))
         self.assertEqual(link.read_text(), "synthetic shared state")
 
     def test_migration_refuses_selected_roots_nested_inside_a_moved_directory(self):
@@ -600,11 +890,11 @@ sys.exit(module["main"]())
         self.volume_command("reinstall", "--source", str(self.source))
         shutil.rmtree(self.home)
         self.home.mkdir(mode=0o700)
-        self.volume_command("restore", "--root", str(self.root))
+        self.volume_command("restore", "--host", "test-host", "--root", str(self.root))
         self.assertTrue((self.home / ".local/bin/wt").is_symlink())
         self.assertTrue(self.profile()["trust_personal_volume"])
         self.assertTrue(json.loads(self.volume_command("doctor", "--json").stdout)["ready"])
-        result = self.volume_command("restore", "--root", str(self.root), mounts=[], ok=False)
+        result = self.volume_command("restore", "--host", "test-host", "--root", str(self.root), mounts=[], ok=False)
         self.assertIn("persistent-mount-missing", result.stderr)
 
     def test_personal_volume_scope_changes_require_new_acceptance(self):
@@ -638,7 +928,7 @@ sys.exit(module["main"]())
         report = json.loads(self.command("doctor", "--json", ok=False).stdout)
         self.assertIn("shared-configuration-target", report["issues"])
         self.install(ok=False)
-        self.command("restore", "--root", str(self.root), ok=False)
+        self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertEqual(hooks.read_bytes(), original)
         self.assertEqual(hooks.stat().st_mode & 0o777, 0o666)
         hooks.chmod(0o600)
@@ -685,7 +975,7 @@ sys.exit(module["main"]())
     def test_restore_cannot_grant_new_volume_trust(self):
         self.volume_install()
         before = (self.root / ".config/workgrove/profile.json").read_bytes()
-        result = self.volume_command("restore", "--root", str(self.root), "--trust-personal-volume", ok=False)
+        result = self.volume_command("restore", "--host", "test-host", "--root", str(self.root), "--trust-personal-volume", ok=False)
         self.assertIn("restore-cannot-change-volume-trust", result.stderr)
         self.assertEqual((self.root / ".config/workgrove/profile.json").read_bytes(), before)
 
@@ -853,7 +1143,7 @@ sys.exit(module["main"]())
         minimal = self.base / "minimal"
         minimal.mkdir()
         env = dict(self.env, PATH=str(minimal))
-        self.command("restore", "--root", str(self.root), env=env)
+        self.command("restore", "--host", "test-host", "--root", str(self.root), env=env)
         self.assertEqual((self.home / ".local/bin/wt").readlink(), self.source / "bin/wt")
         self.assertTrue((self.home / ".tmux.conf").is_symlink())
         self.assertEqual(task.read_text(), CANARY)
@@ -1160,7 +1450,7 @@ sys.exit(module["main"]())
         self.home.mkdir()
         (self.home / ".codex").mkdir()
         (self.home / ".codex/auth.json").write_text(CANARY)
-        self.command("restore", "--root", str(self.root), ok=False)
+        self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertEqual((self.home / ".codex/auth.json").read_text(), CANARY)
         self.assertFalse((self.home / ".local/bin/wt").exists())
 
@@ -1321,7 +1611,7 @@ sys.exit(module["main"]())
     def test_restore_detects_replaced_installation(self):
         self.install()
         (self.source / "bin/wt").write_text("#!/bin/sh\nexit 0\n")
-        self.assertIn("installation-changed", self.command("restore", "--root", str(self.root), ok=False).stderr)
+        self.assertIn("installation-changed", self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False).stderr)
 
     def test_strict_setup_checks_source_directories_and_runtime_files(self):
         self.install()
@@ -1589,7 +1879,7 @@ sys.exit(module["main"]())
         self.assertEqual((self.root / ".local/bin/codex").resolve(), second)
         shutil.rmtree(self.home)
         self.home.mkdir()
-        self.command("restore", "--root", str(self.root))
+        self.command("restore", "--host", "test-host", "--root", str(self.root))
         self.assertEqual((self.home / ".local/bin/codex").resolve(), second)
 
     def test_unicode_and_spaces_in_the_persistent_root(self):
@@ -1762,7 +2052,7 @@ sys.exit(module["main"]())
         report = json.loads(self.command("doctor", "--json", ok=False).stdout)
         self.assertIn("persistent-agent-configuration-missing", report["issues"])
         self.command("doctor", "--preflight", ok=False)
-        self.command("restore", "--root", str(self.root), ok=False)
+        self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.command("install", "--root", str(self.root), ok=False)
         self.assertFalse(target.exists())
 
@@ -1979,7 +2269,7 @@ sys.exit(module["main"]())
         shutil.rmtree(external)
         report = json.loads(self.command("doctor", "--json", ok=False).stdout)
         self.assertIn("external-agent-configuration-missing", report["issues"])
-        self.command("restore", "--root", str(self.root), ok=False)
+        self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertFalse(external.exists())
 
     def test_launch_arguments_reject_credentials_without_logging_them(self):
