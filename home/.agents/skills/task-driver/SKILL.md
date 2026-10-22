@@ -80,6 +80,7 @@ The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥
    - Open the code only when the user asks: `wt open <name>` / `wt -H <vm> open -r <repo> <name>`.
 
    **Recover an existing VM task.** Follow the [recovery policy](../../../.claude/AGENTS.md#vm-task-recovery).
+   For lost portable home links, follow the [portable restore policy](../../../.claude/AGENTS.md#portable-restore-only).
    - If the row is suspended after a network switch, or gone after a restart, tell the user to run `wt -H <vm> attach -r <repo> <name>`. That command stops the row's stale SSH relay on the VM. Then it reconnects the row and selects it.
    - After cmux reconnects, the wheel can type arrow keys, or paste or Shift+Enter can misbehave. In that case, point the user to the same attach command. It re-initializes an attached task's tmux client. If this replacement attach fails, it leaves the row at a shell prompt.
    - If a connected row shows a bare shell after a dropped connection, point the user to `--reattach`.

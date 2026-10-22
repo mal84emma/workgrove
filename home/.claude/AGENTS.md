@@ -199,6 +199,7 @@ Keep compute lifecycle and credentials with the SSH supplier.
 Confirm the persistent root, storage policy, public revision, and personal identity before full preparation.
 Run `wt -H <host> doctor --json` before deciding whether setup repair is needed.
 Use the existing VM attachment procedure after explicit environment repair.
+For restore-only without asking, follow the [portable restore policy](#portable-restore-only).
 
 ### Per-repo setup
 
@@ -211,7 +212,45 @@ Use the [task-driver procedure](../.agents/skills/task-driver/SKILL.md) to prepa
 
 ### VM task recovery
 
-Run recovery, `--reattach`, or `--restart-agent` only when the user asks.
+Run task recovery, `--reattach`, or `--restart-agent` only when the user asks.
+Restore-only without asking is permitted only under the [portable restore policy](#portable-restore-only).
+
+### Portable restore-only
+
+An agent may run restore-only without asking only when all six conditions hold:
+
+1. SSH to the alias works without an unknown-host-key or changed-host-key error.
+2. `wt -H <host> doctor --json`, without `--root`, reports `issues` exactly equal to `["profile-missing","remote-wt-missing"]`.
+3. The root comes from `root_discovery` with status `found`, or from the user for this alias in this session.
+   If both sources exist and differ, stop.
+4. `root_discovery.same_machine` is `true`, or the user said in this session that this host restarted.
+   Otherwise, ask whether the host restarted.
+   Name the alias and the root in that one question.
+5. `wt -H <host> doctor --root <root> --json` reports no issue outside this allowlist:
+   `compatibility-links-missing`, `remote-wt-missing`, and `environment-incomplete`.
+   Any other code needs the user, including `missing-prerequisites`, conflict codes, and saved-agent-command codes.
+6. Run exactly `wt -H <host> setup --root <root> --restore-only`, with no other option.
+   Restore ignores options such as `--git-identity` and `--persist-agents`.
+
+After restore, run `wt -H <host> doctor --json` again.
+Report the root, the restore summary, every backup line, and the doctor result to the user.
+If `persist_agents` is not set, report that and stop before starting or restarting any task.
+If either sign-in file is absent, report that and stop before starting or restarting any task.
+The user signs in.
+
+These steps stay with the user:
+
+- Full setup and any change of `--storage`, `--mount`, `--trust-personal-volume`, `--strict-permissions`, or the alias.
+- `--reattach` and `--restart-agent`.
+- Signing in an agent or `gh`.
+- Accepting a host key.
+- Choosing a root when discovery reports `ambiguous`, `none`, or `incomplete`.
+- Restoring a host whose root comes only from a `WT_REMOTE_ROOT` export.
+  There, doctor finds the profile without naming the root.
+
+After any refusal, stop and ask the user.
+After an unknown or changed host key, stop.
+Never accept a host key or sign in an agent or `gh` yourself.
 
 ### Interactive commands
 

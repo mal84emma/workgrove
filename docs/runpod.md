@@ -66,8 +66,13 @@ Verify lifecycle and storage guarantees through the supplier's documentation.
 
 After an authorized stop/start, follow the [shared VM recovery checklist](remote-setup.md#restore-after-a-host-restart).
 Check SSH first and ask the supplier to refresh the endpoint if needed.
-Doctor without `--root` reports a replaced home folder as a new host.
-Run doctor with the saved root to see the real state:
+Run `wt -H <host> doctor --json` without `--root` to discover a surviving volume root.
+Discovery must report exactly one matching root; otherwise, the user supplies it.
+`root_discovery.same_machine` compares the current machine name with the last setup or restore record.
+The name can change after a restart; workgrove never prints the recorded name.
+The [discovery limits](remote-setup.md#check-readiness) include a filesystem call blocked by uninterruptible I/O.
+
+Run doctor with the chosen root to see the real state:
 
 ```bash
 wt -H <host> doctor --root <root> --json
@@ -77,8 +82,13 @@ When only compatibility links and environment were lost, restore them:
 
 ```bash
 wt -H <host> setup --root <root> --restore-only
-wt -H <host> doctor --root <root> --json
+wt -H <host> doctor --json
 ```
+
+Restore refuses a different saved alias before changing the home folder.
+Its stderr summary reports the active root, alias, personal state, sign-in file presence, and saved Git link.
+Agents follow the [portable restore policy](../home/.claude/AGENTS.md#portable-restore-only) before restoring without asking.
+The user handles host keys, sign-ins, full setup, and task recovery flags.
 
 Restore-only backs up regular files that the host's start command writes in the home folder, including `~/.gitconfig`.
 This command keeps the saved storage policy and volume trust when the root and mount are unchanged.
