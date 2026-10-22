@@ -834,6 +834,176 @@ sys.exit(module["main"]())
         self.assertIn("missing-prerequisites", json.loads(result.stdout)["issues"])
         self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
 
+    def test_restore_backs_up_supplier_home_files_and_reuses_identical_backups(self):
+        self.install("--persist-agents", "--with-tmux-conf")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        planted = {".gitconfig": b"[credential]\n helper = supplier\n", ".tmux.conf": b"# supplier\n\xff"}
+        backups = self.root / ".local/state/workgrove/backups"
+        before = {name: set(backups.glob("*/" + name)) for name in planted}
+        for attempt in range(2):
+            for name, contents in planted.items():
+                path = self.home / name
+                if path.is_symlink():
+                    path.unlink()
+                path.write_bytes(contents)
+            result = self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=""))
+            for name, contents in planted.items():
+                self.assertTrue((self.home / name).is_symlink())
+                copies = list(set(backups.glob("*/" + name)) - before[name])
+                self.assertEqual(len(copies), 1)
+                self.assertEqual(copies[0].read_bytes(), contents)
+                action = "backed up" if attempt == 0 else "removed"
+                lines = [line for line in result.stderr.splitlines() if "~/" + name in line]
+                self.assertEqual(len(lines), 1)
+                self.assertIn(action, lines[0])
+                self.assertIn(str(copies[0].parent.relative_to(self.root)), lines[0])
+            self.assertNotIn(str(self.home), result.stderr)
+            self.assertNotIn(str(self.root), result.stderr)
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+
+    def test_backup_uses_newest_original_path_without_file_timestamps(self):
+        self.install("--persist-agents", "--with-tmux-conf")
+        path = self.home / ".tmux.conf"
+        backups = self.root / ".local/state/workgrove/backups"
+        for contents, count in ((b"first", 1), (b"second", 2), (b"first", 3), (b"first", 3)):
+            path.unlink()
+            path.write_bytes(contents)
+            self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=""))
+            copies = list(backups.glob("*/.tmux.conf"))
+            self.assertEqual(len(copies), count)
+            for copy in copies:
+                os.utime(copy, (1, 1))
+                os.utime(copy.parent, (1, 1))
+
+    def test_full_setup_keeps_same_basename_backups_separate(self):
+        for base in (self.root, self.home):
+            path = base / ".local/bin/wt"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"supplier command\xff")
+        result = self.install("--persist-agents")
+        copies = list((self.root / ".local/state/workgrove/backups").glob("*/wt"))
+        self.assertEqual(len(copies), 2)
+        self.assertTrue(all(path.read_bytes() == b"supplier command\xff" for path in copies))
+        self.assertIn("backed up ~/.local/bin/wt to .local/state/workgrove/backups/", result.stderr)
+        self.assertIn("backed up .local/bin/wt to .local/state/workgrove/backups/", result.stderr)
+
+    def test_restore_names_directory_and_foreign_link_conflicts_before_any_move(self):
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".gitconfig").write_bytes(b"supplier")
+        before = sorted((self.root / ".local/state/workgrove/backups").iterdir())
+        path = self.home / ".claude"
+        path.mkdir()
+        (path / ".credentials.json").write_text(CANARY)
+        result = self.command("restore", "--root", str(self.root), ok=False)
+        self.assertEqual(result.stderr, "workgrove: restore-link-conflict: ~/.claude\n")
+        self.assertEqual((path / ".credentials.json").read_text(), CANARY)
+        shutil.rmtree(path)
+        path.symlink_to(self.base / CANARY)
+        result = self.command("restore", "--root", str(self.root), ok=False)
+        self.assertEqual(result.stderr, "workgrove: restore-link-conflict: ~/.claude\n")
+        self.assertTrue(path.is_symlink())
+        self.assertFalse((self.home / ".local/bin/wt").exists())
+        self.assertEqual((self.home / ".gitconfig").read_bytes(), b"supplier")
+        self.assertEqual(sorted((self.root / ".local/state/workgrove/backups").iterdir()), before)
+
+    def test_restore_refuses_root_files_even_inside_home(self):
+        old = self.root
+        self.root = self.home / "durable"
+        old.rename(self.root)
+        self.source = self.root / "workgrove"
+        self.script = self.source / "lib/workgrove/portable.py"
+        self.install("--persist-agents")
+        path = self.root / ".local/bin/wt"
+        path.unlink()
+        path.write_text("supplier command")
+        home = self.home / ".local/bin/azml-ssh-host"
+        home.unlink()
+        home.write_text("home command")
+        result = self.command("restore", "--root", str(self.root), ok=False)
+        self.assertEqual(result.stderr, "workgrove: restore-link-conflict: .local/bin/wt\n")
+        self.assertEqual(path.read_text(), "supplier command")
+        self.assertEqual(home.read_text(), "home command")
+
+    def test_restore_refuses_claude_skill_files_without_persistence(self):
+        self.install()
+        path = next((self.home / ".claude/skills").iterdir())
+        path.unlink()
+        path.write_text("personal skill")
+        result = self.command("restore", "--root", str(self.root), ok=False)
+        self.assertEqual(result.stderr, "workgrove: restore-link-conflict: ~/.claude/skills/" + path.name + "\n")
+        self.assertEqual(path.read_text(), "personal skill")
+
+    def test_fixed_conflicts_name_paths_and_keep_refusal_codes(self):
+        directory = self.home / ".local/bin/wt"
+        directory.mkdir(parents=True)
+        result = self.install(ok=False)
+        self.assertEqual(result.stderr, "workgrove: directory-conflict: ~/.local/bin/wt\n")
+        directory.rmdir()
+        for name in (".bashrc", ".zshenv"):
+            path = self.home / name
+            path.mkdir()
+            result = self.install(ok=False)
+            self.assertEqual(result.stderr, "workgrove: shell-configuration-conflict: ~/" + name + "\n")
+            path.rmdir()
+            path.symlink_to(self.base / CANARY)
+            result = self.install(ok=False)
+            self.assertEqual(result.stderr, "workgrove: shell-configuration-link-unavailable: ~/" + name + "\n")
+            path.unlink()
+        with patch.dict(os.environ, self.env, clear=True):
+            directory.write_text("command")
+            with self.assertRaises(portable.Refusal) as caught:
+                portable.link(self.source / "bin/wt", directory, self.root, label="~/.local/bin/wt")
+        self.assertEqual(str(caught.exception), "link-conflict")
+        self.assertEqual(caught.exception.path, "~/.local/bin/wt")
+
+    def test_full_setup_reports_instruction_and_shell_link_moves_privately(self):
+        external = self.base / CANARY
+        external.mkdir(mode=0o700)
+        self.env["CLAUDE_CONFIG_DIR"] = str(external)
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            (external / name).symlink_to(self.source / "home/.claude/AGENTS.md")
+        # Only the foreign instruction link requires a copy.
+        (external / "AGENTS.md").unlink()
+        instructions = self.base / "private-instructions"
+        instructions.write_text("Personal instructions.\n")
+        (external / "AGENTS.md").symlink_to(instructions)
+        for name in (".bashrc", ".zshenv"):
+            target = self.base / ("private" + name)
+            target.write_text("# supplier shell\n")
+            (self.home / name).symlink_to(target)
+        result = self.install()
+        self.assertIn("backed up <claude-root>/AGENTS.md to .local/state/workgrove/backups/", result.stderr)
+        for name in (".bashrc", ".zshenv"):
+            self.assertIn("backed up ~/" + name + " to .local/state/workgrove/backups/", result.stderr)
+        self.assertNotIn(str(self.base), result.stderr)
+        path = next((external / "skills").iterdir())
+        path.unlink()
+        path.write_text("personal skill")
+        result = self.command("restore", "--root", str(self.root), ok=False)
+        self.assertEqual(result.stderr, "workgrove: restore-link-conflict: <claude-root>/skills/" + path.name + "\n")
+
+    def test_restore_reports_shell_link_moves_without_deduplicating_links(self):
+        self.install("--persist-agents")
+        target = self.base / CANARY
+        target.write_text("# supplier shell\n")
+        backups = self.root / ".local/state/workgrove/backups"
+        for attempt in range(2):
+            for name in (".bashrc", ".zshenv"):
+                path = self.home / name
+                path.unlink()
+                path.symlink_to(target)
+            result = self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=""))
+            for name in (".bashrc", ".zshenv"):
+                self.assertIn("backed up ~/" + name + " to .local/state/workgrove/backups/", result.stderr)
+                copies = list(backups.glob("*/" + name))
+                self.assertEqual(len(copies), attempt + 1)
+                self.assertTrue(all(copy.is_symlink() and copy.readlink() == target for copy in copies))
+            self.assertIn("# supplier shell", (self.home / ".bashrc").read_text())
+            self.assertEqual(target.read_text(), "# supplier shell\n")
+
     def test_conflicting_agent_data_stops_before_migration(self):
         current = self.home / ".codex"
         target = self.root / ".config/codex"

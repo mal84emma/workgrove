@@ -191,7 +191,18 @@ Links must retain their targets after migration and restoration of the home dire
 Internal links that move with their targets and absolute external links remain supported.
 Other links cause `agent-link-migration-conflict` before any state moves.
 Resolve those conflicts privately before retrying.
-Restore-only refuses new conflicting home data and refuses missing selected persistent agent roots.
+Restore-only backs up regular files at home compatibility link locations before replacing them with links.
+It refuses directories and foreign symbolic links at every compatibility link location.
+It also refuses regular files at root-side command and skill locations, including skills in the selected Claude root.
+These rules depend on each link's role, even when the persistent root or Claude root lies inside the home folder.
+Missing selected persistent agent roots still cause refusal.
+
+Restore-only and full setup report each backup on stderr.
+The line names the home path with `~/` and the backup folder relative to `<root>`.
+External agent locations use placeholders such as `<claude-root>`.
+When the newest backup of the same original path has identical bytes, setup removes the duplicate and names the existing backup.
+Backup records identify the original path and move order without using filesystem modification times.
+Conflicts at fixed link and shell locations include the path after the refusal code.
 
 Without `--persist-agents`, existing agent configuration remains at its current location.
 Its persistence remains the user's responsibility.
@@ -315,6 +326,10 @@ wt -H <host> doctor --json
 
 Restore-only uses the durable installation and Python's standard library.
 It performs no download, package installation, Git update, login, or agent restart.
+It backs up regular home files that the host's start command writes, including `~/.gitconfig` and selected `~/.tmux.conf`.
+Each stderr line names the displaced file and its backup folder under `<root>`.
+An identical newest backup of that path prevents another copy.
+Directories, foreign symbolic links, and regular files at root-side link locations still cause refusal before any file changes.
 Setup, restore-only, and doctor apply the same safety checks to managed personal configuration files.
 They check ownership, permissions, repository boundaries, and link targets without requiring agent authentication.
 If packages or Python were also lost, run full setup with the saved root and explicit storage policy.
