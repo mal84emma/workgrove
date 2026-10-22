@@ -16,7 +16,8 @@ fake_row() {
   jq -c --arg id "$1" --arg title "$2" --arg description "$3" \
     --arg host "${4:-}" --arg state "${5:-connected}" --arg backend "${6:-cmux-tui}" \
     --argjson slot "${7:-null}" '
-    .workspaces[0] | .id=$id | .title=$title | .description=$description
+    [.workspaces[] | select(.remote.enabled == ($host != ""))][0]
+    | .id=$id | .title=$title | .description=$description
     | .current_directory="" | .has_custom_title=true
     | .remote.enabled=($host != "") | .remote.destination=(if $host == "" then null else $host end)
     | .remote.state=(if $host == "" then "disconnected" else $state end)
@@ -52,4 +53,10 @@ fake_queue() {
   printf '%s' "$output" >"$entry/stdout"
   printf '%s' "$error" >"$entry/stderr"
   printf '%s\n' "$status" >"$entry/status"
+}
+
+fake_top() {
+  jq -c --arg caller "$1" --argjson count "$2" '
+    .caller.workspace_id=$caller
+    | .coding_agents=[.coding_agents[0] | .resources.process_count=$count]' "$FAKE_CMUX_FIXTURES/top.json"
 }

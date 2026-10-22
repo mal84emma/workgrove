@@ -22,6 +22,7 @@ unset XDG_DATA_HOME   # the cmux-tui hook wrapper must find its default helper i
 # shellcheck source=test/fakes/rows.sh
 source "$REPO/test/fakes/rows.sh"
 fake_cmux_init "$TEST_ROOT/cmux-state"
+: >"$FAKE_CMUX_STATE/native-log"
 ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/bin/cmux"
 CMUX_LOG="$FAKE_CMUX_STATE/calls.log"
 cat > "$TEST_ROOT/bin/code" <<'CODE'

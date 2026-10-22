@@ -11,14 +11,22 @@ HERE=$(cd "${source_path%/*}" && pwd -P)
 fixtures=${CMUX_FIXTURES:-$HERE/../fixtures/cmux-0.65.1}
 state=${FAKE_CMUX_STATE:-}
 if [[ -n $state ]]; then
-  printf '%s\n' "$*" >>"$state/$(if [[ ${0##*/} == cmux-tui ]]; then echo native-calls.log; else echo calls.log; fi)"
+  printf '%s\n' "$*" >>"$state/$(if [[ ${0##*/} == cmux-tui && -f $state/native-log ]]; then echo native-calls.log; else echo calls.log; fi)"
 fi
+screen_append() {
+  if [[ $key == read-screen && -f $state/screen-append ]]; then
+    if [[ ! -f $state/screen-append-hidden ]]; then cat "$state/screen-append"; fi
+    rm "$state/screen-append"
+  fi
+}
 [[ $1 != --socket ]] || shift 2
 case "$1 ${2:-}" in
   '--json list-windows') key=list-windows; file=windows.json ;;
   '--json list-notifications') key=list-notifications; file=notifications.json ;;
   'workspace list') key=workspace-list; file=rows.json
     if [[ ${4:-} == --window ]]; then key+=--$5; file=rows/$5.json; fi ;;
+  'top --workspace') key=top; file=top/$3.json ;;
+  'workspace create') key=workspace-create; file=create.json ;;
   'workspace close') key=workspace-close; file=close.txt ;;
   'workspace select') key=workspace-select; file=select.txt ;;
   'automation show') key=automation; file=automation.json ;;
@@ -33,16 +41,23 @@ if [[ -n $state ]]; then
       cat "$entry/stderr" >&2 2>/dev/null || true
       rc=$(cat "$entry/status")
       rm -r "$entry"
+      screen_append
       exit "$rc"
     done
   fi
   failure=$state/fail/$key
   [[ -f $failure ]] || failure=$state/fail/${key%%--*}
+  [[ -f $failure ]] || failure=$state/fail/all
   if [[ -f $failure ]]; then
     { read -r rc; cat >&2; } <"$failure"
     exit "$rc"
   fi
-  if [[ -f $state/$file ]]; then cat "$state/$file"; exit 0; fi
+  if [[ $key == workspace-close && ${4:-} != --force && -f $state/close-confirmation ]]; then
+    cat "$state/close-confirmation" >&2
+    exit 1
+  fi
+  if [[ $key == top && ! -f $state/$file ]]; then file=top.json; fi
+  if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; exit 0; fi
 fi
 case "$key" in
   version)
@@ -68,8 +83,8 @@ case "$key" in
     if [[ -f $state/notify-dedupe && -f $state/last-content && $(cat "$state/last-content") == "$title|$body" ]]; then exit 0; fi
     printf '%s' "$title|$body" >"$state/last-content"
     tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl" ;;
-  ping|workspace-close|workspace-select|workspace-action|send|clear-notifications|dismiss-notification|reconnect) ;;
-  ssh|new-workspace) printf 'workspace:99\n' ;;
+  ping|workspace-close|workspace-select|workspace-action|send|send-key|clear-notifications|dismiss-notification|reconnect) ;;
+  ssh|new-workspace|workspace-create) printf 'workspace:99\n' ;;
   read-screen) exit 1 ;;
   *) printf 'fake cmux: unexpected command: %s\n' "$*" >&2; exit 64 ;;
 esac
