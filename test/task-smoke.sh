@@ -135,6 +135,43 @@ scenario_subshell_cleanup() {
   end_scenario
 }
 
+scenario_foreground_signal() {
+  begin_scenario 'TERM cleans up without waiting for an active foreground command' || return 0
+  local pid rc=0 attempt running=1
+  bash -c '
+    source "$1/lib/workgrove/common.sh"
+    touch "$2/foreground-pending"
+    wt_register_tmpfile "$2/foreground-pending"
+    bash -c '\''
+      touch "$1/foreground-ready"
+      until [[ -e $1/foreground-release ]]; do sleep 0.01; done
+      touch "$1/foreground-done"
+    '\'' bash "$2"
+  ' bash "$REPO" "$TEST_ROOT" >"$TEST_ROOT/foreground-output" 2>&1 &
+  pid=$!
+  for ((attempt=0; attempt<200; attempt++)); do
+    [[ ! -e $TEST_ROOT/foreground-ready ]] || break
+    sleep 0.01
+  done
+  if [[ -e $TEST_ROOT/foreground-ready ]]; then pass; else fail 'the foreground command did not start'; fi
+  kill -TERM "$pid"
+  for ((attempt=0; attempt<100; attempt++)); do
+    if ! kill -0 "$pid" 2>/dev/null; then running=0; break; fi
+    sleep 0.01
+  done
+  assert_eq 'the shell exits before the foreground command finishes' 0 "$running"
+  touch "$TEST_ROOT/foreground-release"
+  wait "$pid" || rc=$?
+  for ((attempt=0; attempt<200; attempt++)); do
+    [[ ! -e $TEST_ROOT/foreground-done ]] || break
+    sleep 0.01
+  done
+  if [[ -e $TEST_ROOT/foreground-done ]]; then pass; else fail 'the foreground command did not finish'; fi
+  assert_eq 'the interrupted shell keeps TERM status' 143 "$rc"
+  assert_absent "$TEST_ROOT" foreground-pending
+  end_scenario
+}
+
 scenario_setup_signal() {
   begin_scenario 'remote setup removes its diagnostic file after TERM' || return 0
   local rc=0
@@ -197,6 +234,7 @@ LOG="$TEST_ROOT/cleanup-callback"
 scenario_cleanup_signal
 LOG="$TEST_ROOT/parent-callback"
 scenario_subshell_cleanup
+scenario_foreground_signal
 scenario_setup_signal
 scenario_host_signal
 lib_summary

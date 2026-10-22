@@ -43,11 +43,6 @@ need_jq() { have jq || die "jq not found (brew install jq, or sudo apt-get insta
 # Each callback receives the original exit status, in registration order.
 WG_EXIT_HANDLERS=()
 on_exit() {
-  if ((${#WG_EXIT_HANDLERS[@]} == 0)); then
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-  fi
   WG_EXIT_HANDLERS+=("$1")
   trap 'wg_on_exit "$?"' EXIT
 }
