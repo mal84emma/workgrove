@@ -1277,6 +1277,17 @@ def reinstall(args):
     return install(args)
 
 
+def reinstall_flags(args):
+    accepted = " ".join(flag for action in args.reinstall_parser._actions for flag in action.option_strings
+                        if flag.startswith("--") and flag != "--help")
+    for flag in args.flags:
+        try:
+            args.reinstall_parser.parse_args([flag])
+        except Refusal as error:
+            raise Refusal(f"update: portable host refuses {flag}; accepted flags: {accepted}") from error
+    print(accepted)
+
+
 def doctor(args):
     result = readiness(args.root)
     if args.preflight:
@@ -1324,9 +1335,8 @@ def main():
         if name == "reinstall":
             reinstall_parser = command
     command = commands.add_parser("reinstall-flags")
-    command.set_defaults(run=lambda args: print(" ".join(
-        flag for action in reinstall_parser._actions for flag in action.option_strings
-        if flag.startswith("--") and flag != "--help")))
+    command.add_argument("flags", nargs="*")
+    command.set_defaults(run=reinstall_flags, reinstall_parser=reinstall_parser)
     command = commands.add_parser("doctor")
     command.add_argument("--root")
     command.add_argument("--json", action="store_true")

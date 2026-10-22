@@ -1085,8 +1085,9 @@ sys.exit(module["main"]())
         self.install()
         accepted = self.command("reinstall-flags").stdout.split()
         for flag in ("--refresh-config", "--with-tmux-conf", "--with-future-config"):
+            self.assertIn(flag, accepted)
+        for flag in ("--refresh-config", "--with-tmux-conf", "--with-tmux", "--with-tm", "--with-future-config"):
             with self.subTest(flag=flag):
-                self.assertIn(flag, accepted)
                 result = subprocess.run([str(self.tools / "bash"), str(self.source / "bin/wt"), "update", flag],
                                         env=self.env, capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr)
