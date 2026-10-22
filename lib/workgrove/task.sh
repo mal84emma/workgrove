@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: BASHPID, CMUX_ERROR, CMUX_SSH_ATTEMPT_ID, CODEX_SANDBOX, HOME, PWD, REPO, REPOS_PATH,
-#   ROW_SEP, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_HOST, WT_REPOS_DIR,
+#   ROW_SEP, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_HOST, WT_REMOTE_ROOT, WT_REPOS_DIR,
 #   WT_TMPFILES, WT_TMPFILES_PID.
 # Requires cmux.sh: cmux_notify, cmux_ok, cmux_row_field, row_label.
 # Requires common.sh: die, have, hook_safe_path, on_exit, repo_id, row_title, shell_join,
@@ -75,6 +75,29 @@ main_root_of() {
 : "${REPO:=}"      # main checkout root
 : "${WT_DIRNAME:=}"
 set_repo() { REPO=$(main_root_of "$1") || return 1; WT_DIRNAME=$(git -C "$REPO" config --get wt.dir 2>/dev/null || echo .worktrees); }
+is_installation_repo() {
+  [[ -n ${WT_REMOTE_ROOT:-} ]] || return 1
+  local installation candidate
+  installation=$(cd -P "$WT_REMOTE_ROOT/workgrove" 2>/dev/null && pwd -P) || return 1
+  candidate=$(cd -P "$1" 2>/dev/null && pwd -P) || return 1
+  [[ $candidate == "$installation" ]]
+}
+need_task_repo() {
+  if is_installation_repo "$1"; then
+    die 'new: cannot create tasks in the workgrove installation; use a separate clone with another name for workgrove development'
+  fi
+}
+lookup_new_repo() {
+  local want=${1:-} d
+  # Name lookup omits the installation. Preserve the creation refusal when no other repository matches.
+  if [[ -n ${WT_REMOTE_ROOT:-} && $want == workgrove && ! -d $want && -z $(repo_matches "$want") ]]; then
+    while IFS= read -r d; do
+      [[ -z $d ]] || need_task_repo "$d/$want"
+    done <<<"$(repos_entries)"
+  fi
+  lookup_repo "$want"
+  need_task_repo "$REPO"
+}
 lookup_repo() { # uses a path as given; looks up a name along $WT_REPOS_DIR, where it must be in one folder only
   local want="${1:-}" hits
   if [[ -n "$want" ]]; then
@@ -133,11 +156,13 @@ repos_entries() {
 }
 need_repos_dir() { [[ -n "$(repos_entries)" ]] || die "repos dir not found: $REPOS_PATH (set WT_REPOS_DIR, or pass -r <repo>)"; }
 repo_dirs() { # every git repo on the search path: entry order, sorted within an entry, unreadable and hidden folders skipped
-  local d
+  local d candidate
   while IFS= read -r d; do
     [[ -n "$d" ]] || continue
     [[ -r "$d" ]] || { warn "skipping unreadable folder in WT_REPOS_DIR: $d"; continue; }
-    { find "$d" -mindepth 1 -maxdepth 1 -type d -not -name '.*' -exec test -d '{}/.git' ';' -print 2>/dev/null || true; } | sort
+    while IFS= read -r candidate; do
+      is_installation_repo "$candidate" || printf '%s\n' "$candidate"
+    done < <({ find "$d" -mindepth 1 -maxdepth 1 -type d -not -name '.*' -exec test -d '{}/.git' ';' -print 2>/dev/null || true; } | sort)
   done <<<"$(repos_entries)"
   return 0
 }
@@ -145,7 +170,8 @@ repo_matches() { # repo_matches <name> -> the entries holding that repo, first e
   local name="$1" d
   case "$name" in ""|*/*|.*) return 0 ;; esac
   while IFS= read -r d; do
-    [[ -n "$d" && -d "$d/$name/.git" ]] && printf '%s\n' "$d/$name"
+    [[ -n "$d" && -d "$d/$name/.git" ]] || continue
+    is_installation_repo "$d/$name" || printf '%s\n' "$d/$name"
   done <<<"$(repos_entries)"
   return 0
 }

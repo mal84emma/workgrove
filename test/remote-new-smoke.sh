@@ -88,6 +88,10 @@ make_fake_ssh "$TEST_ROOT/local/bin/ssh" "$TEST_ROOT/local/bin/ssh.fixture"
 cat >"$TEST_ROOT/remote/.local/bin/wt" <<'WT'
 #!/usr/bin/env bash
 set -euo pipefail
+# Supply portable exports without changing this fixture's legacy readiness checks.
+if [[ -n ${REMOTE_INSTALL_ROOT:-} ]]; then
+  export WT_REMOTE_ROOT="$REMOTE_INSTALL_ROOT" WT_REPOS_DIR="$REMOTE_INSTALL_ROOT"
+fi
 if [[ ${REMOTE_FAIL_SUB:-} == "$1" ]]; then
   [[ -z ${REMOTE_FAIL_STDOUT:-} ]] || printf '%s\n' "$REMOTE_FAIL_STDOUT"
   [[ -z ${REMOTE_FAIL_STDERR:-} ]] || printf '%s\n' "$REMOTE_FAIL_STDERR" >&2
@@ -174,6 +178,7 @@ invoke_wt() {
     REAL_WT="$REPO/bin/wt" FAKE_CMUX_STATE="$FAKE_CMUX_STATE" \
     SSH_LOG="$TEST_ROOT/ssh.log" CMUX_MODE="$CMUX_MODE" SSH_MODE="$SSH_MODE" \
     REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" \
+    REMOTE_INSTALL_ROOT="${REMOTE_INSTALL_ROOT:-}" \
     REMOTE_FAIL_SUB="${REMOTE_FAIL_SUB:-}" REMOTE_FAIL_STATUS="${REMOTE_FAIL_STATUS:-141}" \
     REMOTE_FAIL_STDOUT="${REMOTE_FAIL_STDOUT:-}" REMOTE_FAIL_STDERR="${REMOTE_FAIL_STDERR:-}" \
     REMOTE_HOME="$TEST_ROOT/remote" REMOTE_REPO="$TEST_ROOT/remote/repo" \
@@ -191,6 +196,28 @@ run_wt() {
   invoke_wt "${args[@]}"
 }
 check() { if [[ "$1" ]]; then pass; else fail "$2; output: $WT_OUT"; fi; }
+
+scenario_installation_preflight() {
+  begin_scenario 'remote creation preflight refuses the portable installation' || return 0
+  local root="$TEST_ROOT/persistent" request
+  mkdir -p "$root"
+  git clone -q "$TEST_ROOT/remote/repo" "$root/workgrove"
+  cp "$root/workgrove/.git/config" "$TEST_ROOT/portable-config"
+  REMOTE_INSTALL_ROOT="$root"
+  for request in workgrove "$root/workgrove"; do
+    run_wt "$request" none
+    assert_eq 'creation preflight refuses the installation' 1 "$WT_RC"
+    check "$([[ $WT_STDERR == *'use a separate clone with another name for workgrove development'* ]] && echo yes)" \
+      'creation preflight lost the installation refusal'
+    assert_absent "$TEST_ROOT" remote-new.calls
+    if cmp -s "$root/workgrove/.git/config" "$TEST_ROOT/portable-config"; then pass; else fail 'preflight changed installation config'; fi
+    assert_absent "$root/workgrove" .worktrees/task
+  done
+  REMOTE_INSTALL_ROOT=''
+  rm -f "$TEST_ROOT/ssh.log"
+  end_scenario
+}
+scenario_installation_preflight
 
 scenario_preflight_recovery() {
   begin_scenario 'remote preflight and recovery' || return 0
