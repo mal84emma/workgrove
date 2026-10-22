@@ -451,7 +451,8 @@ def select_agent_roots(root, persist, previous):
     for agent, variable, default in (("claude", "CLAUDE_CONFIG_DIR", ".claude"),
                                      ("codex", "CODEX_HOME", ".codex")):
         home = Path.home() / default
-        require(not home.is_symlink() or home.exists(), "agent-configuration-link-unavailable")
+        label = "~/" + default if persist else None
+        require(not home.is_symlink() or home.exists(), "agent-configuration-link-unavailable", label)
         old = previous["agent_roots"][agent] if previous else None
         configured = old or os.environ.get(variable)
         current = canonical(configured) if configured else canonical(home)
@@ -459,18 +460,20 @@ def select_agent_roots(root, persist, previous):
             require(current.is_dir(), "persistent-agent-configuration-missing")
         if configured and current != canonical(home) and root not in current.parents:
             require(current.is_dir(), "external-agent-configuration-missing")
-        private_path(current)
+        with refusal_path(label if current == canonical(home) else None):
+            private_path(current)
         if persist and (not configured or current == canonical(home)) and not home.is_symlink():
             target = root / ".config" / agent
         else:
             target = current
-        private_path(target)
+        with refusal_path(label if target == canonical(home) else None):
+            private_path(target)
         if persist and current != target and current.exists() and target.exists():
-            raise Refusal("agent-configuration-conflict")
+            raise Refusal("agent-configuration-conflict", label)
         if persist and home.exists() and canonical(home) != target and configured and current != canonical(home):
-            raise Refusal("agent-home-conflict")
+            raise Refusal("agent-home-conflict", label)
         if persist and current != target and current.exists():
-            require(current.is_dir(), "invalid-agent-root")
+            require(current.is_dir(), "invalid-agent-root", label)
             migrations.append((current, target))
         chosen[agent] = str(target)
     return chosen, migrations

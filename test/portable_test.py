@@ -1040,6 +1040,27 @@ sys.exit(module["main"]())
             else:
                 path.write_bytes(original)
 
+    def test_setup_names_conflicting_and_dangling_agent_home_paths(self):
+        self.install("--persist-agents")
+        before = sorted((self.root / ".local/state/workgrove/backups").iterdir())
+        for agent in ("claude", "codex"):
+            path = self.home / ("." + agent)
+            target = path.readlink()
+            path.unlink()
+            path.mkdir()
+            credentials = path / (".credentials.json" if agent == "claude" else "auth.json")
+            credentials.write_text(CANARY)
+            result = self.install(ok=False)
+            self.assertEqual(result.stderr, "workgrove: agent-home-conflict: ~/." + agent + "\n")
+            self.assertEqual(credentials.read_text(), CANARY)
+            shutil.rmtree(path)
+            path.symlink_to(self.base / CANARY)
+            result = self.install(ok=False)
+            self.assertEqual(result.stderr, "workgrove: agent-configuration-link-unavailable: ~/." + agent + "\n")
+            self.assertEqual(sorted((self.root / ".local/state/workgrove/backups").iterdir()), before)
+            path.unlink()
+            path.symlink_to(target)
+
     def test_full_setup_reports_instruction_and_shell_link_moves_privately(self):
         external = self.base / CANARY
         external.mkdir(mode=0o700)
