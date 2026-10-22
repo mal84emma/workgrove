@@ -379,6 +379,19 @@ scenario_close_record_controls() {
 }
 scenario_close_record_controls
 
+scenario_close_protocol_hint() {
+  begin_scenario 'newer VM results retain the row and name the Mac update command' || return 0
+  local future out
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  future=$(WG_MACHINE_RESULT=2 WT_PROTOCOL=2 wt_result path missing task /vm/repos/repo)
+  out=$(REMOTE_PATH_RESULT="$future" hook)
+  assert_eq 'an unsupported version retains the notification' '' "$out"
+  lacks "$CMUX_LOG" 'workspace close'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'unsupported result protocol; run wt update on the Mac'
+  end_scenario
+}
+scenario_close_protocol_hint
+
 scenario_notification_budget() {
   begin_scenario 'notification bursts do not consume the open request budget' || return 0
   # Model cmux 0.65's admission window for an ordinary notification followed by two open requests.

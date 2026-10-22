@@ -174,7 +174,9 @@ case $t in
         declare -A result=()
         vm_result "$h" path result gone gone_error rc -- "$n" -r "$r" || result_rc=$?
         if [[ $rc == 1 && $result_rc == 0 && ${result[status]} == missing ]]; then missing=1; fi
-        if [[ $missing -ne 1 ]]; then
+        if [[ $result_rc == 3 ]]; then
+          log "ignored wt-close for task $n of $id on $h: unsupported result protocol; run wt update on the Mac"
+        elif [[ $missing -ne 1 ]]; then
           log "ignored wt-close for task $n of $id on $h: could not confirm its worktree is gone"
         elif close_row "$ws" self >/dev/null 2>&1; then
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
