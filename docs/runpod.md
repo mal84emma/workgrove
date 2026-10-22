@@ -74,14 +74,17 @@ wt -H <host> doctor --root <root> --json
 ```
 
 Use restore-only when compatibility links were lost; use full setup when prerequisites were also lost.
-If the host's start command writes `~/.gitconfig`, restore-only refuses with `restore-link-conflict`.
-Until [#132](https://github.com/mal84emma/workgrove/issues/132) changes that behavior, run full setup with the saved root:
+Restore-only backs up regular files that the host's start command writes in the home folder, including `~/.gitconfig`.
+Run restore-only with the saved root:
 
 ```bash
-wt -H <host> setup --root <root>
+wt -H <host> setup --root <root> --restore-only
 ```
 
 This command keeps the saved storage policy and volume trust when the root and mount are unchanged.
+It reports each displaced home path and its backup folder relative to `<root>`.
+An identical newest backup of the same path prevents another copy.
+Directories, foreign symbolic links, and regular files at root-side link locations still cause refusal before any file changes.
 
 Run doctor again to check readiness before task recovery.
 Then inspect and attach selected tasks using the ordinary Azure VM attachment decisions.
