@@ -149,6 +149,8 @@ Workgrove keeps `HOME` unchanged.
 Shell files source an exports file; sourcing it never installs packages, restores files, or starts tasks.
 Git uses the persistent configuration through `GIT_CONFIG_GLOBAL` and a home compatibility link.
 Normal `wt update` and bare installer reruns retain the portable root and selected options.
+For portable profiles, `wt update` accepts `--refresh-config` and `--with-tmux-conf`.
+It refuses other installer flags before `git fetch` and lists the accepted flags.
 
 Surviving portable environment files prevent fallback to the original installer.
 If the saved profile is missing, an ordinary rerun refuses and requires explicit setup.

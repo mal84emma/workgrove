@@ -741,14 +741,25 @@ cmd_version() {
 }
 
 cmd_update() { # pull this repo and re-run its installer
-  # Forward install.sh's own flags; do not reject them. The opt-ins are sticky, so a plain update keeps what
-  # this machine chose. But a user must be able to opt IN later through the command that the docs name.
+  # Forward installer flags. Portable profiles accept only their reinstall parser's flags.
   local pass=()
   local -A opts=()
   wt_opts "$(wt_spec update)" opts "$@"
   wt_opt_args opts pass
   local dir
   dir=$(cd "$WG_LIB_DIR/../.." && pwd -P)
+  # Check before fetching so a refusal leaves the checkout and portable readiness unchanged.
+  # shellcheck source=lib/workgrove/vm/python-runtime.sh
+  source "$WG_LIB_DIR/vm/python-runtime.sh"
+  if ((${#pass[@]})) && wg_has_portable_profile "$dir/.."; then
+    local accepted flag
+    wg_select_python || die "$wg_python_issue"
+    accepted=$("$wg_python" -B "$WG_LIB_DIR/portable.py" reinstall-flags) || return 1
+    for flag in "${pass[@]}"; do
+      [[ " $accepted " == *" $flag "* ]] \
+        || die "update: portable host refuses $flag; accepted flags: $accepted"
+    done
+  fi
   [[ -d "$dir/.git" ]] || die "$dir is not a git clone; replace the seed: mv $dir $dir.seed && git clone https://github.com/mal84emma/workgrove $dir"
   local ans
   git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 \
