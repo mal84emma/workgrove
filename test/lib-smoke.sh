@@ -12,6 +12,8 @@ source "$REPO/test/lib.sh"
 # shellcheck source=lib/workgrove/common.sh
 source "$REPO/lib/workgrove/common.sh"
 trap lib_cleanup EXIT
+# shellcheck source=test/fakes/rows.sh
+source "$REPO/test/fakes/rows.sh"
 
 scenario_fake_ssh() {
   begin_scenario 'shared fake SSH shell selection and command execution' || return 0
@@ -50,7 +52,9 @@ scenario_fake_ssh
 
 close_row_result() (
   local reply=$1 status=$2 rc=0
-  cmux_call() { printf '%s' "$reply"; return "$status"; }
+  fake_cmux_init "$TEST_ROOT/close-state"
+  export CMUX_BUNDLED_CLI_PATH="$REPO/test/fakes/cmux"
+  fake_queue workspace-close "$reply" "$status"
   CMUX_ERROR=''
   close_row row-test || rc=$?
   printf '%s\n%s' "$rc" "$CMUX_ERROR"
@@ -248,8 +252,6 @@ scenario_identities() {
 }
 scenario_identities
 
-# shellcheck source=test/fakes/rows.sh
-source "$REPO/test/fakes/rows.sh"
 fake_cmux_init "$TEST_ROOT/cmux-state"
 ROW_WINDOW_ONE=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
 ROW_WINDOW_TWO=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
@@ -259,7 +261,7 @@ ROW_TWO=$(fake_row row-two task '@test-vm · repo' test-vm)
 ROW_EXPECTED="{\"workspaces\":[$ROW_ONE,$ROW_TWO]}"
 
 row_cmux_reset() {
-  ROW_WINDOWS="[{\"id\":\"$ROW_WINDOW_ONE\",\"index\":0,\"key\":\"0\"}]"
+  ROW_WINDOWS=$(fake_windows "$ROW_WINDOW_ONE")
   ROW_WINDOWS_RC=0 ROW_ONE_RC=0 ROW_TWO_RC=0 ROW_FALLBACK_RC=0
   ROW_ONE_LIST="[$ROW_ONE]"
   ROW_TWO_LIST="{\"workspaces\":[$ROW_TWO]}"
