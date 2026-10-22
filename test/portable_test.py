@@ -978,6 +978,24 @@ sys.exit(module["main"]())
         self.assertEqual(str(caught.exception), "link-conflict")
         self.assertEqual(caught.exception.path, "~/.local/bin/wt")
 
+    def test_shell_marker_refusals_name_paths_before_any_move(self):
+        self.install("--persist-agents")
+        command = self.home / ".local/bin/azml-ssh-host"
+        command.unlink()
+        command.write_text("supplier command")
+        backups = self.root / ".local/state/workgrove/backups"
+        before = sorted(backups.iterdir())
+        for name in (".bashrc", ".zshenv"):
+            path = self.home / name
+            original = path.read_bytes()
+            path.write_text("# >>> workgrove environment\n# Missing end marker.\n")
+            for mode in ("restore", "install"):
+                result = self.command(mode, "--root", str(self.root), ok=False)
+                self.assertEqual(result.stderr, "workgrove: managed-text-conflict: ~/" + name + "\n")
+                self.assertEqual(command.read_text(), "supplier command")
+                self.assertEqual(sorted(backups.iterdir()), before)
+            path.write_bytes(original)
+
     def test_full_setup_reports_instruction_and_shell_link_moves_privately(self):
         external = self.base / CANARY
         external.mkdir(mode=0o700)

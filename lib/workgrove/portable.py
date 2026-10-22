@@ -932,7 +932,11 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
         require(not path.is_symlink() or path.exists(), "shell-configuration-link-unavailable", "~/" + relative)
         if path.exists():
             require(path.is_file(), "shell-configuration-conflict", "~/" + relative)
-            replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
+            try:
+                replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
+            except Refusal as error:
+                error.path = "~/" + relative
+                raise
     instructions = validate_personal_files(profile, migrations, installing=not restoring)
     for agent in ("claude", "codex"):
         base = Path(profile["agent_roots"][agent])
