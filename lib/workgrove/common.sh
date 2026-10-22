@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
+# Reads globals: BASHPID, BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_EXIT_PID, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
 #   VM_SSH_RUN, VM_WT_CAPTURE_FAILURE, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL, WT_TMPFILES.
 # Requires no functions from other modules. Loads cmux.sh, task.sh, options.sh, and version.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
@@ -42,16 +42,26 @@ need_jq() { have jq || die "jq not found (brew install jq, or sudo apt-get insta
 
 # Each callback receives the original exit status, in registration order.
 WG_EXIT_HANDLERS=()
+WG_EXIT_PID=$BASHPID
 on_exit() {
+  if [[ $WG_EXIT_PID != "$BASHPID" ]]; then
+    WG_EXIT_HANDLERS=()
+    WG_EXIT_PID=$BASHPID
+  fi
   WG_EXIT_HANDLERS+=("$1")
   trap 'wg_on_exit "$?"' EXIT
 }
 wg_on_exit() {
-  local handler
+  local handler __wg_exit_signal=0
+  # Finish all callbacks if a signal arrives during cleanup.
+  trap '__wg_exit_signal=129' HUP
+  trap '__wg_exit_signal=130' INT
+  trap '__wg_exit_signal=143' TERM
   # Callbacks cannot change the positional arguments of this dispatcher.
   for handler in "${WG_EXIT_HANDLERS[@]}"; do
     "$handler" "$1" || true
   done
+  if ((__wg_exit_signal != 0)); then exit "$__wg_exit_signal"; fi
   return "$1"
 }
 
@@ -245,7 +255,7 @@ vm_result() {
     esac
   done
   __stderr_file=$(mktemp "${TMPDIR:-/tmp}/wt-vm-stderr.XXXXXX") || { __vm_rc=1; return 1; }
-  WT_TMPFILES+=("$__stderr_file")
+  wt_register_tmpfile "$__stderr_file"
   __stdout=$(VM_WT_CAPTURE_FAILURE=1 vm_wt "$__host" --machine "$__sub" "$@" 2>"$__stderr_file") || __vm_rc=$?
   __stderr=$(cat "$__stderr_file")
   rm -f "$__stderr_file"

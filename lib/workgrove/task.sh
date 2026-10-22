@@ -1,6 +1,7 @@
 # shellcheck shell=bash
-# Reads globals: CMUX_ERROR, CMUX_SSH_ATTEMPT_ID, CODEX_SANDBOX, HOME, PWD, REPO, REPOS_PATH,
-#   ROW_SEP, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_HOST, WT_REPOS_DIR, WT_TMPFILES.
+# Reads globals: BASHPID, CMUX_ERROR, CMUX_SSH_ATTEMPT_ID, CODEX_SANDBOX, HOME, PWD, REPO, REPOS_PATH,
+#   ROW_SEP, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_HOST, WT_REPOS_DIR,
+#   WT_TMPFILES, WT_TMPFILES_PID.
 # Requires cmux.sh: cmux_notify, cmux_ok, cmux_row_field, row_label.
 # Requires common.sh: die, have, hook_safe_path, on_exit, repo_id, row_title, shell_join,
 #   valid_host, valid_name, warn, wt_result, wt_session.
@@ -19,8 +20,18 @@ cmux_require() {
   return 0
 }
 
-# Remove sidecar temp files when a command exits, including after a signal.
+# Remove registered temporary files when a command exits, including after a signal.
 WT_TMPFILES=()
+WT_TMPFILES_PID=$BASHPID
+wt_register_tmpfile() {
+  if [[ $WT_TMPFILES_PID != "$BASHPID" ]]; then
+    # A subshell owns only its new paths. Do not run its parent's EXIT callbacks.
+    WT_TMPFILES=()
+    WT_TMPFILES_PID=$BASHPID
+    on_exit wt_cleanup
+  fi
+  WT_TMPFILES+=("$@")
+}
 wt_cleanup() {
   if [[ ${#WT_TMPFILES[@]} -gt 0 ]]; then
     rm -f "${WT_TMPFILES[@]}"          # already moved into place: rm -f on a gone path is a no-op
@@ -196,7 +207,7 @@ meta_load() { # meta_load <name> <associative output> — 1: missing, 2: unreada
     WT_META_FILE='' WT_META_JSON='{}' WT_META=()
     if [[ ! -e $__file ]]; then return 1; fi
     __temp=$(mktemp "${TMPDIR:-/tmp}/wt-meta.XXXXXX") || return 2
-    WT_TMPFILES+=("$__temp")
+    wt_register_tmpfile "$__temp"
     if ! jq -j -s 'if length == 1 then .[0] else error("expected one object") end | '"$WT_META_FILTER" "$__file" >"$__temp" 2>/dev/null; then
       rm -f "$__temp"; return 2
     fi

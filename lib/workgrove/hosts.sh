@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: TMPDIR, WG_HOST_PROBE_TIMEOUT, WG_LIB_DIR.
-# Requires common.sh: valid_host.
+# Requires common.sh: valid_host. Requires task.sh: wt_register_tmpfile.
 # Requires version.sh: wt_read_version.
 # Send public probes inline so missing remote installation links cannot hide prerequisites.
 host_probe_source() {
@@ -36,7 +36,9 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
     return 1
   fi
   out_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stdout.XXXXXX") || return 1
+  wt_register_tmpfile "$out_file"
   err_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-stderr.XXXXXX") || { rm -f "$out_file"; return 1; }
+  wt_register_tmpfile "$err_file"
   # The remote timeout limits an nvidia-smi that ignores TERM. The client deadline also limits a remote
   # command that is stuck in uninterruptible I/O: SSH may stay connected and answer keepalives forever.
   # Redirect SSH to files, so that an unkillable child cannot hold this function's output pipes open.
@@ -69,6 +71,7 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
     return
   fi
   err_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-error.XXXXXX") || return 1
+  wt_register_tmpfile "$err_file"
   if ssh_host_check "$host" 2>"$err_file"; then
     report=$(probe_host "$host" 2>"$err_file") || rc=$?
   else
