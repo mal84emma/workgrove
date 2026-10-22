@@ -712,7 +712,14 @@ def backup(path, root, label=None):
     if matching and stat.S_ISREG(path.lstat().st_mode):
         _, folder = max(matching)
         previous = folder / path.name
-        if previous.exists() and stat.S_ISREG(previous.lstat().st_mode) and previous.read_bytes() == path.read_bytes():
+        identical = False
+        if previous.exists() and stat.S_ISREG(previous.lstat().st_mode):
+            try:
+                identical = previous.read_bytes() == path.read_bytes()
+            except OSError:
+                # Keep setup's existing ability to move unreadable files.
+                pass
+        if identical:
             path.unlink()
             print(f"workgrove: removed {label}; identical backup in {folder.relative_to(root)}", file=sys.stderr)
             return

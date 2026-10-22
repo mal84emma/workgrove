@@ -876,6 +876,24 @@ sys.exit(module["main"]())
                 os.utime(copy, (1, 1))
                 os.utime(copy.parent, (1, 1))
 
+    @unittest.skipIf(os.geteuid() == 0, "Root can read files without read permission.")
+    def test_full_setup_still_backs_up_unreadable_regular_files(self):
+        self.install("--persist-agents", "--with-tmux-conf")
+        path = self.home / ".tmux.conf"
+        backups = self.root / ".local/state/workgrove/backups"
+        for attempt in range(2):
+            path.unlink()
+            path.write_bytes(b"supplier settings")
+            path.chmod(0o000)
+            result = self.install()
+            self.assertIn("backed up ~/.tmux.conf to .local/state/workgrove/backups/", result.stderr)
+            copies = list(backups.glob("*/.tmux.conf"))
+            self.assertEqual(len(copies), attempt + 1)
+            self.assertTrue(all(copy.stat().st_mode & 0o777 == 0 for copy in copies))
+        for copy in copies:
+            copy.chmod(0o600)
+            self.assertEqual(copy.read_bytes(), b"supplier settings")
+
     def test_full_setup_keeps_same_basename_backups_separate(self):
         for base in (self.root, self.home):
             path = base / ".local/bin/wt"
