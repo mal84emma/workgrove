@@ -64,8 +64,12 @@ Do not seed private investigation history or personal configuration into the pub
 
 Use `--storage os-disk` for a root on a persistent operating-system disk.
 The default volume mount is the selected root when you omit `--mount`.
-An existing profile keeps its storage policy when you omit `--storage`.
+With supported Python available, an existing profile keeps its storage policy when you omit `--storage`.
 A new profile requires an explicit policy.
+
+If Python is missing and the root contains a saved profile, full setup requires an explicit `--storage` before package installation.
+For `volume`, also pass `--mount` when the root is below the mount.
+The bootstrap checks the selected storage before installing Python; it does not read the saved profile JSON.
 
 `--git-identity <remote-path>` selects an existing personal Git configuration file.
 Without that option, setup uses the remote user's normal global Git configuration.

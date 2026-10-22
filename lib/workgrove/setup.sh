@@ -5,7 +5,7 @@ host_setup() {
   local -A opts=()
   wt_opts "$(wt_spec setup)" opts "$@"
   [[ -n ${opts[root]:-} && ${opts[root]} == /* ]] || die 'setup: --root needs an absolute remote path'
-  local args=() bootstrap policy=${opts[storage]:-volume} mount=${opts[mount]:-${opts[root]}}
+  local args=() bootstrap policy=${opts[storage]:-} mount=${opts[mount]:-}
   wt_opt_args opts args
   # Python receives standard input. The shell bootstrap never reads the uploaded source.
   bootstrap=$(cat "$WG_LIB_DIR/vm/python-runtime.sh")$'\n'
@@ -13,8 +13,14 @@ host_setup() {
   bootstrap+='if ! wg_select_python; then
     [ "$1" != restore ] || { echo "workgrove: Python 3 is missing; run full setup with an explicit storage policy" >&2; exit 1; }
     case "$2" in /*) ;; *) exit 1;; esac
-    if [ "$3" = volume ]; then
-      [ -d "$2" ] && command -v mountpoint >/dev/null 2>&1 && mountpoint -q -- "$4" || { echo "workgrove: persistent-mount-missing" >&2; exit 1; }
+    if [ -f "$2/.config/workgrove/profile.json" ]; then
+      [ -n "$3" ] || { echo "workgrove: Python 3 is missing; pass --storage volume --mount <mount>, or --storage os-disk, to use the saved root" >&2; exit 1; }
+      if [ "$3" = volume ] && [ -z "$4" ]; then
+        command -v mountpoint >/dev/null 2>&1 && mountpoint -q -- "$2" || { echo "workgrove: Python 3 is missing; pass --mount <mount> with --storage volume when the root is below the mount" >&2; exit 1; }
+      fi
+    fi
+    if [ "${3:-volume}" = volume ]; then
+      [ -d "$2" ] && command -v mountpoint >/dev/null 2>&1 && mountpoint -q -- "${4:-$2}" || { echo "workgrove: persistent-mount-missing" >&2; exit 1; }
     else [ "$3" = os-disk ] || exit 1; fi
     . /etc/os-release
     [ "$ID" = ubuntu ] && { [ "$VERSION_ID" = 22.04 ] || [ "$VERSION_ID" = 24.04 ]; } || { echo "workgrove: unsupported-package-adapter" >&2; exit 1; }

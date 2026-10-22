@@ -1710,6 +1710,93 @@ sys.exit(1)
         self.assertIn("Python 3 is missing", result.stderr)
         self.assertTrue((self.root / ".config/workgrove/profile.json").exists())
 
+    def missing_python_setup(self):
+        environment = self.transport()
+        tools = self.base / "bootstrap-tools"
+        tools.mkdir()
+        packages = self.base / "package-calls"
+        mounts = self.base / "mount-calls"
+        (tools / "env").symlink_to(shutil.which("env"))
+        for name, script in {
+            "id": "printf '0\\n'",
+            "apt-get": f'printf "%s\\n" "$*" >>{str(packages)!r}\nexit 1',
+            "mountpoint": f'printf "%s\\n" "$3" >>{str(mounts)!r}\n[ "$3" = "$TEST_MOUNT" ]',
+        }.items():
+            command = tools / name
+            command.write_text("#!/bin/sh\n" + script + "\n")
+            command.chmod(0o700)
+        remote_ssh = Path(environment["PATH"].split(":")[0]) / "ssh"
+        remote_ssh.write_text(remote_ssh.read_text().replace(
+            'environment["CMUX_SSH_ATTEMPT_ID"] = "synthetic-connection"',
+            'environment["PATH"] = ' + repr(str(tools))))
+        client = self.base / "bootstrap-client"
+        shutil.copytree(REPO / "bin", client / "bin")
+        shutil.copytree(REPO / "lib", client / "lib")
+        runtime = client / "lib/workgrove/vm/python-runtime.sh"
+        runtime.write_text(runtime.read_text().replace("/usr/bin/python3", str(self.base / "missing-system-python")))
+        release = self.base / "os-release"
+        release.write_text("ID=ubuntu\nVERSION_ID=24.04\n")
+        setup = client / "lib/workgrove/setup.sh"
+        setup.write_text(setup.read_text().replace(". /etc/os-release", '. "$TEST_OS_RELEASE"'))
+        environment.update(TEST_OS_RELEASE=str(release), TEST_MOUNT=str(self.base))
+
+        def run(*args):
+            result = subprocess.run([str(self.tools / "bash"), str(client / "bin/wt"), "-H", "test-host", "setup",
+                                     "--root", str(self.root), *args], env=environment,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, "")
+            return result.stderr
+        return run, environment, packages, mounts
+
+    def test_missing_python_saved_volume_requires_storage_and_parent_mount(self):
+        self.install()
+        profile = self.root / ".config/workgrove/profile.json"
+        saved = self.profile()
+        saved.update(storage="volume", mount=str(self.base))
+        profile.write_text(json.dumps(saved))
+        before = profile.read_bytes()
+        run, environment, packages, mounts = self.missing_python_setup()
+        self.assertEqual(run(), "workgrove: Python 3 is missing; pass --storage volume --mount <mount>, "
+                         "or --storage os-disk, to use the saved root\n")
+        self.assertFalse(mounts.exists())
+        self.assertFalse(packages.exists())
+        self.assertEqual(run("--storage", "volume"), "workgrove: Python 3 is missing; pass --mount <mount> "
+                         "with --storage volume when the root is below the mount\n")
+        self.assertFalse(packages.exists())
+        self.assertEqual(run("--storage", "volume", "--mount", str(self.base)), "workgrove: Python-install-failed\n")
+        self.assertEqual(packages.read_text(), "update\n")
+        packages.unlink()
+        environment["TEST_MOUNT"] = str(self.root)
+        self.assertEqual(run("--storage", "volume"), "workgrove: Python-install-failed\n")
+        self.assertEqual(packages.read_text(), "update\n")
+        self.assertEqual(profile.read_bytes(), before)
+
+    def test_missing_python_saved_os_disk_requires_storage(self):
+        self.install()
+        profile = self.root / ".config/workgrove/profile.json"
+        before = profile.read_bytes()
+        run, _, packages, mounts = self.missing_python_setup()
+        self.assertIn("pass --storage volume --mount <mount>, or --storage os-disk", run())
+        self.assertFalse(packages.exists())
+        self.assertFalse(mounts.exists())
+        self.assertEqual(run("--storage", "os-disk"), "workgrove: Python-install-failed\n")
+        self.assertEqual(packages.read_text(), "update\n")
+        self.assertFalse(mounts.exists())
+        self.assertEqual(profile.read_bytes(), before)
+
+    def test_missing_python_without_profile_keeps_storage_checks(self):
+        run, environment, packages, mounts = self.missing_python_setup()
+        self.assertEqual(run(), "workgrove: persistent-mount-missing\n")
+        self.assertEqual(mounts.read_text(), str(self.root) + "\n")
+        self.assertFalse(packages.exists())
+        environment["TEST_MOUNT"] = str(self.root)
+        self.assertEqual(run(), "workgrove: Python-install-failed\n")
+        self.assertEqual(packages.read_text(), "update\n")
+        packages.unlink()
+        self.assertEqual(run("--storage", "os-disk"), "workgrove: Python-install-failed\n")
+        self.assertEqual(packages.read_text(), "update\n")
+
     def test_remote_runtime_fallback_and_unavailable_portable_preflight(self):
         self.install("--persist-agents")
         environment = self.transport()
