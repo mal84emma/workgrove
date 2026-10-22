@@ -364,7 +364,7 @@ def discover_root(host):
     def search(candidate, mount, depth):
         nonlocal folders
         checkpoint()
-        if candidate.name.startswith("."):
+        if candidate.name.startswith(".") or (candidate != mount and candidate in mount_points):
             return
         try:
             if not stat.S_ISDIR(inspect(candidate.lstat).st_mode):
@@ -382,6 +382,7 @@ def discover_root(host):
             path = candidate
             for name, directory in ((".config", True), ("workgrove", True), ("profile.json", False)):
                 path = path / name
+                require(path not in mount_points, "invalid-discovery-candidate")
                 mode = inspect(path.lstat).st_mode
                 require(stat.S_ISDIR(mode) if directory else stat.S_ISREG(mode), "invalid-discovery-candidate")
             profile = inspect(load_profile, candidate)
@@ -422,6 +423,7 @@ def discover_root(host):
 
     try:
         mounts = inspect(mount_list)
+        mount_points = {mount for mount, _ in mounts}
         excluded_points = {mount for mount, kind in mounts if kind in excluded}
         for mount, _ in mounts:
             checkpoint()

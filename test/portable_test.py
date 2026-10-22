@@ -92,6 +92,36 @@ class RootDiscoveryTests(unittest.TestCase):
         with self.subTest(kind="hidden"), patch.object(portable, "mount_list", return_value=[(root, "ext4")]):
             self.assertEqual(self.discover()["status"], "none")
 
+    def test_excluded_nested_mount_preserves_candidates_and_folder_budget(self):
+        self.candidate("temporary/root")
+        mounts = [(self.mount, "ext4"), (self.mount / "temporary", "tmpfs")]
+        with patch.object(portable, "mount_list", return_value=mounts):
+            with self.subTest(stage="candidate"):
+                self.assertEqual(self.discover()["status"], "none")
+            root = self.candidate()
+            for index in range(4096):
+                (self.mount / "temporary" / ("folder-%04d" % index)).mkdir()
+            with self.subTest(stage="budget"):
+                self.assertEqual(self.discover()["root"], str(root))
+
+    def test_nested_volume_uses_only_its_own_mount_scope(self):
+        root = self.candidate("volume/root")
+        mount = self.mount / "volume"
+        with patch.object(portable, "mount_list", return_value=[(self.mount, "ext4"), (mount, "ext4")]):
+            self.assertEqual(self.discover()["status"], "none")
+            path = portable.profile_path(root)
+            data = json.loads(path.read_text())
+            data["mount"] = str(mount)
+            path.write_text(json.dumps(data))
+            self.assertEqual(self.discover()["root"], str(root))
+
+    def test_nested_mounts_on_profile_components_are_skipped(self):
+        root = self.candidate()
+        for relative in (".config", ".config/workgrove", ".config/workgrove/profile.json"):
+            with self.subTest(relative=relative), patch.object(portable, "mount_list", return_value=[
+                    (self.mount, "ext4"), (root / relative, "tmpfs")]):
+                self.assertEqual(self.discover()["status"], "none")
+
     def test_mountinfo_decodes_spaces_and_optional_fields(self):
         root = self.candidate("space root")
         profile = portable.profile_path(root)

@@ -344,7 +344,10 @@ It does not run for inventory probes, preflight checks, or an explicit root.
 It changes no readiness result and writes no files.
 
 Discovery checks each eligible mount and its folders through two levels.
+Each search stops at nested mount boundaries.
+Discovery searches each eligible mount separately.
 It skips hidden folders, symbolic links, unreadable folders, file mounts, and system or temporary filesystems.
+
 Only valid volume profiles whose alias and mount match can qualify.
 Duplicate canonical roots count once.
 Exactly one match gives `found` and its root.
