@@ -35,7 +35,34 @@ update_row_snapshots() {
     update_rows "$document" "$@"
   done
 }
+# Set id and ref to unused identities across all row snapshots.
+allocate_row_identity() {
+  local document identities count
+  local documents=()
+  for document in "$state/rows.json" "$state/rows/"*.json; do
+    [[ -f $document ]] && documents+=("$document")
+  done
+  identities=$(jq -sc '[.[].workspaces[] | .id, .ref] | map(select(type == "string"))' "${documents[@]}")
+  count=$(cat "$state/next-row" 2>/dev/null || echo 1)
+  while :; do
+    printf -v id '00000000-0000-4000-8000-%012d' "$count"
+    ref=workspace:$count
+    if ! jq -e --arg id "$id" --arg ref "$ref" 'index($id) != null or index($ref) != null' <<<"$identities" >/dev/null; then break; fi
+    count=$((count + 1))
+  done
+  printf '%s\n' "$((count + 1))" >"$state/next-row"
+}
+unexpected_command() {
+  printf 'fake cmux: unexpected command: %s\n' "$*" >&2
+  exit 64
+}
 [[ $1 != --socket ]] || shift 2
+case "$1 ${2:-}" in
+  'automation '*) [[ $* == 'automation show wt-native-relay' ]] || unexpected_command "$@" ;;
+  'events '*)
+    [[ $* == 'events --after 0 --name notification.created --limit 1 --timeout 3 --no-ack --no-heartbeat' ]] || unexpected_command "$@" ;;
+  '--json agent') [[ $* == '--json agent hook status claude codex' ]] || unexpected_command "$@" ;;
+esac
 case "$1 ${2:-}" in
   '--json agent') key=agent-hook-status; file=agent-hook-status.json ;;
   '--json list-windows') key=list-windows; file=windows.json ;;
@@ -81,10 +108,8 @@ if [[ -n $state && -f $state/mutate ]]; then
   case $key in
     ssh|workspace-create)
       # Keep stable UUIDs in row lists and return cmux's workspace ref from creation.
-      count=$(cat "$state/next-row" 2>/dev/null || echo 1)
-      printf '%s\n' "$((count + 1))" >"$state/next-row"
-      printf -v id '00000000-0000-4000-8000-%012d' "$count"
-      ref=workspace:$count host='' title='<title>' description='' cwd=''
+      allocate_row_identity
+      host='' title='<title>' description='' cwd=''
       if [[ $key == ssh ]]; then host=$2; fi
       while (($#)); do
         case $1 in
@@ -153,6 +178,6 @@ case "$key" in
   ping|workspace-close|workspace-select|workspace-action|send|send-key|clear-notifications|dismiss-notification|reconnect) ;;
   ssh|new-workspace|workspace-create) printf 'workspace:99\n' ;;
   read-screen) exit 1 ;;
-  *) printf 'fake cmux: unexpected command: %s\n' "$*" >&2; exit 64 ;;
+  *) unexpected_command "$@" ;;
 esac
 apply_effects

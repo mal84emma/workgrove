@@ -455,8 +455,11 @@ Command keys include `list-windows`, `workspace-list`, `workspace-list--<window>
 
 `after/<command>/` supplies state files to copy after a successful command.
 A `mutate` file enables persistent row creation, description changes, and closure.
-Creation uses the active window. Description changes and closure update all matching row snapshots.
+Creation uses the active window and reserves seeded row IDs and workspace refs.
+Description changes and closure update all matching row snapshots.
 A `notify-dedupe` file enables notification content suppression for relay tests.
+
+Recorded event, automation, and agent-hook commands require their supported argument forms.
 
 `bash test/docs-smoke.sh` checks the Layout tree, the documentation guide's required citations, and relative links and anchors.
 It also runs isolated regression fixtures for the checker.

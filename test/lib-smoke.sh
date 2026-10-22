@@ -310,6 +310,51 @@ scenario_fake_mutations() {
 }
 scenario_fake_mutations
 
+scenario_fake_seeded_rows() {
+  begin_scenario 'persistent fake creation reserves seeded UUIDs and workspace refs' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/seeded-state"
+  local fake="$REPO/test/fakes/cmux" ref id seed other
+  local first=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA second=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  : >"$FAKE_CMUX_STATE/mutate"
+  fake_windows "$first" "$second" >"$FAKE_CMUX_STATE/windows.json"
+  seed=$(fake_row 00000000-0000-4000-8000-000000000001 seed old test-vm | jq -c '.ref="workspace:7"')
+  other=$(fake_row 00000000-0000-4000-8000-000000000002 other old test-vm | jq -c '.ref="workspace:3"')
+  fake_rows "$seed" >"$FAKE_CMUX_STATE/rows.json"
+  fake_rows "$seed" >"$FAKE_CMUX_STATE/rows/$first.json"
+  fake_rows "$other" >"$FAKE_CMUX_STATE/rows/$second.json"
+  ref=$("$fake" ssh test-vm --name new --no-focus)
+  id=$(jq -r '.workspaces[] | select(.title == "new") | .id' "$FAKE_CMUX_STATE/rows.json")
+  assert_eq 'creation skips reserved global and scoped identities' workspace:4 "$ref"
+  assert_eq 'creation assigns an unused UUID' 00000000-0000-4000-8000-000000000004 "$id"
+  assert_eq 'the global rows keep distinct UUIDs' 2 "$(jq '[.workspaces[].id] | unique | length' "$FAKE_CMUX_STATE/rows.json")"
+  "$fake" workspace close "$id" --force
+  assert_eq 'closing the new row preserves the global seed' seed "$(jq -r '.workspaces[].title' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'closing the new row preserves the active window seed' seed "$(jq -r '.workspaces[].title' "$FAKE_CMUX_STATE/rows/$first.json")"
+  assert_eq 'the other window keeps its reserved ref' workspace:3 "$(jq -r '.workspaces[0].ref' "$FAKE_CMUX_STATE/rows/$second.json")"
+  end_scenario
+}
+scenario_fake_seeded_rows
+
+scenario_fake_command_validation() {
+  begin_scenario 'the shared fake rejects unsupported recorded command forms' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/command-state"
+  local fake="$REPO/test/fakes/cmux" command rc
+  local args=()
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  printf '{}\n' >"$FAKE_CMUX_STATE/agent-hook-status.json"
+  for command in 'events --invalid-option' 'automation show wrong-rule' '--json agent completely-invalid'; do
+    read -r -a args <<<"$command"
+    rc=0
+    "$fake" "${args[@]}" >"$TEST_ROOT/invalid-response" 2>"$TEST_ROOT/invalid-error" || rc=$?
+    assert_eq "$command is rejected before serving a response" 64 "$rc"
+  done
+  assert_eq 'the supported agent hook command still serves its override' '{}' \
+    "$("$fake" --json agent hook status claude codex)"
+  end_scenario
+}
+scenario_fake_command_validation
+
 fake_cmux_init "$TEST_ROOT/cmux-state"
 ROW_WINDOW_ONE=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
 ROW_WINDOW_TWO=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
