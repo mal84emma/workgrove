@@ -1,0 +1,36 @@
+{
+  "boot_id": "00000000-0000-4000-8000-000000000007",
+  "<field-1>": "<redacted>",
+  "id": "<redacted>",
+  "name": "notification.created",
+  "occurred_at": "<redacted>",
+  "pane_id": null,
+  "payload": {
+    "body": null,
+    "body_length": 200,
+    "created_at": "<redacted>",
+    "delivery": "store",
+    "is_read": false,
+    "notification_id": "00000000-0000-4000-8000-000000000013",
+    "redacted_fields": [
+      "title",
+      "subtitle",
+      "body"
+    ],
+    "replaced_notification_ids": [],
+    "subtitle": null,
+    "subtitle_length": 31,
+    "surface_id": "00000000-0000-4000-8000-000000000006",
+    "title": null,
+    "title_length": 5,
+    "workspace_id": "00000000-0000-4000-8000-000000000010"
+  },
+  "protocol": "<redacted>",
+  "seq": 326733,
+  "source": "<redacted>",
+  "surface_id": "00000000-0000-4000-8000-000000000006",
+  "type": "event",
+  "version": 1,
+  "window_id": null,
+  "workspace_id": "00000000-0000-4000-8000-000000000010"
+}

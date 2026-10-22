@@ -13,7 +13,7 @@ trap 'HOME=$DOCTOR_REAL_HOME lib_cleanup' EXIT
 mkdir -p "$TEST_ROOT/home/.claude" "$TEST_ROOT/home/.codex" "$TEST_ROOT/home/.local/bin" \
   "$TEST_ROOT/bin" "$TEST_ROOT/fixtures" "$TEST_ROOT/repos"
 export HOME="$TEST_ROOT/home" PATH="$TEST_ROOT/bin:$PATH" CMUX_FIXTURES="$TEST_ROOT/fixtures"
-export CMUX_BUNDLED_CLI_PATH="$REPO/test/fake-cmux.sh"
+export CMUX_BUNDLED_CLI_PATH="$REPO/test/fakes/cmux"
 unset CMUX_SSH_ATTEMPT_ID CMUX_RUN WT_CMUX_TUI_HOOK CMUX_TUI_HOOK XDG_DATA_HOME
 printf '#!/bin/sh\necho Darwin\n' >"$TEST_ROOT/bin/uname"
 printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/cmux-hook"

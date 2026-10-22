@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Serve the recorded cmux contract with optional state and queued responses.
+set -euo pipefail
+HERE=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)
+fixtures=${CMUX_FIXTURES:-$HERE/../fixtures/cmux-0.65.1}
+state=${FAKE_CMUX_STATE:-}
+if [[ -n $state ]]; then
+  printf '%s\n' "$*" >>"$state/calls.log"
+fi
+case "$1 ${2:-}" in
+  '--json list-windows') key=list-windows; file=windows.json ;;
+  '--json list-notifications') key=list-notifications; file=notifications.json ;;
+  'workspace list') key=workspace-list; file=rows.json
+    if [[ ${4:-} == --window ]]; then key+=/$5; file=rows/$5.json; fi ;;
+  'workspace close') key=workspace-close; file=close.txt ;;
+  'workspace select') key=workspace-select; file=select.txt ;;
+  'automation show') key=automation; file=automation.json ;;
+  *) key=$1; file=$1.json ;;
+esac
+if [[ -n $state ]]; then
+  # A queue entry contains stdout, stderr, and an exit status. Consume each entry once.
+  if [[ -d $state/queue/$key ]]; then
+    for entry in "$state/queue/$key/"*; do
+      [[ -d $entry ]] || continue
+      cat "$entry/stdout" 2>/dev/null || true
+      cat "$entry/stderr" >&2 2>/dev/null || true
+      rc=$(cat "$entry/status")
+      rm -r "$entry"
+      exit "$rc"
+    done
+  fi
+  failure=$state/fail/$key
+  [[ -f $failure ]] || failure=$state/fail/${key%%/*}
+  if [[ -f $failure ]]; then
+    { read -r rc; cat >&2; } <"$failure"
+    exit "$rc"
+  fi
+  if [[ -f $state/$file ]]; then cat "$state/$file"; exit 0; fi
+fi
+case "$key" in
+  version)
+    if [[ -n ${FAKE_CMUX_VERSION:-} ]]; then printf 'cmux %s\n' "$FAKE_CMUX_VERSION"
+    else cat "$fixtures/version.txt"; fi ;;
+  capabilities)
+    jq --arg method "${FAKE_CMUX_MISSING_METHOD:-}" '.methods -= [$method]' "$fixtures/capabilities.json" ;;
+  list-windows|list-notifications|top|automation) cat "$fixtures/$file" ;;
+  workspace-list*)
+    if [[ -n $state ]]; then
+      jq '.workspaces = []' "$fixtures/rows.json"
+    elif [[ ${4:-} == --window && -f $fixtures/rows_by_window.json ]]; then
+      jq -e --arg window "$5" 'if has($window) then .[$window] else error("unknown fixture window") end' "$fixtures/rows_by_window.json"
+    else cat "$fixtures/rows.json"; fi ;;
+  events) cat "$fixtures/event.json" ;;
+  ping|workspace-close|workspace-select|workspace-action|send|notify|clear-notifications|reconnect) ;;
+  ssh|new-workspace) printf 'workspace:99\n' ;;
+  read-screen) exit 1 ;;
+  *) printf 'fake cmux: unexpected command: %s\n' "$*" >&2; exit 64 ;;
+esac

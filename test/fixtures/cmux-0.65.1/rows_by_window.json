@@ -1,0 +1,245 @@
+{
+  "00000000-0000-4000-8000-000000000009": {
+    "window_ref": "<redacted>",
+    "workspaces": [
+      {
+        "current_directory": "<path>",
+        "<field-1>": null,
+        "<field-2>": "<redacted>",
+        "description": "@<test-vm> · <repo>",
+        "has_custom_title": true,
+        "id": "00000000-0000-4000-8000-000000000008",
+        "index": 0,
+        "<field-7>": "<redacted>",
+        "<field-8>": "<redacted>",
+        "<field-9>": "<redacted>",
+        "<field-10>": [],
+        "<field-11>": false,
+        "ref": "<redacted>",
+        "remote": {
+          "<field-0>": 0,
+          "<field-1>": null,
+          "<field-2>": null,
+          "<field-3>": null,
+          "<field-4>": [],
+          "<field-5>": false,
+          "<field-6>": {
+            "capabilities": [],
+            "<field-1>": null,
+            "name": null,
+            "<field-3>": null,
+            "state": "<redacted>",
+            "version": null
+          },
+          "destination": null,
+          "<field-8>": null,
+          "<field-9>": [],
+          "enabled": false,
+          "<field-11>": [],
+          "<field-12>": false,
+          "<field-13>": false,
+          "<field-14>": {
+            "<field-0>": null,
+            "<field-1>": 0,
+            "<field-2>": null
+          },
+          "<field-15>": null,
+          "persistent_daemon_slot": null,
+          "<field-17>": null,
+          "<field-18>": {
+            "<field-0>": null,
+            "<field-1>": null,
+            "<field-2>": null,
+            "<field-3>": [
+              "<redacted>",
+              "<redacted>"
+            ],
+            "state": "<redacted>",
+            "<field-5>": null
+          },
+          "state": "disconnected",
+          "<field-20>": null,
+          "<field-21>": null,
+          "terminal_transport": null,
+          "<field-23>": null
+        },
+        "<field-14>": true,
+        "title": "<title>"
+      },
+      {
+        "current_directory": "<path>",
+        "<field-1>": null,
+        "<field-2>": "<redacted>",
+        "description": "@<test-vm> · <repo>",
+        "has_custom_title": true,
+        "id": "00000000-0000-4000-8000-000000000012",
+        "index": 1,
+        "<field-7>": "<redacted>",
+        "<field-8>": "<redacted>",
+        "<field-9>": "<redacted>",
+        "<field-10>": [],
+        "<field-11>": false,
+        "ref": "<redacted>",
+        "remote": {
+          "<field-0>": 0,
+          "<field-1>": null,
+          "<field-2>": null,
+          "<field-3>": null,
+          "<field-4>": [],
+          "<field-5>": false,
+          "<field-6>": {
+            "capabilities": [],
+            "<field-1>": null,
+            "name": null,
+            "<field-3>": null,
+            "state": "<redacted>",
+            "version": null
+          },
+          "destination": null,
+          "<field-8>": null,
+          "<field-9>": [],
+          "enabled": false,
+          "<field-11>": [],
+          "<field-12>": false,
+          "<field-13>": false,
+          "<field-14>": {
+            "<field-0>": null,
+            "<field-1>": 0,
+            "<field-2>": null
+          },
+          "<field-15>": null,
+          "persistent_daemon_slot": null,
+          "<field-17>": null,
+          "<field-18>": {
+            "<field-0>": null,
+            "<field-1>": null,
+            "<field-2>": null,
+            "<field-3>": [
+              "<redacted>",
+              "<redacted>"
+            ],
+            "state": "<redacted>",
+            "<field-5>": null
+          },
+          "state": "disconnected",
+          "<field-20>": null,
+          "<field-21>": null,
+          "terminal_transport": null,
+          "<field-23>": null
+        },
+        "<field-14>": false,
+        "title": "<title>"
+      },
+      {
+        "current_directory": "<path>",
+        "<field-1>": null,
+        "<field-2>": "<redacted>",
+        "description": "@<test-vm> · <repo>",
+        "has_custom_title": true,
+        "id": "00000000-0000-4000-8000-000000000004",
+        "index": 2,
+        "<field-7>": null,
+        "<field-8>": null,
+        "<field-9>": null,
+        "<field-10>": [],
+        "<field-11>": false,
+        "ref": "<redacted>",
+        "remote": {
+          "<field-0>": 1,
+          "backend": "cmux-tui",
+          "<field-2>": [],
+          "<field-3>": true,
+          "<field-4>": {
+            "name": "<redacted>",
+            "state": "<redacted>"
+          },
+          "destination": "<test-vm>",
+          "<field-6>": null,
+          "<field-7>": [],
+          "enabled": true,
+          "<field-9>": [],
+          "<field-10>": false,
+          "<field-11>": true,
+          "<field-12>": "<redacted>",
+          "<field-13>": null,
+          "<field-14>": {
+            "state": "<redacted>",
+            "<field-1>": "<redacted>"
+          },
+          "<field-15>": "<redacted>",
+          "state": "connected",
+          "<field-17>": "<redacted>",
+          "<field-18>": null,
+          "terminal_transport": "<redacted>",
+          "<field-20>": "<redacted>"
+        },
+        "<field-14>": false,
+        "title": "<title>"
+      },
+      {
+        "current_directory": "<path>",
+        "<field-1>": null,
+        "<field-2>": "<redacted>",
+        "description": "@<test-vm> · <repo>",
+        "has_custom_title": true,
+        "id": "00000000-0000-4000-8000-000000000003",
+        "index": 3,
+        "<field-7>": null,
+        "<field-8>": null,
+        "<field-9>": null,
+        "<field-10>": [],
+        "<field-11>": false,
+        "ref": "<redacted>",
+        "remote": {
+          "<field-0>": 0,
+          "<field-1>": null,
+          "<field-2>": null,
+          "<field-3>": null,
+          "<field-4>": [],
+          "<field-5>": false,
+          "<field-6>": {
+            "capabilities": [],
+            "<field-1>": null,
+            "name": null,
+            "<field-3>": null,
+            "state": "<redacted>",
+            "version": null
+          },
+          "destination": null,
+          "<field-8>": null,
+          "<field-9>": [],
+          "enabled": false,
+          "<field-11>": [],
+          "<field-12>": false,
+          "<field-13>": false,
+          "<field-14>": {
+            "<field-0>": null,
+            "<field-1>": 0,
+            "<field-2>": null
+          },
+          "<field-15>": null,
+          "persistent_daemon_slot": null,
+          "<field-17>": null,
+          "<field-18>": {
+            "<field-0>": null,
+            "<field-1>": null,
+            "<field-2>": null,
+            "<field-3>": [
+              "<redacted>",
+              "<redacted>"
+            ],
+            "state": "<redacted>",
+            "<field-5>": null
+          },
+          "state": "disconnected",
+          "<field-20>": null,
+          "<field-21>": null,
+          "terminal_transport": null,
+          "<field-23>": null
+        },
+        "<field-14>": false,
+        "title": "<title>"
+      }
+    ]
+  }
+}

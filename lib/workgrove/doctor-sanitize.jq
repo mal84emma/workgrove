@@ -7,7 +7,8 @@ def public_keys: [
   "notification_id","name","type","version","protocol","seq","source","boot_id","occurred_at",
   "created_at","is_read","rule_id","when","then","action","command","timeout_seconds",
   "rate_limit","interval_seconds","maximum","methods","access_mode","redacted_fields",
-  "body_length","title_length","subtitle_length","delivery","replaced_notification_ids"
+  "body_length","title_length","subtitle_length","delivery","replaced_notification_ids",
+  "ref","window_ref","has_custom_title","terminal_transport","selected_workspace_id","workspace_count"
 ];
 def public_value($key; $value):
   {backend:["cmux-tui"], state:["connected","disconnected","suspended","connecting"],

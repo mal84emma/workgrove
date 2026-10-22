@@ -1,0 +1,35 @@
+[
+  {
+    "body": "<redacted>",
+    "created_at": "<redacted>",
+    "id": "00000000-0000-4000-8000-000000000001",
+    "is_read": true,
+    "subtitle": "<redacted>",
+    "surface_id": "00000000-0000-4000-8000-000000000002",
+    "<field-6>": "<redacted>",
+    "title": "<title>",
+    "workspace_id": "00000000-0000-4000-8000-000000000004"
+  },
+  {
+    "body": "<redacted>",
+    "created_at": "<redacted>",
+    "id": "00000000-0000-4000-8000-000000000011",
+    "is_read": true,
+    "subtitle": "<redacted>",
+    "surface_id": "00000000-0000-4000-8000-000000000002",
+    "<field-6>": "<redacted>",
+    "title": "<title>",
+    "workspace_id": "00000000-0000-4000-8000-000000000004"
+  },
+  {
+    "body": "<redacted>",
+    "created_at": "<redacted>",
+    "id": "00000000-0000-4000-8000-000000000005",
+    "is_read": true,
+    "subtitle": "<redacted>",
+    "surface_id": "00000000-0000-4000-8000-000000000002",
+    "<field-6>": "<redacted>",
+    "title": "<title>",
+    "workspace_id": "00000000-0000-4000-8000-000000000004"
+  }
+]
