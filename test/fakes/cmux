@@ -24,6 +24,7 @@ screen_append() {
 }
 [[ $1 != --socket ]] || shift 2
 case "$1 ${2:-}" in
+  '--json agent') key=agent-hook-status; file=agent-hook-status.json ;;
   '--json list-windows') key=list-windows; file=windows.json ;;
   '--json list-notifications') key=list-notifications; file=notifications.json ;;
   'workspace list') key=workspace-list; file=rows.json
@@ -78,6 +79,7 @@ case "$key" in
     else cat "$fixtures/rows.json"; fi ;;
   events) cat "$fixtures/event.json" ;;
   notify)
+    : "${state:?notify needs FAKE_CMUX_STATE}"
     title='' body=''
     while (($#)); do
       case $1 in --title) title=$2; shift ;; --body) body=$2; shift ;; esac
