@@ -88,6 +88,11 @@ scenario_update() {
   assert_eq 'local update reports both stages' true "$(jq -r --arg commit "$expected" 'map(.stage) == ["before","after"] and all(.[]; .side == "local" and .commit == $commit and .protocol == 1)' <<<"$json")"
   assert_eq 'existing up-to-date line remains' true "$([[ $output == *'Already up to date.'* ]] && echo true || echo false)"
   assert_eq 'scratch installer runs' true "$([[ $output == *'installer stub'* ]] && echo true || echo false)"
+  local flag
+  for flag in --with-zshrc --opinionated-config; do
+    output=$(HOME="$TEST_ROOT/mac" bash "$TEST_ROOT/clone/bin/wt" update "$flag")
+    assert_eq "classic update still accepts $flag" true "$([[ $output == *'installer stub'* ]] && echo true || echo false)"
+  done
   mkdir -p "$TEST_ROOT/vm/.local/chain"
   ln -s "$TEST_ROOT/clone/bin/wt" "$TEST_ROOT/vm/.local/chain/wt"
   ln -s ../chain/wt "$TEST_ROOT/vm/.local/bin/nested-wt"
