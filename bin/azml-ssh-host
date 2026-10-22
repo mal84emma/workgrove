@@ -480,8 +480,8 @@ cmd_rm() {
   local block ip port
   block=$(read_block "$1")
   [ -n "$block" ] || die "no managed block for $1 in $(tilde "$CONFIG")"
-  ip=$(printf '%s\n' "$block" | awk '$1=="HostName"{print $2; exit}')
-  port=$(printf '%s\n' "$block" | awk '$1=="Port"{print $2; exit}')
+  ip=$(printf '%s\n' "$block" | awk '$1=="HostName" && !found {print $2; found=1}')
+  port=$(printf '%s\n' "$block" | awk '$1=="Port" && !found {print $2; found=1}')
   write_config "$1"
   say "removed Host $1 from $(tilde "$CONFIG")"
   if [ -n "$ip" ] && [ -n "$port" ]; then

@@ -443,6 +443,33 @@ scenario_real_vm() {
 }
 scenario_real_vm
 
+scenario_long_attach() {
+  begin_scenario 'every attach form accepts a long real VM report' || return 0
+  local path="$TEST_ROOT/remote/repo/.worktrees/task" i subject
+  CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  rm -f "$TEST_ROOT/remote-new"
+  invoke_wt -H fakevm new task -r wt-demo -a claude --no-workspace
+  assert_eq 'create the long VM task' 0 "$WT_RC"
+  printf -v subject '%8192s' x
+  for ((i=1; i<=21; i++)); do
+    git -C "$path" commit -qm "commit-$i $subject" --allow-empty
+    : >"$path/changed-$i"
+  done
+  invoke_wt -H fakevm attach task -r wt-demo
+  assert_eq 'plain attach accepts the long report' 0 "$WT_RC"
+  CMUX_MODE=existing
+  printf 'test@vm:~$\n' >"$FAKE_CMUX_STATE/read-screen.json"
+  invoke_wt -H fakevm attach task -r wt-demo --reattach
+  assert_eq 'reattach accepts the long report' 0 "$WT_RC"
+  rm "$FAKE_CMUX_STATE/read-screen.json"
+  CMUX_MODE=alive
+  invoke_wt -H fakevm attach task -r wt-demo --restart-agent
+  assert_eq 'restart-agent accepts the long report' 0 "$WT_RC"
+  rm "$TEST_ROOT/remote-new"
+  end_scenario
+}
+scenario_long_attach
+
 scenario_result_versions() {
   begin_scenario 'VM result compatibility for deferred tasks and open' || return 0
   local mode

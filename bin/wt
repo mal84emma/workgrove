@@ -443,9 +443,9 @@ cmd_show() {
       '{agent:$agent,attached:$attached,started:$started}')
   fi
   wt_result show found "$name" "$REPO" "$(wt_session "$name" "$REPO")" "$state" "$facts"
-  printf '\n--- commits vs %s\n' "$base"; git -C "$path" log --oneline "$base..HEAD" 2>/dev/null | head -20
+  printf '\n--- commits vs %s\n' "$base"; git -C "$path" --no-pager log --oneline --max-count=20 "$base..HEAD" 2>/dev/null
   printf '\n--- diff --stat vs %s (committed)\n' "$base"; git -C "$path" diff --stat "$base...HEAD" 2>/dev/null | tail -15
-  printf '\n--- working tree\n'; git -C "$path" status --short 2>/dev/null | head -20
+  printf '\n--- working tree\n'; git -C "$path" status --short 2>/dev/null | sed -n '1,20p'
   if [[ $diff -eq 1 ]]; then
     cmux_ok || die "cmux is not running"
     cmux_diff --branch --repo "$path" --base "$base" --layout split --title "$name vs $base" --focus true >/dev/null && printf 'opened cmux diff pane\n'

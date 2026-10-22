@@ -50,6 +50,37 @@ SHELL
 }
 scenario_fake_ssh
 
+scenario_draining_readers() {
+  begin_scenario 'bounded readers drain large pipeline input' || return 0
+  local rows output rc=0 fixture="$TEST_ROOT/early-picker" status
+  rows=$(printf 'workspace:%s\n' {1..20000})
+  output=$(printf '%s\n' "$rows" | cmux_ref) || rc=$?
+  assert_eq 'cmux reference lookup preserves the first match' workspace:1 "$output"
+  assert_eq 'cmux reference lookup drains its producer' 0 "$rc"
+  mkdir -p "$fixture"
+  cat >"$fixture/fzf" <<'FZF'
+#!/bin/sh
+printf 'query\nselection\n'
+exit "$PICKER_STATUS"
+FZF
+  chmod +x "$fixture/fzf"
+  # shellcheck source=lib/workgrove/picker.sh
+  source "$REPO/lib/workgrove/picker.sh"
+  for status in 0 130; do
+    rc=0
+    output=$(printf '%s\n' "$rows" | PATH="$fixture:$PATH" PICKER_STATUS="$status" pick repo) || rc=$?
+    if [[ $status == 0 ]]; then
+      assert_eq 'early picker selection drains its producer' 0 "$rc"
+      assert_eq 'early picker selection keeps its output' selection "$output"
+    else
+      assert_eq 'early picker cancellation keeps its status' 1 "$rc"
+      assert_eq 'early picker cancellation emits no selection' '' "$output"
+    fi
+  done
+  end_scenario
+}
+scenario_draining_readers
+
 close_row_result() (
   local reply=$1 close_status=$2 rc=0
   fake_cmux_init "$TEST_ROOT/close-state"

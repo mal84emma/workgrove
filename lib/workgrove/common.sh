@@ -232,11 +232,11 @@ vm_result() {
       # WT_COMPAT: Remove text decoding when every VM emits protocol 1 records.
       case $__sub in
         new|show)
-          __vm_record["repo"]=$(sed -n 's/^ *repo: *//p' <<<"$__visible" | head -1)
-          __value=$(sed -n 's/^ *session: *//p' <<<"$__visible" | head -1)
+          __vm_record["repo"]=$(sed -n 's/^ *repo: *//p' <<<"$__visible" | sed -n '1p')
+          __value=$(sed -n 's/^ *session: *//p' <<<"$__visible" | sed -n '1p')
           __vm_record["session"]=${__value%% *}
           if [[ $__sub == new ]]; then
-            __vm_record["name"]=$(sed -n 's/^created //p' <<<"$__visible" | head -1)
+            __vm_record["name"]=$(sed -n 's/^created //p' <<<"$__visible" | sed -n '1p')
             __vm_record["status"]=created
           else
             __vm_record["name"]=$__name __vm_record["status"]=found
