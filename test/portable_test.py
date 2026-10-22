@@ -996,6 +996,32 @@ sys.exit(module["main"]())
                 self.assertEqual(sorted(backups.iterdir()), before)
             path.write_bytes(original)
 
+    def test_fixed_location_safety_refusals_name_paths_before_any_move(self):
+        self.install("--persist-agents")
+        command = self.home / ".local/bin/azml-ssh-host"
+        command.unlink()
+        command.write_text("supplier command")
+        backups = self.root / ".local/state/workgrove/backups"
+        before = sorted(backups.iterdir())
+        for relative in (".local/bin/wt", ".bashrc", ".zshenv"):
+            path = self.home / relative
+            target = path.readlink() if path.is_symlink() else None
+            original = path.read_bytes()
+            if target is not None:
+                path.unlink()
+            path.write_text("shared configuration")
+            path.chmod(0o666)
+            for mode in ("restore", "install"):
+                result = self.command(mode, "--root", str(self.root), ok=False)
+                self.assertEqual(result.stderr, "workgrove: shared-configuration-target: ~/" + relative + "\n")
+                self.assertEqual(command.read_text(), "supplier command")
+                self.assertEqual(sorted(backups.iterdir()), before)
+            path.unlink()
+            if target is not None:
+                path.symlink_to(target)
+            else:
+                path.write_bytes(original)
+
     def test_full_setup_reports_instruction_and_shell_link_moves_privately(self):
         external = self.base / CANARY
         external.mkdir(mode=0o700)

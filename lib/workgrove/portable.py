@@ -128,6 +128,17 @@ def require(value, code, path=None):
         raise Refusal(code, path)
 
 
+@contextlib.contextmanager
+def refusal_path(path):
+    """Name a fixed location without changing an existing refusal path or code."""
+    try:
+        yield
+    except Refusal as error:
+        if error.path is None:
+            error.path = path
+        raise
+
+
 def canonical(path):
     path = Path(path).expanduser()
     require(path.is_absolute(), "absolute-path-required")
@@ -916,27 +927,24 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
     root = Path(profile["root"])
     moved = {start: target for start, target in migrations}
     for target, path, home in compatibility(profile):
-        private_path(path, detach=True)
-        if path.exists() or path.is_symlink():
-            if path.is_symlink() and canonical(path) == canonical(target):
-                continue
-            label = display_path(path, root, profile)
-            require(not restoring or (home and stat.S_ISREG(path.lstat().st_mode)), "restore-link-conflict", label)
-            if restoring and restore_files is not None:
-                restore_files.add(path)
-            if path.is_dir() and not path.is_symlink():
-                require(path in moved, "directory-conflict", label)
+        with refusal_path(display_path(path, root, profile)):
+            private_path(path, detach=True)
+            if path.exists() or path.is_symlink():
+                if path.is_symlink() and canonical(path) == canonical(target):
+                    continue
+                require(not restoring or (home and stat.S_ISREG(path.lstat().st_mode)), "restore-link-conflict")
+                if restoring and restore_files is not None:
+                    restore_files.add(path)
+                if path.is_dir() and not path.is_symlink():
+                    require(path in moved, "directory-conflict")
     for relative in (".bashrc", ".zshenv"):
         path = Path.home() / relative
-        private_path(path, detach=True)
-        require(not path.is_symlink() or path.exists(), "shell-configuration-link-unavailable", "~/" + relative)
-        if path.exists():
-            require(path.is_file(), "shell-configuration-conflict", "~/" + relative)
-            try:
+        with refusal_path("~/" + relative):
+            private_path(path, detach=True)
+            require(not path.is_symlink() or path.exists(), "shell-configuration-link-unavailable")
+            if path.exists():
+                require(path.is_file(), "shell-configuration-conflict")
                 replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
-            except Refusal as error:
-                error.path = "~/" + relative
-                raise
     instructions = validate_personal_files(profile, migrations, installing=not restoring)
     for agent in ("claude", "codex"):
         base = Path(profile["agent_roots"][agent])
