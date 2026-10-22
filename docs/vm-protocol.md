@@ -81,7 +81,7 @@ Human output can surround the record.
 | `version` | `wt_result` emits the lower of the requested version and `WT_PROTOCOL`. Protocol 1 VMs therefore emit 1 for every valid request. | `common.sh`: `wt_read_result`. |
 | `command` | `new`, `show`, or `path`, supplied by `cmd_new`, `cmd_show`, or `cmd_path` in `bin/wt`. | `common.sh`: `wt_read_result` requires the expected command. |
 | `status` | `created` for `new`; `found` for `show` or successful `path`; `missing` for an absent `path`. | `remote.sh`: `host_new`; `recovery.sh`: `host_attach`; `bin/cmux-hook`: the `wt-close` handler. |
-| `name` | The task name supplied by the producer. | `remote.sh`: `common.sh`: `vm_result` validates creation names and checks the requested name for lookup results. |
+| `name` | The task name supplied by the producer. | `common.sh`: `vm_result` validates creation names and checks the requested name for lookup results. |
 | `repo` | The absolute main checkout path supplied by the producer. | `common.sh`: `vm_result` derives task sessions and requires the requested repository for a missing path. |
 | `session` | `common.sh`: `wt_session` supplies `wt-<repo-id>-<name>` for `new` and `show`; `path` supplies an empty string. | `common.sh`: `vm_result` requires the derived session name for creation and show results. |
 | `state` | `cmd_show` uses `session_state` on a VM. Other producers supply an empty string. | `recovery.sh`: `host_attach` displays it and uses wording only when boolean facts are absent. |
@@ -209,7 +209,7 @@ The tmux queries read `/dev/null`, so the helper receives the agent payload on s
 | `0` | The command succeeded. A VM notification send confirms acceptance, not the Mac action. | `cmux.sh`: `cmux_notify`; `task.sh`: `open_worktree`. |
 | `3` | `rm` refuses because its Git or file safety checks found work to preserve. Other removal checks can fail with 1. | `bin/wt`: `cmd_rm`; `remote.sh`: `host_rm` preserves the refusal. |
 | `1` | `path` cannot find the registered worktree. A requested `path/missing` record goes to standard error. | `task.sh`: `require_wt`; `common.sh`: `die`; `bin/cmux-hook`: `wt-close`. |
-| `255` | Raw SSH reports a transport failure. This does not prove that a remote creation failed to finish. | `remote.sh`: `common.sh`: `vm_wt`, `vm_tmux`; `remote.sh`: `remote_sh_raw`, `host_new`. |
+| `255` | Raw SSH reports a transport failure. This does not prove that a remote creation failed to finish. | `common.sh`: `vm_wt`, `vm_tmux`; `remote.sh`: `remote_sh_raw`, `host_new`. |
 | `1` after SSH `255` | `remote_sh`, `remote_wt`, `host_attach`, `host_open`, and `host_update` print an unreachable-host error through `die`. `host_version` and `host_doctor` also convert connection failure to 1. | `remote.sh`: the named wrappers; `doctor.sh`: `host_doctor`. |
 | `142` | A capped hook call exceeded its deadline. A failed lookup cannot authorize another row or removal. | `bin/cmux-hook`: `capped`; `cmux.sh`: `ws_load`. |
 
