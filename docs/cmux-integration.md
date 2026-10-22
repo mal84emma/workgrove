@@ -81,6 +81,8 @@ SSH creation always uses `--no-focus`; explicit selection follows only when the 
 On cmux 0.65.1, focused replacement creation reproduced a generated title instead of the requested task title.
 Creating unfocused and then selecting preserved the title during live reattachment.
 A failed selection retains the identified row and task while reporting the failure.
+Wrapped cmux failures report their cause, or the function name when no diagnostic is available.
+`wt diff` and `wt show --diff` report a failed cmux diff call and exit with a nonzero status.
 
 `close_row` accepts this exact error when the row has already disappeared:
 

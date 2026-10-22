@@ -367,6 +367,7 @@ prepare_cmux() {
   local CMUX_STUB_FAIL_PING=0 CMUX_STUB_AGENTS=0 CMUX_STUB_CALLER=other-row CMUX_STUB_BUSY_ROWS=''
   local CMUX_STUB_FAIL_TOP=0 CMUX_STUB_BAD_TOP=0 CMUX_STUB_FAIL_WINDOWS=0 CMUX_STUB_BAD_WINDOWS=0
   local CMUX_STUB_FAIL_LIST='' CMUX_STUB_EMPTY_LIST='' CMUX_STUB_FAIL_CLOSE=0
+  local CMUX_STUB_DIFF_STATUS=0
   for assignment in "${WT_RELAY_ENV[@]}"; do local "$assignment"; done
   rm -f "$FAKE_CMUX_STATE/fail/"* "$FAKE_CMUX_STATE/top/"*.json
   if [[ $WT_STUB == "$CMUX_DEAD" ]]; then
@@ -390,6 +391,7 @@ prepare_cmux() {
   fi
   if [[ -n $CMUX_STUB_EMPTY_LIST ]]; then fake_queue "workspace-list--$CMUX_STUB_EMPTY_LIST" ''; fi
   if [[ $CMUX_STUB_FAIL_CLOSE == 1 ]]; then fake_failure workspace-close 1 'Error: socket access denied'; fi
+  if [[ $CMUX_STUB_DIFF_STATUS != 0 ]]; then fake_failure diff "$CMUX_STUB_DIFF_STATUS"; fi
   if ((CMUX_STUB_AGENTS > 0)); then
     printf 'Error: confirmation_required: Workspace has a running process; retry with --force\n' >"$FAKE_CMUX_STATE/close-confirmation"
   else rm -f "$FAKE_CMUX_STATE/close-confirmation"; fi
@@ -1512,6 +1514,21 @@ scenario_cmux() {
   assert_has "…it says the row was skipped" "$WT_OUT" "cmux is not running; skipped workspace creation"
   assert_dir "…and the worktree is there anyway" "$r/.worktrees/ws"
   assert_cmux_calls "…and cmux was only ever asked whether it is there" "$(printf 'ping\nping')"
+
+  stub_cmux alive
+  local command rc message="cmux diff --branch --repo $r/.worktrees/ws --base main --layout split --title ws vs main --focus true"
+  for command in diff show; do
+    local args=("$command" ws -r "$r")
+    [[ $command != show ]] || args+=(--diff)
+    assert_wt_ok "$command opens the diff pane" "${args[@]}"
+    assert_has "$command reports the opened pane" "$WT_OUT" 'opened cmux diff pane'
+    for rc in 1 23; do
+      WT_RELAY_ENV=("CMUX_STUB_DIFF_STATUS=$rc")
+      assert_wt_fails "$rc" "wt: $message failed (exit $rc)" "${args[@]}"
+      assert_lacks "$command does not report an opened pane after failure" "$WT_OUT" 'opened cmux diff pane'
+    done
+    WT_RELAY_ENV=()
+  done
 
   # running, and the row that this name would take, with this repo's basename, belongs to another repo
   stub_cmux alive
