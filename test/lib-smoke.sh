@@ -248,11 +248,14 @@ scenario_identities() {
 }
 scenario_identities
 
+# shellcheck source=test/fakes/rows.sh
+source "$REPO/test/fakes/rows.sh"
+fake_cmux_init "$TEST_ROOT/cmux-state"
 ROW_WINDOW_ONE=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
 ROW_WINDOW_TWO=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
 ROW_WINDOW_THREE=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC
-ROW_ONE='{"id":"row-one","title":"task","description":"@local · repo"}'
-ROW_TWO='{"id":"row-two","title":"task","description":"@test-vm · repo","remote":{"enabled":true,"destination":"test-vm"}}'
+ROW_ONE=$(fake_row row-one task '@local · repo')
+ROW_TWO=$(fake_row row-two task '@test-vm · repo' test-vm)
 ROW_EXPECTED="{\"workspaces\":[$ROW_ONE,$ROW_TWO]}"
 
 row_cmux_reset() {
@@ -261,19 +264,29 @@ row_cmux_reset() {
   ROW_ONE_LIST="[$ROW_ONE]"
   ROW_TWO_LIST="{\"workspaces\":[$ROW_TWO]}"
   ROW_FALLBACK_LIST="[$ROW_ONE]"
-  : >"$TEST_ROOT/row-calls"
+  : >"$FAKE_CMUX_STATE/calls.log"
   : >"$TEST_ROOT/row-caps"
 }
-row_cmux() {
-  printf '%s\n' "$*" >>"$TEST_ROOT/row-calls"
-  case "$*" in
-    '--json list-windows') printf '%s' "$ROW_WINDOWS"; return "$ROW_WINDOWS_RC" ;;
-    "workspace list --json --window $ROW_WINDOW_ONE") printf '%s' "$ROW_ONE_LIST"; return "$ROW_ONE_RC" ;;
-    "workspace list --json --window $ROW_WINDOW_TWO") printf '%s' "$ROW_TWO_LIST"; return "$ROW_TWO_RC" ;;
-    "workspace list --json --window $ROW_WINDOW_THREE") printf '[]' ;;
-    'workspace list --json') printf '%s' "$ROW_FALLBACK_LIST"; return "$ROW_FALLBACK_RC" ;;
-    *) return 64 ;;
-  esac
+load_test_rows() {
+  local key status
+  printf '%s' "$ROW_WINDOWS" >"$FAKE_CMUX_STATE/windows.json"
+  printf '%s' "$ROW_ONE_LIST" >"$FAKE_CMUX_STATE/rows/$ROW_WINDOW_ONE.json"
+  printf '%s' "$ROW_TWO_LIST" >"$FAKE_CMUX_STATE/rows/$ROW_WINDOW_TWO.json"
+  printf '[]' >"$FAKE_CMUX_STATE/rows/$ROW_WINDOW_THREE.json"
+  printf '%s' "$ROW_FALLBACK_LIST" >"$FAKE_CMUX_STATE/rows.json"
+  for key in list-windows workspace-list--$ROW_WINDOW_ONE workspace-list--$ROW_WINDOW_TWO workspace-list; do
+    case $key in
+      list-windows) status=$ROW_WINDOWS_RC ;;
+      "workspace-list--$ROW_WINDOW_ONE") status=$ROW_ONE_RC ;;
+      "workspace-list--$ROW_WINDOW_TWO") status=$ROW_TWO_RC ;;
+      workspace-list) status=$ROW_FALLBACK_RC ;;
+    esac
+    rm -f "$FAKE_CMUX_STATE/fail/$key"
+    if [[ $status != 0 ]]; then fake_failure "$key" "$status"; fi
+  done
+  local policy=$1
+  shift
+  cmux_rows_load "$policy" "$@" "$REPO/test/fakes/cmux"
 }
 row_capped() {
   printf '%s\n' "${*:2}" >>"$TEST_ROOT/row-caps"
@@ -281,11 +294,11 @@ row_capped() {
 }
 check_rows_load() {
   local policy=$1 expected_rc=$2 expected_json=$3 expected_full=$4 rc=0
-  cmux_rows_load "$policy" row_capped row_cmux || rc=$?
+  load_test_rows "$policy" row_capped || rc=$?
   assert_eq "$policy returns the expected status" "$expected_rc" "$rc"
   assert_eq "$policy returns the expected rows" "$expected_json" "$CMUX_ROWS_JSON"
   assert_eq "$policy records list completeness" "$expected_full" "$CMUX_ROWS_FULL"
-  assert_eq "$policy wraps every cmux call" "$(cat "$TEST_ROOT/row-calls")" "$(cat "$TEST_ROOT/row-caps")"
+  assert_eq "$policy wraps every cmux call" "$(cat "$FAKE_CMUX_STATE/calls.log")" "$(cat "$TEST_ROOT/row-caps")"
 }
 
 scenario_row_windows() {
@@ -299,7 +312,7 @@ scenario_row_windows() {
     check_rows_load "$policy" 0 "$ROW_EXPECTED" 1
     assert_eq "$policy queries windows by UUID" \
       "$(printf -- '--json list-windows\nworkspace list --json --window %s\nworkspace list --json --window %s' "$ROW_WINDOW_ONE" "$ROW_WINDOW_TWO")" \
-      "$(tail -3 "$TEST_ROOT/row-calls")"
+      "$(tail -3 "$FAKE_CMUX_STATE/calls.log")"
   done
   end_scenario
 }
@@ -313,19 +326,19 @@ scenario_row_failures() {
     ROW_TWO_RC=142
     if [[ $policy == skip ]]; then
       check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
-      assert_grep 'display lookups continue after a failed window' "$TEST_ROOT/row-calls" "$ROW_WINDOW_THREE"
+      assert_grep 'display lookups continue after a failed window' "$FAKE_CMUX_STATE/calls.log" "$ROW_WINDOW_THREE"
     else
       check_rows_load "$policy" 142 '' 0
-      assert_eq "$policy stops at the failing window" "workspace list --json --window $ROW_WINDOW_TWO" "$(tail -1 "$TEST_ROOT/row-calls")"
+      assert_eq "$policy stops at the failing window" "workspace list --json --window $ROW_WINDOW_TWO" "$(tail -1 "$FAKE_CMUX_STATE/calls.log")"
     fi
     row_cmux_reset
     ROW_WINDOWS='' ROW_WINDOWS_RC=1
     if [[ $policy == checked ]]; then
       check_rows_load "$policy" 1 '' 0
-      assert_eq 'checked requires successful enumeration' '--json list-windows' "$(cat "$TEST_ROOT/row-calls")"
+      assert_eq 'checked requires successful enumeration' '--json list-windows' "$(cat "$FAKE_CMUX_STATE/calls.log")"
     else
       check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
-      assert_eq "$policy falls back without --json list-windows" $'--json list-windows\nworkspace list --json' "$(cat "$TEST_ROOT/row-calls")"
+      assert_eq "$policy falls back without --json list-windows" $'--json list-windows\nworkspace list --json' "$(cat "$FAKE_CMUX_STATE/calls.log")"
     fi
   done
   row_cmux_reset
@@ -358,11 +371,11 @@ scenario_row_validation() {
     '[{"id":"row","title":"task","remote":{"enabled":"true"}}]' \
     '[{"id":"row","title":"task","remote":{"destination":4}}]'; do
     ROW_ONE_LIST=$invalid
-    assert_result "checked rejects $invalid" no cmux_rows_load checked row_cmux
+    assert_result "checked rejects $invalid" no load_test_rows checked
     assert_eq 'a failed validation clears the previous snapshot' '' "$CMUX_ROWS_JSON"
   done
   ROW_ONE_LIST='{"workspaces":['
-  assert_result 'the hook rejects invalid JSON' no cmux_rows_load stop row_cmux
+  assert_result 'the hook rejects invalid JSON' no load_test_rows stop
   row_cmux_reset
   ROW_WINDOWS="${ROW_WINDOWS%]},{\"id\":\"$ROW_WINDOW_TWO\"}]"
   ROW_TWO_LIST=''
