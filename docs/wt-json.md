@@ -132,6 +132,11 @@ Repository and selected-agent checks still run immediately before task creation.
 
 `wt -H <host> doctor --json` returns the read-only readiness object directly.
 It can report missing remote tools or links without invoking the remote `wt` executable.
+
+`compatibility-links-missing` identifies links that restore-only can repair, including regular files at home link locations.
+`compatibility-links-conflict` identifies link locations that restore-only refuses: directories, foreign symbolic links, and regular root-side files.
+Both codes can appear in `issues` and inventory's `readiness_issues` when different locations need different repairs.
+
 Its `ready` value excludes separate personal sign-ins, native relay verification, and hook trust decisions.
 `storage_permission_policy` is `strict`, `trusted-personal-volume`, or null when no portable profile is available.
 `storage_permission_warnings` contains `unix-mode-checks-relaxed` when the user accepted a personal volume exception; otherwise it is empty.

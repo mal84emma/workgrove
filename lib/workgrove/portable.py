@@ -943,6 +943,11 @@ def validate_personal_files(profile, migrations=(), installing=False):
     return instruction_copies
 
 
+def restore_can_backup(path, home):
+    """Use the link's restoration role to permit regular home files only."""
+    return home and stat.S_ISREG(path.lstat().st_mode)
+
+
 def preflight_files(profile, migrations, restoring, restore_files=None):
     root = Path(profile["root"])
     moved = {start: target for start, target in migrations}
@@ -952,7 +957,7 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
             if path.exists() or path.is_symlink():
                 if path.is_symlink() and canonical(path) == canonical(target):
                     continue
-                require(not restoring or (home and stat.S_ISREG(path.lstat().st_mode)), "restore-link-conflict")
+                require(not restoring or restore_can_backup(path, home), "restore-link-conflict")
                 if restoring and restore_files is not None:
                     restore_files.add(path)
                 if path.is_dir() and not path.is_symlink():
@@ -1263,8 +1268,10 @@ def _readiness(root=None):
             for target, path, home in compatibility(profile):
                 private_path(path, detach=True)
                 if not path.is_symlink() or canonical(path) != canonical(target):
-                    issues.append("compatibility-links-missing")
-                    break
+                    if (path.exists() or path.is_symlink()) and not restore_can_backup(path, home):
+                        issues.append("compatibility-links-conflict")
+                    else:
+                        issues.append("compatibility-links-missing")
             env = Path(profile["root"]) / ".config/workgrove/env.sh"
             validate_personal_files(profile)
             if not env.is_file() or read(env) != shell_environment(profile):
