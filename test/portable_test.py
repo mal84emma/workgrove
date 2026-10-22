@@ -1585,6 +1585,34 @@ sys.exit(module["main"]())
         self.assertFalse(bashrc.is_symlink())
         self.assertEqual(supplier.read_text(), "export PATH=/usr/bin:/bin\n")
 
+    def test_interleaved_shell_blocks_refuse_before_home_backups(self):
+        self.install("--persist-agents")
+        environment = ("# >>> workgrove environment\n", "# <<< workgrove environment\n")
+        interactive = ("# >>> workgrove interactive path\n", "# <<< workgrove interactive path\n")
+        for outer, inner in ((environment, interactive), (interactive, environment)):
+            for operation in ("install", "restore"):
+                with self.subTest(outer=outer, operation=operation):
+                    shutil.rmtree(self.home)
+                    self.home.mkdir(mode=0o700)
+                    text = outer[0] + inner[0] + outer[1] + inner[1]
+                    (self.home / ".bashrc").write_text(text)
+                    gitconfig = self.home / ".gitconfig"
+                    gitconfig.write_bytes(b"supplier Git configuration")
+                    backups = self.root / ".local/state/workgrove/backups"
+                    before = set(backups.iterdir())
+                    if operation == "install":
+                        result = self.install(ok=False)
+                    else:
+                        result = self.command("restore", "--root", str(self.root), ok=False,
+                                              env=dict(self.env, PATH=""))
+                    self.assertEqual(result.stderr, "workgrove: managed-text-conflict: ~/.bashrc\n")
+                    self.assertEqual((self.home / ".bashrc").read_text(), text)
+                    self.assertFalse(gitconfig.is_symlink())
+                    self.assertEqual(gitconfig.read_bytes(), b"supplier Git configuration")
+                    self.assertEqual(set(backups.iterdir()), before)
+                    self.assertFalse((self.home / ".local").exists())
+                    self.assertFalse((self.home / ".zshenv").exists())
+
     def test_doctor_does_not_replace_personal_files_or_create_backups(self):
         self.install("--persist-agents")
         folder = self.root / ".config/workgrove"
