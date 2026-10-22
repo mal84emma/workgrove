@@ -949,6 +949,62 @@ SHIM
   end_scenario
 }
 
+# 4a. Portable installations cannot host new tasks. Existing tasks remain available for cleanup.
+scenario_installation_repo() {
+  begin_scenario "$1" || return 0
+  local saved="$REPOS_DIR" root="$TEST_ROOT/portable" alias="$TEST_ROOT/portable-alias" r spelling
+  local refusal='use a separate clone with another name for workgrove development'
+  mkdir -p "$root"
+  REPOS_DIR="$root"
+  r=$(new_repo installation)
+  mv "$r" "$root/workgrove"
+  r="$root/workgrove"
+  ln -s "$root" "$alias"
+  stub_cmux dead
+  assert_wt_ok 'ordinary installations allow tasks' new existing --no-workspace -r workgrove
+  assert_wt_ok 'ordinary installations appear in repos' repos --porcelain
+  assert_has 'repos includes workgrove without a portable root' "$WT_OUT" "workgrove"$'\t'"$r"
+  assert_wt_ok 'ordinary installations appear in list --all' list --all
+  assert_has 'list includes the existing task' "$WT_OUT" 'existing'
+  cp "$r/.git/config" "$TEST_ROOT/installation-config"
+  mkdir "$r/subdir"
+
+  for spelling in "$root" "$alias"; do
+    REPOS_DIR="$spelling"
+    if [[ $spelling == "$root" ]]; then WT_RELAY_ENV=("WT_REMOTE_ROOT=$alias"); else WT_RELAY_ENV=("WT_REMOTE_ROOT=$root"); fi
+    assert_wt_ok 'portable repos excludes the installation' repos --porcelain
+    assert_eq 'the installation is absent from the picker input' '' "$WT_OUT"
+    assert_wt_ok 'portable list --all excludes the installation' list --all
+    assert_eq 'the installation task is absent' '' "$WT_OUT"
+    assert_wt_fails 1 'repo not found: workgrove' repos workgrove
+    assert_wt_fails 1 "$refusal" new refused --no-workspace -r workgrove
+    assert_wt_fails 1 "$refusal" new refused --no-workspace -r "$spelling/workgrove"
+    assert_wt_fails 1 "$refusal" new refused --no-workspace -r "$r/.worktrees/existing"
+    WT_CWD="$spelling/workgrove/subdir"
+    assert_wt_fails 1 "$refusal" new refused --no-workspace
+    WT_CWD="$r/.worktrees/existing"
+    assert_wt_fails 1 "$refusal" new refused --no-workspace
+    WT_CWD=''
+    assert_same_bytes 'refusals preserve installation config' "$TEST_ROOT/installation-config" "$r/.git/config"
+    assert_registered "$r" refused no
+    assert_branch "$r" wt/refused no
+    assert_wt_ok 'existing installation tasks remain inspectable' show existing -r "$r"
+    assert_wt_ok 'existing installation tasks remain locatable' path existing -r "$r"
+    assert_eq 'path still returns the installation task' "$r/.worktrees/existing" "$WT_OUT"
+  done
+  assert_wt_ok 'existing installation tasks remain removable' rm existing -r "$r"
+  assert_registered "$r" existing no
+  assert_branch "$r" wt/existing no
+  REPOS_DIR="$root"
+  r=$(new_repo workgrove-dev)
+  assert_wt_ok 'portable repos includes a separate development clone' repos --porcelain
+  assert_has 'the development clone remains selectable' "$WT_OUT" "${r##*/}"$'\t'
+  assert_wt_ok 'a separate development clone allows tasks' new development --no-workspace -r "$r"
+  WT_RELAY_ENV=()
+  REPOS_DIR="$saved"
+  end_scenario
+}
+
 # 4b. Long reports retain every section and the display limits.
 scenario_show_limits() {
   begin_scenario "$1" || return 0

@@ -295,6 +295,33 @@ class PortableTests(unittest.TestCase):
         self.command("restore", "--root", str(self.root))
         self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
 
+    def test_task_branch_config_invalidates_manifest_and_allows_cleanup(self):
+        self.install()
+        task = self.source / ".worktrees/accidental"
+        self.git("worktree", "add", "-qb", "wt/accidental", str(task), "HEAD")
+        self.git("config", "branch.wt/accidental.remote", "origin")
+        self.git("config", "branch.wt/accidental.merge", "refs/heads/main")
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("installation-changed-run-full-setup", report["issues"])
+        result = self.command("restore", "--root", str(self.root), ok=False)
+        self.assertIn("installation-changed-run-full-setup", result.stderr)
+        tmux = self.tools / "tmux"
+        tmux.write_text("#!/bin/sh\necho 'no server running on /tmp/synthetic-tmux' >&2\nexit 1\n")
+        for command in ("show", "path", "rm"):
+            options = ["--keep-branch"] if command == "rm" else []
+            result = subprocess.run([str(self.tools / "bash"), str(self.source / "bin/wt"),
+                                     command, "accidental", "-r", str(self.source), *options],
+                                    cwd=self.root, env=dict(self.env, CMUX_SSH_ATTEMPT_ID="test"),
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(task.exists())
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("installation-changed-run-full-setup", report["issues"])
+        self.install()
+        self.command("restore", "--root", str(self.root))
+        tmux.write_text("#!/bin/sh\nexit 0\n")
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+
     def test_manifest_rejects_untracked_inputs_but_ignores_unrelated_environment(self):
         extra = self.source / "bin/extra-command"
         extra.write_text("#!/bin/sh\nexit 0\n")

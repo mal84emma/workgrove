@@ -11,7 +11,7 @@ version=$(wt_vm_version)
 printf '%s\n' "$version"
 repo=$1
 if [ -n "$repo" ]; then
-  "$HOME/.local/bin/wt" repos "$repo" >/dev/null || exit 1
+  WG_NEW_PREFLIGHT=1 "$HOME/.local/bin/wt" repos "$repo" >/dev/null || exit 1
 fi
 command -v tmux >/dev/null 2>&1 || { echo "remote tmux is missing" >&2; exit 1; }
 agent=$2

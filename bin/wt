@@ -220,7 +220,7 @@ cmd_new() {
   workspace=${opts[workspace]-$workspace}
   repo=${opts[repo]-$repo}
   if [[ $stdin_prompt -eq 1 ]]; then IFS= read -r -d '' prompt || true; fi
-  resolve_repo "$repo"
+  lookup_new_repo "$repo"; need_commits
   name=$(tidy_name "$name")
   [[ -n "$name" ]] || name=$(slugify "$prompt")
   [[ -n "$name" ]] || name="task-$(date +%Y%m%d-%H%M%S)"
@@ -692,7 +692,11 @@ cmd_repos()   { # wt repos [<name>] [--porcelain|--table]. No name: list every r
   wt_opts "$(wt_spec repos)" opts "$@"
   name=${opts[name]-$name}
   mode=${opts[mode]-$mode}
-  if [[ -n "$name" ]]; then lookup_repo "$name"; printf '%s\n' "$REPO"; return 0; fi
+  if [[ -n "$name" ]]; then
+    # The Mac's creation preflight needs the same refusal as new before it checks the remote agent.
+    if [[ ${WG_NEW_PREFLIGHT:-} == 1 ]]; then lookup_new_repo "$name"; else lookup_repo "$name"; fi
+    printf '%s\n' "$REPO"; return 0
+  fi
   need_repos_dir
   if [[ -z "$mode" ]]; then if [[ -t 1 ]]; then mode=table; else mode=porcelain; fi; fi
   if [[ "$mode" == porcelain ]]; then repo_dirs | awk -F/ '{printf "%s\t%s\n", $NF, $0}'; return 0; fi
