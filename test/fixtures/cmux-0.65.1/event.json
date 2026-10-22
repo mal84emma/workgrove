@@ -1,5 +1,5 @@
 {
-  "boot_id": "00000000-0000-4000-8000-000000000007",
+  "boot_id": "00000000-0000-4000-8000-000000000017",
   "<field-1>": "<redacted>",
   "id": "<redacted>",
   "name": "notification.created",
@@ -7,11 +7,11 @@
   "pane_id": null,
   "payload": {
     "body": null,
-    "body_length": 200,
+    "body_length": 4,
     "created_at": "<redacted>",
     "delivery": "store",
     "is_read": false,
-    "notification_id": "00000000-0000-4000-8000-000000000013",
+    "notification_id": "00000000-0000-4000-8000-000000000010",
     "redacted_fields": [
       "title",
       "subtitle",
@@ -19,18 +19,18 @@
     ],
     "replaced_notification_ids": [],
     "subtitle": null,
-    "subtitle_length": 31,
-    "surface_id": "00000000-0000-4000-8000-000000000006",
+    "subtitle_length": 13,
+    "surface_id": "00000000-0000-4000-8000-000000000001",
     "title": null,
-    "title_length": 5,
-    "workspace_id": "00000000-0000-4000-8000-000000000010"
+    "title_length": 24,
+    "workspace_id": "00000000-0000-4000-8000-000000000003"
   },
   "protocol": "<redacted>",
-  "seq": 326733,
+  "seq": 331370,
   "source": "<redacted>",
-  "surface_id": "00000000-0000-4000-8000-000000000006",
+  "surface_id": "00000000-0000-4000-8000-000000000001",
   "type": "event",
   "version": 1,
   "window_id": null,
-  "workspace_id": "00000000-0000-4000-8000-000000000010"
+  "workspace_id": "00000000-0000-4000-8000-000000000003"
 }

@@ -197,6 +197,19 @@ scenario_shapes_and_hooks() {
   end_scenario
 }
 
+scenario_reference_redaction() {
+  begin_scenario 'redaction preserves synthetic reference relationships' || return 0
+  local sanitized
+  sanitized=$(jq -cn '{rows:{workspaces:[{ref:"workspace:91"},{ref:"workspace:37"}],window_ref:"window:19"},
+    rows_by_window:[{workspaces:[{ref:"workspace:91"}],window_ref:"window:19"}],body:"workspace:91"}' \
+    | jq -cf "$REPO/lib/workgrove/doctor-sanitize.jq")
+  assert_eq 'workspace refs remain valid and distinct' true "$(jq '[.rows.workspaces[].ref] | (unique | length) == 2 and all(.[]; test("^workspace:[1-9][0-9]*$"))' <<<"$sanitized")"
+  assert_eq 'repeated workspace refs keep their relationship' true "$(jq '.rows.workspaces[0].ref == .rows_by_window[0].workspaces[0].ref' <<<"$sanitized")"
+  assert_eq 'window refs remain valid and consistent' true "$(jq '.rows.window_ref == "window:1" and .rows.window_ref == .rows_by_window[0].window_ref' <<<"$sanitized")"
+  assert_eq 'free text matching a ref still gets redacted' '<redacted>' "$(jq -r .body <<<"$sanitized")"
+  end_scenario
+}
+
 scenario_recorded_contract() {
   begin_scenario 'the real cmux capture preserves the supported contract' || return 0
   CMUX_FIXTURES=$FAKE_CMUX_FIXTURES invoke doctor
@@ -364,5 +377,6 @@ scenario_mac
 scenario_shapes_and_hooks
 scenario_record
 scenario_recorded_contract
+scenario_reference_redaction
 scenario_vm
 lib_summary

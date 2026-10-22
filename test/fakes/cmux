@@ -37,12 +37,8 @@ update_row_snapshots() {
 }
 # Set id and ref to unused identities across all row snapshots.
 allocate_row_identity() {
-  local document identities count
-  local documents=()
-  for document in "$state/rows.json" "$state/rows/"*.json; do
-    [[ -f $document ]] && documents+=("$document")
-  done
-  identities=$(jq -sc '[.[].workspaces[] | .id, .ref] | map(select(type == "string"))' "${documents[@]}")
+  local identities count
+  identities=$(fake_identity_records | jq '[.[] | .id, .ref] | map(select(type == "string"))')
   count=$(cat "$state/next-row" 2>/dev/null || echo 1)
   while :; do
     printf -v id '00000000-0000-4000-8000-%012d' "$count"
@@ -50,32 +46,79 @@ allocate_row_identity() {
     if ! jq -e --arg id "$id" --arg ref "$ref" 'index($id) != null or index($ref) != null' <<<"$identities" >/dev/null; then break; fi
     count=$((count + 1))
   done
+  fake_ref "$id" "$ref" >/dev/null
   printf '%s\n' "$((count + 1))" >"$state/next-row"
 }
 unexpected_command() {
   printf 'fake cmux: unexpected command: %s\n' "$*" >&2
   exit 64
 }
-[[ $1 != --socket ]] || shift 2
+refresh_windows() {
+  local window document index
+  while IFS=$'\t' read -r window index; do
+    document=$state/rows/$window.json
+    [[ -f $document ]] || fake_window_rows "$window" >"$document"
+    # shellcheck disable=SC2016  # jq expands the filter variables.
+    update_rows "$document" --arg ref "window:$((index + 1))" '.window_ref=$ref'
+    # shellcheck disable=SC2016  # jq expands the filter variables.
+    update_rows "$state/windows.json" --arg id "$window" --slurpfile rows "$document" '
+      (.[] | select(.id == $id)) |= (
+        .workspace_count=($rows[0].workspaces | length)
+        | .selected_workspace_id as $selected
+        | .selected_workspace_id=(if any($rows[0].workspaces[]; .id == $selected)
+            then $selected else ($rows[0].workspaces[0].id // null) end))'
+  done < <(jq -r '.[] | [.id,.index] | @tsv' "$state/windows.json")
+}
+[[ $# -gt 0 ]] || unexpected_command
+if [[ $1 == --socket ]]; then
+  [[ $# -ge 3 ]] || unexpected_command "$@"
+  shift 2
+fi
+# Validate supported argument forms before queues, overrides, or mutations run.
 case "$1 ${2:-}" in
-  'automation '*) [[ $* == 'automation show wt-native-relay' ]] || unexpected_command "$@" ;;
-  'events '*)
-    [[ $* == 'events --after 0 --name notification.created --limit 1 --timeout 3 --no-ack --no-heartbeat' ]] || unexpected_command "$@" ;;
-  '--json agent') [[ $* == '--json agent hook status claude codex' ]] || unexpected_command "$@" ;;
-esac
-case "$1 ${2:-}" in
-  '--json agent') key=agent-hook-status; file=agent-hook-status.json ;;
-  '--json list-windows') key=list-windows; file=windows.json ;;
-  '--json list-notifications') key=list-notifications; file=notifications.json ;;
-  'workspace list') key=workspace-list; file=rows.json
-    if [[ ${4:-} == --window ]]; then key+=--$5; file=rows/$5.json; fi ;;
-  'top --workspace') key=top; file=top.json
-    if [[ -n $state && -f $state/top/$3.json ]]; then file=top/$3.json; fi ;;
+  'version '|'capabilities '|'ping ')
+    [[ $# == 1 ]] || unexpected_command "$@"
+    key=$1; file=$1.json ;;
+  '--json agent')
+    [[ $# == 6 && $* == '--json agent hook status claude codex' ]] || unexpected_command "$@"
+    key=agent-hook-status; file=agent-hook-status.json ;;
+  '--json list-windows'|'--json list-notifications')
+    [[ $# == 2 ]] || unexpected_command "$@"
+    key=$2
+    if [[ $2 == list-windows ]]; then file=windows.json; else file=notifications.json; fi ;;
+  'workspace list')
+    [[ $# == 3 && $3 == --json || $# == 5 && $3 == --json && $4 == --window && -n $5 ]] || unexpected_command "$@"
+    key=workspace-list; file=rows.json
+    if [[ $# == 5 ]]; then key+=--$5; file=rows/$5.json; fi ;;
+  'top --json'|'top --workspace')
+    [[ $# == 2 && $2 == --json || $# == 4 && $2 == --workspace && -n $3 && $4 == --json ]] || unexpected_command "$@"
+    key=top; file=top.json
+    if [[ $# == 4 && -n $state && -f $state/top/$3.json ]]; then file=top/$3.json; fi ;;
   'workspace create') key=workspace-create; file=create.json ;;
-  'workspace close') key=workspace-close; file=close.txt ;;
-  'workspace select') key=workspace-select; file=select.txt ;;
-  'automation show') key=automation; file=automation.json ;;
-  *) key=$1; file=$1.json ;;
+  'workspace close')
+    [[ $# == 3 || $# == 4 && $4 == --force ]] || unexpected_command "$@"
+    key=workspace-close; file=close.txt ;;
+  'workspace select')
+    [[ $# == 3 ]] || unexpected_command "$@"
+    key=workspace-select; file=select.txt ;;
+  'workspace-action --workspace')
+    [[ $# == 7 && -n $3 && $4 == --action && $5 == set-description && $6 == --description ]] || unexpected_command "$@"
+    key=workspace-action; file=workspace-action.json; target=$3; description=$7 ;;
+  'automation show')
+    [[ $# == 3 && $3 == wt-native-relay ]] || unexpected_command "$@"
+    key=automation; file=automation.json ;;
+  'events --after')
+    [[ $# == 11 && $* == 'events --after 0 --name notification.created --limit 1 --timeout 3 --no-ack --no-heartbeat' ]] || unexpected_command "$@"
+    key=events; file=event.json ;;
+  'read-screen --workspace'|'dismiss-notification --id')
+    [[ $# == 3 ]] || unexpected_command "$@"
+    key=$1; file=$1.json ;;
+  'send --workspace'|'send-key --workspace')
+    [[ $# == 4 ]] || unexpected_command "$@"
+    key=$1; file=$1.json ;;
+  'ssh '*) key=ssh; file=ssh.json ;;
+  'notify '*) key=notify; file=notify.json ;;
+  *) unexpected_command "$@" ;;
 esac
 if [[ -n $state ]]; then
   # A queue entry contains stdout, stderr, and an exit status. Consume each entry once.
@@ -105,6 +148,8 @@ if [[ -n $state ]]; then
   if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; apply_effects; exit 0; fi
 fi
 if [[ -n $state && -f $state/mutate ]]; then
+  # shellcheck source=test/fakes/rows.sh
+  source "$HERE/rows.sh"
   case $key in
     ssh|workspace-create)
       # Keep stable UUIDs in row lists and return cmux's workspace ref from creation.
@@ -119,32 +164,28 @@ if [[ -n $state && -f $state/mutate ]]; then
         esac
         shift
       done
-      # shellcheck source=test/fakes/rows.sh
-      source "$HERE/rows.sh"
-      row=$(fake_row "$id" "$title" "$description" "$host" | jq -c --arg ref "$ref" --arg cwd "$cwd" '.ref=$ref | .current_directory=$cwd')
+      row=$(fake_row "$id" "$title" "$description" "$host" connected cmux-tui null "$ref" \
+        | jq -c --arg cwd "$cwd" '.current_directory=$cwd')
       # shellcheck disable=SC2016  # jq expands the filter variables.
       update_rows "$state/rows.json" --argjson row "$row" '.workspaces += [$row]'
       window=$(jq -r '[.[] | select(.key == true)][0].id // .[0].id // empty' "$state/windows.json")
       if [[ -n $window ]]; then
         document=$state/rows/$window.json
-        [[ -f $document ]] || fake_rows >"$document"
+        [[ -f $document ]] || fake_window_rows "$window" >"$document"
         # shellcheck disable=SC2016  # jq expands the filter variables.
         update_rows "$document" --argjson row "$row" '.workspaces += [$row]'
       fi
+      refresh_windows
       printf '%s\n' "$ref"
       apply_effects
       exit 0 ;;
     workspace-close)
       # shellcheck disable=SC2016  # jq expands the filter variables.
-      update_row_snapshots --arg id "$3" '.workspaces |= map(select(.id != $id and .ref != $id))' ;;
+      update_row_snapshots --arg id "$3" '.workspaces |= map(select(.id != $id and .ref != $id))'
+      refresh_windows ;;
     workspace-action)
-      id='' description=''
-      while (($#)); do
-        case $1 in --workspace) id=$2; shift ;; --description) description=$2; shift ;; esac
-        shift
-      done
       # shellcheck disable=SC2016  # jq expands the filter variables.
-      update_row_snapshots --arg id "$id" --arg description "$description" \
+      update_row_snapshots --arg id "$target" --arg description "$description" \
         '(.workspaces[] | select(.id == $id or .ref == $id) | .description)=$description'
       apply_effects
       exit 0 ;;

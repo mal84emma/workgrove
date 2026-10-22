@@ -445,6 +445,12 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
 Every cmux suite uses `test/fakes/cmux` and the helpers in `test/fakes/rows.sh`.
 The fake reads recorded cmux 0.65.1 responses from `test/fixtures/cmux-0.65.1/`.
 `wt doctor --record test/fixtures` captures these responses and removes private values.
+Sanitization keeps workspace and window refs consistent while replacing their original numbers.
+
+`fake_row <id> <title> <description> [host state backend slot ref]` builds a row with a stable, unique workspace ref.
+The optional eighth argument supplies an explicit unused `workspace:N` ref.
+Helpers store reference assignments under `FAKE_CMUX_STATE`, or under `TEST_ROOT` when no state is active.
+`fake_window_rows <window> [rows...]` adds the scoped response's window ref.
 
 `FAKE_CMUX_STATE` selects a scratch state folder.
 `windows.json`, `rows.json`, `rows/<window>.json`, `notifications.json`, and `top.json` override recorded responses.
@@ -457,9 +463,11 @@ Command keys include `list-windows`, `workspace-list`, `workspace-list--<window>
 A `mutate` file enables persistent row creation, description changes, and closure.
 Creation uses the active window and reserves seeded row IDs and workspace refs.
 Description changes and closure update all matching row snapshots.
+Membership changes update window counts, selected workspace IDs, and scoped response refs.
 A `notify-dedupe` file enables notification content suppression for relay tests.
 
-Recorded event, automation, and agent-hook commands require their supported argument forms.
+Recorded commands require their complete supported argument forms before queues or overrides can respond.
+Unsupported workspace actions return exit status 64 and preserve state.
 
 `bash test/docs-smoke.sh` checks the Layout tree, the documentation guide's required citations, and relative links and anchors.
 It also runs isolated regression fixtures for the checker.
