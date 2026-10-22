@@ -90,7 +90,8 @@ need_task_repo() {
 lookup_new_repo() {
   local want=${1:-} d
   # Name lookup omits the installation. Preserve the creation refusal when no other repository matches.
-  if [[ -n ${WT_REMOTE_ROOT:-} && $want == workgrove && ! -d $want && -z $(repo_matches "$want") ]]; then
+  if [[ -n ${WT_REMOTE_ROOT:-} && -n $want && $want != */* && $want != .* \
+        && ! -d $want && -z $(repo_matches "$want") ]]; then
     while IFS= read -r d; do
       [[ -z $d ]] || need_task_repo "$d/$want"
     done <<<"$(repos_entries)"
