@@ -22,16 +22,10 @@ die() { printf '%s\n' "$*" >&2; return 1; }
 warn() { printf '%s\n' "$*" >&2; }
 wt_path() { printf '%s/project/.worktrees/%s' "$TEST_ROOT" "$1"; }
 wt_branch() { printf 'wt/%s' "$1"; }
-cmux_bin() { printf '%s/cmux' "$TEST_ROOT"; }
-
-cat >"$TEST_ROOT/cmux" <<'CMUX'
-#!/usr/bin/env bash
-case $1 in
-  read-screen) cat "$NAMED_SCREEN" ;;
-  ping) exit 0 ;;
-esac
-CMUX
-chmod +x "$TEST_ROOT/cmux"
+# shellcheck source=test/fakes/rows.sh
+source "$REPO/test/fakes/rows.sh"
+fake_cmux_init "$TEST_ROOT/cmux-state"
+cmux_bin() { printf '%s/test/fakes/cmux' "$REPO"; }
 
 git init -q -b main "$TEST_ROOT/project"
 git -C "$TEST_ROOT/project" -c user.name=Test -c user.email=test@example.com commit -qm initial --allow-empty
@@ -102,7 +96,8 @@ test_rm_reasons
 
 test_check_row_removal() {
   local c=unchanged id=unchanged ROW_AGENT=''
-  rows_json() { printf '%s\n' '{"workspaces":[{"id":"row-1","title":"task","description":"@local · project"}]}'; }
+  fake_rows "$(fake_row row-1 task '@local · project')" >"$FAKE_CMUX_STATE/rows.json"
+  rows_json() { cmux_call workspace list --json; }
   row_agent() { ROW_AGENT=self; }
   begin_scenario 'row outputs can use internal local names' || return 0
   if check_row_removal task /repo/project c id; then pass; else fail 'check_row_removal failed'; fi
@@ -114,7 +109,7 @@ test_check_row_removal() {
 test_check_row_removal
 
 test_row_shell_prompt() {
-  local -x NAMED_SCREEN="$TEST_ROOT/screen"
+  local NAMED_SCREEN="$FAKE_CMUX_STATE/read-screen.json"
   local screen=unchanged host=unchanged status=0
   row_remote_field() { printf connected; }
   vm_session_detached() { printf '%s' "$1" >"$TEST_ROOT/detached-host"; }

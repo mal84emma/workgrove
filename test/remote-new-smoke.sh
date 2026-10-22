@@ -20,65 +20,56 @@ cat >"$TEST_ROOT/local/bin/uname" <<'UNAME'
 #!/bin/sh
 echo Darwin
 UNAME
-# The row modes: "existing" has this task's row, "legacy" has it with the title of an older wt, and
-# "other-repo" has a row of another repo's task with the same name. "no-ref" is "other-repo" with a create
-# that prints no workspace ref; the row that the create adds shows up in the next list. "no-ref-blind" is
-# "no-ref" with a row list that fails until the create, so wt has no list of the rows from before it.
-# "no-ref-own" has the user's own row with the task's title and no repo, and a create that prints no ref.
-# "no-ref-race" has no rows before the create; after it, the list also has another repo's row that appeared
-# meanwhile. "race" lists no row the first time and this task's row after that. "tag-fail" and "race" make
-# every description write fail. A close leaves the rows of the mode listed.
-cat >"$TEST_ROOT/local/bin/cmux" <<'CMUX'
-#!/bin/sh
-printf '%s\n' "$*" >>"$CMUX_LOG"
-row() { printf '{"id":"%s","title":"%s","description":"%s","remote":{"enabled":true,"destination":"fakevm"}}' "$1" "$2" "$3"; }
-case "$1" in
-  ping) [ "$CMUX_MODE" != down ] ;;
-  --json) if [ "$CMUX_MODE" = partial-window ]; then
-            echo '[{"id":"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"},{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"}]'
-            exit 0
-          fi
-          echo '[{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"}]' ;;
-  workspace) if [ "$CMUX_MODE" = select-fail ] && [ "${2:-}" = select ]; then exit 1; fi
-             if [ "$CMUX_MODE" = partial-window ] && [ "${5:-}" = AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA ]; then exit 1; fi
-             if [ "$CMUX_MODE" = no-ref-late ] && [ -e "$CMUX_LOG.created" ]; then
-               echo lookup >>"$CMUX_LOG.after-create"
-               echo '{"workspaces":[]}'
-               exit 0
-             fi
-             case "$CMUX_MODE" in
-               existing) printf '{"workspaces":[%s]}\n' "$(row workspace:123 task '@fakevm · repo')" ;;
-               legacy) printf '{"workspaces":[%s]}\n' "$(row workspace:123 repo:task @fakevm)" ;;
-               other-repo) printf '{"workspaces":[%s]}\n' "$(row other-row task '@fakevm · other')" ;;
-               no-ref) if [ -e "$CMUX_LOG.created" ]; then
-                         printf '{"workspaces":[%s,%s]}\n' "$(row other-row task '@fakevm · other')" \
-                           '{"id":"new-row","title":"task","remote":{"enabled":true,"destination":"fakevm"}}'
-                       else printf '{"workspaces":[%s]}\n' "$(row other-row task '@fakevm · other')"; fi ;;
-               no-ref-blind) [ -e "$CMUX_LOG.created" ] || exit 1
-                             printf '{"workspaces":[%s,%s]}\n' "$(row other-row task '@fakevm · other')" \
-                               '{"id":"new-row","title":"task","remote":{"enabled":true,"destination":"fakevm"}}' ;;
-               no-ref-own) if [ -e "$CMUX_LOG.created" ]; then
-                             printf '{"workspaces":[%s,%s]}\n' "$(row user-row task '')" \
-                               '{"id":"new-row","title":"task","remote":{"enabled":true,"destination":"fakevm"}}'
-                           else printf '{"workspaces":[%s]}\n' "$(row user-row task '')"; fi ;;
-               no-ref-race) if [ -e "$CMUX_LOG.created" ]; then
-                              printf '{"workspaces":[%s,%s]}\n' "$(row other-row task '@fakevm · other')" \
-                                '{"id":"new-row","title":"task","remote":{"enabled":true,"destination":"fakevm"}}'
-                            else printf '{"workspaces":[]}\n'; fi ;;
-               race) if [ -e "$CMUX_LOG.listed" ]; then printf '{"workspaces":[%s]}\n' "$(row race-row task '@fakevm · repo')"
-                     else : >"$CMUX_LOG.listed"; printf '{"workspaces":[]}\n'; fi ;;
-               *) printf '{"workspaces":[]}\n' ;;
-             esac ;;
-  ssh) [ "$CMUX_MODE" != ssh-fail ] || { echo 'row connection failed' >&2; exit 1; }
-       case "$CMUX_MODE" in no-ref*) : >"$CMUX_LOG.created"; echo OK ;; *) echo 'workspace:123' ;; esac ;;
-  workspace-action) case "$CMUX_MODE" in tag-fail|race) exit 1 ;; esac ;;
-esac
-CMUX
+# shellcheck source=test/fakes/rows.sh
+source "$REPO/test/fakes/rows.sh"
+fake_cmux_init "$TEST_ROOT/cmux-state"
+ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/local/bin/cmux"
+rm "$FAKE_CMUX_STATE/calls.log"
+ln -s "$TEST_ROOT/cmux.log" "$FAKE_CMUX_STATE/calls.log"
+
+prepare_cmux() {
+  local before after
+  rm -rf "$FAKE_CMUX_STATE/fail" "$FAKE_CMUX_STATE/queue" "$FAKE_CMUX_STATE/after"
+  mkdir -p "$FAKE_CMUX_STATE/fail" "$FAKE_CMUX_STATE/queue"
+  fake_windows CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC >"$FAKE_CMUX_STATE/windows.json"
+  before=$(fake_rows)
+  printf 'workspace:123\n' >"$FAKE_CMUX_STATE/ssh.json"
+  case $CMUX_MODE in
+    down) fake_failure ping 1 ;;
+    select-fail) fake_failure workspace-select 1 ;;
+    ssh-fail) fake_failure ssh 1 'row connection failed' ;;
+    tag-fail) fake_failure workspace-action 1 ;;
+    existing) before=$(fake_rows "$(fake_row workspace:123 task '@fakevm · repo' fakevm)") ;;
+    legacy) before=$(fake_rows "$(fake_row workspace:123 repo:task @fakevm fakevm)") ;;
+    other-repo|no-ref) before=$(fake_rows "$(fake_row other-row task '@fakevm · other' fakevm)") ;;
+    no-ref-own) before=$(fake_rows "$(fake_row user-row task '' fakevm)") ;;
+    no-ref-blind) fake_failure workspace-list 1 ;;
+    partial-window)
+      fake_windows AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC >"$FAKE_CMUX_STATE/windows.json"
+      fake_failure workspace-list--AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA 1 ;;
+    race)
+      fake_queue workspace-list--CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC "$before"
+      before=$(fake_rows "$(fake_row race-row task '@fakevm · repo' fakevm)")
+      fake_failure workspace-action 1 ;;
+  esac
+  printf '%s' "$before" >"$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json"
+  case $CMUX_MODE in
+    no-ref*)
+      mkdir -p "$FAKE_CMUX_STATE/after/ssh/rows"
+      printf 'OK\n' >"$FAKE_CMUX_STATE/ssh.json"
+      case $CMUX_MODE in
+        no-ref-late) after=$(fake_rows) ;;
+        no-ref-own) after=$(fake_rows "$(fake_row user-row task '' fakevm)" "$(fake_row new-row task '' fakevm)") ;;
+        *) after=$(fake_rows "$(fake_row other-row task '@fakevm · other' fakevm)" "$(fake_row new-row task '' fakevm)") ;;
+      esac
+      printf '%s' "$after" >"$FAKE_CMUX_STATE/after/ssh/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json" ;;
+  esac
+}
 cat >"$TEST_ROOT/local/bin/ssh.fixture" <<'SSH'
 #!/usr/bin/env bash
 printf '%s\n' "$cmd" >>"$SSH_LOG"
 if [[ "$SSH_MODE" == lost && "$cmd" == *' new '* ]]; then
-  HOME="$REMOTE_HOME" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
+  HOME="$REMOTE_HOME" CMUX_SSH_ATTEMPT_ID=1 WT_REPOS_DIR="$REMOTE_HOME/discovery" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
     REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" fake_ssh_run "$cmd" >/dev/null
   exit 255
 fi
@@ -86,56 +77,42 @@ if [[ "$SSH_MODE" == refuse && "$cmd" == *' new '* ]]; then
   echo "worktree 'task' already exists" >&2
   exit 1
 fi
-HOME="$REMOTE_HOME" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
+HOME="$REMOTE_HOME" CMUX_SSH_ATTEMPT_ID=1 WT_REPOS_DIR="$REMOTE_HOME/discovery" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
   REMOTE_REPO="$REMOTE_REPO" REMOTE_NEW_MARKER="$REMOTE_NEW_MARKER" \
   REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" fake_ssh_run "$cmd"
 exit $?
 SSH
 make_fake_ssh "$TEST_ROOT/local/bin/ssh" "$TEST_ROOT/local/bin/ssh.fixture"
+# The wrapper records arguments and injects compatibility faults into real wt output.
 cat >"$TEST_ROOT/remote/.local/bin/wt" <<'WT'
-#!/bin/sh
-case "$1" in
-  repos) [ "$2" = wt-demo ] || { echo 'repo not found' >&2; exit 1; }
-         printf '%s\n' "$REMOTE_REPO" ;;
-  new) if [ "$REMOTE_OUTPUT_MODE" = old ]; then
-         for arg in "$@"; do
-           case "$arg" in -m|--model) echo "wt: new: unknown option $arg" >&2; exit 1 ;; esac
-         done
-       fi
-       echo create >>"$REMOTE_NEW_MARKER.calls"
-       mkdir -p "$REMOTE_REPO/.worktrees/task" "$REMOTE_REPO/.git/wt"
-       cat >"$REMOTE_REPO/.git/wt/task.prompt"
-       printf '%s\n' "$@" >"$REMOTE_NEW_MARKER.args"
-       agent=claude model=
-       while [ "$#" -gt 0 ]; do
-         case "$1" in
-           -a|--agent) agent=$2; shift ;;
-           -m|--model) model=$2; shift ;;
-         esac
-         shift
-       done
-       printf '{"agent":"%s","model":"%s"}\n' "$agent" "$model" >"$REMOTE_REPO/.git/wt/task.json"
-       : >"$REMOTE_NEW_MARKER"
-       [ "$REMOTE_OUTPUT_MODE" != bad ] || { echo 'created ???'; exit 0; }
-       if [ "$REMOTE_OUTPUT_MODE" = machine ]; then
-         printf 'Task created.\nWT_RESULT\t{"version":1,"command":"new","status":"created","name":"task","repo":"%s","session":"wt-repo-task","state":""}\n' "$REMOTE_REPO"
-       else
-         printf 'created task\n  path:   %s/.worktrees/task\n  branch: wt/task (from main)\n  repo:   %s\n  session: wt-repo-task\n' "$REMOTE_REPO" "$REMOTE_REPO"
-         [ "$REMOTE_OUTPUT_MODE" != malformed ] || printf 'WT_RESULT\t{broken\n'
-       fi ;;
-  list) case "$2" in -r|--repo) printf 'scoped: %s\n' "$3" ;; *) echo 'all repos' ;; esac ;;
-  show) [ -e "$REMOTE_NEW_MARKER" ] || exit 1
-        if [ "$REMOTE_OUTPUT_MODE" = machine ]; then
-          printf 'Task details.\nWT_RESULT\t{"version":1,"command":"show","status":"found","name":"task","repo":"%s","session":"wt-repo-task","state":"none"}\n' "$REMOTE_REPO"
-        else
-          state=none
-          [ "$REMOTE_OUTPUT_MODE" != running ] || state='agent running, detached'
-          printf '  repo: %s\n  session: wt-repo-task (%s)\n' "$REMOTE_REPO" "$state"
-        fi ;;
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $1 == new ]]; then
+  if [[ $REMOTE_OUTPUT_MODE == old ]]; then
+    for arg do
+      case $arg in -m|--model) echo "wt: new: unknown option $arg" >&2; exit 1 ;; esac
+    done
+  fi
+  echo create >>"$REMOTE_NEW_MARKER.calls"
+  printf '%s\n' "$@" >"$REMOTE_NEW_MARKER.args"
+fi
+output=$("$REAL_WT" "$@") || { rc=$?; printf '%s\n' "$output"; exit "$rc"; }
+if [[ $1 == new ]]; then : >"$REMOTE_NEW_MARKER"; fi
+case $REMOTE_OUTPUT_MODE in
+  bad) echo 'created ???' ;;
+  malformed) printf '%s\n' "$output" | sed $'s/^WT_RESULT\t.*/WT_RESULT\t{broken/' ;;
+  old) printf '%s\n' "$output" | sed $'/^WT_RESULT\t/d' ;;
+  machine) printf '%s\n' "$output" | sed -n $'/^WT_RESULT\t/p' ;;
+  *) printf '%s\n' "$output" ;;
 esac
 WT
+printf '#!/bin/sh\necho Linux\n' >"$TEST_ROOT/remote/.local/bin/uname"
 cat >"$TEST_ROOT/remote/.local/bin/tmux" <<'TMUX'
 #!/bin/sh
+if [ "${REMOTE_OUTPUT_MODE:-}" = running ]; then
+  case $1 in list-panes) echo /dev/pts/123 ;; list-clients) ;; esac
+  exit 0
+fi
 if [ "$1" = has-session ]; then echo 'no server running on /tmp/fake' >&2; exit 1; fi
 TMUX
 for tool in claude codex; do
@@ -144,13 +121,34 @@ done
 printf '#!/bin/sh\nexit 1\n' >"$TEST_ROOT/local/bin/fzf"   # wt task needs fzf only for the pickers that --where and -a skip
 chmod +x "$TEST_ROOT/local/bin/"* "$TEST_ROOT/remote/.local/bin/"*
 
+for tool in bash jq git python3; do
+  ln -s "$(command -v "$tool")" "$TEST_ROOT/remote/.local/bin/$tool"
+done
+printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/remote/.local/bin/pgrep"
+chmod +x "$TEST_ROOT/remote/.local/bin/pgrep"
+mkdir -p "$TEST_ROOT/remote/discovery"
+ln -s "$TEST_ROOT/remote/repo" "$TEST_ROOT/remote/discovery/wt-demo"
+git init -qb main "$TEST_ROOT/remote/repo"
+git -C "$TEST_ROOT/remote/repo" config user.name Test
+git -C "$TEST_ROOT/remote/repo" config user.email test@example.invalid
+git -C "$TEST_ROOT/remote/repo" commit -qm initial --allow-empty
+
 CMUX_MODE=alive SSH_MODE=ok REMOTE_DEFAULT_AGENT=claude
 WT_OUT='' WT_RC=0
 invoke_wt() {
   WT_RC=0
+  prepare_cmux
+  if [[ " $* " == *' new '* && ! -e $TEST_ROOT/remote-new ]]; then
+    if [[ -d $TEST_ROOT/remote/repo/.worktrees/task ]]; then
+      git -C "$TEST_ROOT/remote/repo" worktree remove --force "$TEST_ROOT/remote/repo/.worktrees/task"
+      git -C "$TEST_ROOT/remote/repo" branch -D wt/task >/dev/null
+    fi
+    rm -rf "$TEST_ROOT/remote/repo/.git/wt"
+  fi
   WT_OUT=$(env -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u WT_HOST -u WT_AGENT \
     HOME="$TEST_ROOT/local" PATH="$TEST_ROOT/local/bin:$PATH" \
     CMUX_BUNDLED_CLI_PATH="$TEST_ROOT/local/bin/cmux" CMUX_LOG="$TEST_ROOT/cmux.log" \
+    REAL_WT="$REPO/bin/wt" FAKE_CMUX_STATE="$FAKE_CMUX_STATE" \
     SSH_LOG="$TEST_ROOT/ssh.log" CMUX_MODE="$CMUX_MODE" SSH_MODE="$SSH_MODE" \
     REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" \
     REMOTE_HOME="$TEST_ROOT/remote" REMOTE_REPO="$TEST_ROOT/remote/repo" \
@@ -221,6 +219,10 @@ TMUX
   check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cannot check the agent in tmux session'* && -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'restart-agent did not refuse unreadable session status'
   cat >"$TEST_ROOT/remote/.local/bin/tmux" <<'TMUX'
 #!/bin/sh
+if [ "${REMOTE_OUTPUT_MODE:-}" = running ]; then
+  case $1 in list-panes) echo /dev/pts/123 ;; list-clients) ;; esac
+  exit 0
+fi
 if [ "$1" = has-session ]; then echo 'no server running on /tmp/fake' >&2; exit 1; fi
 TMUX
   rm "$TEST_ROOT/remote-new"
@@ -230,8 +232,8 @@ TMUX
   run_wt wt-demo claude
   check "$([[ $WT_RC -ne 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'could not confirm whether a worktree was created'* && "$WT_OUT" == *'wt -H fakevm list -r wt-demo'* ]] && echo yes)" 'ambiguous SSH outcome was treated as safe to retry'
   SSH_MODE=ok
-  invoke_wt -H fakevm list -r "$TEST_ROOT/remote/repo"
-  check "$([[ $WT_RC -eq 0 && "$WT_OUT" == "scoped: $TEST_ROOT/remote/repo" ]] && echo yes)" 'remote list ignored a repo outside WT_REPOS_DIR'
+  invoke_wt -H fakevm list -r "$TEST_ROOT/remote/repo" --json
+  check "$([[ $WT_RC -eq 0 ]] && jq -e --arg repo "$TEST_ROOT/remote/repo" 'length == 1 and .[0].name == "task" and .[0].repo == $repo' <<<"$WT_OUT" >/dev/null && echo yes)" 'remote list ignored a repo outside WT_REPOS_DIR'
   rm "$TEST_ROOT/remote-new"
 
   # A healthy path still creates and reports the row. The row's title is the task name, and its description
@@ -339,14 +341,14 @@ TMUX
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude
   check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to a row that the create did not add'
-  rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
+  rm -f "$TEST_ROOT/remote-new"
 
   # An older row with the task's title and no repo, such as the user's own `cmux ssh` row, is not the new one.
   CMUX_MODE=no-ref-own
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude
   check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'user-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to an older row with the same title'
-  rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
+  rm -f "$TEST_ROOT/remote-new"
 
   # A row of another repo that appeared during the create is not in the list from before it. Its description
   # names its repo, so it is still not the new one.
@@ -354,14 +356,14 @@ TMUX
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude
   check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to a row of another repo that appeared during the create'
-  rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
+  rm -f "$TEST_ROOT/remote-new"
 
   # With no list from before the create, any row could look new. So wt does not guess, and writes no description.
   CMUX_MODE=no-ref-blind
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude
   check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'not creating a row on a lookup that failed'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && ! grep -qF -- 'workspace-action' "$TEST_ROOT/cmux.log" && echo yes)" 'with no list from before the create, wt guessed which row was new'
-  rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
+  rm -f "$TEST_ROOT/remote-new"
 
   # One failed window must stop attach before a partial snapshot can cause a duplicate row.
   CMUX_MODE=alive
@@ -376,8 +378,8 @@ TMUX
   CMUX_MODE=no-ref-late
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude
-  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux reported no row'* && $(wc -l <"$TEST_ROOT/cmux.log.after-create") -eq 1 ]] && echo yes)" 'a missing ref did not use exactly one fallback lookup'
-  rm "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.created"
+  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux reported no row'* && $(awk '/^ssh / {created=1; next} created && /^workspace list / {n++} END {print n+0}' "$TEST_ROOT/cmux.log") -eq 1 ]] && echo yes)" 'a missing ref did not use exactly one fallback lookup'
+  rm "$TEST_ROOT/remote-new"
 
   # The description holds the repo, so a new row without it would be found by no later lookup. wt closes the
   # row and fails, and the recovery advice applies to the task as it is.
@@ -399,11 +401,29 @@ TMUX
   : >"$TEST_ROOT/cmux.log"
   invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
   check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'set-description @fakevm · repo failed for race-row'* ]] && grep -qF -- 'workspace-action --workspace race-row ' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'workspace close' "$TEST_ROOT/cmux.log" && echo yes)" 'a row that a lookup found was closed for a failed description'
-  rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/cmux.log.listed"
+  rm -f "$TEST_ROOT/remote-new"
   CMUX_MODE=alive
   end_scenario
 }
 scenario_preflight_recovery
+
+scenario_real_vm() {
+  begin_scenario 'the fake VM runs real new, show, and path commands' || return 0
+  CMUX_MODE=down SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  rm -f "$TEST_ROOT/remote-new"
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
+  check "$([[ $WT_RC -eq 0 && $(git -C "$TEST_ROOT/remote/repo/.worktrees/task" branch --show-current) == wt/task ]] && echo yes)" 'real VM new did not create a Git worktree'
+  invoke_wt -H fakevm show task -r "$TEST_ROOT/remote/repo" --json
+  check "$([[ $WT_RC -eq 0 ]] && jq -e --arg repo "$TEST_ROOT/remote/repo" '.name == "task" and .repo == $repo and .branch == "wt/task"' <<<"$WT_OUT" >/dev/null && echo yes)" 'real VM show did not report the created task'
+  invoke_wt -H fakevm path task -r "$TEST_ROOT/remote/repo"
+  assert_eq 'real VM path returns the worktree path' "$TEST_ROOT/remote/repo/.worktrees/task" "$WT_OUT"
+  invoke_wt -H fakevm path missing -r "$TEST_ROOT/remote/repo"
+  check "$([[ $WT_RC -eq 1 && $WT_OUT == *"no worktree named 'missing'"* ]] && echo yes)" 'real VM path did not reject a missing task'
+  rm "$TEST_ROOT/remote-new"
+  CMUX_MODE=alive
+  end_scenario
+}
+scenario_real_vm
 
 scenario_prompt_order() {
   begin_scenario 'remote briefs preserve explicit and stdin argument order' || return 0
@@ -417,6 +437,7 @@ scenario_prompt_order() {
       interleaved) args=(--prompt-stdin -p explicit --prompt-stdin); expected='second brief' ;;
     esac
     printf 'stdin brief\0second brief\0' >"$TEST_ROOT/brief-input"
+    rm -f "$TEST_ROOT/remote-new"
     invoke_wt -H fakevm new task -r wt-demo --no-workspace "${args[@]}" <"$TEST_ROOT/brief-input"
     assert_eq "$order creation status" 0 "$WT_RC"
     assert_eq "$order saved brief" "$expected" "$(cat "$TEST_ROOT/remote/repo/.git/wt/task.prompt")"

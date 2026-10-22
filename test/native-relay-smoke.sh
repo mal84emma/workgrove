@@ -19,27 +19,12 @@ export ROW_ID=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB NOTIFICATION_ID=AAAAAAAA-AAAA
 export BACKEND=cmux-tui REMOTE_EXISTS=0
 unset CMUX_NOTIFICATION_TITLE CMUX_NOTIFICATION_BODY CMUX_NOTIFICATION_SUBTITLE CMUX_NOTIFICATION_WORKSPACE_ID
 unset XDG_DATA_HOME   # the cmux-tui hook wrapper must find its default helper in the scratch home
-cat > "$TEST_ROOT/bin/cmux" <<'CMUX'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$CMUX_LOG"
-case "$1 ${2:-}" in
-  '--json list-windows') echo '[{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"}]' ;;
-  'workspace list')
-    [[ ${CMUX_ROWS_FAIL:-0} == 0 ]] || exit "$CMUX_ROWS_FAIL"
-    rows=$(jq -cn --arg w "$ROW_ID" --arg b "$BACKEND" '{workspaces:[{id:$w,title:"task",description:"@test-vm · repo",remote:{enabled:true,destination:"test-vm",backend:$b}}]}')
-    if [[ ${CMUX_ROWS_ARRIVING:-0} == 1 ]]; then
-      if [[ -e $CMUX_ROWS_COUNTER ]]; then
-        rows=$(jq -c '.workspaces += [{id:"arrived-row",title:"new-task",description:"@test-vm · repo",remote:{enabled:true,destination:"test-vm"}}]' <<<"$rows")
-      fi
-      : >"$CMUX_ROWS_COUNTER"
-    fi
-    printf '%s\n' "$rows" ;;
-  '--json list-notifications') cat "$RECORD_FILE" ;;
-  'ssh test-vm') [[ ${CMUX_SSH_FAIL:-0} == 0 ]] || exit "$CMUX_SSH_FAIL"; echo workspace:99 ;;
-  'workspace-action --workspace') [[ ${CMUX_TAG_FAIL:-0} == 0 ]] || exit 1 ;;
-esac
-exit 0
-CMUX
+# shellcheck source=test/fakes/rows.sh
+source "$REPO/test/fakes/rows.sh"
+fake_cmux_init "$TEST_ROOT/cmux-state"
+: >"$FAKE_CMUX_STATE/native-log"
+ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/bin/cmux"
+CMUX_LOG="$FAKE_CMUX_STATE/calls.log"
 cat > "$TEST_ROOT/bin/code" <<'CODE'
 #!/bin/sh
 printf '%s\n' "$*" >> "$CODE_LOG"
@@ -59,10 +44,26 @@ chmod +x "$TEST_ROOT/bin/"*
 export CMUX_AUTOMATION_EVENT_JSON
 CMUX_AUTOMATION_EVENT_JSON=$(jq -cn --arg w "$ROW_ID" --arg i "$NOTIFICATION_ID" '{name:"notification.created",workspace_id:$w,payload:{notification_id:$i,title:null,body:null,redacted_fields:["title","body"]}}')
 record() {
-  jq -cn --arg w "${3:-$ROW_ID}" --arg i "${4:-$NOTIFICATION_ID}" --arg t "$1" --arg b "$2" '[{id:$i,workspace_id:$w,title:$t,body:$b}]' > "$RECORD_FILE"
+  jq -c --arg w "${3:-$ROW_ID}" --arg i "${4:-$NOTIFICATION_ID}" --arg t "$1" --arg b "$2" '[.[0] | .id=$i | .workspace_id=$w | .title=$t | .body=$b]' "$FAKE_CMUX_FIXTURES/notifications.json" > "$RECORD_FILE"
   : > "$CMUX_LOG"; : > "$CODE_LOG"
+  prepare_cmux
 }
-hook() { bash "$REPO/bin/cmux-hook" --event </dev/null; }
+prepare_cmux() {
+  local rows
+  rows=$(fake_rows "$(fake_row "$ROW_ID" task '@test-vm · repo' test-vm connected "$BACKEND")")
+  if [[ ${CMUX_ROWS_ARRIVING:-0} == 1 ]]; then
+    fake_queue workspace-list "$rows"
+    rows=$(fake_rows "$(fake_row "$ROW_ID" task '@test-vm · repo' test-vm connected "$BACKEND")" \
+      "$(fake_row arrived-row new-task '@test-vm · repo' test-vm)")
+  fi
+  printf '%s' "$rows" >"$FAKE_CMUX_STATE/rows.json"
+  cp "$RECORD_FILE" "$FAKE_CMUX_STATE/notifications.json"
+  rm -f "$FAKE_CMUX_STATE/fail/workspace-list" "$FAKE_CMUX_STATE/fail/ssh" "$FAKE_CMUX_STATE/fail/workspace-action"
+  if [[ ${CMUX_ROWS_FAIL:-0} != 0 ]]; then fake_failure workspace-list "$CMUX_ROWS_FAIL"; fi
+  if [[ ${CMUX_SSH_FAIL:-0} != 0 ]]; then fake_failure ssh "$CMUX_SSH_FAIL"; fi
+  if [[ ${CMUX_TAG_FAIL:-0} != 0 ]]; then fake_failure workspace-action 1; fi
+}
+hook() { prepare_cmux; bash "$REPO/bin/cmux-hook" --event </dev/null; }
 has() { if grep -qF -- "$2" "$1"; then pass; else fail "missing '$2' in $1"; fi; }
 lacks() { if grep -qF -- "$2" "$1"; then fail "unexpected '$2' in $1"; else pass; fi; }
 printf 'Host test-vm\n' > "$HOME/.ssh/config"
@@ -93,7 +94,7 @@ scenario_reattachment() {
   begin_scenario 'reattachment replaces the previous transport and repeated requests survive content suppression' || return 0
   cmux_bin() { printf '%s' "$TEST_ROOT/bin/cmux"; }
   warn() { printf '%s\n' "$*" >&2; }
-  export RELAY_STATE="$TEST_ROOT/session-env" RELAY_REQUESTS="$TEST_ROOT/requests.jsonl" RELAY_DELIVERED="$TEST_ROOT/delivered.jsonl"
+  export RELAY_STATE="$TEST_ROOT/session-env" RELAY_REQUESTS="$FAKE_CMUX_STATE/notify.requests.jsonl" RELAY_DELIVERED="$FAKE_CMUX_STATE/notify.delivered.jsonl"
   mkdir -p "$RELAY_STATE"
   cat > "$TEST_ROOT/bin/tmux" <<'TMUX'
 #!/usr/bin/env bash
@@ -116,18 +117,8 @@ case "$1" in
 esac
 exit 0
 TMUX
-  cat > "$TEST_ROOT/bin/cmux-tui" <<'TUI'
-#!/usr/bin/env bash
-while [[ $# -gt 0 ]]; do
-  case $1 in --title) title=$2; shift ;; --body) body=$2; shift ;; esac
-  shift
-done
-jq -cn --arg t "$title" --argjson b "$body" '{title:$t,body:$b}' >> "$RELAY_REQUESTS"
-# cmux's earlier five-second content gate also returns success for suppressed requests.
-if [[ -f $RELAY_STATE/last-content && $(cat "$RELAY_STATE/last-content") == "$title|$body" ]]; then exit 0; fi
-printf '%s' "$title|$body" > "$RELAY_STATE/last-content"
-tail -n 1 "$RELAY_REQUESTS" >> "$RELAY_DELIVERED"
-TUI
+  ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/bin/cmux-tui"
+  : >"$FAKE_CMUX_STATE/notify-dedupe"
   chmod +x "$TEST_ROOT/bin/tmux" "$TEST_ROOT/bin/cmux-tui"
   printf '%s' 127.0.0.1:9999 > "$RELAY_STATE/CMUX_SOCKET_PATH"
   printf '%s' AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA > "$RELAY_STATE/CMUX_WORKSPACE_ID"
@@ -181,11 +172,10 @@ scenario_shared_creation
 scenario_lookup_race() {
   begin_scenario 'native attach selects a row that arrived after event validation' || return 0
   record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"new-task"}'
-  CMUX_ROWS_ARRIVING=1 CMUX_ROWS_COUNTER="$TEST_ROOT/row-snapshot" hook >/dev/null
+  CMUX_ROWS_ARRIVING=1 hook >/dev/null
   has "$CMUX_LOG" 'workspace select arrived-row'
   lacks "$CMUX_LOG" 'ssh test-vm'
   has "$CMUX_LOG" 'dismiss-notification'
-  rm "$TEST_ROOT/row-snapshot"
   end_scenario
 }
 scenario_lookup_race

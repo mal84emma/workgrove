@@ -1405,36 +1405,17 @@ sys.exit(subprocess.run(["/bin/sh", "-c", sys.argv[-1]], env=environment, check=
         uname.write_text("#!/bin/sh\nprintf 'Darwin\\n'\n")
         uname.chmod(0o700)
         cmux = tools / "cmux"
-        cmux.write_text(f'''#!{sys.executable}
-import json, os, pathlib, sys
-args = sys.argv[1:]
-path = pathlib.Path(os.environ["TRANSPORT_ROWS"])
-rows = json.loads(path.read_text()) if path.exists() else []
-with open(os.environ["TRANSPORT_CMUX_LOG"], "a") as stream:
-    stream.write(json.dumps(args) + "\\n")
-if args[0] == "--json":
-    print('[{{"id":"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"}}]')
-elif args[:2] == ["workspace", "list"]:
-    print(json.dumps({{"workspaces":rows}}))
-elif args[:2] == ["workspace", "close"]:
-    rows = [row for row in rows if row["id"] != args[2]]
-elif args[0] == "ssh":
-    identity = "workspace:" + str(len(rows) + 1)
-    rows.append({{"id":identity, "title":args[args.index("--name") + 1],
-                 "description":"", "remote":{{"enabled":True,"destination":args[1],"state":"connected"}}}})
-    print(identity)
-elif args[0] == "workspace-action" and "--description" in args:
-    for row in rows:
-        if row["id"] == args[args.index("--workspace") + 1]:
-            row["description"] = args[args.index("--description") + 1]
-path.write_text(json.dumps(rows))
-''')
-        cmux.chmod(0o700)
+        cmux.symlink_to(REPO / "test/fakes/cmux")
+        state = self.base / "cmux-state"
+        subprocess.run([str(self.tools / "bash"), "-c",
+                        'source "$1/test/fakes/rows.sh"; fake_cmux_init "$2"',
+                        "fake-cmux", str(REPO), str(state)], env=self.env, check=True)
+        (state / "mutate").touch()
         tmux = self.tools / "tmux"
         tmux.write_text("#!/bin/sh\ncase \"$1\" in has-session) echo 'no server running on /tmp/synthetic-tmux' >&2; exit 1;; esac\nexit 0\n")
         environment = dict(self.env, HOME=str(local), PATH=str(tools) + ":" + self.env["PATH"],
                            TRANSPORT_HOME=str(self.home), TRANSPORT_LOG=str(self.base / "transport.log"),
-                           TRANSPORT_ROWS=str(self.base / "rows.json"), TRANSPORT_CMUX_LOG=str(self.base / "cmux.log"))
+                           FAKE_CMUX_STATE=str(state), CMUX_BUNDLED_CLI_PATH=str(cmux))
         return environment
 
     def remote(self, environment, *args, ok=True, brief=None):
@@ -1546,19 +1527,19 @@ sys.exit(1)
             self.assertTrue(json.loads(self.remote(environment, "doctor", "--json").stdout)["ready"])
             records = json.loads(self.remote(environment, "list", "--json", "-r", str(project)).stdout)
             self.assertTrue(set(names) <= {record["name"] for record in records})
-            before = (self.base / "rows.json").read_text() if (self.base / "rows.json").exists() else "[]"
+            before = (self.base / "cmux-state/rows.json").read_text() if (self.base / "cmux-state/rows.json").exists() else "[]"
             refusal = self.remote(environment, "attach", names[0], "-r", str(project), ok=False)
             self.assertIn("--restart-agent", refusal.stderr)
-            self.assertEqual((self.base / "rows.json").read_text(), before)
+            self.assertEqual((self.base / "cmux-state/rows.json").read_text(), before)
             self.remote(environment, "attach", names[0], "-r", str(project), "--restart-agent")
-            rows = json.loads((self.base / "rows.json").read_text())
+            rows = json.loads((self.base / "cmux-state/rows.json").read_text())["workspaces"]
             self.assertTrue(any(row["title"] == names[0] and row["description"] == "@test-host · project" for row in rows))
             self.assertFalse(any(row["title"] == names[1] for row in rows))
             metadata = json.loads((project / ".git/wt" / (names[0] + ".json")).read_text())
             self.assertEqual(metadata["agent"], "claude")
             self.assertEqual(metadata["model"], "test-model")
             self.assertEqual(changed.read_text(), "Uncommitted task work.\n")
-        commands = [json.loads(line) for line in (self.base / "cmux.log").read_text().splitlines()]
+        commands = [line.split() for line in (self.base / "cmux-state/calls.log").read_text().splitlines()]
         ssh_rows = [command for command in commands if command[0] == "ssh"]
         self.assertEqual(len(ssh_rows), 2)
         self.assertTrue(all("--no-focus" in command for command in ssh_rows))

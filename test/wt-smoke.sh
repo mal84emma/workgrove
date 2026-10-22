@@ -346,81 +346,62 @@ set_line() {
 # Each of those characters is a way for a shell to mangle a string that it must only carry.
 PROMPT_FIXTURE=$'first "line": $HOME `date` \'quoted\' back\\slash\nsecond line: café — ünïcode ✓'
 
-# stub_cmux dead|alive: cmux_bin prefers $CMUX_BUNDLED_CLI_PATH when it is executable. So
-# this setting alone decides what cmux_ok believes. "dead" logs its argv and exits 1, like a cmux that is not
-# running. "alive" answers ping with 0 and serves $WT_ROWS for `workspace list --json`. Both truncate the
-# log, so assert_cmux_calls always reads the calls of one scenario only.
+# Each scenario configures the shared fake through its scratch state folder.
+# shellcheck source=test/fakes/rows.sh
+source "$REPO/test/fakes/rows.sh"
+fake_cmux_init "$TEST_ROOT/cmux-state"
 CMUX_DEAD="$TEST_ROOT/cmux-dead/cmux"
 CMUX_ALIVE="$TEST_ROOT/cmux-alive/cmux"
 WT_STUB="$CMUX_DEAD"
-WT_ROWS="$TEST_ROOT/rows.json"
-WT_WINDOWS="$TEST_ROOT/windows.txt"          # what `cmux list-windows` prints; empty means a one-window cmux
-WT_ROWS_DIR="$TEST_ROOT/rows-by-window"      # <window uuid>.json: the rows `workspace list --window` serves
-mkdir -p "$(dirname "$CMUX_DEAD")" "$(dirname "$CMUX_ALIVE")" "$WT_ROWS_DIR"
-cat >"$CMUX_DEAD" <<'STUB'
-#!/bin/sh
-printf '%s\n' "$*" >>"$CMUX_STUB_LOG"
-if [ "${CMUX_STUB_FAIL_PING:-}" = 1 ]; then echo 'Error: socket access denied' >&2
-else echo 'Error: Socket not found at /tmp/stub-cmux' >&2; fi
-exit 1
-STUB
-cat >"$CMUX_ALIVE" <<'STUB'
-#!/bin/sh
-printf '%s\n' "$*" >>"$CMUX_STUB_LOG"
-if [ "$1" = ping ]; then exit 0; fi
-if [ "$1" = workspace ] && [ "$2" = close ] && [ "${CMUX_STUB_AGENTS:-0}" -gt 0 ] && [ "${4:-}" != --force ]; then
-  echo 'Error: confirmation_required: Workspace has a running process; retry with --force' >&2
-  exit 1
-fi
-if [ "$1" = workspace ] && [ "$2" = close ] && [ "${CMUX_STUB_FAIL_CLOSE:-}" = 1 ]; then
-  echo 'Error: socket access denied' >&2
-  exit 1
-fi
-if [ "$1" = top ]; then
-  if [ "${CMUX_STUB_FAIL_TOP:-}" = 1 ]; then exit 1; fi
-  if [ "${CMUX_STUB_BAD_TOP:-}" = 1 ]; then echo '{"coding_agents":[{}]}'; exit 0; fi
-  n="${CMUX_STUB_AGENTS:-0}"   # each row in CMUX_STUB_BUSY_ROWS runs an agent of its own
-  case " ${CMUX_STUB_BUSY_ROWS:-} " in *" $3 "*) n=1 ;; esac
-  printf '{"caller":{"workspace_id":"%s"},"coding_agents":[{"resources":{"process_count":%s}}]}\n' "${CMUX_STUB_CALLER:-other-row}" "$n"
-  exit 0
-fi
-if [ "$1 ${2:-}" = "--json list-windows" ]; then
-  if [ "${CMUX_STUB_FAIL_WINDOWS:-}" = 1 ]; then exit 1; fi
-  if [ "${CMUX_STUB_BAD_WINDOWS:-}" = 1 ]; then echo 'unrecognized window output'; exit 0; fi
-  if [ -s "$CMUX_STUB_WINDOWS" ]; then cat "$CMUX_STUB_WINDOWS"; else echo '[]'; fi
-  exit 0
-fi
-if [ "$1" = workspace ] && [ "$2" = list ]; then
-  w=""; prev=""
-  for a in "$@"; do if [ "$prev" = --window ]; then w="$a"; fi; prev="$a"; done
-  if [ -n "${CMUX_STUB_EMPTY_LIST:-}" ] && [ "$CMUX_STUB_EMPTY_LIST" = "$w" ]; then exit 0; fi
-  if [ -n "${CMUX_STUB_FAIL_LIST:-}" ] && { [ "$CMUX_STUB_FAIL_LIST" = all ] || [ "$CMUX_STUB_FAIL_LIST" = "$w" ]; }; then exit 1; fi
-  if [ -z "$w" ]; then
-    cat "$CMUX_STUB_ROWS"
-  elif [ -f "$CMUX_STUB_ROWS_DIR/$w.json" ]; then cat "$CMUX_STUB_ROWS_DIR/$w.json"
-  else echo '{"workspaces":[]}'
+WT_ROWS="$FAKE_CMUX_STATE/rows.json"
+WT_WINDOWS="$FAKE_CMUX_STATE/windows.json"
+WT_ROWS_DIR="$FAKE_CMUX_STATE/rows"
+mkdir -p "$(dirname "$CMUX_DEAD")" "$(dirname "$CMUX_ALIVE")"
+ln -s "$REPO/test/fakes/cmux" "$CMUX_DEAD"
+ln -s "$REPO/test/fakes/cmux" "$CMUX_ALIVE"
+rm "$FAKE_CMUX_STATE/calls.log"
+ln -s "$CMUX_LOG" "$FAKE_CMUX_STATE/calls.log"
+
+prepare_cmux() {
+  local assignment row key
+  local CMUX_STUB_FAIL_PING=0 CMUX_STUB_AGENTS=0 CMUX_STUB_CALLER=other-row CMUX_STUB_BUSY_ROWS=''
+  local CMUX_STUB_FAIL_TOP=0 CMUX_STUB_BAD_TOP=0 CMUX_STUB_FAIL_WINDOWS=0 CMUX_STUB_BAD_WINDOWS=0
+  local CMUX_STUB_FAIL_LIST='' CMUX_STUB_EMPTY_LIST='' CMUX_STUB_FAIL_CLOSE=0
+  for assignment in "${WT_RELAY_ENV[@]}"; do local "$assignment"; done
+  rm -f "$FAKE_CMUX_STATE/fail/"* "$FAKE_CMUX_STATE/top/"*.json
+  if [[ $WT_STUB == "$CMUX_DEAD" ]]; then
+    local error='Error: Socket not found at /tmp/stub-cmux'
+    [[ $CMUX_STUB_FAIL_PING != 1 ]] || error='Error: socket access denied'
+    fake_failure all 1 "$error"
   fi
-  exit 0
-fi
-if [ "$1" = read-screen ]; then
-  if [ -f "$CMUX_STUB_SCREEN_DELAY" ]; then
-    cat "$CMUX_STUB_SCREEN_DELAY"
-    rm -f "$CMUX_STUB_SCREEN_DELAY"
-  else
-    cat "$CMUX_STUB_SCREEN"
+  fake_top "$CMUX_STUB_CALLER" "$CMUX_STUB_AGENTS" >"$FAKE_CMUX_STATE/top.json"
+  mkdir -p "$FAKE_CMUX_STATE/top"
+  for row in $CMUX_STUB_BUSY_ROWS; do
+    fake_top "$CMUX_STUB_CALLER" 1 >"$FAKE_CMUX_STATE/top/$row.json"
+  done
+  if [[ $CMUX_STUB_FAIL_TOP == 1 ]]; then fake_failure top 1; fi
+  if [[ $CMUX_STUB_BAD_TOP == 1 ]]; then printf '{"coding_agents":[{}]}' >"$FAKE_CMUX_STATE/top.json"; fi
+  if [[ $CMUX_STUB_FAIL_WINDOWS == 1 ]]; then fake_failure list-windows 1; fi
+  if [[ $CMUX_STUB_BAD_WINDOWS == 1 ]]; then fake_queue list-windows 'unrecognized window output'; fi
+  if [[ -n $CMUX_STUB_FAIL_LIST ]]; then
+    key=workspace-list
+    [[ $CMUX_STUB_FAIL_LIST == all ]] || key+=--$CMUX_STUB_FAIL_LIST
+    fake_failure "$key" 1
   fi
-  if [ -f "$CMUX_STUB_NONCE" ]; then
-    if [ ! -f "$CMUX_STUB_NONCE_STALE" ]; then cat "$CMUX_STUB_NONCE"; fi
-    rm -f "$CMUX_STUB_NONCE"
+  if [[ -n $CMUX_STUB_EMPTY_LIST ]]; then fake_queue "workspace-list--$CMUX_STUB_EMPTY_LIST" ''; fi
+  if [[ $CMUX_STUB_FAIL_CLOSE == 1 ]]; then fake_failure workspace-close 1 'Error: socket access denied'; fi
+  if ((CMUX_STUB_AGENTS > 0)); then
+    printf 'Error: confirmation_required: Workspace has a running process; retry with --force\n' >"$FAKE_CMUX_STATE/close-confirmation"
+  else rm -f "$FAKE_CMUX_STATE/close-confirmation"; fi
+  if [[ -f $TEST_ROOT/cmux-send-fail ]]; then fake_failure send 1; fi
+  if [[ -f $TEST_ROOT/native-fail ]]; then fake_failure notify 1; fi
+  if [[ -f $TEST_ROOT/remote-screen ]]; then cp "$TEST_ROOT/remote-screen" "$FAKE_CMUX_STATE/read-screen.json"; fi
+  if [[ -f $TEST_ROOT/remote-screen-delay ]]; then
+    fake_queue read-screen "$(cat "$TEST_ROOT/remote-screen-delay")"
+    rm "$TEST_ROOT/remote-screen-delay"
   fi
-  exit 0
-fi
-if [ "$1" = send ] && [ -f "$CMUX_STUB_SEND_FAIL" ]; then exit 1; fi
-echo "workspace:99"
-exit 0
-STUB
-chmod +x "$CMUX_DEAD" "$CMUX_ALIVE"
-printf '{"workspaces":[]}\n' >"$WT_ROWS"
+}
+
 stub_cmux() {
   case "$1" in
     dead)  WT_STUB="$CMUX_DEAD" ;;
@@ -432,7 +413,7 @@ stub_cmux() {
   # guard_scratch_root checks this path, like every other path that this suite destroys. This is the only
   # rm in the file that takes a glob. The header promises that every path goes through guard_scratch_root
   # before anything is removed.
-  : >"$WT_WINDOWS"; guard_scratch_root "$WT_ROWS_DIR"; rm -f "$WT_ROWS_DIR"/*.json
+  fake_windows >"$WT_WINDOWS"; guard_scratch_root "$WT_ROWS_DIR"; rm -f "$WT_ROWS_DIR"/*.json
 }
 
 # stub_windows <window uuid…>: writes what `cmux list-windows` prints, in cmux's own format, and an empty
@@ -442,7 +423,7 @@ stub_cmux() {
 # The window IDs must have UUID format, because the adapter validates them before querying each window.
 stub_windows() {
   local u
-  printf '%s\n' "$@" | jq -Rsc 'split("\n")[:-1] | to_entries | map({id:.value, index:.key})' >"$WT_WINDOWS"
+  fake_windows "$@" >"$WT_WINDOWS"
   for u in "$@"; do
     printf '{"workspaces":[]}\n' >"$WT_ROWS_DIR/$u.json"
   done
@@ -485,17 +466,16 @@ WT_RELAY_ENV=()     # a scenario can simulate a VM row against the stub cmux, ne
 WT_EXTRA=""        # machine-wide agent args for model precedence checks
 wt_run() {
   WT_RC=0
+  prepare_cmux
   WT_OUT="$(cd "${WT_CWD:-$TEST_ROOT}" \
     && env -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u CMUX_WORKSPACE_ID -u CMUX_TUI_SOCKET -u CMUX_TUI_TERMINAL_ID -u CMUX_TUI_SESSION_ID \
            -u WT_AGENT -u WT_AGENT_ARGS -u WT_HOST \
            -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT \
            HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" \
            WT_REPOS_DIR="$REPOS_DIR" CMUX_BUNDLED_CLI_PATH="$WT_STUB" \
-           CMUX_STUB_LOG="$CMUX_LOG" CMUX_STUB_ROWS="$WT_ROWS" AGENT_ARGV_LOG="$AGENT_LOG" \
-           CMUX_STUB_WINDOWS="$WT_WINDOWS" CMUX_STUB_ROWS_DIR="$WT_ROWS_DIR" \
-           CMUX_STUB_SCREEN="$TEST_ROOT/remote-screen" CMUX_STUB_SCREEN_DELAY="$TEST_ROOT/remote-screen-delay" \
-           CMUX_STUB_NONCE="$TEST_ROOT/remote-tmux-nonce" CMUX_STUB_NONCE_STALE="$TEST_ROOT/remote-tmux-nonce-stale" \
-           CMUX_STUB_SEND_FAIL="$TEST_ROOT/cmux-send-fail" \
+           FAKE_CMUX_STATE="$FAKE_CMUX_STATE" CMUX_STUB_LOG="$CMUX_LOG" AGENT_ARGV_LOG="$AGENT_LOG" \
+           CMUX_STUB_NONCE="$FAKE_CMUX_STATE/screen-append" \
+           FAKE_VM_WT="$WT" FAKE_VM_REPO="$TEST_ROOT/vm/project" FAKE_VM_BIN="$TEST_ROOT/vm-bin" \
            REMOTE_LOG="$TEST_ROOT/remote-log" \
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
            REMOTE_WT_SESSION="${REMOTE_WT_SESSION:-wt-project-task}" \
@@ -932,11 +912,12 @@ SHIM
   assert_grep "native request names the socket and terminal" "$CMUX_LOG" "--socket /tmp/native notify --surface term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --title wt-open"
   assert_lacks "native request does not use a Mac workspace ID" "$(cat "$CMUX_LOG")" "--workspace"
   rm "$FAKE_BIN/cmux-tui"
-  ln -s "$CMUX_DEAD" "$FAKE_BIN/cmux-tui"
+  ln -s "$CMUX_ALIVE" "$FAKE_BIN/cmux-tui"
+  : >"$TEST_ROOT/native-fail"
   assert_wt_fails 1 "cmux-tui notify failed" open a1 -r "$ra"
   assert_has "VM gives the manual command on relay failure" "$WT_OUT" "Run on the Mac: wt -H fakevm open -r $ra a1"
   assert_lacks "VM does not report a successful request" "$WT_OUT" "requested VS Code on the Mac:"
-  rm "$FAKE_BIN/cmux-tui"
+  rm "$FAKE_BIN/cmux-tui" "$TEST_ROOT/native-fail"
   WT_RELAY_ENV=()
   REPOS_DIR="$saved"
   end_scenario
@@ -1477,42 +1458,24 @@ scenario_cmux() {
 
   # running, and the row that this name would take, with this repo's basename, belongs to another repo
   stub_cmux alive
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[
-  {"id":"workspace:1","title":"taken","description":"@local · $id","current_directory":"$REPOS_DIR"}
-]}
-ROWS
+  fake_rows "$(fake_row "workspace:1" "taken" "@local · $id" | jq -c --arg directory "$REPOS_DIR" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_fails 1 "row 'taken @local · $id' already belongs to" new taken --no-workspace -r "$r"
   assert_gone "…and refuses before it makes anything" "$r/.worktrees/taken"
 
   # …and the same for a row that an older wt titled "<repo>:<name>", which still counts as that task's row
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[
-  {"id":"workspace:1","title":"$id:oldtaken","description":"@local","current_directory":"$REPOS_DIR"}
-]}
-ROWS
+  fake_rows "$(fake_row "workspace:1" "$id:oldtaken" "@local" | jq -c --arg directory "$REPOS_DIR" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_fails 1 "row '$id:oldtaken @local' already belongs to" new oldtaken --no-workspace -r "$r"
   assert_gone "…and refuses before it makes anything" "$r/.worktrees/oldtaken"
 
   # Two rows share a title, and only the host tells them apart. With no host asked for, the local row
   # answers. Here the local row is this repo's own, so the name is free.
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[
-  {"id":"workspace:1","title":"dup","description":"@vm1 · $id",
-   "remote":{"enabled":true,"destination":"vm1"},"current_directory":"$REPOS_DIR"},
-  {"id":"workspace:2","title":"dup","description":"@local · $id","current_directory":"$r"}
-]}
-ROWS
+  fake_rows "$(fake_row "workspace:1" "dup" "@vm1 · $id" "vm1" "connected" "cmux-tui" "null" | jq -c --arg directory "$REPOS_DIR" '.current_directory=$directory')" \
+    "$(fake_row "workspace:2" "dup" "@local · $id" | jq -c --arg directory "$r" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_ok "the local row is the one consulted" new dup --no-workspace -r "$r"
 
   # …and the other way round, to show the @host row is not what answered above
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[
-  {"id":"workspace:1","title":"swap","description":"@vm1 · $id",
-   "remote":{"enabled":true,"destination":"vm1"},"current_directory":"$r"},
-  {"id":"workspace:2","title":"swap","description":"@local · $id","current_directory":"$REPOS_DIR"}
-]}
-ROWS
+  fake_rows "$(fake_row "workspace:1" "swap" "@vm1 · $id" "vm1" "connected" "cmux-tui" "null" | jq -c --arg directory "$r" '.current_directory=$directory')" \
+    "$(fake_row "workspace:2" "swap" "@local · $id" | jq -c --arg directory "$REPOS_DIR" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_fails 1 "row 'swap @local · $id' already belongs to" new swap --no-workspace -r "$r"
   assert_gone "…and again refuses before it makes anything" "$r/.worktrees/swap"
 
@@ -1524,11 +1487,7 @@ ROWS
   stub_cmux alive
   stub_windows "$w1" "$w2"
   printf '{"workspaces":[]}\n' >"$WT_ROWS"     # empty: a one-window list is what this scenario must NOT rely on
-  cat >"$WT_ROWS_DIR/$w2.json" <<ROWS
-{"workspaces":[
-  {"id":"row-in-window-two","title":"moved","description":"@local · $id","current_directory":"$REPOS_DIR"}
-]}
-ROWS
+  fake_rows "$(fake_row "row-in-window-two" "moved" "@local · $id" | jq -c --arg directory "$REPOS_DIR" '.current_directory=$directory')" >"$WT_ROWS_DIR/$w2.json"
   assert_wt_fails 1 "row 'moved @local · $id' already belongs to" new moved --no-workspace -r "$r"
   assert_gone "…and makes nothing, though the row is in the other window" "$r/.worktrees/moved"
   assert_has "…having enumerated the windows to find it" "$(cat "$CMUX_LOG")" "list-windows"
@@ -1538,19 +1497,13 @@ ROWS
   stub_windows "$w1" "$w2"
   printf '{"workspaces":[]}\n' >"$WT_ROWS"
   assert_wt_ok "a worktree whose row is in the other window" new elsewhere --no-workspace -r "$r"
-  cat >"$WT_ROWS_DIR/$w2.json" <<ROWS
-{"workspaces":[
-  {"id":"row-in-window-two","title":"elsewhere","description":"@local · $id","current_directory":"$r"}
-]}
-ROWS
+  fake_rows "$(fake_row "row-in-window-two" "elsewhere" "@local · $id" | jq -c --arg directory "$r" '.current_directory=$directory')" >"$WT_ROWS_DIR/$w2.json"
   assert_wt_ok "wt rm removes it" rm elsewhere -r "$r"
   assert_has "…and closed the row it could not have seen before" "$(cat "$CMUX_LOG")" \
              "workspace close row-in-window-two"
 
   assert_wt_ok "a worktree in the selected window" new selected --no-workspace -r "$r"
-  cat >"$WT_ROWS_DIR/$w1.json" <<ROWS
-{"workspaces":[{"id":"selected-window-row","title":"selected","description":"@local · $id"}]}
-ROWS
+  fake_rows "$(fake_row "selected-window-row" "selected" "@local · $id")" >"$WT_ROWS_DIR/$w1.json"
   assert_wt_ok "wt rm finds the selected window after its marker" rm selected -r "$r"
   assert_has "the selected window's row closed" "$(cat "$CMUX_LOG")" "workspace close selected-window-row"
   assert_gone "the selected window's worktree was removed" "$r/.worktrees/selected"
@@ -1560,9 +1513,7 @@ ROWS
   assert_wt_ok "wt new custom" new custom --no-workspace -r "$r"
   jq '.title = "renamed"' "$r/.git/wt/custom.json" >"$r/.git/wt/custom.json.tmp"
   mv "$r/.git/wt/custom.json.tmp" "$r/.git/wt/custom.json"
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"custom-row","title":"renamed","description":"@local · $id","current_directory":"$r"}]}
-ROWS
+  fake_rows "$(fake_row "custom-row" "renamed" "@local · $id" | jq -c --arg directory "$r" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_ok "wt rm uses the saved title" rm custom -r "$r"
   assert_has "…and closes the renamed row" "$(cat "$CMUX_LOG")" "workspace close custom-row"
 
@@ -1572,12 +1523,8 @@ ROWS
   r2="$(new_repo other)"
   id2="$(basename "$r2")"
   stub_cmux alive
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[
-  {"id":"row-of-other","title":"same","description":"@local · $id2","current_directory":"$r2/.worktrees/same"},
-  {"id":"row-of-this","title":"same","description":"@local · $id","current_directory":"$r/.worktrees/same"}
-]}
-ROWS
+  fake_rows "$(fake_row "row-of-other" "same" "@local · $id2" | jq -c --arg directory "$r2/.worktrees/same" '.current_directory=$directory')" \
+    "$(fake_row "row-of-this" "same" "@local · $id" | jq -c --arg directory "$r/.worktrees/same" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_ok "a task name that another repo uses is free here" new same --no-workspace -r "$r"
   assert_wt_ok "…and in the other repo" new same --no-workspace -r "$r2"
   assert_wt_ok "wt show same" show same -r "$r"
@@ -1605,9 +1552,7 @@ ROWS
   assert_wt_ok "wt attach dotted" attach dotted -r "$r3"
   assert_has "…puts the repo's id in the description" "$(cat "$CMUX_LOG")" \
              "workspace create --name dotted --description @local · $id3 --cwd"
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"dotted-row","title":"dotted","description":"@local · $id3","current_directory":"$r3/.worktrees/dotted"}]}
-ROWS
+  fake_rows "$(fake_row "dotted-row" "dotted" "@local · $id3" | jq -c --arg directory "$r3/.worktrees/dotted" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_ok "wt rm dotted" rm dotted -r "$r3"
   assert_has "…finds the row by the repo's id" "$(cat "$CMUX_LOG")" "workspace close dotted-row"
 
@@ -1618,9 +1563,7 @@ ROWS
   assert_wt_ok "wt new legacy" new legacy --no-workspace -r "$r"
   jq --arg t "$id:legacy" '.title = $t' "$r/.git/wt/legacy.json" >"$r/.git/wt/legacy.json.tmp"
   mv "$r/.git/wt/legacy.json.tmp" "$r/.git/wt/legacy.json"
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"legacy-row","title":"$id:legacy","description":"@local","current_directory":"$r/.worktrees/legacy"}]}
-ROWS
+  fake_rows "$(fake_row "legacy-row" "$id:legacy" "@local" | jq -c --arg directory "$r/.worktrees/legacy" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_ok "wt show legacy" show legacy -r "$r"
   assert_has "…prints the label in the new form" "$WT_OUT" "row:     legacy @local · $id"
   assert_wt_ok "wt rm legacy" rm legacy -r "$r"
@@ -1635,9 +1578,7 @@ ROWS
   assert_meta "$r" oldmeta title oldmeta
   # A row with the old title is this repo's, whatever its second line says.
   assert_wt_ok "wt new oldnote" new oldnote --no-workspace -r "$r"
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"oldnote-row","title":"$id:oldnote","description":"@local · my note","current_directory":"$r/.worktrees/oldnote"}]}
-ROWS
+  fake_rows "$(fake_row "oldnote-row" "$id:oldnote" "@local · my note" | jq -c --arg directory "$r/.worktrees/oldnote" '.current_directory=$directory')" >"$WT_ROWS"
   : >"$CMUX_LOG"
   assert_wt_ok "wt rm oldnote" rm oldnote -r "$r"
   assert_has "…closes the row with the old title and an edited second line" "$(cat "$CMUX_LOG")" "workspace close oldnote-row"
@@ -1647,12 +1588,8 @@ ROWS
   # A second line that names another repo is that repo's row, so wt rm does not check it.
   stub_cmux alive
   assert_wt_ok "wt new edited" new edited --no-workspace -r "$r"
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[
-  {"id":"other-repo-row","title":"edited","description":"@local · $id2","current_directory":"$r2"},
-  {"id":"edited-row","title":"edited","description":"@local · $id (waiting on review)","current_directory":"$r/.worktrees/edited"}
-]}
-ROWS
+  fake_rows "$(fake_row "other-repo-row" "edited" "@local · $id2" | jq -c --arg directory "$r2" '.current_directory=$directory')" \
+    "$(fake_row "edited-row" "edited" "@local · $id (waiting on review)" | jq -c --arg directory "$r/.worktrees/edited" '.current_directory=$directory')" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=1")
   assert_wt_fails 1 "an agent is running in cmux row edited-row" rm edited --force -r "$r"
   assert_dir "…and keeps the worktree" "$r/.worktrees/edited"
@@ -1664,9 +1601,7 @@ ROWS
   # With no agent in it, a row with a cleared second line stays open, because nothing shows whose row it is.
   WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0")
   assert_wt_ok "wt new cleared" new cleared --no-workspace -r "$r"
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"cleared-row","title":"cleared","description":"","current_directory":"$r/.worktrees/cleared"}]}
-ROWS
+  fake_rows "$(fake_row "cleared-row" "cleared" "" | jq -c --arg directory "$r/.worktrees/cleared" '.current_directory=$directory')" >"$WT_ROWS"
   : >"$CMUX_LOG"
   assert_wt_ok "wt rm cleared" rm cleared -r "$r"
   assert_lacks "…and leaves the row open" "$(cat "$CMUX_LOG")" "workspace close"
@@ -1678,52 +1613,41 @@ ROWS
   # checked, whatever its title and second line say.
   WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
   for line in "@local" "@local · wip"; do
-    cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"busy-row","title":"guarded","description":"$line","current_directory":"$guarded"}]}
-ROWS
+    fake_rows "$(fake_row "busy-row" "guarded" "$line" | jq -c --arg directory "$guarded" '.current_directory=$directory')" >"$WT_ROWS"
     assert_wt_fails 1 "an agent is running in cmux row busy-row, whose current directory is in this worktree" \
       rm guarded --force -r "$r"
   done
   # The check covers the worktree's subdirectories, and a directory that names the worktree through a symlink.
   ln -s "$guarded" "$TEST_ROOT/guarded-link"
   for line in "$guarded/src" "$TEST_ROOT/guarded-link"; do
-    cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"busy-row","title":"notes","description":"@local","current_directory":"$line"}]}
-ROWS
+    fake_rows "$(fake_row "busy-row" "notes" "@local" | jq -c --arg directory "$line" '.current_directory=$directory')" >"$WT_ROWS"
     assert_wt_fails 1 "an agent is running in cmux row busy-row, whose current directory is in this worktree" \
       rm guarded -r "$r"
   done
   # Two rows can name the task without an edit, for example after a local wt attach while its row was open.
   # An agent in the second row is another agent, and the refusal says so.
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"first-row","title":"guarded","description":"@local · $id"},{"id":"busy-row","title":"guarded","description":"@local · $id"}]}
-ROWS
+  fake_rows "$(fake_row "first-row" "guarded" "@local · $id")" \
+    "$(fake_row "busy-row" "guarded" "@local · $id")" >"$WT_ROWS"
   assert_wt_fails 1 "another agent is running in cmux row busy-row; kept the worktree" rm guarded -r "$r"
   # wt rm checks every row that may be the task's, in any order. Here the list has the caller's own row and an
   # idle row with the old title, each next to a busy row.
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"own-row","title":"guarded","description":""},{"id":"busy-row","title":"guarded","description":""}]}
-ROWS
+  fake_rows "$(fake_row "own-row" "guarded" "")" \
+    "$(fake_row "busy-row" "guarded" "")" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_CALLER=own-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
   assert_wt_fails 1 "an agent is running in cmux row busy-row" rm guarded -r "$r"
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"old-row","title":"$id:guarded","description":"@local"},{"id":"busy-row","title":"guarded","description":""}]}
-ROWS
+  fake_rows "$(fake_row "old-row" "$id:guarded" "@local")" \
+    "$(fake_row "busy-row" "guarded" "")" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
   assert_wt_fails 1 "an agent is running in cmux row busy-row" rm guarded -r "$r"
   assert_dir "…and keeps the worktree" "$guarded"
   # These rows are not checked: a row on another host, a row with another title, and a row in a sibling
   # worktree whose name starts with this one's. A row found only by its current directory is never closed.
   # Here, those are the caller's own driver row and an idle shell row.
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[
-  {"id":"vm-row","title":"guarded","description":"","remote":{"enabled":true,"destination":"somevm"}},
-  {"id":"notes-row","title":"notes","description":""},
-  {"id":"sibling-row","title":"guarded-tests","description":"@local · $id","current_directory":"$r/.worktrees/guarded-tests"},
-  {"id":"shell-row","title":"$id shell","description":"@local","current_directory":"$guarded/src"},
-  {"id":"driver-row","title":"driver","description":"@local","current_directory":"$guarded"}
-]}
-ROWS
+  fake_rows "$(fake_row "vm-row" "guarded" "" "somevm" "connected" "cmux-tui" "null")" \
+    "$(fake_row "notes-row" "notes" "")" \
+    "$(fake_row "sibling-row" "guarded-tests" "@local · $id" | jq -c --arg directory "$r/.worktrees/guarded-tests" '.current_directory=$directory')" \
+    "$(fake_row "shell-row" "$id shell" "@local" | jq -c --arg directory "$guarded/src" '.current_directory=$directory')" \
+    "$(fake_row "driver-row" "driver" "@local" | jq -c --arg directory "$guarded" '.current_directory=$directory')" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_CALLER=driver-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=vm-row notes-row sibling-row")
   : >"$CMUX_LOG"
   assert_wt_ok "wt rm guarded" rm guarded -r "$r"
@@ -1743,18 +1667,14 @@ ROWS
   WT_SANDBOX=""
   stub_cmux alive
   assert_wt_ok "wt new unsandboxed" new unsandboxed --no-workspace -r "$r"
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"sandbox-row","title":"unsandboxed","description":"@local · $id","current_directory":"$r"}]}
-ROWS
+  fake_rows "$(fake_row "sandbox-row" "unsandboxed" "@local · $id" | jq -c --arg directory "$r" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_ok "local teardown from the main checkout outside the sandbox" rm unsandboxed -r "$r"
   assert_has "local teardown closed the row" "$(cat "$CMUX_LOG")" "workspace close sandbox-row"
   WT_CWD=""
 
   for agent in claude codex; do
     assert_wt_ok "$agent test worktree" new "self-$agent" --no-workspace -r "$r"
-    cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"own-$agent","title":"self-$agent","description":"@local · $id","current_directory":"$r"}]}
-ROWS
+    fake_rows "$(fake_row "own-$agent" "self-$agent" "@local · $id" | jq -c --arg directory "$r" '.current_directory=$directory')" >"$WT_ROWS"
     WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=1")
     assert_wt_fails 1 "another agent is running" rm "self-$agent" --force -r "$r"
     assert_dir "another $agent agent kept the worktree" "$r/.worktrees/self-$agent"
@@ -1839,9 +1759,7 @@ exit 1
 STUB
   chmod +x "$fake/ssh" "$fake/tmux"
   # This row has the "<repo>:<name>" title of an older wt, so these checks also show that host_rm finds it.
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"active-vm-row","title":"$id:active-vm","remote":{"enabled":true,"destination":"smoke.invalid"}}]}
-ROWS
+  fake_rows "$(fake_row "active-vm-row" "$id:active-vm" "" "smoke.invalid" "connected" "cmux-tui" "null")" >"$WT_ROWS"
   WT_PATH_PREFIX="$fake" WT_RELAY_ENV=("CMUX_STUB_AGENTS=1")
   : >"$CMUX_LOG"
   assert_wt_fails 1 "another agent is running" -H smoke.invalid rm active-vm --force -r "$r"
@@ -1858,10 +1776,8 @@ ROWS
   assert_lacks "a failed remote probe cannot request removal" "$(cat "$CMUX_LOG")" "rm active-vm"
   # A VM row of another repo's task with the same name is not this task's row, so host_rm does not check its
   # agent. The refusal below comes from the VM's tmux session, not from that row.
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"other-vm-row","title":"active-vm","description":"@smoke.invalid · other-repo",
-  "remote":{"enabled":true,"destination":"smoke.invalid"}},{"id":"local-row","title":"active-vm","description":""}]}
-ROWS
+  fake_rows "$(fake_row "other-vm-row" "active-vm" "@smoke.invalid · other-repo" "smoke.invalid" "connected" "cmux-tui" "null")" \
+    "$(fake_row "local-row" "active-vm" "")" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=1" "VM_AGENT_ACTIVE=1")
   : >"$CMUX_LOG"
   assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
@@ -1870,9 +1786,7 @@ ROWS
   WT_PATH_PREFIX="" WT_RELAY_ENV=()
 
   assert_wt_ok "wt new close-failed" new close-failed --no-workspace -r "$r"
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"failed-row","title":"close-failed","description":"@local · $id","current_directory":"$r"}]}
-ROWS
+  fake_rows "$(fake_row "failed-row" "close-failed" "@local · $id" | jq -c --arg directory "$r" '.current_directory=$directory')" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_FAIL_CLOSE=1")
   wt_run rm close-failed -r "$r"
   assert_eq "row-close failure exits nonzero" "1" "$WT_RC"
@@ -1885,11 +1799,7 @@ ROWS
   # altogether. Such a cmux has no list-windows, or prints output that is not a window list. The stub_cmux
   # call below resets the stub to such a cmux.
   stub_cmux alive
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[
-  {"id":"workspace:1","title":"onewin","description":"@local · $id","current_directory":"$REPOS_DIR"}
-]}
-ROWS
+  fake_rows "$(fake_row "workspace:1" "onewin" "@local · $id" | jq -c --arg directory "$REPOS_DIR" '.current_directory=$directory')" >"$WT_ROWS"
   assert_wt_fails 1 "row 'onewin @local · $id' already belongs to" new onewin --no-workspace -r "$r"
   stub_cmux dead
   end_scenario
@@ -1943,19 +1853,50 @@ scenario_connected_attach() {
 printf 'ssh %s\n' "${cmd%%$'\n'*}" >>"$REMOTE_LOG"
 STUB
   make_fake_ssh "$fake/ssh" "$fake/ssh.fixture"
+  mkdir -p "$TEST_ROOT/vm/project" "$TEST_ROOT/vm-bin"
+  fixture_git "$TEST_ROOT/vm/project" init -q -b main
+  fixture_git "$TEST_ROOT/vm/project" config user.name Test
+  fixture_git "$TEST_ROOT/vm/project" config user.email test@example.invalid
+  fixture_commit "$TEST_ROOT/vm/project" README 'a scratch VM repo'
+  fixture_git "$TEST_ROOT/vm/project" worktree add -qb wt/task "$TEST_ROOT/vm/project/.worktrees/task"
+  printf '#!/bin/sh\necho Linux\n' >"$TEST_ROOT/vm-bin/uname"
+  printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/vm-bin/pgrep"
+  chmod +x "$TEST_ROOT/vm-bin/"*
   cat >"$SCRATCH_HOME/.local/bin/wt" <<'STUB'
-#!/bin/sh
+#!/usr/bin/env bash
+set -euo pipefail
 printf 'show %s\n' "$*" >>"$REMOTE_LOG"
-if [ "$REMOTE_WT_FORMAT" = machine ]; then
-  printf 'Task details.\nWT_RESULT\t{"version":1,"command":"show","status":"found","name":"task","repo":"/vm/repos/project","session":"%s","state":"%s"}\n' "$REMOTE_WT_SESSION" "$(cat "$REMOTE_WT_STATE")"
-  exit 0
-fi
-printf '  repo: /vm/repos/project\n  session: %s (%s)\n' "$REMOTE_WT_SESSION" "$(cat "$REMOTE_WT_STATE")"
+args=()
+for arg do
+  if [[ $arg == /vm/repos/project ]]; then arg=$FAKE_VM_REPO; fi
+  args+=("$arg")
+done
+output=$(PATH="$FAKE_VM_BIN:$PATH" CMUX_SSH_ATTEMPT_ID=1 FAKE_SHOW_PROBE=1 WT_MACHINE=1 "$FAKE_VM_WT" "${args[@]}")
+while IFS= read -r line; do
+  if [[ $line == WT_RESULT$'\t'* ]]; then
+    [[ $REMOTE_WT_FORMAT == machine ]] || continue
+    # Change only the session field when a scenario injects naming drift.
+    if [[ $REMOTE_WT_SESSION != wt-project-task ]]; then
+      line=WT_RESULT$'\t'$(jq -c --arg session "$REMOTE_WT_SESSION" '.session=$session' <<<"${line#*$'\t'}")
+    fi
+  elif [[ $REMOTE_WT_SESSION != wt-project-task ]]; then
+    line=${line//wt-project-task/$REMOTE_WT_SESSION}
+  fi
+  printf '%s\n' "${line//$FAKE_VM_REPO//vm/repos/project}"
+done <<<"$output"
 STUB
   # Each has-session is one probe, answered attached, detached or missing. The answer comes from the queue
   # while the queue lasts, then from the fixture. list-clients reports the answer that the probe drew.
   cat >"$fake/tmux" <<'STUB'
 #!/bin/sh
+if [ "${FAKE_SHOW_PROBE:-}" = 1 ]; then
+  case "$1" in
+    has-session) exit 0 ;;
+    list-panes) echo /dev/pts/123 ;;
+    list-clients) case "$(cat "$REMOTE_WT_STATE")" in *detached*) ;; *) echo client ;; esac ;;
+  esac
+  exit 0
+fi
 printf 'tmux %s\n' "$*" >>"$REMOTE_LOG"
 case "$1" in
   has-session)
@@ -1994,10 +1935,7 @@ STUB
   : >"$TEST_ROOT/remote-tmux-queue"
   : >"$TEST_ROOT/remote-log"
   stub_cmux alive
-  cat >"$WT_ROWS" <<ROWS
-{"workspaces":[{"id":"remote-row","title":"task","description":"@fakevm · project",
-  "remote":{"enabled":true,"destination":"fakevm","state":"connected","backend":"cmux-tui"}}]}
-ROWS
+  fake_rows "$(fake_row "remote-row" "task" "@fakevm · project" "fakevm" "connected" "cmux-tui" "null")" >"$WT_ROWS"
   # A connected client is replaced only after fresh screen proof.
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "an already connected row is selected" -H fakevm attach task -r /vm/repos/project
@@ -2009,7 +1947,7 @@ ROWS
   expected_line=$(tmux_cmd wt-project-task "" "" reinit)
   assert_has "replacement uses tmux_cmd's exact attach line" "$(cat "$TEST_ROOT/remote-log")" "tmux detach-client -t /dev/pts/3 -E $expected_line"
 
-  if REMOTE_LOG="$TEST_ROOT/remote-log" CMUX_STUB_NONCE="$TEST_ROOT/remote-tmux-nonce" \
+  if REMOTE_LOG="$TEST_ROOT/remote-log" CMUX_STUB_NONCE="$FAKE_CMUX_STATE/screen-append" \
       "$fake/tmux" display-message -d 5000 -t =wrong WT_REINIT_BAD >/dev/null 2>&1; then
     fail "a status message for another tmux session was accepted"
   else
@@ -2024,11 +1962,11 @@ ROWS
   rm "$TEST_ROOT/remote-tmux-late-reconnect" "$TEST_ROOT/remote-tmux-late-reconnect.triggered"
 
   # The old client can still exist while cmux has opened a fresh shell but shows a cached agent screen.
-  : >"$TEST_ROOT/remote-tmux-nonce-stale"
+  : >"$FAKE_CMUX_STATE/screen-append-hidden"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "a stale agent screen does not prove the active client" -H fakevm attach task -r /vm/repos/project
   assert_lacks "stale screen never replaced the abandoned pty" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
-  rm "$TEST_ROOT/remote-tmux-nonce-stale"
+  rm "$FAKE_CMUX_STATE/screen-append-hidden"
 
   printf '4242 /dev/pts/3\n9999 /dev/pts/4\n' >"$TEST_ROOT/remote-tmux-client-queue"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"

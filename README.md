@@ -207,7 +207,21 @@ workgrove/
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── bash5-smoke.sh         all bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
 │   ├── doctor-smoke.sh        cmux contracts, VM hooks, and redacted fixture recording
-│   ├── fake-cmux.sh           serves recorded cmux contract responses
+│   ├── fakes/
+│   │   ├── cmux              the shared cmux and cmux-tui fake
+│   │   └── rows.sh           builds scenario data from recorded responses
+│   ├── fixtures/
+│   │   └── cmux-0.65.1/      redacted responses recorded from real cmux
+│   │       ├── REDACTED.txt   redaction notice
+│   │       ├── automation.json
+│   │       ├── capabilities.json
+│   │       ├── event.json
+│   │       ├── notifications.json
+│   │       ├── rows.json
+│   │       ├── rows_by_window.json
+│   │       ├── top.json
+│   │       ├── version.txt
+│   │       └── windows.json
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── ssh-host-smoke.sh      offline SSH fragment registration tests
@@ -428,6 +442,33 @@ the line also covers `ssh <vm> '<cmd>'` and `wt -H <vm> …`.
 
 ### Tests
 
+Every cmux suite uses `test/fakes/cmux` and the helpers in `test/fakes/rows.sh`.
+The fake reads recorded cmux 0.65.1 responses from `test/fixtures/cmux-0.65.1/`.
+`wt doctor --record test/fixtures` captures these responses and removes private values.
+Sanitization keeps workspace and window refs consistent while replacing their original numbers.
+
+`fake_row <id> <title> <description> [host state backend slot ref]` builds a row with a stable, unique workspace ref.
+The optional eighth argument supplies an explicit unused `workspace:N` ref.
+Helpers store reference assignments under `FAKE_CMUX_STATE`, or under `TEST_ROOT` when no state is active.
+`fake_window_rows <window> [rows...]` adds the scoped response's window ref.
+
+`FAKE_CMUX_STATE` selects a scratch state folder.
+`windows.json`, `rows.json`, `rows/<window>.json`, `notifications.json`, and `top.json` override recorded responses.
+`calls.log` records each command.
+`fail/<command>` supplies an exit status on its first line and an error message on subsequent lines.
+`fake_queue` queues response text, an exit status, and an error message.
+Command keys include `list-windows`, `workspace-list`, `workspace-list--<window>`, `read-screen`, and `workspace-close`.
+
+`after/<command>/` supplies state files to copy after a successful command.
+A `mutate` file enables persistent row creation, description changes, and closure.
+Creation uses the active window and reserves seeded row IDs and workspace refs.
+Description changes and closure update all matching row snapshots.
+Membership changes update window counts, selected workspace IDs, and scoped response refs.
+A `notify-dedupe` file enables notification content suppression for relay tests.
+
+Recorded commands require their complete supported argument forms before queues or overrides can respond.
+Unsupported workspace actions return exit status 64 and preserve state.
+
 `bash test/docs-smoke.sh` checks the Layout tree, the documentation guide's required citations, and relative links and anchors.
 It also runs isolated regression fixtures for the checker.
 It needs `python3` and Git. The shared runner and CI discover it through `test/*-smoke.sh`.
@@ -442,7 +483,7 @@ Main pushes and pull-request merge checks use separate cancellation groups.
 The workflow makes these checks:
 
 - On `ubuntu-24.04`, `shellcheck -x` checks `bin/*`, `lib/workgrove/*.sh`, `lib/workgrove/vm/*.sh`,
-  `install.sh`, and `test/*.sh`. The job downloads ShellCheck 0.11.0 from its official release
+  `install.sh`, `test/*.sh`, `test/fakes/cmux`, and `test/fakes/*.sh`. The job downloads ShellCheck 0.11.0 from its official release
   and verifies the archive's SHA-256 checksum.
 - The suites in `test/` run in parallel on `macos-latest`, `ubuntu-22.04`, and `ubuntu-24.04`.
   Each scenario must make at least one assertion.
@@ -559,7 +600,9 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   It pins the exact `tmux_cmd` output for task, `shared`, and `reinit` forms.
   A stub tmux checks native identity precedence, explicit empty values, and unset names.
   It does not contact a host.
-- **`bash test/remote-new-smoke.sh`** uses scratch SSH and cmux stubs. It checks these cases:
+- **`bash test/remote-new-smoke.sh`** runs the real `bin/wt` behind scratch SSH and the shared cmux fake.
+  It checks real VM `new`, `show`, and `path` commands.
+  It also checks these cases:
   - remote task preflight and model forwarding
   - an older VM's option refusal
   - a row failure after worktree creation
@@ -583,7 +626,7 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   - Denied: a remote whose push URL leaves github.com, including when `wt pr` would push through that remote.
   - `settings.base.json` wires the hook and carries no rule that would override it.
 - **`bash test/doctor-smoke.sh`** checks cmux versions, methods, response shapes, hook paths, VM checks, and fixture redaction.
-  It uses `test/fake-cmux.sh` to serve and replay recorded contract responses.
+  It uses `test/fakes/cmux` to serve and replay recorded contract responses.
 - **`bash test/native-relay-smoke.sh`** checks native VM requests, tmux identity, notification validation, and automation backups.
   It also checks that `wt run` gives the cmux-tui agent hooks the terminal ID from the task's tmux session.
   It uses a scratch home and fake commands.

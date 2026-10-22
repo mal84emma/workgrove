@@ -12,6 +12,8 @@ source "$REPO/test/lib.sh"
 # shellcheck source=lib/workgrove/common.sh
 source "$REPO/lib/workgrove/common.sh"
 trap lib_cleanup EXIT
+# shellcheck source=test/fakes/rows.sh
+source "$REPO/test/fakes/rows.sh"
 
 scenario_fake_ssh() {
   begin_scenario 'shared fake SSH shell selection and command execution' || return 0
@@ -50,7 +52,9 @@ scenario_fake_ssh
 
 close_row_result() (
   local reply=$1 status=$2 rc=0
-  cmux_call() { printf '%s' "$reply"; return "$status"; }
+  fake_cmux_init "$TEST_ROOT/close-state"
+  export CMUX_BUNDLED_CLI_PATH="$REPO/test/fakes/cmux"
+  fake_queue workspace-close "$reply" "$status"
   CMUX_ERROR=''
   close_row row-test || rc=$?
   printf '%s\n%s' "$rc" "$CMUX_ERROR"
@@ -248,32 +252,308 @@ scenario_identities() {
 }
 scenario_identities
 
+scenario_fake_replay() {
+  begin_scenario 'the shared fake replays plain and scoped top responses' || return 0
+  local fake="$REPO/test/fakes/cmux" id=00000000-0000-4000-8000-000000000001
+  local rc scope
+  for scope in plain scoped; do
+    local args=(top --json)
+    [[ $scope != scoped ]] || args=(top --workspace "$id" --json)
+    rc=0
+    env -u FAKE_CMUX_STATE -u CMUX_FIXTURES "$fake" "${args[@]}" >"$TEST_ROOT/replayed-top" 2>"$TEST_ROOT/replayed-error" || rc=$?
+    assert_eq "$scope top replay succeeds" 0 "$rc"
+    if cmp -s "$FAKE_CMUX_FIXTURES/top.json" "$TEST_ROOT/replayed-top"; then pass
+    else fail "$scope top replay differs from the recorded response"; fi
+  done
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/top-state"
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  mkdir -p "$FAKE_CMUX_STATE/top"
+  fake_top global-caller 0 >"$FAKE_CMUX_STATE/top.json"
+  fake_top scoped-caller 1 >"$FAKE_CMUX_STATE/top/$id.json"
+  assert_eq 'an unknown workspace uses the global top override' global-caller \
+    "$("$fake" top --workspace other --json | jq -r .caller.workspace_id)"
+  assert_eq 'a workspace keeps its scoped top override' scoped-caller \
+    "$("$fake" top --workspace "$id" --json | jq -r .caller.workspace_id)"
+  end_scenario
+}
+scenario_fake_replay
+
+scenario_fake_mutations() {
+  begin_scenario 'persistent fake rows stay consistent across window snapshots' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/mutation-state"
+  local fake="$REPO/test/fakes/cmux" ref id
+  local first=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA second=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  : >"$FAKE_CMUX_STATE/mutate"
+  fake_windows "$first" "$second" >"$FAKE_CMUX_STATE/windows.json"
+  fake_rows >"$FAKE_CMUX_STATE/rows/$first.json"
+  fake_rows >"$FAKE_CMUX_STATE/rows/$second.json"
+  ref=$("$fake" ssh test-vm --name task --no-focus)
+  assert_eq 'persistent creation returns a workspace ref' workspace:1 "$ref"
+  id=$(jq -r '.workspaces[0].id' "$FAKE_CMUX_STATE/rows.json")
+  assert_eq 'the global snapshot contains the new row' 1 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'the active window contains the new row' 1 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$first.json")"
+  assert_eq 'the other window stays empty' 0 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$second.json")"
+  cmux_rows_load checked "$fake"
+  assert_eq 'checked enumeration finds the created row' "$id" "$(jq -r '.workspaces[0].id' <<<"$CMUX_ROWS_JSON")"
+  "$fake" workspace-action --workspace "$ref" --action set-description --description '@test-vm · repo'
+  assert_eq 'description changes update the global snapshot' '@test-vm · repo' \
+    "$(jq -r '.workspaces[0].description' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'description changes update the window snapshot' '@test-vm · repo' \
+    "$(jq -r '.workspaces[0].description' "$FAKE_CMUX_STATE/rows/$first.json")"
+  "$fake" workspace close "$id" --force
+  assert_eq 'closure removes the global row' 0 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'closure removes the window row' 0 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$first.json")"
+  cmux_rows_load checked "$fake"
+  assert_eq 'checked enumeration confirms closure' 0 "$(jq '.workspaces | length' <<<"$CMUX_ROWS_JSON")"
+  end_scenario
+}
+scenario_fake_mutations
+
+scenario_fake_seeded_rows() {
+  begin_scenario 'persistent fake creation reserves seeded UUIDs and workspace refs' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/seeded-state"
+  local fake="$REPO/test/fakes/cmux" ref id seed other
+  local first=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA second=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  : >"$FAKE_CMUX_STATE/mutate"
+  fake_windows "$first" "$second" >"$FAKE_CMUX_STATE/windows.json"
+  seed=$(fake_row 00000000-0000-4000-8000-000000000001 seed old test-vm connected cmux-tui null workspace:7)
+  other=$(fake_row 00000000-0000-4000-8000-000000000002 other old test-vm connected cmux-tui null workspace:3)
+  fake_rows "$seed" >"$FAKE_CMUX_STATE/rows.json"
+  fake_rows "$seed" >"$FAKE_CMUX_STATE/rows/$first.json"
+  fake_rows "$other" >"$FAKE_CMUX_STATE/rows/$second.json"
+  ref=$("$fake" ssh test-vm --name new --no-focus)
+  id=$(jq -r '.workspaces[] | select(.title == "new") | .id' "$FAKE_CMUX_STATE/rows.json")
+  assert_eq 'creation skips reserved global and scoped identities' workspace:4 "$ref"
+  assert_eq 'creation assigns an unused UUID' 00000000-0000-4000-8000-000000000004 "$id"
+  assert_eq 'the global rows keep distinct UUIDs' 2 "$(jq '[.workspaces[].id] | unique | length' "$FAKE_CMUX_STATE/rows.json")"
+  "$fake" workspace close "$id" --force
+  assert_eq 'closing the new row preserves the global seed' seed "$(jq -r '.workspaces[].title' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'closing the new row preserves the active window seed' seed "$(jq -r '.workspaces[].title' "$FAKE_CMUX_STATE/rows/$first.json")"
+  assert_eq 'the other window keeps its reserved ref' workspace:3 "$(jq -r '.workspaces[0].ref' "$FAKE_CMUX_STATE/rows/$second.json")"
+  end_scenario
+}
+scenario_fake_seeded_rows
+
+scenario_fake_command_validation() {
+  begin_scenario 'the shared fake rejects unsupported recorded command forms' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/command-state"
+  local fake="$REPO/test/fakes/cmux" command rc
+  local args=()
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  printf '{}\n' >"$FAKE_CMUX_STATE/agent-hook-status.json"
+  for command in 'events --invalid-option' 'automation show wrong-rule' '--json agent completely-invalid' \
+    'top --jsno' 'workspace list --jsno' '--json list-windows --nonsense' '--json list-notifications --nonsense'; do
+    read -r -a args <<<"$command"
+    rc=0
+    "$fake" "${args[@]}" >"$TEST_ROOT/invalid-response" 2>"$TEST_ROOT/invalid-error" || rc=$?
+    assert_eq "$command is rejected before serving a response" 64 "$rc"
+  done
+  assert_eq 'the supported agent hook command still serves its override' '{}' \
+    "$("$fake" --json agent hook status claude codex)"
+  end_scenario
+}
+scenario_fake_command_validation
+
+scenario_fake_seed_refs() {
+  begin_scenario 'seeded rows expose unique stable workspace references' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/seed-refs-state"
+  local fake="$REPO/test/fakes/cmux" first second ref first_ref second_ref
+  local window=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  : >"$FAKE_CMUX_STATE/mutate"
+  fake_windows "$window" >"$FAKE_CMUX_STATE/windows.json"
+  first=$(fake_row seed-one first original test-vm)
+  second=$(fake_row seed-two second original test-vm)
+  first_ref=$(jq -r .ref <<<"$first"); second_ref=$(jq -r .ref <<<"$second")
+  assert_eq 'seeded references use the cmux workspace form' true "$(jq -n --arg a "$first_ref" --arg b "$second_ref" '[$a,$b] | all(.[]; test("^workspace:[1-9][0-9]*$"))')"
+  assert_eq 'different seeds advertise different references' true "$([[ $first_ref != "$second_ref" ]] && echo true || echo false)"
+  fake_rows "$first" "$second" >"$FAKE_CMUX_STATE/rows.json"
+  fake_window_rows "$window" "$first" "$second" >"$FAKE_CMUX_STATE/rows/$window.json"
+  "$fake" workspace-action --workspace "$first_ref" --action set-description --description changed
+  assert_eq 'targeting one ref changes only its global row' '["changed","original"]' "$(jq -c '[.workspaces[].description]' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'targeting one ref changes only its scoped row' '["changed","original"]' "$(jq -c '[.workspaces[].description]' "$FAKE_CMUX_STATE/rows/$window.json")"
+  "$fake" workspace close "$first_ref" --force
+  assert_eq 'closing one ref preserves the other global seed' seed-two "$(jq -r '.workspaces[].id' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'closing one ref preserves the other scoped seed' seed-two "$(jq -r '.workspaces[].id' "$FAKE_CMUX_STATE/rows/$window.json")"
+  ref=$(fake_row explicit-seed explicit '' test-vm connected cmux-tui null workspace:99 | jq -r .ref)
+  assert_eq 'a seed can specify an explicit unused reference' workspace:99 "$ref"
+  assert_eq 'rebuilding a seed keeps its reference' "$second_ref" "$(fake_row seed-two second original test-vm | jq -r .ref)"
+  end_scenario
+}
+scenario_fake_seed_refs
+
+scenario_fake_legacy_refs() {
+  begin_scenario 'legacy row IDs cannot alias another row reference' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/legacy-ref-state"
+  local fake="$REPO/test/fakes/cmux" first second row collision rc
+  local window=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  touch "$FAKE_CMUX_STATE/mutate"
+  fake_windows "$window" >"$FAKE_CMUX_STATE/windows.json"
+  first=$(fake_row workspace:2 first original test-vm)
+  second=$(fake_row workspace:1 second original test-vm)
+  assert_eq 'a legacy ID defaults to its own reference' workspace:2 "$(jq -r .ref <<<"$first")"
+  assert_eq 'reverse seed order preserves a distinct legacy alias' workspace:1 "$(jq -r .ref <<<"$second")"
+  fake_rows "$first" "$second" >"$FAKE_CMUX_STATE/rows.json"
+  fake_window_rows "$window" "$first" "$second" >"$FAKE_CMUX_STATE/rows/$window.json"
+  "$fake" workspace-action --workspace workspace:1 --action set-description --description changed
+  assert_eq 'a legacy alias updates only its global row' '["original","changed"]' "$(jq -c '[.workspaces[].description]' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'a legacy alias updates only its scoped row' '["original","changed"]' "$(jq -c '[.workspaces[].description]' "$FAKE_CMUX_STATE/rows/$window.json")"
+  "$fake" workspace close workspace:1 --force
+  assert_eq 'closing a legacy alias preserves the other global row' workspace:2 "$(jq -r '.workspaces[].id' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'closing a legacy alias preserves the other scoped row' workspace:2 "$(jq -r '.workspaces[].id' "$FAKE_CMUX_STATE/rows/$window.json")"
+
+  FAKE_CMUX_STATE="$TEST_ROOT/legacy-ref-collision-state"
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  fake_windows "$window" >"$FAKE_CMUX_STATE/windows.json"
+  row=$(fake_row workspace:9 legacy original test-vm connected cmux-tui null workspace:1)
+  assert_eq 'a legacy seed can keep an explicit distinct reference' workspace:1 "$(jq -r .ref <<<"$row")"
+  fake_rows "$row" >"$FAKE_CMUX_STATE/rows.json"
+  fake_window_rows "$window" "$row" >"$FAKE_CMUX_STATE/rows/$window.json"
+  cat "$FAKE_CMUX_STATE/rows.json" "$FAKE_CMUX_STATE/rows/$window.json" "$FAKE_CMUX_STATE/references.json" >"$TEST_ROOT/alias-before"
+  for collision in reference id; do
+    rc=0
+    case $collision in
+      reference) fake_row other-row collision '' test-vm connected cmux-tui null workspace:9 >"$TEST_ROOT/alias-output" 2>&1 || rc=$? ;;
+      id) fake_row workspace:1 collision '' test-vm >"$TEST_ROOT/alias-output" 2>&1 || rc=$? ;;
+    esac
+    assert_eq "a new $collision cannot alias another row" 64 "$rc"
+    cat "$FAKE_CMUX_STATE/rows.json" "$FAKE_CMUX_STATE/rows/$window.json" "$FAKE_CMUX_STATE/references.json" >"$TEST_ROOT/alias-after"
+    if cmp -s "$TEST_ROOT/alias-before" "$TEST_ROOT/alias-after"; then pass
+    else fail "a rejected $collision collision changed state"; fi
+  done
+  assert_eq 'automatic allocation reserves legacy IDs as well as references' workspace:10 "$(fake_row automatic-row automatic '' test-vm | jq -r .ref)"
+  assert_eq 'rebuilding a legacy seed preserves its existing binding' workspace:1 "$(fake_row workspace:9 legacy original test-vm | jq -r .ref)"
+  end_scenario
+}
+scenario_fake_legacy_refs
+
+scenario_fake_unsupported_action() {
+  begin_scenario 'unsupported workspace actions preserve every snapshot' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/action-state"
+  local fake="$REPO/test/fakes/cmux" row ref rc=0 window=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  : >"$FAKE_CMUX_STATE/mutate"
+  fake_windows "$window" >"$FAKE_CMUX_STATE/windows.json"
+  row=$(fake_row action-row task original test-vm); ref=$(jq -r .ref <<<"$row")
+  fake_rows "$row" >"$FAKE_CMUX_STATE/rows.json"
+  fake_window_rows "$window" "$row" >"$FAKE_CMUX_STATE/rows/$window.json"
+  cp "$FAKE_CMUX_STATE/rows.json" "$TEST_ROOT/action-global-before"
+  cp "$FAKE_CMUX_STATE/rows/$window.json" "$TEST_ROOT/action-window-before"
+  cp "$FAKE_CMUX_STATE/windows.json" "$TEST_ROOT/action-metadata-before"
+  "$fake" workspace-action --workspace "$ref" --action set-title --title renamed >"$TEST_ROOT/action-output" 2>&1 || rc=$?
+  assert_eq 'an unsupported action is rejected' 64 "$rc"
+  local pair
+  for pair in 'rows.json:action-global-before' "rows/$window.json:action-window-before" 'windows.json:action-metadata-before'; do
+    if cmp -s "$FAKE_CMUX_STATE/${pair%%:*}" "$TEST_ROOT/${pair#*:}"; then pass
+    else fail 'a rejected action changed a snapshot'; fi
+  done
+  end_scenario
+}
+scenario_fake_unsupported_action
+
+scenario_fake_window_metadata() {
+  begin_scenario 'persistent window metadata follows row membership' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/window-metadata-state"
+  local fake="$REPO/test/fakes/cmux" first second first_id second_id
+  local window=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA other=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  : >"$FAKE_CMUX_STATE/mutate"
+  fake_windows "$window" "$other" >"$FAKE_CMUX_STATE/windows.json"
+  assert_eq 'empty windows have no selected workspace or members' true "$(jq 'all(.[]; .workspace_count == 0 and .selected_workspace_id == null)' "$FAKE_CMUX_STATE/windows.json")"
+  assert_eq 'one window has focus' 1 "$(jq '[.[] | select(.key)] | length' "$FAKE_CMUX_STATE/windows.json")"
+  first=$("$fake" ssh test-vm --name first --no-focus)
+  first_id=$(jq -r '.workspaces[0].id' "$FAKE_CMUX_STATE/rows.json")
+  assert_eq 'creation updates the active window metadata' true "$(jq --arg id "$first_id" '.[0].workspace_count == 1 and .[0].selected_workspace_id == $id' "$FAKE_CMUX_STATE/windows.json")"
+  assert_eq 'creation preserves the empty other window' true "$(jq '.[1].workspace_count == 0 and .[1].selected_workspace_id == null' "$FAKE_CMUX_STATE/windows.json")"
+  assert_eq 'scoped rows retain a window reference' window:1 "$(jq -r .window_ref "$FAKE_CMUX_STATE/rows/$window.json")"
+  second=$("$fake" ssh test-vm --name second --no-focus)
+  second_id=$(jq -r '.workspaces[1].id' "$FAKE_CMUX_STATE/rows.json")
+  assert_eq 'an unfocused create preserves the selected row' true "$(jq --arg id "$first_id" '.[0].workspace_count == 2 and .[0].selected_workspace_id == $id' "$FAKE_CMUX_STATE/windows.json")"
+  "$fake" workspace close "$first" --force
+  assert_eq 'closing the selected row selects a remaining row' true "$(jq --arg id "$second_id" '.[0].workspace_count == 1 and .[0].selected_workspace_id == $id' "$FAKE_CMUX_STATE/windows.json")"
+  "$fake" workspace close "$second" --force
+  assert_eq 'closing the last row clears window metadata' true "$(jq '.[0].workspace_count == 0 and .[0].selected_workspace_id == null' "$FAKE_CMUX_STATE/windows.json")"
+  end_scenario
+}
+scenario_fake_window_metadata
+
+scenario_fake_recorded_ref() {
+  begin_scenario 'rebuilding a recorded seed preserves its existing reference' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/recorded-ref-state"
+  local id ref rebuilt rc=0
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  cp "$FAKE_CMUX_FIXTURES/rows.json" "$FAKE_CMUX_STATE/rows.json"
+  id=$(jq -r '.workspaces[0].id' "$FAKE_CMUX_STATE/rows.json")
+  ref=$(jq -r '.workspaces[0].ref' "$FAKE_CMUX_STATE/rows.json")
+  fake_row "$id" conflicting '' test-vm connected cmux-tui null workspace:999 >"$TEST_ROOT/rebind-output" 2>&1 || rc=$?
+  assert_eq 'a recorded reference cannot be rebound before registration' 64 "$rc"
+  if [[ ! -e $FAKE_CMUX_STATE/references.json ]]; then pass
+  else fail 'a rejected rebind created a registry'; fi
+  rc=0
+  rebuilt=$(fake_row "$id" rebuilt original test-vm)
+  assert_eq 'a rebuilt recorded UUID keeps its advertised ref' "$ref" "$(jq -r .ref <<<"$rebuilt")"
+  assert_eq 'the registry records the existing snapshot binding' "$ref" "$(jq -r --arg id "$id" '.[$id]' "$FAKE_CMUX_STATE/references.json")"
+  fake_rows "$rebuilt" >"$FAKE_CMUX_STATE/rows/recorded.json"
+  touch "$FAKE_CMUX_STATE/mutate"
+  "$REPO/test/fakes/cmux" workspace-action --workspace "$ref" --action set-description --description updated
+  assert_eq 'a recorded ref updates the global snapshot' updated "$(jq -r --arg id "$id" '.workspaces[] | select(.id == $id) | .description' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'a recorded ref updates the rebuilt scoped snapshot' updated "$(jq -r '.workspaces[0].description' "$FAKE_CMUX_STATE/rows/recorded.json")"
+  cp "$FAKE_CMUX_STATE/rows.json" "$TEST_ROOT/recorded-ref-before"
+  cp "$FAKE_CMUX_STATE/references.json" "$TEST_ROOT/registry-before"
+  fake_row "$id" conflicting '' test-vm connected cmux-tui null workspace:999 >"$TEST_ROOT/rebind-output" 2>&1 || rc=$?
+  assert_eq 'an existing reference cannot be rebound' 64 "$rc"
+  if cmp -s "$FAKE_CMUX_STATE/rows.json" "$TEST_ROOT/recorded-ref-before"; then pass
+  else fail 'a rejected rebind changed the recorded snapshot'; fi
+  if cmp -s "$FAKE_CMUX_STATE/references.json" "$TEST_ROOT/registry-before"; then pass
+  else fail 'a rejected rebind changed the registry'; fi
+  fake_rows "$rebuilt" | jq '.workspaces[0].ref="workspace:999"' >"$FAKE_CMUX_STATE/rows/conflicting.json"
+  rc=0
+  fake_row "$id" conflicting '' test-vm >"$TEST_ROOT/conflict-output" 2>&1 || rc=$?
+  assert_eq 'conflicting snapshot bindings are rejected' 64 "$rc"
+  end_scenario
+}
+scenario_fake_recorded_ref
+
+fake_cmux_init "$TEST_ROOT/cmux-state"
 ROW_WINDOW_ONE=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
 ROW_WINDOW_TWO=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
 ROW_WINDOW_THREE=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC
-ROW_ONE='{"id":"row-one","title":"task","description":"@local · repo"}'
-ROW_TWO='{"id":"row-two","title":"task","description":"@test-vm · repo","remote":{"enabled":true,"destination":"test-vm"}}'
+ROW_ONE=$(fake_row row-one task '@local · repo')
+ROW_TWO=$(fake_row row-two task '@test-vm · repo' test-vm)
 ROW_EXPECTED="{\"workspaces\":[$ROW_ONE,$ROW_TWO]}"
 
 row_cmux_reset() {
-  ROW_WINDOWS="[{\"id\":\"$ROW_WINDOW_ONE\",\"index\":0,\"key\":\"0\"}]"
+  ROW_WINDOWS=$(fake_windows "$ROW_WINDOW_ONE")
   ROW_WINDOWS_RC=0 ROW_ONE_RC=0 ROW_TWO_RC=0 ROW_FALLBACK_RC=0
   ROW_ONE_LIST="[$ROW_ONE]"
   ROW_TWO_LIST="{\"workspaces\":[$ROW_TWO]}"
   ROW_FALLBACK_LIST="[$ROW_ONE]"
-  : >"$TEST_ROOT/row-calls"
+  : >"$FAKE_CMUX_STATE/calls.log"
   : >"$TEST_ROOT/row-caps"
 }
-row_cmux() {
-  printf '%s\n' "$*" >>"$TEST_ROOT/row-calls"
-  case "$*" in
-    '--json list-windows') printf '%s' "$ROW_WINDOWS"; return "$ROW_WINDOWS_RC" ;;
-    "workspace list --json --window $ROW_WINDOW_ONE") printf '%s' "$ROW_ONE_LIST"; return "$ROW_ONE_RC" ;;
-    "workspace list --json --window $ROW_WINDOW_TWO") printf '%s' "$ROW_TWO_LIST"; return "$ROW_TWO_RC" ;;
-    "workspace list --json --window $ROW_WINDOW_THREE") printf '[]' ;;
-    'workspace list --json') printf '%s' "$ROW_FALLBACK_LIST"; return "$ROW_FALLBACK_RC" ;;
-    *) return 64 ;;
-  esac
+load_test_rows() {
+  local key status
+  printf '%s' "$ROW_WINDOWS" >"$FAKE_CMUX_STATE/windows.json"
+  printf '%s' "$ROW_ONE_LIST" >"$FAKE_CMUX_STATE/rows/$ROW_WINDOW_ONE.json"
+  printf '%s' "$ROW_TWO_LIST" >"$FAKE_CMUX_STATE/rows/$ROW_WINDOW_TWO.json"
+  printf '[]' >"$FAKE_CMUX_STATE/rows/$ROW_WINDOW_THREE.json"
+  printf '%s' "$ROW_FALLBACK_LIST" >"$FAKE_CMUX_STATE/rows.json"
+  for key in list-windows workspace-list--$ROW_WINDOW_ONE workspace-list--$ROW_WINDOW_TWO workspace-list; do
+    case $key in
+      list-windows) status=$ROW_WINDOWS_RC ;;
+      "workspace-list--$ROW_WINDOW_ONE") status=$ROW_ONE_RC ;;
+      "workspace-list--$ROW_WINDOW_TWO") status=$ROW_TWO_RC ;;
+      workspace-list) status=$ROW_FALLBACK_RC ;;
+    esac
+    rm -f "$FAKE_CMUX_STATE/fail/$key"
+    if [[ $status != 0 ]]; then fake_failure "$key" "$status"; fi
+  done
+  local policy=$1
+  shift
+  cmux_rows_load "$policy" "$@" "$REPO/test/fakes/cmux"
 }
 row_capped() {
   printf '%s\n' "${*:2}" >>"$TEST_ROOT/row-caps"
@@ -281,11 +561,11 @@ row_capped() {
 }
 check_rows_load() {
   local policy=$1 expected_rc=$2 expected_json=$3 expected_full=$4 rc=0
-  cmux_rows_load "$policy" row_capped row_cmux || rc=$?
+  load_test_rows "$policy" row_capped || rc=$?
   assert_eq "$policy returns the expected status" "$expected_rc" "$rc"
   assert_eq "$policy returns the expected rows" "$expected_json" "$CMUX_ROWS_JSON"
   assert_eq "$policy records list completeness" "$expected_full" "$CMUX_ROWS_FULL"
-  assert_eq "$policy wraps every cmux call" "$(cat "$TEST_ROOT/row-calls")" "$(cat "$TEST_ROOT/row-caps")"
+  assert_eq "$policy wraps every cmux call" "$(cat "$FAKE_CMUX_STATE/calls.log")" "$(cat "$TEST_ROOT/row-caps")"
 }
 
 scenario_row_windows() {
@@ -299,7 +579,7 @@ scenario_row_windows() {
     check_rows_load "$policy" 0 "$ROW_EXPECTED" 1
     assert_eq "$policy queries windows by UUID" \
       "$(printf -- '--json list-windows\nworkspace list --json --window %s\nworkspace list --json --window %s' "$ROW_WINDOW_ONE" "$ROW_WINDOW_TWO")" \
-      "$(tail -3 "$TEST_ROOT/row-calls")"
+      "$(tail -3 "$FAKE_CMUX_STATE/calls.log")"
   done
   end_scenario
 }
@@ -313,19 +593,19 @@ scenario_row_failures() {
     ROW_TWO_RC=142
     if [[ $policy == skip ]]; then
       check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
-      assert_grep 'display lookups continue after a failed window' "$TEST_ROOT/row-calls" "$ROW_WINDOW_THREE"
+      assert_grep 'display lookups continue after a failed window' "$FAKE_CMUX_STATE/calls.log" "$ROW_WINDOW_THREE"
     else
       check_rows_load "$policy" 142 '' 0
-      assert_eq "$policy stops at the failing window" "workspace list --json --window $ROW_WINDOW_TWO" "$(tail -1 "$TEST_ROOT/row-calls")"
+      assert_eq "$policy stops at the failing window" "workspace list --json --window $ROW_WINDOW_TWO" "$(tail -1 "$FAKE_CMUX_STATE/calls.log")"
     fi
     row_cmux_reset
     ROW_WINDOWS='' ROW_WINDOWS_RC=1
     if [[ $policy == checked ]]; then
       check_rows_load "$policy" 1 '' 0
-      assert_eq 'checked requires successful enumeration' '--json list-windows' "$(cat "$TEST_ROOT/row-calls")"
+      assert_eq 'checked requires successful enumeration' '--json list-windows' "$(cat "$FAKE_CMUX_STATE/calls.log")"
     else
       check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
-      assert_eq "$policy falls back without --json list-windows" $'--json list-windows\nworkspace list --json' "$(cat "$TEST_ROOT/row-calls")"
+      assert_eq "$policy falls back without --json list-windows" $'--json list-windows\nworkspace list --json' "$(cat "$FAKE_CMUX_STATE/calls.log")"
     fi
   done
   row_cmux_reset
@@ -358,11 +638,11 @@ scenario_row_validation() {
     '[{"id":"row","title":"task","remote":{"enabled":"true"}}]' \
     '[{"id":"row","title":"task","remote":{"destination":4}}]'; do
     ROW_ONE_LIST=$invalid
-    assert_result "checked rejects $invalid" no cmux_rows_load checked row_cmux
+    assert_result "checked rejects $invalid" no load_test_rows checked
     assert_eq 'a failed validation clears the previous snapshot' '' "$CMUX_ROWS_JSON"
   done
   ROW_ONE_LIST='{"workspaces":['
-  assert_result 'the hook rejects invalid JSON' no cmux_rows_load stop row_cmux
+  assert_result 'the hook rejects invalid JSON' no load_test_rows stop
   row_cmux_reset
   ROW_WINDOWS="${ROW_WINDOWS%]},{\"id\":\"$ROW_WINDOW_TWO\"}]"
   ROW_TWO_LIST=''

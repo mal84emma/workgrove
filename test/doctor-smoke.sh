@@ -8,12 +8,14 @@ SCRATCH_BASE=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 [[ $TEST_ROOT == "$SCRATCH_BASE"/* && $TEST_ROOT != "$HOME"/* ]] || exit 1
 # shellcheck source=test/lib.sh
 source "$REPO/test/lib.sh"
+# shellcheck source=test/fakes/rows.sh
+source "$REPO/test/fakes/rows.sh"
 DOCTOR_REAL_HOME=$HOME
 trap 'HOME=$DOCTOR_REAL_HOME lib_cleanup' EXIT
 mkdir -p "$TEST_ROOT/home/.claude" "$TEST_ROOT/home/.codex" "$TEST_ROOT/home/.local/bin" \
   "$TEST_ROOT/bin" "$TEST_ROOT/fixtures" "$TEST_ROOT/repos"
 export HOME="$TEST_ROOT/home" PATH="$TEST_ROOT/bin:$PATH" CMUX_FIXTURES="$TEST_ROOT/fixtures"
-export CMUX_BUNDLED_CLI_PATH="$REPO/test/fake-cmux.sh"
+export CMUX_BUNDLED_CLI_PATH="$REPO/test/fakes/cmux"
 unset CMUX_SSH_ATTEMPT_ID CMUX_RUN WT_CMUX_TUI_HOOK CMUX_TUI_HOOK XDG_DATA_HOME
 printf '#!/bin/sh\necho Darwin\n' >"$TEST_ROOT/bin/uname"
 printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/cmux-hook"
@@ -25,19 +27,30 @@ for config in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"; do
 {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"SOURCE='a value' \"$HOME/.local/bin/a hook\""}]}]}}
 JSON
 done
-printf 'cmux 0.65.1 (110)\n' >"$CMUX_FIXTURES/version.txt"
-printf '[{"id":"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA","title":"private-window"}]\n' >"$CMUX_FIXTURES/windows.json"
-cat >"$CMUX_FIXTURES/rows.json" <<'JSON'
-{"workspaces":[{"id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"private-title","description":"@secretvm · secret-repo","current_directory":"/Users/secretuser/repos/private","remote":{"enabled":true,"destination":"secretvm","state":"connected","backend":"cmux-tui","persistent_daemon_slot":null}}]}
-JSON
-printf '{"caller":{"workspace_id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"},"coding_agents":[{"resources":{"process_count":1}}]}\n' >"$CMUX_FIXTURES/top.json"
-printf '[{"id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","workspace_id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","title":"private-title","body":"/home/secretuser secretvm","secretuser":"secretvm"}]\n' >"$CMUX_FIXTURES/notifications.json"
+cp "$FAKE_CMUX_FIXTURES/version.txt" "$FAKE_CMUX_FIXTURES/capabilities.json" "$CMUX_FIXTURES/"
+jq '[.[0] | .id="AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA" | .title="private-window"
+  | .selected_workspace_id="BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"]' \
+  "$FAKE_CMUX_FIXTURES/windows.json" >"$CMUX_FIXTURES/windows.json"
+fake_rows "$(fake_row BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB private-title '@secretvm · secret-repo' secretvm \
+  | jq -c '.current_directory="/Users/secretuser/repos/private"')" >"$CMUX_FIXTURES/rows.json"
+fake_top BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB 1 >"$CMUX_FIXTURES/top.json"
+jq '[.[0] | .id="CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"
+  | .workspace_id="BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB" | .title="private-title"
+  | .body="/home/secretuser secretvm" | .secretuser="secretvm"]' \
+  "$FAKE_CMUX_FIXTURES/notifications.json" >"$CMUX_FIXTURES/notifications.json"
 cp "$REPO/home/.cmuxterm/automations.json" "$TEST_ROOT/rules.json"
 jq '.rules[0]' "$TEST_ROOT/rules.json" >"$CMUX_FIXTURES/automation.json"
-printf '{"name":"notification.created","workspace_id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB","payload":{"notification_id":"CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC","body":"private-title secretvm"}}\n' >"$CMUX_FIXTURES/event.json"
-printf '%s\n' '{"methods":["workspace.list","workspace.create","workspace.action","workspace.close","workspace.select","workspace.remote.reconnect","notification.list","notification.dismiss","system.top","surface.read_text"]}' >"$CMUX_FIXTURES/capabilities.json"
+jq '.workspace_id="BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"
+  | .payload.notification_id="CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"
+  | .payload.body="private-title secretvm"' "$FAKE_CMUX_FIXTURES/event.json" >"$CMUX_FIXTURES/event.json"
 
 invoke() {
+  if [[ -n ${FAKE_CMUX_STATE:-} ]]; then
+    jq -cn --arg status "${TUI_CODEX_STATUS:-installed}" \
+      '{action:"status",errors:[],providers:[{provider:"claude",state:"installed"},{provider:"codex",state:$status}]}' \
+      >"$FAKE_CMUX_STATE/agent-hook-status.json"
+    if [[ ${TUI_BAD_JSON:-0} == 1 ]]; then printf 'action status\nproviders []\n' >"$FAKE_CMUX_STATE/agent-hook-status.json"; fi
+  fi
   STATUS=0
   bash "$REPO/bin/wt" "$@" >"$TEST_ROOT/output" 2>&1 || STATUS=$?
 }
@@ -184,6 +197,29 @@ scenario_shapes_and_hooks() {
   end_scenario
 }
 
+scenario_reference_redaction() {
+  begin_scenario 'redaction preserves synthetic reference relationships' || return 0
+  local sanitized
+  sanitized=$(jq -cn '{rows:{workspaces:[{ref:"workspace:91"},{ref:"workspace:37"}],window_ref:"window:19"},
+    rows_by_window:[{workspaces:[{ref:"workspace:91"}],window_ref:"window:19"}],body:"workspace:91"}' \
+    | jq -cf "$REPO/lib/workgrove/doctor-sanitize.jq")
+  assert_eq 'workspace refs remain valid and distinct' true "$(jq '[.rows.workspaces[].ref] | (unique | length) == 2 and all(.[]; test("^workspace:[1-9][0-9]*$"))' <<<"$sanitized")"
+  assert_eq 'repeated workspace refs keep their relationship' true "$(jq '.rows.workspaces[0].ref == .rows_by_window[0].workspaces[0].ref' <<<"$sanitized")"
+  assert_eq 'window refs remain valid and consistent' true "$(jq '.rows.window_ref == "window:1" and .rows.window_ref == .rows_by_window[0].window_ref' <<<"$sanitized")"
+  assert_eq 'free text matching a ref still gets redacted' '<redacted>' "$(jq -r .body <<<"$sanitized")"
+  end_scenario
+}
+
+scenario_recorded_contract() {
+  begin_scenario 'the real cmux capture preserves the supported contract' || return 0
+  CMUX_FIXTURES=$FAKE_CMUX_FIXTURES invoke doctor
+  assert_eq 'the recorded real responses pass doctor' 0 "$STATUS"
+  assert_eq 'recorded rows retain public schema fields' true "$(jq '
+    all(.workspaces[]; has("ref") and has("has_custom_title") and (.remote | has("terminal_transport")))
+    and any(.workspaces[]; .remote.enabled and .remote.backend == "cmux-tui")' "$FAKE_CMUX_FIXTURES/rows.json")"
+  end_scenario
+}
+
 scenario_record() {
   begin_scenario 'recorded fixtures redact identities and replay through the fake cmux' || return 0
   cp "$CMUX_FIXTURES/windows.json" "$TEST_ROOT/saved-windows.json"
@@ -235,12 +271,8 @@ scenario_vm() {
   begin_scenario 'VM checks detect absent hooks, old tmux, invalid folders, and protocol drift' || return 0
   mkdir -p "$HOME/.local/share/cmux-tui/bin"
   cp "$HOME/.local/bin/cmux-hook" "$HOME/.local/share/cmux-tui/bin/cmux-tui-hook"
-  cat >"$TEST_ROOT/bin/cmux-tui" <<'TUI'
-#!/usr/bin/env bash
-[[ $* == '--json agent hook status claude codex' ]] || exit 64
-if [[ ${TUI_BAD_JSON:-0} == 1 ]]; then printf 'action status\nproviders []\n'; exit; fi
-printf '{"action":"status","errors":[],"providers":[{"provider":"claude","state":"installed"},{"provider":"codex","state":"%s"}]}\n' "${TUI_CODEX_STATUS:-installed}"
-TUI
+  fake_cmux_init "$TEST_ROOT/cmux-state"
+  ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/bin/cmux-tui"
   cat >"$TEST_ROOT/bin/tmux" <<'TMUX'
 #!/usr/bin/env bash
 printf 'tmux %s\n' "${TMUX_VERSION:-3.2a}"
@@ -344,5 +376,7 @@ scenario_readiness_dispatch
 scenario_mac
 scenario_shapes_and_hooks
 scenario_record
+scenario_recorded_contract
+scenario_reference_redaction
 scenario_vm
 lib_summary

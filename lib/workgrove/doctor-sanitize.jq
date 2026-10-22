@@ -7,7 +7,8 @@ def public_keys: [
   "notification_id","name","type","version","protocol","seq","source","boot_id","occurred_at",
   "created_at","is_read","rule_id","when","then","action","command","timeout_seconds",
   "rate_limit","interval_seconds","maximum","methods","access_mode","redacted_fields",
-  "body_length","title_length","subtitle_length","delivery","replaced_notification_ids"
+  "body_length","title_length","subtitle_length","delivery","replaced_notification_ids",
+  "ref","window_ref","has_custom_title","terminal_transport","selected_workspace_id","workspace_count"
 ];
 def public_value($key; $value):
   {backend:["cmux-tui"], state:["connected","disconnected","suspended","connecting"],
@@ -20,7 +21,17 @@ def methods: ["workspace.list","workspace.create","workspace.action","workspace.
 . as $input
 | ([paths(strings) as $p | getpath($p)] + [.. | objects | keys[]]
     | map(select(test("^[A-Fa-f0-9]{8}(-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$"))) | unique) as $ids
-| def identity($value):
+| ([.. | objects | to_entries[] | select(.key == "ref" or .key == "window_ref") | .value
+    | strings | select(test("^workspace:[1-9][0-9]*$"))] | unique) as $workspace_refs
+| ([.. | objects | to_entries[] | select(.key == "ref" or .key == "window_ref") | .value
+    | strings | select(test("^window:[1-9][0-9]*$"))] | unique) as $window_refs
+| def reference($value):
+    if ($workspace_refs | index($value)) != null then
+      "workspace:" + (($workspace_refs | index($value)) + 1 | tostring)
+    elif ($window_refs | index($value)) != null then
+      "window:" + (($window_refs | index($value)) + 1 | tostring)
+    else "<redacted>" end;
+  def identity($value):
     (($ids | index($value)) + 1 | tostring) as $n
     | "00000000-0000-4000-8000-" + (("000000000000" + $n)[-12:]);
   def scrub($key):
@@ -38,6 +49,7 @@ def methods: ["workspace.list","workspace.create","workspace.action","workspace.
         elif $key == "title" then "<title>"
         elif $key == "body" or $key == "subtitle" then "<redacted>"
         elif $key == "current_directory" then "<path>"
+        elif $key == "ref" or $key == "window_ref" then reference($value)
         elif ($ids | index($value)) != null then identity($value)
         elif public_value($key; $value) then .
         elif $key == "methods" and (methods | index($value)) != null then .

@@ -448,13 +448,15 @@ sys.exit(int(open(os.environ["SSH_TEST_STATUS"]).read()))
             else:
                 self.assertNotEqual(result.returncode, 0)
         script = ('source "$1/lib/workgrove/common.sh"; '
+                  'source "$1/test/fakes/rows.sh"; fake_cmux_init "$2"; '
+                  'export CMUX_BUNDLED_CLI_PATH="$1/test/fakes/cmux"; '
+                  'fake_failure all 64 unexpected-cmux-call; '
                   'CMUX_ROWS_FULL=1; CMUX_ROWS_JSON=\'{"workspaces":[]}\'; '
-                  'cmux_call() { echo unexpected-cmux-call; }; '
                   'cmux_row_create_ssh test-host task description command')
-        result = subprocess.run([os.environ["BASH"], "-c", script, "test", str(REPO)], env=self.env,
+        result = subprocess.run([os.environ["BASH"], "-c", script, "test", str(REPO), str(self.root / "cmux-state")], env=self.env,
                                 capture_output=True, text=True, timeout=15)
         self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("unexpected-cmux-call", result.stdout)
+        self.assertEqual((self.root / "cmux-state/calls.log").read_text(), "")
         self.assertNotIn(CANARY, result.stdout + result.stderr)
         self.assertEqual(len(self.calls()), before)
 

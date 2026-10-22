@@ -1,0 +1,2840 @@
+{
+  "<field-0>": {
+    "<field-0>": false,
+    "<field-1>": "<redacted>",
+    "<field-2>": "<redacted>",
+    "<field-3>": "<redacted>",
+    "<field-4>": "<redacted>",
+    "window_ref": "window:1",
+    "workspace_id": "00000000-0000-4000-8000-000000000014",
+    "<field-7>": "<redacted>"
+  },
+  "caller": {
+    "<field-0>": false,
+    "<field-1>": "<redacted>",
+    "<field-2>": "<redacted>",
+    "<field-3>": "<redacted>",
+    "<field-4>": "<redacted>",
+    "window_ref": "window:1",
+    "workspace_id": "00000000-0000-4000-8000-000000000016",
+    "<field-7>": "<redacted>"
+  },
+  "coding_agents": [
+    {
+      "<field-0>": "<redacted>",
+      "<field-1>": "<redacted>",
+      "id": "<redacted>",
+      "resources": {
+        "<field-0>": 0.84349596323973697,
+        "<field-1>": 428821024,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          1353,
+          9669
+        ],
+        "process_count": 2,
+        "<field-7>": 337870848,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    },
+    {
+      "<field-0>": "<redacted>",
+      "<field-1>": "<redacted>",
+      "id": "<redacted>",
+      "resources": {
+        "<field-0>": 3.7844794573934317,
+        "<field-1>": 375081768,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          10565,
+          48351
+        ],
+        "process_count": 2,
+        "<field-7>": 381911040,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    }
+  ],
+  "<field-3>": false,
+  "<field-4>": {
+    "<field-0>": {
+      "<field-0>": "<redacted>",
+      "name": "<redacted>",
+      "<field-2>": "<redacted>",
+      "<field-3>": 259098328,
+      "<field-4>": 687,
+      "<field-5>": 172228608,
+      "<field-6>": "<redacted>",
+      "resources": {
+        "<field-0>": 3.4169590692472016,
+        "<field-1>": 259098328,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          687
+        ],
+        "process_count": 1,
+        "<field-7>": 172228608,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 447093981184
+      }
+    },
+    "<field-1>": {
+      "<field-0>": [
+        {
+          "<field-0>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                48351
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 198164480,
+              "<field-5>": 198164480,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000009",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                10565
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 183746560,
+              "<field-5>": 183746560,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000016",
+              "<field-9>": "<redacted>"
+            }
+          ],
+          "<field-1>": {
+            "<field-0>": 2,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 2,
+            "<field-4>": 0,
+            "workspace_count": 2
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            10565,
+            48351
+          ],
+          "process_count": 2,
+          "<field-6>": 381911040,
+          "<field-7>": 381911040,
+          "<field-8>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": [
+              48351
+            ],
+            "process_count": 1,
+            "<field-3>": "<redacted>",
+            "<field-4>": 198164480,
+            "<field-5>": 198164480,
+            "<field-6>": "<redacted>",
+            "<field-7>": "<redacted>",
+            "workspace_id": "00000000-0000-4000-8000-000000000009",
+            "<field-9>": "<redacted>"
+          }
+        },
+        {
+          "<field-0>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                9669
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 190005248,
+              "<field-5>": 190005248,
+              "<field-6>": null,
+              "<field-7>": null,
+              "workspace_id": "00000000-0000-4000-8000-000000000014",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                1353
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 147865600,
+              "<field-5>": 147865600,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000002",
+              "<field-9>": "<redacted>"
+            }
+          ],
+          "<field-1>": {
+            "<field-0>": 2,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 2,
+            "<field-4>": 0,
+            "workspace_count": 2
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            1353,
+            9669
+          ],
+          "process_count": 2,
+          "<field-6>": 337870848,
+          "<field-7>": 337870848,
+          "<field-8>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": [
+              9669
+            ],
+            "process_count": 1,
+            "<field-3>": "<redacted>",
+            "<field-4>": 190005248,
+            "<field-5>": 190005248,
+            "<field-6>": null,
+            "<field-7>": null,
+            "workspace_id": "00000000-0000-4000-8000-000000000014",
+            "<field-9>": "<redacted>"
+          }
+        },
+        {
+          "<field-0>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                10676,
+                94915
+              ],
+              "process_count": 2,
+              "<field-3>": "<redacted>",
+              "<field-4>": 41435136,
+              "<field-5>": 41435136,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000016",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                19726,
+                50671
+              ],
+              "process_count": 2,
+              "<field-3>": "<redacted>",
+              "<field-4>": 41435136,
+              "<field-5>": 41435136,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000009",
+              "<field-9>": "<redacted>"
+            }
+          ],
+          "<field-1>": {
+            "<field-0>": 4,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 2,
+            "<field-4>": 0,
+            "workspace_count": 2
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            10676,
+            19726,
+            50671,
+            94915
+          ],
+          "process_count": 4,
+          "<field-6>": 82870272,
+          "<field-7>": 82870272,
+          "<field-8>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": [
+              10676,
+              94915
+            ],
+            "process_count": 2,
+            "<field-3>": "<redacted>",
+            "<field-4>": 41435136,
+            "<field-5>": 41435136,
+            "<field-6>": "<redacted>",
+            "<field-7>": "<redacted>",
+            "workspace_id": "00000000-0000-4000-8000-000000000016",
+            "<field-9>": "<redacted>"
+          }
+        },
+        {
+          "<field-0>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                10677,
+                10824,
+                94914,
+                95030
+              ],
+              "process_count": 4,
+              "<field-3>": "<redacted>",
+              "<field-4>": 34324480,
+              "<field-5>": 34324480,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000016",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                19728,
+                19852,
+                50672,
+                50787
+              ],
+              "process_count": 4,
+              "<field-3>": "<redacted>",
+              "<field-4>": 34193408,
+              "<field-5>": 34193408,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000009",
+              "<field-9>": "<redacted>"
+            }
+          ],
+          "<field-1>": {
+            "<field-0>": 8,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 2,
+            "<field-4>": 0,
+            "workspace_count": 2
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            10677,
+            10824,
+            19728,
+            19852,
+            50672,
+            50787,
+            94914,
+            95030
+          ],
+          "process_count": 8,
+          "<field-6>": 68517888,
+          "<field-7>": 68517888,
+          "<field-8>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": [
+              10677,
+              10824,
+              94914,
+              95030
+            ],
+            "process_count": 4,
+            "<field-3>": "<redacted>",
+            "<field-4>": 34324480,
+            "<field-5>": 34324480,
+            "<field-6>": "<redacted>",
+            "<field-7>": "<redacted>",
+            "workspace_id": "00000000-0000-4000-8000-000000000016",
+            "<field-9>": "<redacted>"
+          }
+        },
+        {
+          "<field-0>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                10678,
+                94913
+              ],
+              "process_count": 2,
+              "<field-3>": "<redacted>",
+              "<field-4>": 21348352,
+              "<field-5>": 21348352,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000016",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                19727,
+                50670
+              ],
+              "process_count": 2,
+              "<field-3>": "<redacted>",
+              "<field-4>": 21348352,
+              "<field-5>": 21348352,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000009",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                9795
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 9322496,
+              "<field-5>": 9322496,
+              "<field-6>": null,
+              "<field-7>": null,
+              "workspace_id": "00000000-0000-4000-8000-000000000014",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                3838
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 8896512,
+              "<field-5>": 8896512,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000002",
+              "<field-9>": "<redacted>"
+            }
+          ],
+          "<field-1>": {
+            "<field-0>": 6,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 4,
+            "<field-4>": 0,
+            "workspace_count": 4
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            3838,
+            9795,
+            10678,
+            19727,
+            50670,
+            94913
+          ],
+          "process_count": 6,
+          "<field-6>": 60915712,
+          "<field-7>": 60915712,
+          "<field-8>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": [
+              10678,
+              94913
+            ],
+            "process_count": 2,
+            "<field-3>": "<redacted>",
+            "<field-4>": 21348352,
+            "<field-5>": 21348352,
+            "<field-6>": "<redacted>",
+            "<field-7>": "<redacted>",
+            "workspace_id": "00000000-0000-4000-8000-000000000016",
+            "<field-9>": "<redacted>"
+          }
+        },
+        {
+          "<field-0>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                9749,
+                55986
+              ],
+              "process_count": 2,
+              "<field-3>": "<redacted>",
+              "<field-4>": 32161792,
+              "<field-5>": 32161792,
+              "<field-6>": null,
+              "<field-7>": null,
+              "workspace_id": "00000000-0000-4000-8000-000000000014",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                2364,
+                3781
+              ],
+              "process_count": 2,
+              "<field-3>": "<redacted>",
+              "<field-4>": 26542080,
+              "<field-5>": 26542080,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000002",
+              "<field-9>": "<redacted>"
+            }
+          ],
+          "<field-1>": {
+            "<field-0>": 4,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 2,
+            "<field-4>": 0,
+            "workspace_count": 2
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            2364,
+            3781,
+            9749,
+            55986
+          ],
+          "process_count": 4,
+          "<field-6>": 58703872,
+          "<field-7>": 58703872,
+          "<field-8>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": [
+              9749,
+              55986
+            ],
+            "process_count": 2,
+            "<field-3>": "<redacted>",
+            "<field-4>": 32161792,
+            "<field-5>": 32161792,
+            "<field-6>": null,
+            "<field-7>": null,
+            "workspace_id": "00000000-0000-4000-8000-000000000014",
+            "<field-9>": "<redacted>"
+          }
+        },
+        {
+          "<field-0>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                11005
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 19496960,
+              "<field-5>": 19496960,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000016",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                59237
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 18874368,
+              "<field-5>": 18874368,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000009",
+              "<field-9>": "<redacted>"
+            }
+          ],
+          "<field-1>": {
+            "<field-0>": 2,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 2,
+            "<field-4>": 0,
+            "workspace_count": 2
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            11005,
+            59237
+          ],
+          "process_count": 2,
+          "<field-6>": 38371328,
+          "<field-7>": 38371328,
+          "<field-8>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": [
+              11005
+            ],
+            "process_count": 1,
+            "<field-3>": "<redacted>",
+            "<field-4>": 19496960,
+            "<field-5>": 19496960,
+            "<field-6>": "<redacted>",
+            "<field-7>": "<redacted>",
+            "workspace_id": "00000000-0000-4000-8000-000000000016",
+            "<field-9>": "<redacted>"
+          }
+        },
+        {
+          "<field-0>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                47062,
+                48193
+              ],
+              "process_count": 2,
+              "<field-3>": "<redacted>",
+              "<field-4>": 4947968,
+              "<field-5>": 4947968,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000009",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                10370,
+                10533
+              ],
+              "process_count": 2,
+              "<field-3>": "<redacted>",
+              "<field-4>": 4653056,
+              "<field-5>": 4653056,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000016",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                1013,
+                1352
+              ],
+              "process_count": 2,
+              "<field-3>": "<redacted>",
+              "<field-4>": 3850240,
+              "<field-5>": 3850240,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000002",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                1014
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 1359872,
+              "<field-5>": 1359872,
+              "<field-6>": null,
+              "<field-7>": null,
+              "workspace_id": "00000000-0000-4000-8000-000000000014",
+              "<field-9>": "<redacted>"
+            }
+          ],
+          "<field-1>": {
+            "<field-0>": 7,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 4,
+            "<field-4>": 0,
+            "workspace_count": 4
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            1013,
+            1014,
+            1352,
+            10370,
+            10533,
+            47062,
+            48193
+          ],
+          "process_count": 7,
+          "<field-6>": 14811136,
+          "<field-7>": 14811136,
+          "<field-8>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": [
+              47062,
+              48193
+            ],
+            "process_count": 2,
+            "<field-3>": "<redacted>",
+            "<field-4>": 4947968,
+            "<field-5>": 4947968,
+            "<field-6>": "<redacted>",
+            "<field-7>": "<redacted>",
+            "workspace_id": "00000000-0000-4000-8000-000000000009",
+            "<field-9>": "<redacted>"
+          }
+        },
+        {
+          "<field-0>": [],
+          "<field-1>": {
+            "<field-0>": 0,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 0,
+            "<field-4>": 1,
+            "workspace_count": 0
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            883
+          ],
+          "process_count": 1,
+          "<field-6>": 13828096,
+          "<field-7>": 13828096,
+          "<field-8>": null
+        },
+        {
+          "<field-0>": [],
+          "<field-1>": {
+            "<field-0>": 0,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 0,
+            "<field-4>": 2,
+            "workspace_count": 0
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            999,
+            3822
+          ],
+          "process_count": 2,
+          "<field-6>": 12664832,
+          "<field-7>": 12664832,
+          "<field-8>": null
+        },
+        {
+          "<field-0>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                48197
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 5324800,
+              "<field-5>": 5324800,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000009",
+              "<field-9>": "<redacted>"
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                10535
+              ],
+              "process_count": 1,
+              "<field-3>": "<redacted>",
+              "<field-4>": 5111808,
+              "<field-5>": 5111808,
+              "<field-6>": "<redacted>",
+              "<field-7>": "<redacted>",
+              "workspace_id": "00000000-0000-4000-8000-000000000016",
+              "<field-9>": "<redacted>"
+            }
+          ],
+          "<field-1>": {
+            "<field-0>": 2,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 2,
+            "<field-4>": 0,
+            "workspace_count": 2
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            10535,
+            48197
+          ],
+          "process_count": 2,
+          "<field-6>": 10436608,
+          "<field-7>": 10436608,
+          "<field-8>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": [
+              48197
+            ],
+            "process_count": 1,
+            "<field-3>": "<redacted>",
+            "<field-4>": 5324800,
+            "<field-5>": 5324800,
+            "<field-6>": "<redacted>",
+            "<field-7>": "<redacted>",
+            "workspace_id": "00000000-0000-4000-8000-000000000009",
+            "<field-9>": "<redacted>"
+          }
+        },
+        {
+          "<field-0>": [],
+          "<field-1>": {
+            "<field-0>": 0,
+            "<field-1>": "<redacted>",
+            "<field-2>": null,
+            "<field-3>": 0,
+            "<field-4>": 1,
+            "workspace_count": 0
+          },
+          "id": "<redacted>",
+          "name": "<redacted>",
+          "<field-4>": [
+            3768
+          ],
+          "process_count": 1,
+          "<field-6>": 1736704,
+          "<field-7>": 1736704,
+          "<field-8>": null
+        }
+      ],
+      "<field-1>": [
+        883,
+        999,
+        1006,
+        1007,
+        1013,
+        1014,
+        1352,
+        1353,
+        2364,
+        3768,
+        3781,
+        3822,
+        3838,
+        9669,
+        9749,
+        9795,
+        10369,
+        10370,
+        10533,
+        10535,
+        10565,
+        10676,
+        10677,
+        10678,
+        10824,
+        11005,
+        19726,
+        19727,
+        19728,
+        19852,
+        47018,
+        47062,
+        48193,
+        48197,
+        48351,
+        50670,
+        50671,
+        50672,
+        50787,
+        55986,
+        59237,
+        94913,
+        94914,
+        94915,
+        95030
+      ],
+      "process_count": 45,
+      "<field-3>": 1082638336,
+      "<field-4>": 687
+    },
+    "<field-2>": "<redacted>",
+    "<field-3>": "<redacted>"
+  },
+  "<field-5>": [
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 0.84349596323973697,
+        "<field-1>": 428821024,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          1353,
+          9669
+        ],
+        "process_count": 2,
+        "<field-7>": 337870848,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    },
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 0,
+        "<field-1>": 8635136,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          10535,
+          48197
+        ],
+        "process_count": 2,
+        "<field-7>": 10436608,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    },
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 3.492732820518734,
+        "<field-1>": 279203680,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          687,
+          2364,
+          3781,
+          9749,
+          55986
+        ],
+        "process_count": 5,
+        "<field-7>": 230932480,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    },
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 0,
+        "<field-1>": 20515480,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          3838,
+          9795,
+          10678,
+          19727,
+          50670,
+          94913
+        ],
+        "process_count": 6,
+        "<field-7>": 60915712,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    },
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 3.7844794573934317,
+        "<field-1>": 375081768,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          10565,
+          48351
+        ],
+        "process_count": 2,
+        "<field-7>": 381911040,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    },
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 0.03554438696770381,
+        "<field-1>": 20382872,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          11005,
+          59237
+        ],
+        "process_count": 2,
+        "<field-7>": 38371328,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    },
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 0,
+        "<field-1>": 0,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          1006,
+          1007,
+          10369,
+          47018
+        ],
+        "process_count": 4,
+        "<field-7>": 0,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 4,
+        "<field-11>": [
+          1006,
+          1007,
+          10369,
+          47018
+        ],
+        "<field-12>": 4,
+        "<field-13>": [
+          1006,
+          1007,
+          10369,
+          47018
+        ],
+        "<field-14>": 0
+      }
+    },
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 0,
+        "<field-1>": 59088912,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          10676,
+          19726,
+          50671,
+          94915
+        ],
+        "process_count": 4,
+        "<field-7>": 82870272,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    },
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 0.001257201592681632,
+        "<field-1>": 74012720,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          10677,
+          10824,
+          19728,
+          19852,
+          50672,
+          50787,
+          94914,
+          95030
+        ],
+        "process_count": 8,
+        "<field-7>": 68517888,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    },
+    {
+      "id": "<redacted>",
+      "name": "<redacted>",
+      "resources": {
+        "<field-0>": 0.26972435022114966,
+        "<field-1>": 29509912,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          1013,
+          1014,
+          1352,
+          10370,
+          10533,
+          47062,
+          48193
+        ],
+        "process_count": 7,
+        "<field-7>": 14811136,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 0,
+        "<field-11>": [],
+        "<field-12>": 0,
+        "<field-13>": [],
+        "<field-14>": 0
+      }
+    }
+  ],
+  "<field-6>": {
+    "<field-0>": true,
+    "<field-1>": "<redacted>",
+    "<field-2>": true,
+    "<field-3>": 0,
+    "<field-4>": "<redacted>",
+    "<field-5>": "<redacted>",
+    "<field-6>": true,
+    "<field-7>": "<redacted>",
+    "<field-8>": "<redacted>",
+    "<field-9>": [
+      "<redacted>",
+      "<redacted>"
+    ],
+    "<field-10>": true,
+    "<field-11>": "<redacted>",
+    "source": "<redacted>"
+  },
+  "<field-7>": {
+    "<field-0>": 8.4272341799334374,
+    "<field-1>": 1295251504,
+    "<field-2>": 0,
+    "<field-3>": [],
+    "<field-4>": [],
+    "<field-5>": [
+      687,
+      1006,
+      1007,
+      1013,
+      1014,
+      1352,
+      1353,
+      2364,
+      3781,
+      3838,
+      9669,
+      9749,
+      9795,
+      10369,
+      10370,
+      10533,
+      10535,
+      10565,
+      10676,
+      10677,
+      10678,
+      10824,
+      11005,
+      19726,
+      19727,
+      19728,
+      19852,
+      47018,
+      47062,
+      48193,
+      48197,
+      48351,
+      50670,
+      50671,
+      50672,
+      50787,
+      55986,
+      59237,
+      94913,
+      94914,
+      94915,
+      95030
+    ],
+    "process_count": 42,
+    "<field-7>": 1226637312,
+    "<field-8>": 0,
+    "<field-9>": [],
+    "<field-10>": 4,
+    "<field-11>": [
+      1006,
+      1007,
+      10369,
+      47018
+    ],
+    "<field-12>": 4,
+    "<field-13>": [
+      1006,
+      1007,
+      10369,
+      47018
+    ],
+    "<field-14>": 19723485020160
+  },
+  "windows": [
+    {
+      "<field-0>": [
+        687
+      ],
+      "<field-1>": [
+        1353,
+        9669,
+        10535,
+        48197
+      ],
+      "index": 0,
+      "key": false,
+      "<field-4>": "<redacted>",
+      "<field-5>": [],
+      "ref": "window:1",
+      "resources": {
+        "<field-0>": 8.4272341799334374,
+        "<field-1>": 1295251504,
+        "<field-2>": 0,
+        "<field-3>": [],
+        "<field-4>": [],
+        "<field-5>": [
+          687,
+          1006,
+          1007,
+          1013,
+          1014,
+          1352,
+          1353,
+          2364,
+          3781,
+          3838,
+          9669,
+          9749,
+          9795,
+          10369,
+          10370,
+          10533,
+          10535,
+          10565,
+          10676,
+          10677,
+          10678,
+          10824,
+          11005,
+          19726,
+          19727,
+          19728,
+          19852,
+          47018,
+          47062,
+          48193,
+          48197,
+          48351,
+          50670,
+          50671,
+          50672,
+          50787,
+          55986,
+          59237,
+          94913,
+          94914,
+          94915,
+          95030
+        ],
+        "process_count": 42,
+        "<field-7>": 1226637312,
+        "<field-8>": 0,
+        "<field-9>": [],
+        "<field-10>": 4,
+        "<field-11>": [
+          1006,
+          1007,
+          10369,
+          47018
+        ],
+        "<field-12>": 4,
+        "<field-13>": [
+          1006,
+          1007,
+          10369,
+          47018
+        ],
+        "<field-14>": 19723485020160
+      },
+      "selected_workspace_id": "00000000-0000-4000-8000-000000000014",
+      "<field-9>": "<redacted>",
+      "<field-10>": [
+        687,
+        1006,
+        1007,
+        1353,
+        9669,
+        10369,
+        10565,
+        47018,
+        48351
+      ],
+      "<field-11>": true,
+      "workspace_count": 5,
+      "workspaces": [
+        {
+          "description": "@<test-vm> · <repo>",
+          "<field-1>": [
+            9669
+          ],
+          "<field-2>": {
+            "<field-0>": null,
+            "<field-1>": "<redacted>",
+            "<field-2>": null
+          },
+          "id": "00000000-0000-4000-8000-000000000014",
+          "index": 0,
+          "<field-5>": "<redacted>",
+          "<field-6>": [
+            {
+              "<field-0>": true,
+              "<field-1>": [
+                9669
+              ],
+              "index": 0,
+              "<field-3>": "<redacted>",
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0.5134773770054486,
+                "<field-1>": 257821912,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [
+                  1007,
+                  1014,
+                  9669,
+                  9749,
+                  9795,
+                  55986
+                ],
+                "process_count": 6,
+                "<field-7>": 232849408,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 1,
+                "<field-11>": [
+                  1007
+                ],
+                "<field-12>": 1,
+                "<field-13>": [
+                  1007
+                ],
+                "<field-14>": 2234731347968
+              },
+              "<field-6>": "<redacted>",
+              "<field-7>": 2,
+              "<field-8>": [
+                "<redacted>",
+                "<redacted>"
+              ],
+              "<field-9>": [
+                {
+                  "<field-0>": null,
+                  "<field-1>": [
+                    9669,
+                    9749,
+                    9795,
+                    55986
+                  ],
+                  "<field-2>": true,
+                  "<field-3>": [
+                    9669
+                  ],
+                  "index": 0,
+                  "<field-5>": 0,
+                  "<field-6>": "<redacted>",
+                  "<field-7>": "<redacted>",
+                  "<field-8>": [],
+                  "ref": "<redacted>",
+                  "resources": {
+                    "<field-0>": 0.5134773770054486,
+                    "<field-1>": 257821912,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [
+                      1007,
+                      1014,
+                      9669,
+                      9749,
+                      9795,
+                      55986
+                    ],
+                    "process_count": 6,
+                    "<field-7>": 232849408,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 1,
+                    "<field-11>": [
+                      1007
+                    ],
+                    "<field-12>": 1,
+                    "<field-13>": [
+                      1007
+                    ],
+                    "<field-14>": 2234731347968
+                  },
+                  "<field-11>": [
+                    1007,
+                    1014,
+                    9669,
+                    9749,
+                    9795,
+                    55986
+                  ],
+                  "<field-12>": true,
+                  "<field-13>": true,
+                  "title": "<title>",
+                  "<field-15>": [
+                    1007
+                  ],
+                  "<field-16>": "<redacted>",
+                  "<field-17>": {
+                    "<field-0>": "<redacted>",
+                    "<field-1>": "<redacted>",
+                    "<field-2>": "<redacted>",
+                    "<field-3>": "<redacted>",
+                    "<field-4>": "<redacted>"
+                  },
+                  "<field-18>": [
+                    1007,
+                    1014,
+                    9669,
+                    9749,
+                    9795
+                  ],
+                  "type": "<redacted>",
+                  "<field-20>": {
+                    "<field-0>": 0,
+                    "<field-1>": 0,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [],
+                    "process_count": 0,
+                    "<field-7>": 0,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 0,
+                    "<field-11>": [],
+                    "<field-12>": 0,
+                    "<field-13>": [],
+                    "<field-14>": 0
+                  },
+                  "<field-21>": [],
+                  "<field-22>": null,
+                  "<field-23>": []
+                },
+                {
+                  "<field-0>": null,
+                  "<field-1>": [],
+                  "<field-2>": false,
+                  "<field-3>": [
+                    9669
+                  ],
+                  "index": 1,
+                  "<field-5>": 1,
+                  "<field-6>": "<redacted>",
+                  "<field-7>": "<redacted>",
+                  "<field-8>": [],
+                  "ref": "<redacted>",
+                  "resources": {
+                    "<field-0>": 0.5134773770054486,
+                    "<field-1>": 257821912,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [
+                      1007,
+                      1014,
+                      9669,
+                      9749,
+                      9795,
+                      55986
+                    ],
+                    "process_count": 6,
+                    "<field-7>": 232849408,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 1,
+                    "<field-11>": [
+                      1007
+                    ],
+                    "<field-12>": 1,
+                    "<field-13>": [
+                      1007
+                    ],
+                    "<field-14>": 2234731347968
+                  },
+                  "<field-11>": [
+                    1007,
+                    1014,
+                    9669,
+                    9749,
+                    9795
+                  ],
+                  "<field-12>": false,
+                  "<field-13>": false,
+                  "title": "<title>",
+                  "<field-15>": [
+                    1007
+                  ],
+                  "<field-16>": "<redacted>",
+                  "<field-17>": {
+                    "<field-0>": "<redacted>",
+                    "<field-1>": "<redacted>",
+                    "<field-2>": "<redacted>",
+                    "<field-3>": "<redacted>",
+                    "<field-4>": "<redacted>"
+                  },
+                  "<field-18>": [
+                    1007,
+                    1014,
+                    9669,
+                    9749,
+                    9795
+                  ],
+                  "type": "<redacted>",
+                  "<field-20>": {
+                    "<field-0>": 0,
+                    "<field-1>": 0,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [],
+                    "process_count": 0,
+                    "<field-7>": 0,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 0,
+                    "<field-11>": [],
+                    "<field-12>": 0,
+                    "<field-13>": [],
+                    "<field-14>": 0
+                  },
+                  "<field-21>": [],
+                  "<field-22>": null,
+                  "<field-23>": []
+                }
+              ],
+              "<field-10>": [
+                1007
+              ]
+            }
+          ],
+          "<field-7>": false,
+          "ref": "workspace:1",
+          "resources": {
+            "<field-0>": 0.5134773770054486,
+            "<field-1>": 257821912,
+            "<field-2>": 0,
+            "<field-3>": [],
+            "<field-4>": [],
+            "<field-5>": [
+              1007,
+              1014,
+              9669,
+              9749,
+              9795,
+              55986
+            ],
+            "process_count": 6,
+            "<field-7>": 232849408,
+            "<field-8>": 0,
+            "<field-9>": [],
+            "<field-10>": 1,
+            "<field-11>": [
+              1007
+            ],
+            "<field-12>": 1,
+            "<field-13>": [
+              1007
+            ],
+            "<field-14>": 2234731347968
+          },
+          "<field-10>": true,
+          "<field-11>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                9669
+              ],
+              "<field-2>": "<redacted>",
+              "<field-3>": "<redacted>",
+              "index": 0,
+              "key": "<redacted>",
+              "<field-6>": "<redacted>",
+              "<field-7>": 9669,
+              "<field-8>": 0,
+              "<field-9>": [],
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0.5134773770054486,
+                "<field-1>": 252382016,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [
+                  9669,
+                  9749,
+                  9795,
+                  55986
+                ],
+                "process_count": 4,
+                "<field-7>": 231489536,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 1788970221568
+              },
+              "<field-12>": [
+                9669
+              ],
+              "<field-13>": [
+                9669
+              ],
+              "<field-14>": null,
+              "<field-15>": "<redacted>",
+              "<field-16>": true
+            }
+          ],
+          "title": "<title>",
+          "<field-13>": [
+            1007,
+            9669
+          ]
+        },
+        {
+          "description": "@<test-vm> · <repo>",
+          "<field-1>": [
+            48197
+          ],
+          "<field-2>": {
+            "<field-0>": null,
+            "<field-1>": "<redacted>",
+            "<field-2>": null
+          },
+          "id": "00000000-0000-4000-8000-000000000009",
+          "index": 1,
+          "<field-5>": "<redacted>",
+          "<field-6>": [
+            {
+              "<field-0>": true,
+              "<field-1>": [
+                48197
+              ],
+              "index": 0,
+              "<field-3>": "<redacted>",
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 2.1192251070261592,
+                "<field-1>": 279178376,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [
+                  19726,
+                  19727,
+                  19728,
+                  19852,
+                  47018,
+                  47062,
+                  48193,
+                  48197,
+                  48351,
+                  50670,
+                  50671,
+                  50672,
+                  50787,
+                  59237
+                ],
+                "process_count": 14,
+                "<field-7>": 324288512,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 1,
+                "<field-11>": [
+                  47018
+                ],
+                "<field-12>": 1,
+                "<field-13>": [
+                  47018
+                ],
+                "<field-14>": 7180503089152
+              },
+              "<field-6>": "<redacted>",
+              "<field-7>": 1,
+              "<field-8>": [
+                "<redacted>"
+              ],
+              "<field-9>": [
+                {
+                  "<field-0>": null,
+                  "<field-1>": [
+                    48197,
+                    48351,
+                    59237
+                  ],
+                  "<field-2>": true,
+                  "<field-3>": [
+                    48197
+                  ],
+                  "index": 0,
+                  "<field-5>": 0,
+                  "<field-6>": "<redacted>",
+                  "<field-7>": "<redacted>",
+                  "<field-8>": [],
+                  "ref": "<redacted>",
+                  "resources": {
+                    "<field-0>": 2.1192251070261592,
+                    "<field-1>": 279178376,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [
+                      19726,
+                      19727,
+                      19728,
+                      19852,
+                      47018,
+                      47062,
+                      48193,
+                      48197,
+                      48351,
+                      50670,
+                      50671,
+                      50672,
+                      50787,
+                      59237
+                    ],
+                    "process_count": 14,
+                    "<field-7>": 324288512,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 1,
+                    "<field-11>": [
+                      47018
+                    ],
+                    "<field-12>": 1,
+                    "<field-13>": [
+                      47018
+                    ],
+                    "<field-14>": 7180503089152
+                  },
+                  "<field-11>": [
+                    19726,
+                    19727,
+                    19728,
+                    19852,
+                    47018,
+                    47062,
+                    48193,
+                    48197,
+                    48351,
+                    50670,
+                    50671,
+                    50672,
+                    50787,
+                    59237
+                  ],
+                  "<field-12>": true,
+                  "<field-13>": true,
+                  "title": "<title>",
+                  "<field-15>": [
+                    47018
+                  ],
+                  "<field-16>": "<redacted>",
+                  "<field-17>": {
+                    "<field-0>": "<redacted>",
+                    "<field-1>": "<redacted>",
+                    "<field-2>": "<redacted>",
+                    "<field-3>": "<redacted>",
+                    "<field-4>": "<redacted>",
+                    "<field-5>": "<redacted>",
+                    "<field-6>": "<redacted>",
+                    "<field-7>": "<redacted>",
+                    "<field-8>": "<redacted>",
+                    "<field-9>": "<redacted>",
+                    "<field-10>": "<redacted>",
+                    "<field-11>": "<redacted>",
+                    "<field-12>": "<redacted>",
+                    "<field-13>": "<redacted>"
+                  },
+                  "<field-18>": [
+                    19726,
+                    19727,
+                    19728,
+                    19852,
+                    47018,
+                    47062,
+                    48193,
+                    48197,
+                    48351,
+                    50670,
+                    50671,
+                    50672,
+                    50787,
+                    59237
+                  ],
+                  "type": "<redacted>",
+                  "<field-20>": {
+                    "<field-0>": 0,
+                    "<field-1>": 0,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [],
+                    "process_count": 0,
+                    "<field-7>": 0,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 0,
+                    "<field-11>": [],
+                    "<field-12>": 0,
+                    "<field-13>": [],
+                    "<field-14>": 0
+                  },
+                  "<field-21>": [],
+                  "<field-22>": null,
+                  "<field-23>": []
+                }
+              ],
+              "<field-10>": [
+                47018
+              ]
+            }
+          ],
+          "<field-7>": false,
+          "ref": "workspace:5",
+          "resources": {
+            "<field-0>": 2.1192251070261592,
+            "<field-1>": 279178376,
+            "<field-2>": 0,
+            "<field-3>": [],
+            "<field-4>": [],
+            "<field-5>": [
+              19726,
+              19727,
+              19728,
+              19852,
+              47018,
+              47062,
+              48193,
+              48197,
+              48351,
+              50670,
+              50671,
+              50672,
+              50787,
+              59237
+            ],
+            "process_count": 14,
+            "<field-7>": 324288512,
+            "<field-8>": 0,
+            "<field-9>": [],
+            "<field-10>": 1,
+            "<field-11>": [
+              47018
+            ],
+            "<field-12>": 1,
+            "<field-13>": [
+              47018
+            ],
+            "<field-14>": 7180503089152
+          },
+          "<field-10>": false,
+          "<field-11>": [
+            {
+              "<field-0>": null,
+              "<field-1>": [],
+              "<field-2>": "<redacted>",
+              "<field-3>": "<redacted>",
+              "index": 0,
+              "key": "<redacted>",
+              "<field-6>": "<redacted>",
+              "<field-7>": null,
+              "<field-8>": 2,
+              "<field-9>": [],
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0,
+                "<field-1>": 0,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [],
+                "process_count": 0,
+                "<field-7>": 0,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 0
+              },
+              "<field-12>": [],
+              "<field-13>": [],
+              "<field-14>": null,
+              "<field-15>": "<redacted>",
+              "<field-16>": true
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [],
+              "<field-2>": "<redacted>",
+              "<field-3>": "<redacted>",
+              "index": 1,
+              "key": "<redacted>",
+              "<field-6>": "<redacted>",
+              "<field-7>": null,
+              "<field-8>": 0,
+              "<field-9>": [],
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0,
+                "<field-1>": 0,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [],
+                "process_count": 0,
+                "<field-7>": 0,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 0
+              },
+              "<field-12>": [],
+              "<field-13>": [],
+              "<field-14>": null,
+              "<field-15>": "<redacted>",
+              "<field-16>": true
+            },
+            {
+              "<field-0>": null,
+              "<field-1>": [
+                48197
+              ],
+              "<field-2>": "<redacted>",
+              "<field-3>": null,
+              "index": 2,
+              "key": "<redacted>",
+              "<field-6>": "<redacted>",
+              "<field-7>": 48351,
+              "<field-8>": 0,
+              "<field-9>": [],
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 2.0299085119304956,
+                "<field-1>": 266348648,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [
+                  19726,
+                  19727,
+                  19728,
+                  19852,
+                  48351,
+                  50670,
+                  50671,
+                  50672,
+                  50787,
+                  59237
+                ],
+                "process_count": 10,
+                "<field-7>": 314015744,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 5843231965184
+              },
+              "<field-12>": [
+                48351
+              ],
+              "<field-13>": [
+                48351
+              ],
+              "<field-14>": null,
+              "<field-15>": "<redacted>",
+              "<field-16>": false
+            }
+          ],
+          "title": "<title>",
+          "<field-13>": [
+            47018,
+            48351
+          ]
+        },
+        {
+          "description": "@<test-vm> · <repo>",
+          "<field-1>": [
+            10535
+          ],
+          "<field-2>": {
+            "<field-0>": null,
+            "<field-1>": "<redacted>",
+            "<field-2>": null
+          },
+          "id": "00000000-0000-4000-8000-000000000016",
+          "index": 2,
+          "<field-5>": "<redacted>",
+          "<field-6>": [
+            {
+              "<field-0>": true,
+              "<field-1>": [
+                10535
+              ],
+              "index": 0,
+              "<field-3>": "<redacted>",
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 1.8800467639375211,
+                "<field-1>": 286534264,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [
+                  10369,
+                  10370,
+                  10533,
+                  10535,
+                  10565,
+                  10676,
+                  10677,
+                  10678,
+                  10824,
+                  11005,
+                  94913,
+                  94914,
+                  94915,
+                  95030
+                ],
+                "process_count": 14,
+                "<field-7>": 310116352,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 1,
+                "<field-11>": [
+                  10369
+                ],
+                "<field-12>": 1,
+                "<field-13>": [
+                  10369
+                ],
+                "<field-14>": 7180687802368
+              },
+              "<field-6>": "<redacted>",
+              "<field-7>": 1,
+              "<field-8>": [
+                "<redacted>"
+              ],
+              "<field-9>": [
+                {
+                  "<field-0>": null,
+                  "<field-1>": [
+                    10535,
+                    10565,
+                    11005
+                  ],
+                  "<field-2>": true,
+                  "<field-3>": [
+                    10535
+                  ],
+                  "index": 0,
+                  "<field-5>": 0,
+                  "<field-6>": "<redacted>",
+                  "<field-7>": "<redacted>",
+                  "<field-8>": [],
+                  "ref": "<redacted>",
+                  "resources": {
+                    "<field-0>": 1.8800467639375211,
+                    "<field-1>": 286534264,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [
+                      10369,
+                      10370,
+                      10533,
+                      10535,
+                      10565,
+                      10676,
+                      10677,
+                      10678,
+                      10824,
+                      11005,
+                      94913,
+                      94914,
+                      94915,
+                      95030
+                    ],
+                    "process_count": 14,
+                    "<field-7>": 310116352,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 1,
+                    "<field-11>": [
+                      10369
+                    ],
+                    "<field-12>": 1,
+                    "<field-13>": [
+                      10369
+                    ],
+                    "<field-14>": 7180687802368
+                  },
+                  "<field-11>": [
+                    10369,
+                    10370,
+                    10533,
+                    10535,
+                    10565,
+                    10676,
+                    10677,
+                    10678,
+                    10824,
+                    11005,
+                    94913,
+                    94914,
+                    94915,
+                    95030
+                  ],
+                  "<field-12>": true,
+                  "<field-13>": true,
+                  "title": "<title>",
+                  "<field-15>": [
+                    10369
+                  ],
+                  "<field-16>": "<redacted>",
+                  "<field-17>": {
+                    "<field-0>": "<redacted>",
+                    "<field-1>": "<redacted>",
+                    "<field-2>": "<redacted>",
+                    "<field-3>": "<redacted>",
+                    "<field-4>": "<redacted>",
+                    "<field-5>": "<redacted>",
+                    "<field-6>": "<redacted>",
+                    "<field-7>": "<redacted>",
+                    "<field-8>": "<redacted>",
+                    "<field-9>": "<redacted>",
+                    "<field-10>": "<redacted>",
+                    "<field-11>": "<redacted>",
+                    "<field-12>": "<redacted>",
+                    "<field-13>": "<redacted>"
+                  },
+                  "<field-18>": [
+                    10369,
+                    10370,
+                    10533,
+                    10535,
+                    10565,
+                    10676,
+                    10677,
+                    10678,
+                    10824,
+                    11005,
+                    94913,
+                    94914,
+                    94915,
+                    95030
+                  ],
+                  "type": "<redacted>",
+                  "<field-20>": {
+                    "<field-0>": 0,
+                    "<field-1>": 0,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [],
+                    "process_count": 0,
+                    "<field-7>": 0,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 0,
+                    "<field-11>": [],
+                    "<field-12>": 0,
+                    "<field-13>": [],
+                    "<field-14>": 0
+                  },
+                  "<field-21>": [],
+                  "<field-22>": null,
+                  "<field-23>": []
+                }
+              ],
+              "<field-10>": [
+                10369
+              ]
+            }
+          ],
+          "<field-7>": false,
+          "ref": "workspace:4",
+          "resources": {
+            "<field-0>": 1.8800467639375211,
+            "<field-1>": 286534264,
+            "<field-2>": 0,
+            "<field-3>": [],
+            "<field-4>": [],
+            "<field-5>": [
+              10369,
+              10370,
+              10533,
+              10535,
+              10565,
+              10676,
+              10677,
+              10678,
+              10824,
+              11005,
+              94913,
+              94914,
+              94915,
+              95030
+            ],
+            "process_count": 14,
+            "<field-7>": 310116352,
+            "<field-8>": 0,
+            "<field-9>": [],
+            "<field-10>": 1,
+            "<field-11>": [
+              10369
+            ],
+            "<field-12>": 1,
+            "<field-13>": [
+              10369
+            ],
+            "<field-14>": 7180687802368
+          },
+          "<field-10>": false,
+          "<field-11>": [
+            {
+              "<field-0>": null,
+              "<field-1>": [],
+              "<field-2>": "<redacted>",
+              "<field-3>": "<redacted>",
+              "index": 0,
+              "key": "<redacted>",
+              "<field-6>": "<redacted>",
+              "<field-7>": null,
+              "<field-8>": 2,
+              "<field-9>": [],
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0,
+                "<field-1>": 0,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [],
+                "process_count": 0,
+                "<field-7>": 0,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 0
+              },
+              "<field-12>": [],
+              "<field-13>": [],
+              "<field-14>": null,
+              "<field-15>": "<redacted>",
+              "<field-16>": true
+            },
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [],
+              "<field-2>": "<redacted>",
+              "<field-3>": "<redacted>",
+              "index": 1,
+              "key": "<redacted>",
+              "<field-6>": "<redacted>",
+              "<field-7>": null,
+              "<field-8>": 0,
+              "<field-9>": [],
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0,
+                "<field-1>": 0,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [],
+                "process_count": 0,
+                "<field-7>": 0,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 0
+              },
+              "<field-12>": [],
+              "<field-13>": [],
+              "<field-14>": null,
+              "<field-15>": "<redacted>",
+              "<field-16>": true
+            },
+            {
+              "<field-0>": null,
+              "<field-1>": [
+                10535
+              ],
+              "<field-2>": "<redacted>",
+              "<field-3>": null,
+              "index": 2,
+              "key": "<redacted>",
+              "<field-6>": "<redacted>",
+              "<field-7>": 10565,
+              "<field-8>": 0,
+              "<field-9>": [],
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 1.7913725340233215,
+                "<field-1>": 274343560,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [
+                  10565,
+                  10676,
+                  10677,
+                  10678,
+                  10824,
+                  11005,
+                  94913,
+                  94914,
+                  94915,
+                  95030
+                ],
+                "process_count": 10,
+                "<field-7>": 300351488,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 5843424198656
+              },
+              "<field-12>": [
+                10565
+              ],
+              "<field-13>": [
+                10565
+              ],
+              "<field-14>": null,
+              "<field-15>": "<redacted>",
+              "<field-16>": false
+            }
+          ],
+          "title": "<title>",
+          "<field-13>": [
+            10369,
+            10565
+          ]
+        },
+        {
+          "description": "@<test-vm> · <repo>",
+          "<field-1>": [],
+          "<field-2>": {
+            "<field-0>": "<redacted>",
+            "<field-1>": "<redacted>",
+            "<field-2>": "<redacted>"
+          },
+          "id": "00000000-0000-4000-8000-000000000003",
+          "index": 3,
+          "<field-5>": "<redacted>",
+          "<field-6>": [
+            {
+              "<field-0>": true,
+              "<field-1>": [],
+              "index": 0,
+              "<field-3>": "<redacted>",
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0,
+                "<field-1>": 0,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [],
+                "process_count": 0,
+                "<field-7>": 0,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 0
+              },
+              "<field-6>": "<redacted>",
+              "<field-7>": 1,
+              "<field-8>": [
+                "<redacted>"
+              ],
+              "<field-9>": [
+                {
+                  "<field-0>": null,
+                  "<field-1>": [],
+                  "<field-2>": true,
+                  "<field-3>": [],
+                  "index": 0,
+                  "<field-5>": 0,
+                  "<field-6>": "<redacted>",
+                  "<field-7>": "<redacted>",
+                  "<field-8>": [],
+                  "ref": "<redacted>",
+                  "resources": {
+                    "<field-0>": 0,
+                    "<field-1>": 0,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [],
+                    "process_count": 0,
+                    "<field-7>": 0,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 0,
+                    "<field-11>": [],
+                    "<field-12>": 0,
+                    "<field-13>": [],
+                    "<field-14>": 0
+                  },
+                  "<field-11>": [],
+                  "<field-12>": true,
+                  "<field-13>": true,
+                  "title": "<title>",
+                  "<field-15>": [],
+                  "<field-16>": null,
+                  "<field-17>": {},
+                  "<field-18>": [],
+                  "type": "<redacted>",
+                  "<field-20>": {
+                    "<field-0>": 0,
+                    "<field-1>": 0,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [],
+                    "process_count": 0,
+                    "<field-7>": 0,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 0,
+                    "<field-11>": [],
+                    "<field-12>": 0,
+                    "<field-13>": [],
+                    "<field-14>": 0
+                  },
+                  "<field-21>": [],
+                  "<field-22>": null,
+                  "<field-23>": []
+                }
+              ],
+              "<field-10>": []
+            }
+          ],
+          "<field-7>": false,
+          "ref": "workspace:2",
+          "resources": {
+            "<field-0>": 0,
+            "<field-1>": 0,
+            "<field-2>": 0,
+            "<field-3>": [],
+            "<field-4>": [],
+            "<field-5>": [],
+            "process_count": 0,
+            "<field-7>": 0,
+            "<field-8>": 0,
+            "<field-9>": [],
+            "<field-10>": 0,
+            "<field-11>": [],
+            "<field-12>": 0,
+            "<field-13>": [],
+            "<field-14>": 0
+          },
+          "<field-10>": false,
+          "<field-11>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [],
+              "<field-2>": "<redacted>",
+              "<field-3>": "<redacted>",
+              "index": 0,
+              "key": "<redacted>",
+              "<field-6>": "<redacted>",
+              "<field-7>": null,
+              "<field-8>": 100,
+              "<field-9>": [],
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0,
+                "<field-1>": 0,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [],
+                "process_count": 0,
+                "<field-7>": 0,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 0
+              },
+              "<field-12>": [],
+              "<field-13>": [],
+              "<field-14>": null,
+              "<field-15>": "<redacted>",
+              "<field-16>": true
+            }
+          ],
+          "title": "<title>",
+          "<field-13>": []
+        },
+        {
+          "description": "@<test-vm> · <repo>",
+          "<field-1>": [
+            1353
+          ],
+          "<field-2>": {
+            "<field-0>": null,
+            "<field-1>": "<redacted>",
+            "<field-2>": null
+          },
+          "id": "00000000-0000-4000-8000-000000000002",
+          "index": 4,
+          "<field-5>": "<redacted>",
+          "<field-6>": [
+            {
+              "<field-0>": true,
+              "<field-1>": [
+                1353
+              ],
+              "index": 0,
+              "<field-3>": "<redacted>",
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0.49752586271710797,
+                "<field-1>": 212618624,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [
+                  1006,
+                  1013,
+                  1352,
+                  1353,
+                  2364,
+                  3781,
+                  3838
+                ],
+                "process_count": 7,
+                "<field-7>": 187154432,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 1,
+                "<field-11>": [
+                  1006
+                ],
+                "<field-12>": 1,
+                "<field-13>": [
+                  1006
+                ],
+                "<field-14>": 2680468799488
+              },
+              "<field-6>": "<redacted>",
+              "<field-7>": 1,
+              "<field-8>": [
+                "<redacted>"
+              ],
+              "<field-9>": [
+                {
+                  "<field-0>": null,
+                  "<field-1>": [
+                    1353,
+                    2364,
+                    3781,
+                    3838
+                  ],
+                  "<field-2>": true,
+                  "<field-3>": [
+                    1353
+                  ],
+                  "index": 0,
+                  "<field-5>": 0,
+                  "<field-6>": "<redacted>",
+                  "<field-7>": "<redacted>",
+                  "<field-8>": [],
+                  "ref": "<redacted>",
+                  "resources": {
+                    "<field-0>": 0.49752586271710797,
+                    "<field-1>": 212618624,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [
+                      1006,
+                      1013,
+                      1352,
+                      1353,
+                      2364,
+                      3781,
+                      3838
+                    ],
+                    "process_count": 7,
+                    "<field-7>": 187154432,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 1,
+                    "<field-11>": [
+                      1006
+                    ],
+                    "<field-12>": 1,
+                    "<field-13>": [
+                      1006
+                    ],
+                    "<field-14>": 2680468799488
+                  },
+                  "<field-11>": [
+                    1006,
+                    1013,
+                    1352,
+                    1353,
+                    2364,
+                    3781,
+                    3838
+                  ],
+                  "<field-12>": true,
+                  "<field-13>": true,
+                  "title": "<title>",
+                  "<field-15>": [
+                    1006
+                  ],
+                  "<field-16>": "<redacted>",
+                  "<field-17>": {
+                    "<field-0>": "<redacted>",
+                    "<field-1>": "<redacted>",
+                    "<field-2>": "<redacted>",
+                    "<field-3>": "<redacted>",
+                    "<field-4>": "<redacted>",
+                    "<field-5>": "<redacted>"
+                  },
+                  "<field-18>": [
+                    1006,
+                    1013,
+                    1352,
+                    1353,
+                    2364,
+                    3838
+                  ],
+                  "type": "<redacted>",
+                  "<field-20>": {
+                    "<field-0>": 0,
+                    "<field-1>": 0,
+                    "<field-2>": 0,
+                    "<field-3>": [],
+                    "<field-4>": [],
+                    "<field-5>": [],
+                    "process_count": 0,
+                    "<field-7>": 0,
+                    "<field-8>": 0,
+                    "<field-9>": [],
+                    "<field-10>": 0,
+                    "<field-11>": [],
+                    "<field-12>": 0,
+                    "<field-13>": [],
+                    "<field-14>": 0
+                  },
+                  "<field-21>": [],
+                  "<field-22>": null,
+                  "<field-23>": []
+                }
+              ],
+              "<field-10>": [
+                1006
+              ]
+            }
+          ],
+          "<field-7>": false,
+          "ref": "workspace:3",
+          "resources": {
+            "<field-0>": 0.49752586271710797,
+            "<field-1>": 212618624,
+            "<field-2>": 0,
+            "<field-3>": [],
+            "<field-4>": [],
+            "<field-5>": [
+              1006,
+              1013,
+              1352,
+              1353,
+              2364,
+              3781,
+              3838
+            ],
+            "process_count": 7,
+            "<field-7>": 187154432,
+            "<field-8>": 0,
+            "<field-9>": [],
+            "<field-10>": 1,
+            "<field-11>": [
+              1006
+            ],
+            "<field-12>": 1,
+            "<field-13>": [
+              1006
+            ],
+            "<field-14>": 2680468799488
+          },
+          "<field-10>": false,
+          "<field-11>": [
+            {
+              "<field-0>": "<redacted>",
+              "<field-1>": [
+                1353
+              ],
+              "<field-2>": "<redacted>",
+              "<field-3>": "<redacted>",
+              "index": 0,
+              "key": "<redacted>",
+              "<field-6>": "<redacted>",
+              "<field-7>": 1353,
+              "<field-8>": 0,
+              "<field-9>": [],
+              "ref": "<redacted>",
+              "resources": {
+                "<field-0>": 0.40579233750582105,
+                "<field-1>": 204933904,
+                "<field-2>": 0,
+                "<field-3>": [],
+                "<field-4>": [],
+                "<field-5>": [
+                  1353,
+                  2364,
+                  3781,
+                  3838
+                ],
+                "process_count": 4,
+                "<field-7>": 183304192,
+                "<field-8>": 0,
+                "<field-9>": [],
+                "<field-10>": 0,
+                "<field-11>": [],
+                "<field-12>": 0,
+                "<field-13>": [],
+                "<field-14>": 1788949610496
+              },
+              "<field-12>": [
+                1353
+              ],
+              "<field-13>": [
+                1353
+              ],
+              "<field-14>": null,
+              "<field-15>": "<redacted>",
+              "<field-16>": true
+            }
+          ],
+          "title": "<title>",
+          "<field-13>": [
+            1006,
+            1353
+          ]
+        }
+      ]
+    }
+  ]
+}
