@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WT_BASE_FETCHES, WT_DIRNAME, WT_MERGE_TREE, WT_META, WT_TMPFILES.
 # Requires common.sh: have, warn.
-# Requires task.sh: meta_require.
+# Requires task.sh: meta_require, wt_register_tmpfile.
 file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shasum, Linux sha256sum)
   local h=""
   if have shasum; then h=$(shasum -a 256 "$1" 2>/dev/null) || h=""
@@ -193,7 +193,7 @@ branch_landed() { # branch_landed <branch> <base> <reason output>
   else
     # read-tree refuses an index file that is empty, so hand it a name that does not exist yet
     __idx=$(mktemp "${TMPDIR:-/tmp}/wt-index.XXXXXX") || { __landed_why="no temp file for a merge index"; return 1; }
-    WT_TMPFILES+=("$__idx"); rm -f "$__idx"
+    wt_register_tmpfile "$__idx"; rm -f "$__idx"
     if GIT_INDEX_FILE="$__idx" git -C "$REPO" read-tree -m -i --aggressive "$__m" "$__base" "$__b" >/dev/null 2>&1; then
       __tree_t=$(GIT_INDEX_FILE="$__idx" git -C "$REPO" write-tree 2>/dev/null) || __tree_t=""
     fi

@@ -80,8 +80,123 @@ MV
   assert_eq 'no temp files remain in the sidecar directory' '' "$(find "$TEST_ROOT/project/.git/wt" -name '*.new.*' -print)"
   end_scenario
 }
+
+scenario_cleanup_signal() {
+  begin_scenario 'TERM during EXIT cleanup removes files and runs later callbacks' || return 0
+  local rc=0
+  bash -c '
+    source "$1/lib/workgrove/common.sh"
+    touch "$2/pending-cleanup"
+    WT_TMPFILES+=("$2/pending-cleanup")
+    record() { printf "done\n" >"$2"; }
+    callback() { record "$1" "$LOG"; }
+    on_exit callback
+    rm() { kill -TERM "$BASHPID"; command rm "$@"; }
+    exit 7
+  ' bash "$REPO" "$TEST_ROOT" || rc=$?
+  assert_eq 'TERM keeps its signal status during cleanup' 143 "$rc"
+  assert_absent "$TEST_ROOT" pending-cleanup
+  assert_eq 'later callbacks still run' 'done' "$(cat "$LOG")"
+  end_scenario
+}
+
+scenario_subshell_cleanup() {
+  begin_scenario 'subshell cleanup owns its files and preserves parent callbacks' || return 0
+  local rc=0
+  bash -c '
+    source "$1/lib/workgrove/common.sh"
+    touch "$2/parent-pending"
+    wt_register_tmpfile "$2/parent-pending"
+    record() { printf "parent\n" >>"$LOG"; }
+    on_exit record
+    output=$(
+      touch "$2/subshell-pending"
+      wt_register_tmpfile "$2/subshell-pending"
+      kill -TERM "$BASHPID"
+    )
+    printf "%s\n" "$?" >"$2/subshell-status"
+    [[ -e $2/parent-pending && ! -e $2/subshell-pending && ! -e $LOG ]] || exit 8
+    (
+      touch "$2/background-pending"
+      wt_register_tmpfile "$2/background-pending"
+      kill -TERM "$BASHPID"
+    ) &
+    wait "$!"
+    printf "%s\n" "$?" >"$2/background-status"
+    [[ -e $2/parent-pending && ! -e $2/background-pending && ! -e $LOG ]] || exit 9
+  ' bash "$REPO" "$TEST_ROOT" || rc=$?
+  assert_eq 'the parent keeps its pending file until exit' 0 "$rc"
+  assert_eq 'the command substitution preserves TERM status' 143 "$(cat "$TEST_ROOT/subshell-status")"
+  assert_eq 'the background subshell preserves TERM status' 143 "$(cat "$TEST_ROOT/background-status")"
+  assert_absent "$TEST_ROOT" parent-pending
+  assert_absent "$TEST_ROOT" subshell-pending
+  assert_absent "$TEST_ROOT" background-pending
+  assert_eq 'only the parent runs its callback' parent "$(cat "$LOG")"
+  end_scenario
+}
+
+scenario_setup_signal() {
+  begin_scenario 'remote setup removes its diagnostic file after TERM' || return 0
+  local rc=0
+  mkdir -p "$TEST_ROOT/setup-bin" "$TEST_ROOT/setup-home" "$TEST_ROOT/setup-tmp"
+  cat >"$TEST_ROOT/setup-bin/ssh" <<'SSH'
+#!/usr/bin/env bash
+find "$TMPDIR" -name 'wt-setup-error.*' -print >"$SIGNAL_MARKER"
+kill -TERM "$PPID"
+exit 1
+SSH
+  chmod +x "$TEST_ROOT/setup-bin/ssh"
+  env HOME="$TEST_ROOT/setup-home" PATH="$TEST_ROOT/setup-bin:$PATH" TMPDIR="$TEST_ROOT/setup-tmp" \
+    SIGNAL_MARKER="$TEST_ROOT/setup-interrupted" bash "$REPO/bin/wt" -H test-host setup \
+    --root /persistent --storage os-disk >"$TEST_ROOT/setup-output" 2>&1 || rc=$?
+  assert_eq 'TERM stops remote setup' 143 "$rc"
+  if [[ -s $TEST_ROOT/setup-interrupted ]]; then pass; else fail 'setup did not create its diagnostic file'; fi
+  assert_eq 'setup leaves no diagnostic file' '' "$(find "$TEST_ROOT/setup-tmp" -name 'wt-setup-error.*' -print)"
+  end_scenario
+}
+
+scenario_host_signal() {
+  begin_scenario 'host probes remove temporary files in their own subshells after TERM' || return 0
+  local rc=0
+  mkdir -p "$TEST_ROOT/host-bin" "$TEST_ROOT/host-home/.ssh" "$TEST_ROOT/host-tmp"
+  printf 'Host test-host\n' >"$TEST_ROOT/host-home/.ssh/config"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$TEST_ROOT/host-bin/uname"
+  cat >"$TEST_ROOT/host-bin/ssh" <<'SSH'
+#!/usr/bin/env bash
+find "$TMPDIR" -name 'wt-host-*' -print >"$SIGNAL_MARKER"
+kill -TERM "$PPID"
+exit 1
+SSH
+  chmod +x "$TEST_ROOT/host-bin/"*
+  env -u CMUX_SSH_ATTEMPT_ID HOME="$TEST_ROOT/host-home" PATH="$TEST_ROOT/host-bin:$PATH" \
+    TMPDIR="$TEST_ROOT/host-tmp" SIGNAL_MARKER="$TEST_ROOT/host-interrupted" \
+    bash "$REPO/bin/wt" hosts --json >"$TEST_ROOT/host-output" 2>"$TEST_ROOT/host-error" || rc=$?
+  assert_eq 'hosts still records an interrupted probe' 0 "$rc"
+  assert_eq 'the probe reports its signal status' 'SSH probe failed (exit 143)' "$(jq -r '.[0].error' "$TEST_ROOT/host-output")"
+  assert_eq 'all host temporary files exist before interruption' 4 "$(wc -l <"$TEST_ROOT/host-interrupted" | tr -d ' ')"
+  assert_eq 'the probe leaves no temporary file' '' "$(find "$TEST_ROOT/host-tmp" -name 'wt-host-*' -print)"
+  rc=0
+  # shellcheck disable=SC2016  # The child shell expands these arguments.
+  env TMPDIR="$TEST_ROOT/host-tmp" bash -c '
+    source "$1/lib/workgrove/common.sh"
+    source "$1/lib/workgrove/hosts.sh"
+    ssh_host_check() { kill -TERM "$BASHPID"; }
+    (host_record test-host) &
+    wait "$!"
+  ' bash "$REPO" >"$TEST_ROOT/record-output" 2>&1 || rc=$?
+  assert_eq 'TERM stops the host record worker' 143 "$rc"
+  assert_eq 'the worker leaves no temporary file' '' "$(find "$TEST_ROOT/host-tmp" -name 'wt-host-*' -print)"
+  end_scenario
+}
+
 LOG="$TEST_ROOT/handlers"; export LOG
 scenario_exit_handlers
 scenario_repeated_source
 scenario_task_signal
+LOG="$TEST_ROOT/cleanup-callback"
+scenario_cleanup_signal
+LOG="$TEST_ROOT/parent-callback"
+scenario_subshell_cleanup
+scenario_setup_signal
+scenario_host_signal
 lib_summary

@@ -815,7 +815,7 @@ cmd_hosts() {
   while IFS= read -r host; do
     f=$(mktemp "${TMPDIR:-/tmp}/wt-host-record.XXXXXX") || die "hosts: could not create a temporary file"
     files+=("$f")
-    WT_TMPFILES+=("$f")
+    wt_register_tmpfile "$f"
     (host_record "$host" >"$f") &
     pids+=("$!")
   done < <(ssh_hosts)

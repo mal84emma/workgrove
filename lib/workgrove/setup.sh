@@ -36,6 +36,7 @@ host_setup() {
   bootstrap+="$(shell_join bootstrap --host "$host" "${args[@]}")"
   local error_file consent status=0
   error_file=$(mktemp "${TMPDIR:-/tmp}/wt-setup-error.XXXXXX") || die 'setup: cannot create a private diagnostic file'
+  wt_register_tmpfile "$error_file"
   remote_sh_raw "$host" "/bin/sh -c $(shell_join "$bootstrap" wt-setup "$mode" "${opts[root]}" "$policy" "$mount")" \
     <"$WG_LIB_DIR/portable.py" 2>"$error_file" || status=$?
   if ((status != 0)) && [[ ! -v opts[trust] && ! -v opts[strict] && ! -v opts[restore] && -t 0 && -t 2 ]] &&
