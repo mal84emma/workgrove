@@ -231,7 +231,7 @@ wt_update_record() {
 
 host_version() {
   local output rc=0
-  output=$(vm_wt "$1" version 2>/dev/null) || rc=$?
+  output=$(vm_wt "$1" version) || rc=$?
   [[ $rc != 255 ]] || { warn "host unreachable: is the VM running? (ssh $1)"; return 1; }
   if [[ $rc == 0 ]] && output=$(wt_read_version <<<"$output" 2>/dev/null); then
     printf '%s\n' "$output"
@@ -250,7 +250,7 @@ host_update() {
   vm_wt "$host" --tty update "${@:2}" || rc=$?
   [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
   [[ $rc == 0 ]] || return "$rc"
-  version=$(host_version "$host" 2>/dev/null) || version='{"commit":null,"protocol":null}'
+  version=$(host_version "$host") || version='{"commit":null,"protocol":null}'
   if ! jq -e '.commit != null and .protocol != null' <<<"$version" >/dev/null; then
     warn "update on $host succeeded; could not read its version (ssh $host)"
   fi

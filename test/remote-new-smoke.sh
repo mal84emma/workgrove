@@ -88,6 +88,11 @@ make_fake_ssh "$TEST_ROOT/local/bin/ssh" "$TEST_ROOT/local/bin/ssh.fixture"
 cat >"$TEST_ROOT/remote/.local/bin/wt" <<'WT'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ ${REMOTE_FAIL_SUB:-} == "$1" ]]; then
+  [[ -z ${REMOTE_FAIL_STDOUT:-} ]] || printf '%s\n' "$REMOTE_FAIL_STDOUT"
+  [[ -z ${REMOTE_FAIL_STDERR:-} ]] || printf '%s\n' "$REMOTE_FAIL_STDERR" >&2
+  exit "$REMOTE_FAIL_STATUS"
+fi
 if [[ $1 == new ]]; then
   if [[ $REMOTE_OUTPUT_MODE == old ]]; then
     for arg do
@@ -152,7 +157,7 @@ git -C "$TEST_ROOT/remote/repo" config user.email test@example.invalid
 git -C "$TEST_ROOT/remote/repo" commit -qm initial --allow-empty
 
 CMUX_MODE=alive SSH_MODE=ok REMOTE_DEFAULT_AGENT=claude
-WT_OUT='' WT_RC=0
+WT_OUT='' WT_STDOUT='' WT_STDERR='' WT_RC=0
 invoke_wt() {
   WT_RC=0
   prepare_cmux
@@ -169,9 +174,14 @@ invoke_wt() {
     REAL_WT="$REPO/bin/wt" FAKE_CMUX_STATE="$FAKE_CMUX_STATE" \
     SSH_LOG="$TEST_ROOT/ssh.log" CMUX_MODE="$CMUX_MODE" SSH_MODE="$SSH_MODE" \
     REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" \
+    REMOTE_FAIL_SUB="${REMOTE_FAIL_SUB:-}" REMOTE_FAIL_STATUS="${REMOTE_FAIL_STATUS:-141}" \
+    REMOTE_FAIL_STDOUT="${REMOTE_FAIL_STDOUT:-}" REMOTE_FAIL_STDERR="${REMOTE_FAIL_STDERR:-}" \
     REMOTE_HOME="$TEST_ROOT/remote" REMOTE_REPO="$TEST_ROOT/remote/repo" \
     REMOTE_NEW_MARKER="$TEST_ROOT/remote-new" REMOTE_DEFAULT_AGENT="$REMOTE_DEFAULT_AGENT" \
-    "${WT_BASH:-bash}" "$REPO/bin/wt" "$@" 2>&1) || WT_RC=$?
+    "${WT_BASH:-bash}" "$REPO/bin/wt" "$@" 2>"$TEST_ROOT/wt-stderr") || WT_RC=$?
+  WT_STDOUT=$WT_OUT
+  WT_STDERR=$(cat "$TEST_ROOT/wt-stderr")
+  if [[ -n $WT_STDERR ]]; then WT_OUT+="${WT_OUT:+$'\n'}$WT_STDERR"; fi
 }
 run_wt() {
   local args=(-H fakevm new task -r "$1")
@@ -577,5 +587,79 @@ SETUP
   end_scenario
 }
 scenario_nested_commands
+
+scenario_vm_failures() {
+  begin_scenario 'VM failures name the command, host, status, signal, and recovery command' || return 0
+  local sub status
+  CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  REMOTE_FAIL_SUB=show REMOTE_FAIL_STATUS=141
+  invoke_wt -H fakevm attach task -r wt-demo
+  assert_eq 'silent show failure keeps its status' 141 "$WT_RC"
+  assert_eq 'silent show failure has no stdout' '' "$WT_STDOUT"
+  assert_eq 'silent show failure reports one stderr line with inspection advice' \
+    'wt show on fakevm exited 141 (SIGPIPE); try: wt -H fakevm show task -r wt-demo' "$WT_STDERR"
+
+  REMOTE_FAIL_SUB=new
+  : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm new task -r wt-demo -a claude
+  assert_eq 'silent new failure keeps its status' 141 "$WT_RC"
+  check "$(jq -e '.protocol == 1 and (.commit | type == "string")' <<<"$WT_STDOUT" >/dev/null && echo yes)" 'new changed its preflight stdout'
+  assert_eq 'silent new failure reports one stderr line with inspection advice' \
+    'wt new on fakevm exited 141 (SIGPIPE); the worktree may exist; inspect with: wt -H fakevm list -r wt-demo before retrying' "$WT_STDERR"
+  check "$(if ! grep -q '^ssh ' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'failed creation opened a row'
+
+  REMOTE_FAIL_STATUS=1 REMOTE_FAIL_STDERR='wt: new: unknown option -m'
+  invoke_wt -H fakevm new task -r wt-demo -a claude -m opus
+  check "$(grep -xF 'wt new on fakevm exited 1; the worktree may exist; inspect with: wt -H fakevm list -r wt-demo before retrying; update with: wt -H fakevm update' <<<"$WT_STDERR" >/dev/null && echo yes)" 'model compatibility failure omitted its update command from the summary'
+
+  REMOTE_FAIL_SUB=show REMOTE_FAIL_STATUS=42 REMOTE_FAIL_STDERR='VM diagnostic: unchanged'
+  invoke_wt -H fakevm attach task -r '/repos/two words'
+  assert_eq 'captured VM stderr stays before the summary and quoted recovery command' \
+    $'VM diagnostic: unchanged\nwt show on fakevm exited 42; try: wt -H fakevm show task -r /repos/two\\ words' "$WT_STDERR"
+  REMOTE_FAIL_STATUS=141 REMOTE_FAIL_STDERR=''
+
+  for sub in list show path open rm version help doctor update; do
+    REMOTE_FAIL_SUB=$sub
+    local args=(-H fakevm "$sub")
+    case $sub in
+      show|path|open|rm) args+=(task -r wt-demo) ;;
+      list) args+=(-r wt-demo) ;;
+    esac
+    # open requests path; rm checks tmux before forwarding rm.
+    if [[ $sub == open ]]; then REMOTE_FAIL_SUB=path; fi
+    invoke_wt "${args[@]}"
+    check "$([[ $WT_RC -ne 0 && $WT_STDERR == *"wt $REMOTE_FAIL_SUB on fakevm exited 141 (SIGPIPE)"* ]] && echo yes)" "$sub hid the shared VM failure diagnostic"
+    check "$([[ $WT_STDOUT != *'exited 141'* ]] && echo yes)" "$sub sent the failure summary to stdout"
+  done
+
+  REMOTE_FAIL_SUB=list REMOTE_FAIL_STDOUT='partial report' REMOTE_FAIL_STDERR='VM diagnostic: unchanged'
+  for status in 42 137 200; do
+    REMOTE_FAIL_STATUS=$status
+    invoke_wt -H fakevm list -r wt-demo
+    assert_eq 'forwarded failure preserves status' "$status" "$WT_RC"
+    assert_eq 'forwarded failure preserves stdout' 'partial report' "$WT_STDOUT"
+    local detail=''
+    case $status in 137) detail=' (SIGKILL)' ;; 200) detail=' (unknown signal 72)' ;; esac
+    assert_eq 'VM stderr precedes exactly one summary' \
+      "VM diagnostic: unchanged"$'\n'"wt list on fakevm exited $status$detail" "$WT_STDERR"
+  done
+
+  REMOTE_FAIL_STDOUT='' REMOTE_FAIL_STDERR='' REMOTE_FAIL_STATUS=255
+  for sub in list attach; do
+    REMOTE_FAIL_SUB=list
+    local args=(-H fakevm list -r wt-demo)
+    if [[ $sub == attach ]]; then REMOTE_FAIL_SUB=show; args=(-H fakevm attach task -r wt-demo); fi
+    invoke_wt "${args[@]}"
+    assert_eq 'SSH failure keeps its converted status' 1 "$WT_RC"
+    assert_eq 'SSH failure keeps its existing diagnostic' \
+      'wt: host unreachable: is the VM running? (ssh fakevm)' "$WT_STDERR"
+  done
+  REMOTE_FAIL_SUB=''
+  invoke_wt -H fakevm version
+  assert_eq 'successful VM commands keep their status' 0 "$WT_RC"
+  assert_eq 'successful VM commands add no diagnostic' '' "$WT_STDERR"
+  end_scenario
+}
+scenario_vm_failures
 
 lib_summary

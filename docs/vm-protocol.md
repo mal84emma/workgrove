@@ -204,6 +204,17 @@ The tmux queries read `/dev/null`, so the helper receives the agent payload on s
 
 ## Exit statuses and failure handling
 
+When the VM's `wt` fails, `vm_wt` prints one summary line on standard error and preserves the command's exit status.
+The line names the subcommand, host, and status: `wt show on <vm> exited 141 (SIGPIPE)`.
+For statuses above 128, the line includes the signal name when the Mac recognizes the signal number.
+Otherwise, it includes `unknown signal` and the signal number.
+
+The VM's own standard error also reaches the user.
+For `vm_result` calls, a failed `show` includes the inspection command used by attach recovery.
+A failed `new` includes a `list` command to inspect possible creation before retrying.
+If the VM rejects the model option, the line also includes the existing update command.
+Status 255 keeps the existing SSH failure handling below and does not add this summary.
+
 | Status | Boundary and meaning | File and reader |
 |---|---|---|
 | `0` | The command succeeded. A VM notification send confirms acceptance, not the Mac action. | `cmux.sh`: `cmux_notify`; `task.sh`: `open_worktree`. |

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
-#   VM_SSH_RUN, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL, WT_TMPFILES.
+#   VM_SSH_RUN, VM_WT_CAPTURE_FAILURE, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT, WT_PROTOCOL, WT_TMPFILES.
 # Requires no functions from other modules. Loads cmux.sh, task.sh, options.sh, and version.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
@@ -170,9 +170,24 @@ vm_ssh() {
     -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$@" "$host" "$line"
 }
 
+vm_wt_failure() {
+  local host=$1 sub=$2 rc=$3 hint=${4:-} signal='' detail=''
+  if ((rc != 0 && rc != 255)); then
+    if ((rc > 128)); then
+      if signal=$(kill -l "$((rc - 128))" 2>/dev/null); then
+        detail=" (SIG${signal#SIG})"
+      else
+        detail=" (unknown signal $((rc - 128)))"
+      fi
+    fi
+    printf 'wt %s on %s exited %s%s%s\n' "$sub" "$host" "$rc" "$detail" "${hint:+; $hint}" >&2
+  fi
+  return 0
+}
+
 # Preserve SSH's exit status. Callers decide how to report transport failures.
 vm_wt() {
-  local host=$1 machine='' tty=() guard; shift
+  local host=$1 machine='' tty=() guard rc=0; shift
   case ${1:-} in
     --machine) machine="WT_MACHINE=$WT_PROTOCOL "; shift ;;
     --tty) [[ ! -t 0 ]] || tty=(-t); shift ;;
@@ -181,7 +196,10 @@ vm_wt() {
   guard='test -x "$HOME/.local/bin/wt" || { printf "%s\n" '
   guard+="$(shell_join "remote wt is missing; run: wt -H $host doctor --json; wt -H $host setup --root <persistent-root>")"
   guard+=' >&2; exit 127; }; '
-  vm_ssh "$host" "$guard$machine$(vm_wt_line "$@")" "${tty[@]}"
+  vm_ssh "$host" "$guard$machine$(vm_wt_line "$@")" "${tty[@]}" || rc=$?
+  # vm_result adds recovery advice after it reads both captured streams.
+  if [[ ${VM_WT_CAPTURE_FAILURE:-0} != 1 ]]; then vm_wt_failure "$host" "$1" "$rc"; fi
+  return "$rc"
 }
 
 vm_tmux() {
@@ -201,7 +219,7 @@ vm_result() {
   local __fields_output=$3
   local -n __vm_record=$3 __visible=$4 __errors=$5 __vm_rc=$6
   shift 7
-  local __raw __stdout __stderr __stderr_file __parse=0 __value __name='' __repo='' __arg __want_repo=0
+  local __raw __stdout __stderr __stderr_file __parse=0 __value __name='' __repo='' __arg __want_repo=0 __hint='' __summary
   __vm_record=() __visible='' __errors='' __vm_rc=0
   for __arg in "$@"; do
     if [[ $__want_repo == 1 ]]; then __repo=$__arg; __want_repo=0; continue; fi
@@ -214,12 +232,24 @@ vm_result() {
   done
   __stderr_file=$(mktemp "${TMPDIR:-/tmp}/wt-vm-stderr.XXXXXX") || { __vm_rc=1; return 1; }
   WT_TMPFILES+=("$__stderr_file")
-  __stdout=$(vm_wt "$__host" --machine "$__sub" "$@" 2>"$__stderr_file") || __vm_rc=$?
+  __stdout=$(VM_WT_CAPTURE_FAILURE=1 vm_wt "$__host" --machine "$__sub" "$@" 2>"$__stderr_file") || __vm_rc=$?
   __stderr=$(cat "$__stderr_file")
   rm -f "$__stderr_file"
+  case $__sub in
+    new)
+      __hint="the worktree may exist; inspect with: wt -H $__host list"
+      [[ -z $__repo ]] || __hint+=" -r $(shell_join "$__repo")"
+      __hint+=' before retrying'
+      case $__stdout$'\n'$__stderr in
+        *'new: unknown option -m'*|*'new: unknown option --model'*) __hint+="; update with: wt -H $__host update" ;;
+      esac ;;
+    show) __hint="try: wt -H $__host show $(shell_join "$__name" -r "$__repo")" ;;
+  esac
   __raw=$__stdout$'\n'$__stderr
   __visible=$(printf '%s\n' "$__stdout" | sed $'/^WT_RESULT\t/d')
   __errors=$(printf '%s\n' "$__stderr" | sed $'/^WT_RESULT\t/d')
+  __summary=$(vm_wt_failure "$__host" "$__sub" "$__vm_rc" "$__hint" 2>&1)
+  if [[ -n $__summary ]]; then __errors+="${__errors:+$'\n'}$__summary"; fi
   wt_read_result_into "$__raw" "$__sub" "$__fields_output" || __parse=$?
   case $__parse in
     0)

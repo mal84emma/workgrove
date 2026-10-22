@@ -199,7 +199,9 @@ scenario_vm_results() {
       local visible errors rc parsed=0 sub=show
       case $sample in text) sub=new ;; missing|wrong-repo|path-*|field-injection) sub=path ;; esac
       vm_result fixture "$sub" record visible errors rc -- task -r /repo || parsed=$?
-      [[ -z $errors ]] || printf 'unexpected diagnostic: %s' "$errors"
+      local expected_errors=''
+      if [[ $rc != 0 && $rc != 255 ]]; then expected_errors="wt $sub on fixture exited $rc"; fi
+      [[ $errors == "$expected_errors" ]] || printf 'unexpected diagnostic: %s' "$errors"
       case $sample in
         malformed|version|wrong-name|wrong-session|wrong-repo|field-injection) printf '%s' "$parsed" ;;
         *) printf '%s|%s|%s|%s|%s|%s|%s|%s' "$parsed" "$rc" "$visible" \
