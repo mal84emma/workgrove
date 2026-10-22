@@ -802,7 +802,7 @@ the saved task later with plain `attach`.
 ### VM command results
 
 The Mac sets `WT_MACHINE` to the highest record version it accepts, currently `1`.
-This applies to VM task creation, task recovery, and the Mac hook's worktree absence check.
+This applies to VM task creation, task recovery, path lookup for opening VS Code, and the Mac hook's worktree absence check.
 The VM keeps its human-readable output and adds one line beginning with `WT_RESULT`
 and a tab, followed by a compact JSON object.
 The VM consumes the request at startup so setup hooks and nested commands keep their ordinary output.
@@ -816,6 +816,8 @@ The object has these fields:
 | `name`, `repo` | The task name and absolute main checkout path. |
 | `session` | The tmux session name for `new` and `show`; an empty string for `path`. |
 | `state` | The session state from `show`, without parentheses; an empty string for other commands. |
+| `agent`, `attached`, `started` | Boolean facts from `show`: a running agent, an attached tmux client, and an existing started marker. |
+| `path` | The worktree path from a successful `path` command. |
 
 The record goes to standard output, except that a missing `path` record goes to
 standard error with exit status `1`.
@@ -823,10 +825,12 @@ The VM emits the lower of the requested version and its own version.
 Protocol 1 VMs accept every positive integer request and emit version 1.
 Readers require exactly one record with a supported version, the expected command, and string fields.
 Readers keep unknown scalar keys. New fields are additive.
+Older records can omit the boolean facts and `path`; marked compatibility fallbacks handle those records.
+The shared result reader removes record lines before displaying VM output.
 A new version number means that a field changed its meaning.
 An unsupported result version stops creation or recovery and names `wt update` on the Mac.
 The object must have unique keys and scalar values, with no nested objects or arrays.
-String fields must not contain control characters.
+Keys and string values must not contain control characters.
 Readers use the text format only when no record is present.
 An invalid record causes creation or recovery to stop and keeps the row during a close check.
 

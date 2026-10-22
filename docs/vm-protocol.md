@@ -14,7 +14,9 @@ The [relay investigation](vm-open-relay.md) and [agent status investigation](vm-
 With `-H`, a repository must be an absolute VM path or a plain repository name.
 `show`, `rm`, `path`, `open`, and `attach` require `-r`.
 
-`remote_wt` executes `"$HOME/.local/bin/wt"` on the VM through SSH.
+`vm_wt` in [common.sh](../lib/workgrove/common.sh) executes `"$HOME/.local/bin/wt"` on the VM through SSH.
+`vm_wt_line` and `vm_run_line` build commands without executing them.
+`vm_ssh` supplies shared SSH options, including keepalives; `vm_tmux` handles session queries and removal.
 `shell_join` in [common.sh](../lib/workgrove/common.sh) quotes each argument for the remote shell.
 Values such as `WT_MACHINE=1` appear inline in the command; the connection does not require SSH `AcceptEnv`.
 The Mac ships preflight and recovery scripts on standard input, so those scripts use the Mac's implementation.
@@ -23,28 +25,28 @@ The Mac ships preflight and recovery scripts on standard input, so those scripts
 |---|---|---|---|
 | `new` | `new --no-workspace --prompt-stdin`, with requested name, repository, base, agent, and model options. Standard input holds the brief. | Status 0 and a `new/created` record supply `name`, `repo`, and `session`. The session must match `wt_session`. | `remote.sh`: `host_new`. |
 | Creation preflight | `sh -s -- <repo> <agent>` receives `version.sh` and `vm/host-new-preflight.sh`. | The script prints version JSON. Its exit status checks `wt`, the repository, tmux, and the requested or default agent. | `remote.sh`: `host_new_preflight`, `host_new`. |
-| `attach` | `show <name> -r <repo>` with a machine-result request. | A `show/found` record supplies `name`, `repo`, `session`, and `state`. The name and derived session must match. | [recovery.sh](../lib/workgrove/recovery.sh): `host_attach`. |
+| `attach` | `show <name> -r <repo>` with a machine-result request. | A `show/found` record supplies identity and the `agent`, `attached`, and `started` booleans. The name and derived session must match. | [recovery.sh](../lib/workgrove/recovery.sh): `host_attach`. |
 | `attach` recovery | tmux queries and `vm/reinit-client-*.sh` scripts. | The Mac checks session clients, a single PID/TTY pair, and fresh screen markers before replacing a client. | `recovery.sh`: `vm_session_detached`, `reattach_shell_row`, `reinit_task_client`. |
 | `show` | `show` with the supplied options. | The Mac forwards output and exit status. It does not parse the user's report. | `bin/wt`: `cmd_host`; `remote.sh`: `remote_wt`. |
 | `rm` or `remove` | An agent probe, then `rm` with the supplied removal options. | The Mac requires an absent or idle agent and successful removal before closing its row and stopping the session. | `remote.sh`: `agent_on_vm`, `host_rm`. |
 | `path` | `path <name> -r <repo>`. | The Mac forwards the ordinary path and exit status. | `bin/wt`: `cmd_host`; `remote.sh`: `remote_wt`. |
-| `open` | `path <name> -r <repo>` without machine records. | The complete output must pass `hook_safe_path` before the Mac constructs the VS Code remote URI. | `remote.sh`: `host_open`. |
+| `open` | `path <name> -r <repo>` with a machine-result request. | The recorded `path` must pass `hook_safe_path`. Older records and text-only VMs use stdout as the path. | `remote.sh`: `host_open`. |
 | `list` or `ls` | `list`, with `--all` added when `-r` is absent. | The Mac forwards the table or requested JSON. | `remote.sh`: `host_list`. |
 | `repos` | `repos` with the supplied options. A terminal receives `--table` unless a mode was requested. | The Mac forwards repository lookup, table, or porcelain output. | `remote.sh`: `host_repos`. |
 | `doctor` | `doctor`, followed by `version`. | The Mac prints checks, recognizes SSH failure, and compares the reported protocol with `WT_PROTOCOL`. Remote `--record` is unsupported. | [doctor.sh](../lib/workgrove/doctor.sh): `host_doctor`. |
 | `version` | `version`. | The Mac forwards the VM's JSON object. | `bin/wt`: `cmd_host`; `remote.sh`: `remote_wt`. |
-| `update` | `version`, `update` with installation flags, then `version`. | The Mac validates version objects and prints before/after update records. It lends a terminal to interactive update confirmation. | `remote.sh`: `host_version`, `host_update`, `remote_wt_tty`. |
+| `update` | `version`, `update` with installation flags, then `version`. | The Mac validates version objects and prints before/after update records. It lends a terminal to interactive update confirmation. | `remote.sh`: `host_version`, `host_update`; `common.sh`: `vm_wt --tty`. |
 | `help`, `-h`, or `--help` | The normalized `help` command. | The Mac forwards help text and exit status. | `bin/wt`: `cmd_host`; `remote.sh`: `remote_wt`. |
-| Agent safety probe | The Mac's `tmux_agent` function runs through `bash -c`. | Status 0 means an agent runs; 1 means absent or idle; 2 means unreadable status. | `remote.sh`: `agent_on_vm`; [task.sh](../lib/workgrove/task.sh): `tmux_agent`. |
-| Task row startup | The SSH row runs `tmux_cmd`, then `wt run <name> -r <repo>` inside the new session. | The Mac uses the command's session identity, rather than parsing `wt run` output. | `remote.sh`: `remote_row`, `remote_run_cmd`; `common.sh`: `tmux_cmd`. |
+| Agent safety probe | The Mac sends its `tmux_agent` function on stdin to `bash -s`. | Status 0 means an agent runs; 1 means absent or idle; 2 means unreadable status. | `remote.sh`: `agent_on_vm`; [task.sh](../lib/workgrove/task.sh): `tmux_agent`. |
+| Task row startup | The SSH row runs `tmux_cmd`, then `wt run <name> -r <repo>` inside the new session. | The Mac uses the command's session identity, rather than parsing `wt run` output. | `remote.sh`: `remote_row`; `common.sh`: `vm_run_line`, `tmux_cmd`. |
 | `hosts` inventory | `sh -s` receives `version.sh` and `vm/probe-host.sh`. This is not a remote `wt hosts` command. | Tab-separated `wt_version`, `cpu`, `mem_kib`, `gpu_status`, and `gpu` rows become host JSON. | [hosts.sh](../lib/workgrove/hosts.sh): `probe_host`, `host_record`. |
 
 `host_new` consumes `-p` or `--prompt-stdin` on the Mac and sends both forms through the same standard-input channel.
 `--no-workspace` skips the Mac cmux requirement and row creation, but still runs VM preflight and creates the worktree.
 `host_new` does not retry creation after a disconnected SSH call because the VM might already have created the task.
 
-`host_attach` uses `session_state` from `task.sh`.
-Its values are `none`, `shell only`, `shell only, detached`, `agent running`, and `agent running, detached`.
+`host_attach` uses the boolean facts when the VM supplies them.
+`state` remains display text. Older VMs use marked wording fallbacks for the values `none`, `shell only`, `shell only, detached`, `agent running`, and `agent running, detached`.
 A task with no session and no started marker can start for the first time.
 A lost agent requires explicit `--restart-agent`; explicit `--reattach` sends attachment input only after a shell-prompt check.
 
@@ -61,8 +63,10 @@ An invalid value returns 1; an exceeded deadline returns 124.
 ## Result records and versions
 
 `WT_PROTOCOL` in `common.sh` is currently `1`.
-`remote_wt_result` and `remote_wt_result_raw` in `remote.sh` request records with `WT_MACHINE=$WT_PROTOCOL`.
-The Mac hook requests `WT_MACHINE=1` for its close check.
+`vm_result` calls `vm_wt --machine` to request records with `WT_MACHINE=$WT_PROTOCOL`.
+Creation, attach, open, and the Mac hook use this reader.
+It returns decoded fields, stdout, stderr, and command status separately, and removes records from both visible streams.
+It discovers records on either stream and uses only stdout for a legacy successful path.
 At startup, `bin/wt` consumes `WT_MACHINE`, stores it in nonexported `WG_MACHINE_RESULT`, and unsets the request.
 Nested `wt` calls and `.wt-setup` therefore do not inherit machine-result mode.
 
@@ -70,16 +74,21 @@ Nested `wt` calls and `.wt-setup` therefore do not inherit machine-result mode.
 Each record starts with `WT_RESULT`, one tab, and one compact JSON object on the same line.
 Human output can surround the record.
 `wt_read_result` in `common.sh` finds and validates the record; it does not parse unrelated lines.
+`wt_read_result_into` validates the record before decoding its scalar fields into an associative array.
 
 | Field | Value and producer | Reader |
 |---|---|---|
 | `version` | `wt_result` emits the lower of the requested version and `WT_PROTOCOL`. Protocol 1 VMs therefore emit 1 for every valid request. | `common.sh`: `wt_read_result`. |
 | `command` | `new`, `show`, or `path`, supplied by `cmd_new`, `cmd_show`, or `cmd_path` in `bin/wt`. | `common.sh`: `wt_read_result` requires the expected command. |
 | `status` | `created` for `new`; `found` for `show` or successful `path`; `missing` for an absent `path`. | `remote.sh`: `host_new`; `recovery.sh`: `host_attach`; `bin/cmux-hook`: the `wt-close` handler. |
-| `name` | The task name supplied by the producer. | `remote.sh`: `host_new` validates syntax. `recovery.sh`: `host_attach` checks the requested name. `bin/cmux-hook`: `wt-close` checks the requested name. |
-| `repo` | The absolute main checkout path supplied by the producer. | `remote.sh`: `host_new`; `recovery.sh`: `host_attach` derive the session. `bin/cmux-hook`: `wt-close` requires the exact requested path. |
-| `session` | `common.sh`: `wt_session` supplies `wt-<repo-id>-<name>` for `new` and `show`; `path` supplies an empty string. | `remote.sh`: `host_new`; `recovery.sh`: `host_attach` require the derived session name. |
-| `state` | `cmd_show` uses `session_state` on a VM. Other producers supply an empty string. | `recovery.sh`: `host_attach` selects first start, attachment, or explicit restart behavior. |
+| `name` | The task name supplied by the producer. | `remote.sh`: `common.sh`: `vm_result` validates creation names and checks the requested name for lookup results. |
+| `repo` | The absolute main checkout path supplied by the producer. | `common.sh`: `vm_result` derives task sessions and requires the requested repository for a missing path. |
+| `session` | `common.sh`: `wt_session` supplies `wt-<repo-id>-<name>` for `new` and `show`; `path` supplies an empty string. | `common.sh`: `vm_result` requires the derived session name for creation and show results. |
+| `state` | `cmd_show` uses `session_state` on a VM. Other producers supply an empty string. | `recovery.sh`: `host_attach` displays it and uses wording only when boolean facts are absent. |
+| `agent` | `cmd_show` reports whether the checked tmux probe found an agent. | `host_attach` requires a running agent unless first-start or explicit recovery applies. |
+| `attached` | `cmd_show` reports whether tmux lists an attached client. | `host_attach` checks a detached session before reattaching a shell row. |
+| `started` | `cmd_show` reports whether the task's started marker exists. | `host_attach` permits a first start only when the marker and session are absent. |
+| `path` | `cmd_path` supplies the worktree path for a found result. | `host_open` validates the path before opening VS Code. |
 
 `require_wt` in `task.sh` emits a missing `path` record on standard error and exits 1 through `die`.
 It checks the Git worktree registration before reporting absence.
@@ -88,18 +97,20 @@ Ordinary `wt path` prints only the path when no machine-result request exists.
 
 `wt_read_result` requires exactly one record, unique keys, and scalar values without nested objects or arrays.
 It validates a positive integer version and string fields for `status`, `name`, `repo`, `session`, and `state`.
-Those strings cannot contain control characters below 32 or character 127.
+Every key and string value, including unknown fields, must omit control characters below 32 and character 127.
+The optional `agent`, `attached`, and `started` fields must be booleans. The optional `path` field must be a string.
 The reader preserves unknown scalar fields.
 Additive fields retain the version; a changed field meaning requires a new version.
 
 The parser returns 1 for malformed records, 2 for absent records, and 3 for unsupported versions.
 These are parser statuses, not the remote command's exit status.
-`host_new`, `host_attach`, and the close handler use legacy text only when the record is absent.
+`vm_result` uses legacy identity text only when the record is absent.
+Version 1 records that omit newer facts retain marked compatibility fallbacks.
 They reject malformed or unsupported records.
 The unsupported-version path prints a Mac update hint.
 
-`host_new` reads legacy `created`, `repo:`, and `session:` lines.
-`host_attach` reads legacy `repo:` and `session:` lines, including the parenthesized state.
+`vm_result` reads legacy `created`, `repo:`, and `session:` lines, including the parenthesized state.
+For older VMs, `host_attach` sends a compatibility script to check the started marker.
 The close handler accepts the legacy missing-worktree text only with remote exit status 1.
 
 `wt_version` in `common.sh` emits `commit` and `protocol`.
@@ -198,8 +209,8 @@ The tmux queries read `/dev/null`, so the helper receives the agent payload on s
 | `0` | The command succeeded. A VM notification send confirms acceptance, not the Mac action. | `cmux.sh`: `cmux_notify`; `task.sh`: `open_worktree`. |
 | `3` | `rm` refuses because its Git or file safety checks found work to preserve. Other removal checks can fail with 1. | `bin/wt`: `cmd_rm`; `remote.sh`: `host_rm` preserves the refusal. |
 | `1` | `path` cannot find the registered worktree. A requested `path/missing` record goes to standard error. | `task.sh`: `require_wt`; `common.sh`: `die`; `bin/cmux-hook`: `wt-close`. |
-| `255` | Raw SSH reports a transport failure. This does not prove that a remote creation failed to finish. | `remote.sh`: `remote_sh_raw`, `remote_wt_result_raw`, `host_new`. |
-| `1` after SSH `255` | `remote_sh` and `remote_sh_tty` print an unreachable-host error through `die`. `host_version` and `host_doctor` also convert connection failure to 1. | `remote.sh`: the named wrappers; `doctor.sh`: `host_doctor`. |
+| `255` | Raw SSH reports a transport failure. This does not prove that a remote creation failed to finish. | `remote.sh`: `common.sh`: `vm_wt`, `vm_tmux`; `remote.sh`: `remote_sh_raw`, `host_new`. |
+| `1` after SSH `255` | `remote_sh`, `remote_wt`, `host_attach`, `host_open`, and `host_update` print an unreachable-host error through `die`. `host_version` and `host_doctor` also convert connection failure to 1. | `remote.sh`: the named wrappers; `doctor.sh`: `host_doctor`. |
 | `142` | A capped hook call exceeded its deadline. A failed lookup cannot authorize another row or removal. | `bin/cmux-hook`: `capped`; `cmux.sh`: `ws_load`. |
 
 Run `wt doctor` on the Mac and `wt -H <vm> doctor` for the VM checks.
