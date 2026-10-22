@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # Serve the recorded cmux contract with optional state and queued responses.
 set -euo pipefail
-HERE=$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)
+source_path=${BASH_SOURCE[0]}
+while [[ -L $source_path ]]; do
+  source_dir=$(cd "${source_path%/*}" && pwd -P)
+  source_path=$(readlink "$source_path")
+  [[ $source_path == /* ]] || source_path=$source_dir/$source_path
+done
+HERE=$(cd "${source_path%/*}" && pwd -P)
 fixtures=${CMUX_FIXTURES:-$HERE/../fixtures/cmux-0.65.1}
 state=${FAKE_CMUX_STATE:-}
 if [[ -n $state ]]; then
-  printf '%s\n' "$*" >>"$state/calls.log"
+  printf '%s\n' "$*" >>"$state/$(if [[ ${0##*/} == cmux-tui ]]; then echo native-calls.log; else echo calls.log; fi)"
 fi
+[[ $1 != --socket ]] || shift 2
 case "$1 ${2:-}" in
   '--json list-windows') key=list-windows; file=windows.json ;;
   '--json list-notifications') key=list-notifications; file=notifications.json ;;
@@ -51,7 +58,17 @@ case "$key" in
       jq -e --arg window "$5" 'if has($window) then .[$window] else error("unknown fixture window") end' "$fixtures/rows_by_window.json"
     else cat "$fixtures/rows.json"; fi ;;
   events) cat "$fixtures/event.json" ;;
-  ping|workspace-close|workspace-select|workspace-action|send|notify|clear-notifications|reconnect) ;;
+  notify)
+    title='' body=''
+    while (($#)); do
+      case $1 in --title) title=$2; shift ;; --body) body=$2; shift ;; esac
+      shift
+    done
+    jq -cn --arg title "$title" --argjson body "$body" '{title:$title,body:$body}' >>"$state/notify.requests.jsonl"
+    if [[ -f $state/notify-dedupe && -f $state/last-content && $(cat "$state/last-content") == "$title|$body" ]]; then exit 0; fi
+    printf '%s' "$title|$body" >"$state/last-content"
+    tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl" ;;
+  ping|workspace-close|workspace-select|workspace-action|send|clear-notifications|dismiss-notification|reconnect) ;;
   ssh|new-workspace) printf 'workspace:99\n' ;;
   read-screen) exit 1 ;;
   *) printf 'fake cmux: unexpected command: %s\n' "$*" >&2; exit 64 ;;
