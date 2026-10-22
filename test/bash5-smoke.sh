@@ -123,18 +123,16 @@ scenario_linked_library() {
   assert_eq 'bash wt, in the folder of the link, prints the help' yes "$([[ $out == *'wt new  [name]'* ]] && echo yes || echo "$out")"
   out=$(cd "$TEST_ROOT/home" && env -i PATH="$PATH" HOME="$TEST_ROOT/home" "$TEST_ROOT/links/bin/wt-ssh-host" help 2>&1) || true
   assert_eq 'wt-ssh-host loads through the links' yes "$([[ $out == *'wt-ssh-host'* && $out == *'{add,rm,check,list}'* ]] && echo yes || echo "$out")"
-  cat > "$TEST_ROOT/cmux" <<'CMUX'
-#!/bin/sh
-printf '%s\n' "$*" >> "$CMUX_LOG"
-exit 1
-CMUX
-  chmod +x "$TEST_ROOT/cmux"
+  # shellcheck source=test/fakes/rows.sh
+  source "$REPO/test/fakes/rows.sh"
+  fake_cmux_init "$TEST_ROOT/cmux-state"
+  fake_failure all 1
   out=$(cd "$TEST_ROOT/home" && env -i PATH="$PATH" HOME="$TEST_ROOT/home" \
-    XDG_STATE_HOME="$TEST_ROOT/home/.local/state" CMUX_LOG="$TEST_ROOT/cmux.log" \
-    CMUX_BUNDLED_CLI_PATH="$TEST_ROOT/cmux" \
+    XDG_STATE_HOME="$TEST_ROOT/home/.local/state" FAKE_CMUX_STATE="$FAKE_CMUX_STATE" \
+    CMUX_BUNDLED_CLI_PATH="$REPO/test/fakes/cmux" \
     CMUX_AUTOMATION_EVENT_JSON='{"name":"notification.created","workspace_id":"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA","payload":{"notification_id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"}}' \
     "$TEST_ROOT/links/bin/cmux-hook" --event 2>&1) || true
-  assert_grep 'cmux-hook loads the library through the links' "$TEST_ROOT/cmux.log" 'list-windows'
+  assert_grep 'cmux-hook loads the library through the links' "$FAKE_CMUX_STATE/calls.log" 'list-windows'
   out=$(cd "$TEST_ROOT/home" && printf '{}\n' | env -i PATH="$PATH" HOME="$TEST_ROOT/home" \
     XDG_STATE_HOME="$TEST_ROOT/home/.local/state" "$TEST_ROOT/links/bin/agent-notify" 2>&1) || true
   assert_eq 'agent-notify loads the library through the links' '' "$out"
