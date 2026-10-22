@@ -252,6 +252,64 @@ scenario_identities() {
 }
 scenario_identities
 
+scenario_fake_replay() {
+  begin_scenario 'the shared fake replays plain and scoped top responses' || return 0
+  local fake="$REPO/test/fakes/cmux" id=00000000-0000-4000-8000-000000000001
+  local rc scope
+  for scope in plain scoped; do
+    local args=(top --json)
+    [[ $scope != scoped ]] || args=(top --workspace "$id" --json)
+    rc=0
+    env -u FAKE_CMUX_STATE -u CMUX_FIXTURES "$fake" "${args[@]}" >"$TEST_ROOT/replayed-top" 2>"$TEST_ROOT/replayed-error" || rc=$?
+    assert_eq "$scope top replay succeeds" 0 "$rc"
+    if cmp -s "$FAKE_CMUX_FIXTURES/top.json" "$TEST_ROOT/replayed-top"; then pass
+    else fail "$scope top replay differs from the recorded response"; fi
+  done
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/top-state"
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  mkdir -p "$FAKE_CMUX_STATE/top"
+  fake_top global-caller 0 >"$FAKE_CMUX_STATE/top.json"
+  fake_top scoped-caller 1 >"$FAKE_CMUX_STATE/top/$id.json"
+  assert_eq 'an unknown workspace uses the global top override' global-caller \
+    "$("$fake" top --workspace other --json | jq -r .caller.workspace_id)"
+  assert_eq 'a workspace keeps its scoped top override' scoped-caller \
+    "$("$fake" top --workspace "$id" --json | jq -r .caller.workspace_id)"
+  end_scenario
+}
+scenario_fake_replay
+
+scenario_fake_mutations() {
+  begin_scenario 'persistent fake rows stay consistent across window snapshots' || return 0
+  local -x FAKE_CMUX_STATE="$TEST_ROOT/mutation-state"
+  local fake="$REPO/test/fakes/cmux" ref id
+  local first=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA second=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB
+  fake_cmux_init "$FAKE_CMUX_STATE"
+  : >"$FAKE_CMUX_STATE/mutate"
+  fake_windows "$first" "$second" >"$FAKE_CMUX_STATE/windows.json"
+  fake_rows >"$FAKE_CMUX_STATE/rows/$first.json"
+  fake_rows >"$FAKE_CMUX_STATE/rows/$second.json"
+  ref=$("$fake" ssh test-vm --name task --no-focus)
+  assert_eq 'persistent creation returns a workspace ref' workspace:1 "$ref"
+  id=$(jq -r '.workspaces[0].id' "$FAKE_CMUX_STATE/rows.json")
+  assert_eq 'the global snapshot contains the new row' 1 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'the active window contains the new row' 1 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$first.json")"
+  assert_eq 'the other window stays empty' 0 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$second.json")"
+  cmux_rows_load checked "$fake"
+  assert_eq 'checked enumeration finds the created row' "$id" "$(jq -r '.workspaces[0].id' <<<"$CMUX_ROWS_JSON")"
+  "$fake" workspace-action --workspace "$ref" --action set-description --description '@test-vm · repo'
+  assert_eq 'description changes update the global snapshot' '@test-vm · repo' \
+    "$(jq -r '.workspaces[0].description' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'description changes update the window snapshot' '@test-vm · repo' \
+    "$(jq -r '.workspaces[0].description' "$FAKE_CMUX_STATE/rows/$first.json")"
+  "$fake" workspace close "$id" --force
+  assert_eq 'closure removes the global row' 0 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'closure removes the window row' 0 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$first.json")"
+  cmux_rows_load checked "$fake"
+  assert_eq 'checked enumeration confirms closure' 0 "$(jq '.workspaces | length' <<<"$CMUX_ROWS_JSON")"
+  end_scenario
+}
+scenario_fake_mutations
+
 fake_cmux_init "$TEST_ROOT/cmux-state"
 ROW_WINDOW_ONE=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA
 ROW_WINDOW_TWO=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb

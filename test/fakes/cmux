@@ -22,6 +22,19 @@ screen_append() {
     rm "$state/screen-append"
   fi
 }
+update_rows() {
+  local document=$1
+  shift
+  jq "$@" "$document" >"$document.tmp"
+  mv "$document.tmp" "$document"
+}
+update_row_snapshots() {
+  local document
+  for document in "$state/rows.json" "$state/rows/"*.json; do
+    [[ -f $document ]] || continue
+    update_rows "$document" "$@"
+  done
+}
 [[ $1 != --socket ]] || shift 2
 case "$1 ${2:-}" in
   '--json agent') key=agent-hook-status; file=agent-hook-status.json ;;
@@ -29,7 +42,8 @@ case "$1 ${2:-}" in
   '--json list-notifications') key=list-notifications; file=notifications.json ;;
   'workspace list') key=workspace-list; file=rows.json
     if [[ ${4:-} == --window ]]; then key+=--$5; file=rows/$5.json; fi ;;
-  'top --workspace') key=top; file=top/$3.json ;;
+  'top --workspace') key=top; file=top.json
+    if [[ -n $state && -f $state/top/$3.json ]]; then file=top/$3.json; fi ;;
   'workspace create') key=workspace-create; file=create.json ;;
   'workspace close') key=workspace-close; file=close.txt ;;
   'workspace select') key=workspace-select; file=select.txt ;;
@@ -61,7 +75,6 @@ if [[ -n $state ]]; then
     cat "$state/close-confirmation" >&2
     exit 1
   fi
-  if [[ $key == top && ! -f $state/$file ]]; then file=top.json; fi
   if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; apply_effects; exit 0; fi
 fi
 if [[ -n $state && -f $state/mutate ]]; then
@@ -84,23 +97,30 @@ if [[ -n $state && -f $state/mutate ]]; then
       # shellcheck source=test/fakes/rows.sh
       source "$HERE/rows.sh"
       row=$(fake_row "$id" "$title" "$description" "$host" | jq -c --arg ref "$ref" --arg cwd "$cwd" '.ref=$ref | .current_directory=$cwd')
-      jq --argjson row "$row" '.workspaces += [$row]' "$state/rows.json" >"$state/rows.tmp"
-      mv "$state/rows.tmp" "$state/rows.json"
+      # shellcheck disable=SC2016  # jq expands the filter variables.
+      update_rows "$state/rows.json" --argjson row "$row" '.workspaces += [$row]'
+      window=$(jq -r '[.[] | select(.key == true)][0].id // .[0].id // empty' "$state/windows.json")
+      if [[ -n $window ]]; then
+        document=$state/rows/$window.json
+        [[ -f $document ]] || fake_rows >"$document"
+        # shellcheck disable=SC2016  # jq expands the filter variables.
+        update_rows "$document" --argjson row "$row" '.workspaces += [$row]'
+      fi
       printf '%s\n' "$ref"
       apply_effects
       exit 0 ;;
     workspace-close)
-      jq --arg id "$3" '.workspaces |= map(select(.id != $id and .ref != $id))' "$state/rows.json" >"$state/rows.tmp"
-      mv "$state/rows.tmp" "$state/rows.json" ;;
+      # shellcheck disable=SC2016  # jq expands the filter variables.
+      update_row_snapshots --arg id "$3" '.workspaces |= map(select(.id != $id and .ref != $id))' ;;
     workspace-action)
       id='' description=''
       while (($#)); do
         case $1 in --workspace) id=$2; shift ;; --description) description=$2; shift ;; esac
         shift
       done
-      jq --arg id "$id" --arg description "$description" \
-        '(.workspaces[] | select(.id == $id or .ref == $id) | .description)=$description' "$state/rows.json" >"$state/rows.tmp"
-      mv "$state/rows.tmp" "$state/rows.json"
+      # shellcheck disable=SC2016  # jq expands the filter variables.
+      update_row_snapshots --arg id "$id" --arg description "$description" \
+        '(.workspaces[] | select(.id == $id or .ref == $id) | .description)=$description'
       apply_effects
       exit 0 ;;
   esac
