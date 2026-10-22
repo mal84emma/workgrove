@@ -153,6 +153,18 @@ Workgrove keeps `HOME` unchanged.
 Shell files source an exports file; sourcing it never installs packages, restores files, or starts tasks.
 Git uses the persistent configuration through `GIT_CONFIG_GLOBAL` and a home compatibility link.
 
+Portable setup and restore-only write an `environment` block at the start of `~/.bashrc` and into `~/.zshenv`.
+This block sources `<root>/.config/workgrove/env.sh` before bash's non-interactive return.
+
+A second block, `interactive path`, stays at the end of `~/.bashrc`, including after repeated setup.
+It restores missing `<root>/.local/bin` and `~/.local/bin` PATH entries after a supplier's PATH reset.
+When both entries are missing, `<root>/.local/bin` comes first.
+This block changes only PATH and preserves existing entries without duplication.
+It does not source `env.sh` again, so supplier changes to `CODEX_HOME` and `CLAUDE_CONFIG_DIR` remain intact.
+
+`~/.zshenv` has no second block.
+Classic VM and Mac installs keep their existing shell blocks.
+
 Normal `wt update` and bare installer reruns retain the portable root and selected options.
 For portable profiles, `wt update` accepts `--refresh-config` and `--with-tmux-conf`.
 It refuses other installer flags before `git fetch` and lists the accepted flags.
