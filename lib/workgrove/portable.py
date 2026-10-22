@@ -1281,10 +1281,7 @@ def reinstall_flags(args):
     accepted = " ".join(flag for action in args.reinstall_parser._actions for flag in action.option_strings
                         if flag.startswith("--") and flag != "--help")
     for flag in args.flags:
-        try:
-            args.reinstall_parser.parse_args([flag])
-        except Refusal as error:
-            raise Refusal(f"update: portable host refuses {flag}; accepted flags: {accepted}") from error
+        args.reinstall_parser.parse_args([flag])
     print(accepted)
 
 

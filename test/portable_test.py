@@ -1049,13 +1049,14 @@ sys.exit(module["main"]())
         fetch_head = (self.source / ".git/FETCH_HEAD").read_bytes()
         tracking = self.git("rev-parse", "@{u}").stdout
         profile = self.profile()
-        accepted = self.command("reinstall-flags").stdout.strip()
         for flag in ("--with-zshrc", "--opinionated-config", "--with-future-config"):
             with self.subTest(flag=flag):
                 result = subprocess.run([str(self.tools / "bash"), str(self.source / "bin/wt"), "update", flag],
                                         env=self.env, capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 1, result.stderr)
-                self.assertIn(f"update: portable host refuses {flag}; accepted flags: {accepted}", result.stderr)
+                self.assertIn(f"update: portable host refuses {flag}; accepted flags:", result.stderr)
+                accepted = result.stderr.partition("accepted flags:")[2].strip().split()
+                self.assertEqual(set(accepted), {"--with-tmux-conf", "--refresh-config"})
                 self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), self.revision)
                 self.assertEqual((self.source / ".git/FETCH_HEAD").read_bytes(), fetch_head)
                 self.assertEqual(self.git("rev-parse", "@{u}").stdout, tracking)
