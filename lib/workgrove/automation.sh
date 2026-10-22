@@ -15,7 +15,7 @@ hook_cmux_automation() {
     return 0
   fi
   if [[ -e $rc ]]; then
-    version=$(jq -c 'select(.version != 1) | .version' "$rc" 2>/dev/null || true)
+    version=$(jq -c '.version | select(type == "number" and . != 1)' "$rc" 2>/dev/null || true)
     if [[ -n $version ]]; then
       echo "skipped ~/$dst: unknown automations.json version $version" >&2
       # shellcheck disable=SC2088  # The summary prints a home-relative path.

@@ -480,6 +480,29 @@ scenario_numeric_schema_versions() {
 }
 scenario_numeric_schema_versions
 
+scenario_malformed_schema_versions() {
+  begin_scenario 'automation configurations require a numeric version' || return 0
+  setup_automation
+  mkdir -p "${config%/*}"
+  local sample sum
+  for sample in '{"rules":[]}' '{"version":null,"rules":[]}' '{"version":"1","rules":[]}' \
+      '{"version":true,"rules":[]}' '{"version":{},"rules":[]}' '{"version":[],"rules":[]}'; do
+    printf '%s\n' "$sample" >"$config"
+    sum=$(cksum <"$config")
+    SUMMARY_SKIPS=()
+    hook_cmux_automation >"$TEST_ROOT/malformed.out" 2>"$TEST_ROOT/malformed.err"
+    assert_eq 'a malformed version keeps the configuration' "$sum" "$(cksum <"$config")"
+    assert_eq 'a malformed version uses the malformed-file message' \
+      'skipped ~/.cmuxterm/automations.json: expected a version-1 object with a rules array' "$(cat "$TEST_ROOT/malformed.out")"
+    assert_eq 'a malformed version emits no unknown-version diagnostic' '' "$(cat "$TEST_ROOT/malformed.err")"
+    # shellcheck disable=SC2088  # The summary prints a home-relative path.
+    assert_eq 'the summary reports a malformed file' '~/.cmuxterm/automations.json is not a version-1 object with a rules array' "${SUMMARY_SKIPS[*]}"
+  done
+  rm "$config"
+  end_scenario
+}
+scenario_malformed_schema_versions
+
 scenario_automation_updates() {
   begin_scenario 'automation updates replace stale rules and preserve explicit disabling' || return 0
   setup_automation
