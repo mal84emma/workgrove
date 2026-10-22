@@ -138,7 +138,7 @@ WT_COMMANDS=${WT_COMMANDS/'--keep-branch:keep:=1'/'--note:note:a note;--keep-bra
 cmux_require() { :; }
 agent_on_vm() { return 1; }
 cmux_row_field() { :; }
-remote_sh() { :; }
+vm_tmux() { :; }
 remote_wt() { printf '%s\n' "$@" >"$TEST_ROOT/forwarded"; }
 host_rm example.invalid task --repo='repo name' --note='a value' --keep-branch
 mapfile -t forwarded <"$TEST_ROOT/forwarded"
@@ -168,12 +168,7 @@ mkdir -p "$TEST_ROOT/stubs" "$TEST_ROOT/home/.local/bin"
 cp "$TEST_ROOT/fixture/bin/wt" "$TEST_ROOT/home/.local/bin/wt"
 mkdir -p "$TEST_ROOT/home/.local/lib/workgrove"
 cp "$TEST_ROOT/fixture/lib/workgrove/"*.sh "$TEST_ROOT/home/.local/lib/workgrove/"
-cat >"$TEST_ROOT/stubs/ssh" <<'SSH'
-#!/usr/bin/env bash
-shift 5
-bash -c "$1"
-SSH
-chmod +x "$TEST_ROOT/stubs/ssh"
+make_fake_ssh "$TEST_ROOT/stubs/ssh"
 OUTPUT=$(HOME="$TEST_ROOT/home" PATH="$TEST_ROOT/stubs:$PATH" bash "$TEST_ROOT/fixture/bin/wt" -H example.invalid probe --value='a value' -- -operand)
 assert_eq 'new command forwards with boundaries' 'probe: -operand a value' "$OUTPUT"
 end_scenario
