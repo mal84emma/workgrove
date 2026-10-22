@@ -202,9 +202,10 @@ scenario_installation_preflight() {
   local root="$TEST_ROOT/persistent" request
   mkdir -p "$root"
   git clone -q "$TEST_ROOT/remote/repo" "$root/workgrove"
+  ln -s "$root/workgrove" "$root/installation-alias"
   cp "$root/workgrove/.git/config" "$TEST_ROOT/portable-config"
   REMOTE_INSTALL_ROOT="$root"
-  for request in workgrove "$root/workgrove"; do
+  for request in workgrove "$root/workgrove" installation-alias; do
     run_wt "$request" none
     assert_eq 'creation preflight refuses the installation' 1 "$WT_RC"
     check "$([[ $WT_STDERR == *'use a separate clone with another name for workgrove development'* ]] && echo yes)" \

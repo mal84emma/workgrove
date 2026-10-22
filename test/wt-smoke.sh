@@ -960,6 +960,7 @@ scenario_installation_repo() {
   mv "$r" "$root/workgrove"
   r="$root/workgrove"
   ln -s "$root" "$alias"
+  ln -s "$r" "$root/installation-alias"
   stub_cmux dead
   assert_wt_ok 'ordinary installations allow tasks' new existing --no-workspace -r workgrove
   assert_wt_ok 'ordinary installations appear in repos' repos --porcelain
@@ -978,6 +979,7 @@ scenario_installation_repo() {
     assert_eq 'the installation task is absent' '' "$WT_OUT"
     assert_wt_fails 1 'repo not found: workgrove' repos workgrove
     assert_wt_fails 1 "$refusal" new refused --no-workspace -r workgrove
+    assert_wt_fails 1 "$refusal" new refused --no-workspace -r installation-alias
     assert_wt_fails 1 "$refusal" new refused --no-workspace -r "$spelling/workgrove"
     assert_wt_fails 1 "$refusal" new refused --no-workspace -r "$r/.worktrees/existing"
     WT_CWD="$spelling/workgrove/subdir"
