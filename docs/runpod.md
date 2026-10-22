@@ -68,6 +68,7 @@ After an authorized stop/start, follow the [shared VM recovery checklist](remote
 Check SSH first and ask the supplier to refresh the endpoint if needed.
 Run `wt -H <host> doctor --json` without `--root` to discover a surviving volume root.
 Discovery must report exactly one matching root; otherwise, the user supplies it.
+
 `root_discovery.same_machine` compares the current machine name with the last setup or restore record.
 The name can change after a restart; workgrove never prints the recorded name.
 The [discovery limits](remote-setup.md#check-readiness) include a filesystem call blocked by uninterruptible I/O.

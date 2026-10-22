@@ -349,8 +349,10 @@ Only valid volume profiles whose alias and mount match can qualify.
 Duplicate canonical roots count once.
 Exactly one match gives `found` and its root.
 Other results are `none`, `ambiguous`, `incomplete`, or `not-run`; they disclose no candidate paths, aliases, or counts.
+
 The search stops after 4096 folders or 10 seconds and reports `incomplete`.
 One filesystem call can still block on a mount in uninterruptible I/O.
+When duplicate mount records include an excluded filesystem type, discovery skips that mount.
 
 `same_machine` compares the current machine name with the last successful setup or restore record.
 It is `true` for a match, `false` for a difference, and `null` without a readable record or found root.
@@ -398,6 +400,7 @@ If discovery reports `found`, use that root for the explicit-root check.
 Otherwise, obtain the root from the user.
 Discovery never chooses between roots, and an alias in a profile does not prove ownership.
 Only use personal volumes that the user exclusively controls.
+
 If only links and environment were lost, run:
 
 ```bash

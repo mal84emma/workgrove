@@ -364,6 +364,8 @@ def discover_root(host):
     def search(candidate, mount, depth):
         nonlocal folders
         checkpoint()
+        if candidate.name.startswith("."):
+            return
         try:
             if not stat.S_ISDIR(inspect(candidate.lstat).st_mode):
                 return
@@ -419,9 +421,11 @@ def discover_root(host):
             pass
 
     try:
-        for mount, kind in inspect(mount_list):
+        mounts = inspect(mount_list)
+        excluded_points = {mount for mount, kind in mounts if kind in excluded}
+        for mount, _ in mounts:
             checkpoint()
-            if mount == Path("/") or kind in excluded or mount in seen_mounts:
+            if mount == Path("/") or mount in excluded_points or mount in seen_mounts:
                 continue
             seen_mounts.add(mount)
             search(mount, mount, 0)
@@ -1508,6 +1512,18 @@ def reinstall_flags(args):
     print(accepted)
 
 
+def root_recovery_hint(host, discovery):
+    command = "wt -H " + (shlex.quote(host) if host else "<host>")
+    found = discovery["status"] == "found"
+    root = shlex.quote(discovery["root"]) if found else "<root>"
+    text = "A host whose home folder was replaced looks new. "
+    if not found:
+        text += "The user must give the root. "
+    return (text + "Run: " + command + " doctor --root " + root + " --json; "
+            "then " + command + " setup --root " + root + " --restore-only. "
+            "If doctor reports missing prerequisites, run full setup: " + command + " setup --root " + root + ".")
+
+
 def doctor(args):
     result = readiness(args.root)
     if args.preflight:
@@ -1531,10 +1547,7 @@ def doctor(args):
             print("  " + issue)
         print("native relay and hook trust require a separate native-row check")
     if {"profile-missing", "remote-wt-missing"}.issubset(result["issues"]):
-        print("A host whose home folder was replaced looks new. "
-              "Run: wt -H <host> doctor --root <root> --json; "
-              "then wt -H <host> setup --root <root> --restore-only. "
-              "If doctor reports missing prerequisites, run full setup: wt -H <host> setup --root <root>.",
+        print(root_recovery_hint(args.host, result["root_discovery"]),
               file=sys.stderr if args.json else sys.stdout)
     return 0 if result["ready"] is not False else 1
 

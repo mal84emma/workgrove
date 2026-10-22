@@ -6,6 +6,7 @@ import json
 import os
 import pty
 import select
+import shlex
 from pathlib import Path
 import shutil
 import subprocess
@@ -78,6 +79,19 @@ class RootDiscoveryTests(unittest.TestCase):
                                                                (self.mount / ".", "ext4")]):
             self.assertEqual(self.discover()["root"], str(root))
 
+    def test_hidden_and_shadowed_mount_folders_are_skipped(self):
+        self.candidate("")
+        with self.subTest(kind="shadowed"), patch.object(portable, "mount_list", return_value=[
+                (self.mount, "ext4"), (self.mount, "tmpfs")]):
+            self.assertEqual(self.discover()["status"], "none")
+        root = self.candidate(".hidden-mount")
+        path = portable.profile_path(root)
+        data = json.loads(path.read_text())
+        data["mount"] = str(root)
+        path.write_text(json.dumps(data))
+        with self.subTest(kind="hidden"), patch.object(portable, "mount_list", return_value=[(root, "ext4")]):
+            self.assertEqual(self.discover()["status"], "none")
+
     def test_mountinfo_decodes_spaces_and_optional_fields(self):
         root = self.candidate("space root")
         profile = portable.profile_path(root)
@@ -126,21 +140,23 @@ class RootDiscoveryTests(unittest.TestCase):
     def test_candidate_exceptions_do_not_change_readiness(self):
         root = self.candidate()
         bad = self.candidate("broken/root")
+        other = self.candidate("other/root", "private-alias")
         path = portable.profile_path(bad)
         data = json.loads(path.read_text())
         data["root"] = 42
         path.write_text(json.dumps(data))
         baseline = dict(ready=False, issues=["profile-missing", "remote-wt-missing"])
         args = Namespace(root=None, host="test-host", preflight=False, probe=False, json=True)
-        output = io.StringIO()
+        output, errors = io.StringIO(), io.StringIO()
         with patch.object(portable, "readiness", return_value=baseline.copy()), \
-                patch("sys.stdout", output), patch("sys.stderr", io.StringIO()):
+                patch("sys.stdout", output), patch("sys.stderr", errors):
             self.assertEqual(portable.doctor(args), 1)
         result = json.loads(output.getvalue())
         self.assertEqual(result["issues"], baseline["issues"])
         self.assertFalse(result["ready"])
         self.assertEqual(result["root_discovery"]["root"], str(root))
-        self.assertNotIn(str(bad), output.getvalue())
+        for private in (str(bad), str(other), "private-alias"):
+            self.assertNotIn(private, output.getvalue() + errors.getvalue())
         self.assertFalse((root / ".local/state/workgrove/machine").exists())
         original = portable.load_profile
         def load(candidate):
@@ -197,6 +213,37 @@ class RootDiscoveryTests(unittest.TestCase):
                 elif not args.preflight:
                     self.assertEqual(json.loads(output.getvalue())["root_discovery"],
                                      dict(status="not-run", root=None, same_machine=None))
+
+    def test_doctor_hint_uses_only_a_found_root_and_keeps_readiness(self):
+        root = str(self.mount / "space root's data")
+        baseline = dict(status="incomplete", ready=False, issues=["profile-missing", "remote-wt-missing"],
+                        storage_permission_policy=None, tools={})
+        for status in ("found", "none", "ambiguous", "incomplete", "not-run"):
+            for as_json in (False, True):
+                with self.subTest(status=status, json=as_json):
+                    discovery = dict(status=status, root=root if status == "found" else None, same_machine=None)
+                    args = Namespace(root=None, host="test-host", preflight=False, probe=False, json=as_json)
+                    output, errors = io.StringIO(), io.StringIO()
+                    with patch.object(portable, "readiness", return_value=baseline.copy()), \
+                            patch.object(portable, "discover_root", return_value=discovery), \
+                            patch("sys.stdout", output), patch("sys.stderr", errors):
+                        self.assertEqual(portable.doctor(args), 1)
+                    hint = errors.getvalue() if as_json else output.getvalue()
+                    if as_json:
+                        result = json.loads(output.getvalue())
+                        self.assertEqual({key: result[key] for key in baseline}, baseline)
+                        self.assertEqual(result["root_discovery"], discovery)
+                    else:
+                        self.assertEqual(errors.getvalue(), "")
+                    if status == "found":
+                        for command in ("doctor --root " + shlex.quote(root) + " --json",
+                                        "setup --root " + shlex.quote(root) + " --restore-only"):
+                            self.assertIn("wt -H test-host " + command, hint)
+                        self.assertNotIn("The user must give the root.", hint)
+                    else:
+                        self.assertIn("The user must give the root.", hint)
+                        self.assertIn("wt -H test-host doctor --root <root> --json", hint)
+                        self.assertNotIn(root, hint)
 
 
 class PortableTests(unittest.TestCase):
@@ -593,7 +640,7 @@ class PortableTests(unittest.TestCase):
         self.git("config", "branch.wt/accidental.merge", "refs/heads/main")
         report = json.loads(self.command("doctor", "--json", ok=False).stdout)
         self.assertIn("installation-changed-run-full-setup", report["issues"])
-        result = self.command("restore", "--root", str(self.root), ok=False)
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertIn("installation-changed-run-full-setup", result.stderr)
         tmux = self.tools / "tmux"
         tmux.write_text("#!/bin/sh\necho 'no server running on /tmp/synthetic-tmux' >&2\nexit 1\n")
@@ -608,7 +655,7 @@ class PortableTests(unittest.TestCase):
         report = json.loads(self.command("doctor", "--json", ok=False).stdout)
         self.assertIn("installation-changed-run-full-setup", report["issues"])
         self.install()
-        self.command("restore", "--root", str(self.root))
+        self.command("restore", "--host", "test-host", "--root", str(self.root))
         tmux.write_text("#!/bin/sh\nexit 0\n")
         self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
 
@@ -1164,19 +1211,24 @@ sys.exit(module["main"]())
                 if path.is_symlink():
                     path.unlink()
                 path.write_bytes(contents)
-            result = self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=""))
+            result = self.command("restore", "--host", "test-host", "--root", str(self.root), env=dict(self.env, PATH=""))
             for name, contents in planted.items():
                 self.assertTrue((self.home / name).is_symlink())
                 copies = list(set(backups.glob("*/" + name)) - before[name])
                 self.assertEqual(len(copies), 1)
                 self.assertEqual(copies[0].read_bytes(), contents)
                 action = "backed up" if attempt == 0 else "removed"
-                lines = [line for line in result.stderr.splitlines() if "~/" + name in line]
+                lines = [line for line in result.stderr.splitlines() if "~/" + name in line and
+                         line.startswith(("workgrove: backed up ", "workgrove: removed "))]
                 self.assertEqual(len(lines), 1)
                 self.assertIn(action, lines[0])
                 self.assertIn(str(copies[0].parent.relative_to(self.root)), lines[0])
-            self.assertNotIn(str(self.home), result.stderr)
-            self.assertNotIn(str(self.root), result.stderr)
+            backup_lines = [line for line in result.stderr.splitlines()
+                            if line.startswith(("workgrove: backed up ", "workgrove: removed "))]
+            self.assertNotIn(str(self.home), "\n".join(backup_lines))
+            self.assertNotIn(str(self.root), "\n".join(backup_lines))
+            summary = result.stderr.splitlines().index("workgrove: restored root " + str(self.root) + "; alias test-host")
+            self.assertTrue(all(result.stderr.splitlines().index(line) < summary for line in backup_lines))
         self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
 
     def test_backup_uses_newest_original_path_without_file_timestamps(self):
@@ -1186,7 +1238,7 @@ sys.exit(module["main"]())
         for contents, count in ((b"first", 1), (b"second", 2), (b"first", 3), (b"first", 3)):
             path.unlink()
             path.write_bytes(contents)
-            self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=""))
+            self.command("restore", "--host", "test-host", "--root", str(self.root), env=dict(self.env, PATH=""))
             copies = list(backups.glob("*/.tmux.conf"))
             self.assertEqual(len(copies), count)
             for copy in copies:
@@ -1232,12 +1284,12 @@ sys.exit(module["main"]())
         path = self.home / ".claude"
         path.mkdir()
         (path / ".credentials.json").write_text(CANARY)
-        result = self.command("restore", "--root", str(self.root), ok=False)
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertEqual(result.stderr, "workgrove: restore-link-conflict: ~/.claude\n")
         self.assertEqual((path / ".credentials.json").read_text(), CANARY)
         shutil.rmtree(path)
         path.symlink_to(self.base / CANARY)
-        result = self.command("restore", "--root", str(self.root), ok=False)
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertEqual(result.stderr, "workgrove: restore-link-conflict: ~/.claude\n")
         self.assertTrue(path.is_symlink())
         self.assertFalse((self.home / ".local/bin/wt").exists())
@@ -1257,7 +1309,7 @@ sys.exit(module["main"]())
         home = self.home / ".local/bin/azml-ssh-host"
         home.unlink()
         home.write_text("home command")
-        result = self.command("restore", "--root", str(self.root), ok=False)
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertEqual(result.stderr, "workgrove: restore-link-conflict: .local/bin/wt\n")
         self.assertEqual(path.read_text(), "supplier command")
         self.assertEqual(home.read_text(), "home command")
@@ -1267,7 +1319,7 @@ sys.exit(module["main"]())
         path = next((self.home / ".claude/skills").iterdir())
         path.unlink()
         path.write_text("personal skill")
-        result = self.command("restore", "--root", str(self.root), ok=False)
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertEqual(result.stderr, "workgrove: restore-link-conflict: ~/.claude/skills/" + path.name + "\n")
         self.assertEqual(path.read_text(), "personal skill")
 
@@ -1279,7 +1331,7 @@ sys.exit(module["main"]())
         path = next((selected / "skills").iterdir())
         path.unlink()
         path.write_text("personal skill")
-        result = self.command("restore", "--root", str(self.root), ok=False)
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertEqual(result.stderr, "workgrove: restore-link-conflict: <claude-root>/skills/" + path.name + "\n")
         result = self.install()
         self.assertIn("backed up <claude-root>/skills/" + path.name + " to .local/state/workgrove/backups/", result.stderr)
@@ -1325,7 +1377,7 @@ sys.exit(module["main"]())
             original = path.read_bytes()
             path.write_text("# >>> workgrove environment\n# Missing end marker.\n")
             for mode in ("restore", "install"):
-                result = self.command(mode, "--root", str(self.root), ok=False)
+                result = self.command(mode, "--host", "test-host", "--root", str(self.root), ok=False)
                 self.assertEqual(result.stderr, "workgrove: managed-text-conflict: ~/" + name + "\n")
                 self.assertEqual(command.read_text(), "supplier command")
                 self.assertEqual(sorted(backups.iterdir()), before)
@@ -1347,7 +1399,7 @@ sys.exit(module["main"]())
             path.write_text("shared configuration")
             path.chmod(0o666)
             for mode in ("restore", "install"):
-                result = self.command(mode, "--root", str(self.root), ok=False)
+                result = self.command(mode, "--host", "test-host", "--root", str(self.root), ok=False)
                 self.assertEqual(result.stderr, "workgrove: shared-configuration-target: ~/" + relative + "\n")
                 self.assertEqual(command.read_text(), "supplier command")
                 self.assertEqual(sorted(backups.iterdir()), before)
@@ -1401,7 +1453,7 @@ sys.exit(module["main"]())
         path = next((external / "skills").iterdir())
         path.unlink()
         path.write_text("personal skill")
-        result = self.command("restore", "--root", str(self.root), ok=False)
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
         self.assertEqual(result.stderr, "workgrove: restore-link-conflict: <claude-root>/skills/" + path.name + "\n")
 
     def test_restore_reports_shell_link_moves_without_deduplicating_links(self):
@@ -1414,7 +1466,7 @@ sys.exit(module["main"]())
                 path = self.home / name
                 path.unlink()
                 path.symlink_to(target)
-            result = self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=""))
+            result = self.command("restore", "--host", "test-host", "--root", str(self.root), env=dict(self.env, PATH=""))
             for name in (".bashrc", ".zshenv"):
                 self.assertIn("backed up ~/" + name + " to .local/state/workgrove/backups/", result.stderr)
                 copies = list(backups.glob("*/" + name))
@@ -1510,6 +1562,7 @@ sys.exit(module["main"]())
         result = self.command("doctor", "--json", ok=False)
         self.assertEqual(json.loads(result.stdout)["issues"], ["profile-missing", "remote-wt-missing"])
         hint = ("A host whose home folder was replaced looks new. "
+                "The user must give the root. "
                 "Run: wt -H <host> doctor --root <root> --json; "
                 "then wt -H <host> setup --root <root> --restore-only. "
                 "If doctor reports missing prerequisites, run full setup: wt -H <host> setup --root <root>.")
@@ -1547,7 +1600,7 @@ sys.exit(module["main"]())
                 try:
                     report = json.loads(self.command("doctor", "--root", str(self.root), "--json", ok=False).stdout)
                     self.assertEqual(report["issues"], ["compatibility-links-conflict"])
-                    refused = self.command("restore", "--root", str(self.root), ok=False)
+                    refused = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
                     self.assertIn("restore-link-conflict", refused.stderr)
                 finally:
                     if kind == "directory":
@@ -1560,7 +1613,7 @@ sys.exit(module["main"]())
         path.write_text("supplier file")
         report = json.loads(self.command("doctor", "--root", str(self.root), "--json", ok=False).stdout)
         self.assertEqual(report["issues"], ["compatibility-links-missing"])
-        self.command("restore", "--root", str(self.root))
+        self.command("restore", "--host", "test-host", "--root", str(self.root))
         self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
 
     def test_doctor_finds_conflicts_after_missing_links(self):
@@ -1958,7 +2011,7 @@ sys.exit(module["main"]())
         shutil.rmtree(self.home)
         self.home.mkdir(mode=0o700)
         (self.home / ".bashrc").write_text('[ -z "$PS1" ] && return\nexport PATH=/usr/bin:/bin\n')
-        self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=""))
+        self.command("restore", "--host", "test-host", "--root", str(self.root), env=dict(self.env, PATH=""))
         text = (self.home / ".bashrc").read_text()
         self.assertTrue(text.startswith("# >>> workgrove environment\n"))
         self.assertTrue(text.endswith("# <<< workgrove interactive path\n"))
@@ -1981,7 +2034,7 @@ sys.exit(module["main"]())
                     if operation == "install":
                         result = self.install(ok=False)
                     else:
-                        result = self.command("restore", "--root", str(self.root), ok=False)
+                        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False)
                     self.assertEqual(result.stderr, "workgrove: managed-text-conflict: ~/.bashrc\n")
                     self.assertEqual(bashrc.read_text(), text)
                     self.assertFalse((self.home / ".local").exists())
@@ -2025,7 +2078,7 @@ sys.exit(module["main"]())
                     if operation == "install":
                         result = self.install(ok=False)
                     else:
-                        result = self.command("restore", "--root", str(self.root), ok=False,
+                        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False,
                                               env=dict(self.env, PATH=""))
                     self.assertEqual(result.stderr, "workgrove: managed-text-conflict: ~/.bashrc\n")
                     self.assertEqual((self.home / ".bashrc").read_text(), text)
@@ -2329,7 +2382,9 @@ sys.exit(subprocess.run(["/bin/sh", "-c", sys.argv[-1]], env=environment, check=
         self.assertIn("setup --root <root> --restore-only", missing.stderr)
         result = self.remote(environment, "doctor", "--json", ok=False)
         self.assertIn("remote-wt-missing", json.loads(result.stdout)["issues"])
-        self.assertIn(result.stderr.strip().replace("<host>", "test-host"), missing.stderr)
+        self.assertIn("wt -H test-host doctor --json; then", missing.stderr)
+        self.assertNotIn(str(self.root), missing.stderr)
+        self.assertIn("The user must give the root.", result.stderr)
         self.assertIn("A host whose home folder was replaced looks new.", result.stderr)
         self.assertIn("doctor --root <root> --json", result.stderr)
         self.assertIn("setup --root <root> --restore-only", result.stderr)
