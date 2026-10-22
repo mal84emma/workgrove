@@ -966,7 +966,10 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
                 require(path.is_file(), "shell-configuration-conflict")
                 text = replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
                 if relative == ".bashrc":
-                    replace_block(text, "interactive path", "placeholder")
+                    try:
+                        replace_block(text, "interactive path", "placeholder")
+                    except ValueError:
+                        raise Refusal("managed-text-conflict") from None
     instructions = validate_personal_files(profile, migrations, installing=not restoring)
     for agent in ("claude", "codex"):
         base = Path(profile["agent_roots"][agent])

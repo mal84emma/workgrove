@@ -1552,7 +1552,7 @@ sys.exit(module["main"]())
         self.home.mkdir(mode=0o700)
         bashrc = self.home / ".bashrc"
         start, end = "# >>> workgrove interactive path\n", "# <<< workgrove interactive path\n"
-        for text in (start, end, (start + ":\n" + end) * 2):
+        for text in (start, end, (start + ":\n" + end) * 2, end + start):
             for operation in ("install", "restore"):
                 with self.subTest(text=text, operation=operation):
                     bashrc.write_text(text)
@@ -1560,7 +1560,7 @@ sys.exit(module["main"]())
                         result = self.install(ok=False)
                     else:
                         result = self.command("restore", "--root", str(self.root), ok=False)
-                    self.assertIn("managed-text-conflict", result.stderr)
+                    self.assertEqual(result.stderr, "workgrove: managed-text-conflict: ~/.bashrc\n")
                     self.assertEqual(bashrc.read_text(), text)
                     self.assertFalse((self.home / ".local").exists())
                     self.assertFalse((self.home / ".zshenv").exists())
