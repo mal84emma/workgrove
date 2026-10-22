@@ -4,6 +4,7 @@
 #   bash ~/repos/workgrove/install.sh [--refresh-config] [--opinionated-config]
 #       [--with-zshrc] [--with-gitconfig] [--with-tmux-conf] [--with-keybindings] [--with-statusline]
 #       [--with-claude-ui] [--with-cmux-config]
+#   bash ~/repos/workgrove/install.sh --remote-root <path> [portable setup options]
 #   (on a VM, prefix WT_HOST=<vm>)
 #
 # The script is idempotent: rerun it whenever the repo changes. It never deletes anything. It moves anything

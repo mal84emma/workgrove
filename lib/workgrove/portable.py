@@ -116,7 +116,7 @@ def confirm_volume_request(args):
 
 class Parser(argparse.ArgumentParser):
     def error(self, message):
-        raise Refusal("invalid-arguments")
+        raise Refusal("invalid-arguments: " + message)
 
 
 def require(value, code):
@@ -1277,6 +1277,14 @@ def reinstall(args):
     return install(args)
 
 
+def reinstall_flags(args):
+    accepted = " ".join(flag for action in args.reinstall_parser._actions for flag in action.option_strings
+                        if flag.startswith("--") and flag != "--help")
+    for flag in args.flags:
+        args.reinstall_parser.parse_args([flag])
+    print(accepted)
+
+
 def doctor(args):
     result = readiness(args.root)
     if args.preflight:
@@ -1321,6 +1329,11 @@ def main():
         command.add_argument("--restore-only", action="store_true")
         command.add_argument("--refresh-config", action="store_true")
         command.set_defaults(run=function)
+        if name == "reinstall":
+            reinstall_parser = command
+    command = commands.add_parser("reinstall-flags")
+    command.add_argument("flags", nargs="*")
+    command.set_defaults(run=reinstall_flags, reinstall_parser=reinstall_parser)
     command = commands.add_parser("doctor")
     command.add_argument("--root")
     command.add_argument("--json", action="store_true")

@@ -1032,6 +1032,69 @@ sys.exit(module["main"]())
         self.assertTrue(self.profile()["tmux"])
         self.assertEqual(self.profile()["root"], str(self.root))
 
+    def test_portable_update_refuses_unsupported_flags_before_fetch(self):
+        upstream = self.base / "upstream"
+        self.git("clone", "--quiet", str(self.source), str(upstream))
+        self.git("remote", "add", "origin", str(upstream))
+        self.git("fetch", "--quiet", "origin")
+        branch = self.git("branch", "--show-current").stdout.strip()
+        self.git("branch", "--set-upstream-to", "origin/" + branch)
+        with (upstream / "bin/wt").open("a") as stream:
+            stream.write("\n# Synthetic incoming runtime change.\n")
+        self.git("-C", str(upstream), "add", "bin/wt")
+        self.git("-C", str(upstream), "commit", "-qm", "Change the synthetic runtime")
+        self.install()
+        before = self.command("doctor", "--json").stdout
+        self.assertIsNot(json.loads(before)["ready"], False)
+        fetch_head = (self.source / ".git/FETCH_HEAD").read_bytes()
+        tracking = self.git("rev-parse", "@{u}").stdout
+        profile = self.profile()
+        for flag in ("--with-zshrc", "--opinionated-config", "--with-future-config"):
+            with self.subTest(flag=flag):
+                result = subprocess.run([str(self.tools / "bash"), str(self.source / "bin/wt"), "update", flag],
+                                        env=self.env, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"update: portable host refuses {flag}; accepted flags:", result.stderr)
+                accepted = result.stderr.partition("accepted flags:")[2].strip().split()
+                self.assertEqual(set(accepted), {"--with-tmux-conf", "--refresh-config"})
+                self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), self.revision)
+                self.assertEqual((self.source / ".git/FETCH_HEAD").read_bytes(), fetch_head)
+                self.assertEqual(self.git("rev-parse", "@{u}").stdout, tracking)
+                self.assertEqual(self.command("doctor", "--json").stdout, before)
+                self.assertEqual(self.profile(), profile)
+
+    def test_portable_installer_names_unsupported_argument(self):
+        self.install()
+        result = subprocess.run([str(self.tools / "bash"), str(self.source / "install.sh"), "--with-zshrc"],
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("workgrove: invalid-arguments: unrecognized arguments: --with-zshrc", result.stderr)
+
+    def test_portable_update_accepts_reinstall_flags(self):
+        parser = self.script.read_text()
+        self.script.write_text(parser.replace('        command.add_argument("--refresh-config", action="store_true")',
+                                             '        command.add_argument("--refresh-config", action="store_true")\n'
+                                             '        command.add_argument("--with-future-config", action="store_true")'))
+        self.git("add", str(self.script))
+        self.git("commit", "-qm", "Add a synthetic reinstall flag")
+        upstream = self.base / "upstream.git"
+        self.git("clone", "--bare", str(self.source), str(upstream))
+        self.git("remote", "add", "origin", str(upstream))
+        self.git("fetch", "--quiet", "origin")
+        branch = self.git("branch", "--show-current").stdout.strip()
+        self.git("branch", "--set-upstream-to", "origin/" + branch)
+        self.install()
+        accepted = self.command("reinstall-flags").stdout.split()
+        for flag in ("--refresh-config", "--with-tmux-conf", "--with-future-config"):
+            self.assertIn(flag, accepted)
+        for flag in ("--refresh-config", "--with-tmux-conf", "--with-tmux", "--with-tm", "--with-future-config"):
+            with self.subTest(flag=flag):
+                result = subprocess.run([str(self.tools / "bash"), str(self.source / "bin/wt"), "update", flag],
+                                        env=self.env, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.command("doctor", "--json")
+        self.assertTrue(self.profile()["tmux"])
+
     def test_portable_installer_and_update_share_supported_python_selection(self):
         runtime = self.source / "lib/workgrove/vm/python-runtime.sh"
         original = runtime.read_text()
