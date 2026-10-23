@@ -80,6 +80,7 @@ CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Re
 CMUX=$(cmux_bin) || { log "cmux executable not found"; exit 0; }
 CMUX_RUN=(capped "$CMUX")
 VM_SSH_RUN=(capped ssh)
+VM_SSH_CHECK_RUN=(capped)
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
 
 attach_row() { # attach_row <host> <session> <title> <repo id> <command>
@@ -170,14 +171,11 @@ case $t in
        from_row_on_host "$ws" "$h"; then
       id=$(repo_id "$r"); sess=$(wt_session "$n" "$r")
       if [[ $(row_by_title "$(row_title "$n")" "$id" "$h") == "$ws" ]]; then
-        rc=0; result_rc=0; missing=0
+        rc=0; result_rc=0
         declare -A result=()
         vm_result "$h" path result gone gone_error rc -- "$n" -r "$r" || result_rc=$?
-        if [[ $rc == 1 && $result_rc == 0 && ${result[status]} == missing ]]; then missing=1; fi
-        if [[ $result_rc == 3 ]]; then
-          log "ignored wt-close for task $n of $id on $h: unsupported result protocol; run wt update on the Mac"
-        elif [[ $missing -ne 1 ]]; then
-          log "ignored wt-close for task $n of $id on $h: could not confirm its worktree is gone"
+        if ! vm_wt_failure "$h" close "$rc" "" "$result_rc" "${result[status]-}" "$n" "$id"; then
+          :
         elif close_row "$ws" self >/dev/null 2>&1; then
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
