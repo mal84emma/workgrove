@@ -2796,10 +2796,16 @@ sys.exit(subprocess.run(["/bin/sh", "-c", sys.argv[-1]], env=environment, check=
         self.assertNotIn("runpod ", log)
 
     def test_remote_volume_prompt_and_explicit_flag_use_the_same_acceptance(self):
+        self.remote_volume_prompt(tagged=True)
+
+    def test_remote_volume_prompt_accepts_legacy_json_without_spacing_dependency(self):
+        self.remote_volume_prompt(tagged=False)
+
+    def remote_volume_prompt(self, tagged):
         environment = self.transport()
         marker = self.base / "accepted"
         ssh = Path(environment["PATH"].split(":")[0]) / "ssh"
-        request = "trust-request\t" + json.dumps(
+        request = ("trust-request\t" if tagged else "") + json.dumps(
             {"error": "personal-volume-trust-required", "root": str(self.root), "mount": str(self.root)},
             separators=(",", ":"))
         ssh.write_text(f'''#!{sys.executable}
