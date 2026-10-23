@@ -363,20 +363,20 @@ request_row() { # request_row <name> — VM side: ask the Mac for a cmux row, an
 
 session_state() { # session_state <name> <associative output> — the VM's session display and boolean facts.
   local -n __session=$2
-  local s clients='' rc=0 present=false
-  s=$(wt_session "$1" "$REPO")
-  tmux_agent "$s" present >/dev/null 2>&1 || rc=$?
-  if [[ $rc != 1 || $present == true ]]; then
-    clients=$(tmux list-clients -t "=$s" 2>/dev/null) || clients=''
+  local __s __clients='' __rc=0 __exists=false
+  __s=$(wt_session "$1" "$REPO")
+  tmux_agent "$__s" __exists >/dev/null 2>&1 || __rc=$?
+  if [[ $__rc != 1 || $__exists == true ]]; then
+    __clients=$(tmux list-clients -t "=$__s" 2>/dev/null) || __clients=''
   fi
   __session=(["state"]=none ["agent"]=false ["attached"]=false)
-  case $rc in
+  case $__rc in
     0) __session["state"]='agent running'; __session["agent"]=true ;;
-    1) if [[ $present == true ]]; then __session["state"]='shell only'; fi ;;
+    1) if [[ $__exists == true ]]; then __session["state"]='shell only'; fi ;;
     # Unreadable status displays shell only because the agent fact is false.
     2) __session["state"]='shell only' ;;
   esac
-  if [[ -n $clients ]]; then __session["attached"]=true; fi
+  if [[ -n $__clients ]]; then __session["attached"]=true; fi
   if [[ ${__session["state"]} != none && ${__session["attached"]} == false ]]; then
     __session["state"]+=', detached'
   fi
@@ -384,28 +384,28 @@ session_state() { # session_state <name> <associative output> — the VM's sessi
 
 # Status is 0 for a running agent, 1 for absent or idle, and 2 for unreadable status.
 tmux_agent() { # tmux_agent <session> [session exists output]
-  local err panes t rc=0
+  local __err __panes __t __rc=0
   if [[ -n ${2:-} ]]; then
     local -n __present=$2
     __present=false
   fi
-  err=$(LC_ALL=C tmux has-session -t "=$1" 2>&1) || rc=$?
-  if [[ $rc -ne 0 ]]; then
-    case "$err" in
+  __err=$(LC_ALL=C tmux has-session -t "=$1" 2>&1) || __rc=$?
+  if [[ $__rc -ne 0 ]]; then
+    case "$__err" in
       "can't find session: =$1"|"can't find session: $1") return 1 ;;
       'no server running on '*|'error connecting to '*'(No such file or directory)') return 1 ;;
-      *) printf '%s\n' "$err" >&2; return 2 ;;
+      *) printf '%s\n' "$__err" >&2; return 2 ;;
     esac
   fi
   if [[ -n ${2:-} ]]; then __present=true; fi
-  panes=$(tmux list-panes -s -t "=$1" -F '#{pane_tty}' 2>&1) || { printf '%s\n' "$panes" >&2; return 2; }
-  [[ -n "$panes" ]] || return 2
-  while IFS= read -r t; do
-    [[ "$t" =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 2
-    rc=0
-    pgrep -t "${t#/dev/}" -x 'claude|codex' >/dev/null || rc=$?
-    case $rc in 0) return 0 ;; 1) ;; *) return 2 ;; esac
-  done <<<"$panes"
+  __panes=$(tmux list-panes -s -t "=$1" -F '#{pane_tty}' 2>&1) || { printf '%s\n' "$__panes" >&2; return 2; }
+  [[ -n "$__panes" ]] || return 2
+  while IFS= read -r __t; do
+    [[ "$__t" =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 2
+    __rc=0
+    pgrep -t "${__t#/dev/}" -x 'claude|codex' >/dev/null || __rc=$?
+    case $__rc in 0) return 0 ;; 1) ;; *) return 2 ;; esac
+  done <<<"$__panes"
   return 1
 }
 
