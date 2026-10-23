@@ -29,6 +29,10 @@ cat >"$TEST_ROOT/bin/ssh.fixture" <<'SSH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$SSH_LOG"
 if [[ "$host" == hang ]]; then cat >/dev/null; exec /bin/sleep 60; fi
+if [[ "$PROBE_MODE" == doctor-source ]]; then
+  cat >"$TEST_ROOT/$host.source"
+  exit 0
+fi
 if [[ "$PROBE_MODE" == actual ]]; then
   script=$(mktemp "$TEST_ROOT/probe.XXXXXX")
   sed -e "s|/proc/meminfo|$TEST_ROOT/fixtures/meminfo|g" \
@@ -267,4 +271,23 @@ scenario_timeout_boundary() {
   end_scenario
 }
 scenario_timeout_boundary
+
+scenario_doctor_alias() {
+  begin_scenario 'only the targeted doctor receives an SSH alias' || return 0
+  local mode
+  for mode in --json --environment; do
+    : >"$TEST_ROOT/ssh.log"
+    PROBE_MODE=doctor-source run_wt -H alpha doctor "$mode" >"$TEST_ROOT/doctor-output"
+    assert_grep "doctor $mode passes the alias" "$TEST_ROOT/ssh.log" 'doctor --host alpha'
+  done
+  PROBE_MODE=doctor-source run_wt hosts --json >"$TEST_ROOT/inventory-output"
+  assert_grep 'inventory keeps the probe command' "$TEST_ROOT/alpha.source" 'doctor --probe'
+  if grep -F 'doctor --host' "$TEST_ROOT/alpha.source" >/dev/null; then
+    fail 'inventory must not pass an alias'
+  else
+    pass
+  fi
+  end_scenario
+}
+scenario_doctor_alias
 lib_summary

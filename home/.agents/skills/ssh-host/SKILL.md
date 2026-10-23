@@ -13,7 +13,7 @@ Read [SSH registration](../../../../docs/ssh-hosts.md) when an outer alias is mi
 Read [portable setup](../../../../docs/remote-setup.md) before installing or restoring a profile.
 For Runpod storage and restart notes, read [the Runpod guide](../../../../docs/runpod.md).
 
-1. Establish the authorized scope: registration, full preparation, or explicit recovery.
+1. Establish the authorized scope: registration, full preparation, or recovery under the [portable restore policy](../../../.claude/AGENTS.md#portable-restore-only).
    Obtain the chosen alias and any supplied fragment path from the user or existing SSH configuration.
    Use an already usable alias directly; do not create a second provider registry.
 2. When registration is requested, run `wt-ssh-host add <host> --fragment <path>`.
@@ -36,12 +36,5 @@ For Runpod storage and restart notes, read [the Runpod guide](../../../../docs/r
    Follow the [recovery policy](../../../.claude/AGENTS.md#vm-task-recovery) before attach recovery or either explicit recovery flag.
 
 After a host restart, refresh SSH through its supplier and follow the shared VM recovery procedure.
-
-Run `wt -H <host> doctor --root <root> --json` with the persistent root supplied by the user.
-For lost links and environment, use authorized `wt -H <host> setup --root <root> --restore-only`.
-A regular file at a home link location remains `compatibility-links-missing`; restore-only backs it up.
-If doctor reports `compatibility-links-conflict`, stop and report the conflict before restoration.
-Directories, foreign symbolic links, and regular root-side files require private resolution.
-Use full preparation when doctor reports missing prerequisites.
-
+When doctor identifies lost setup, follow the [portable restore policy](../../../.claude/AGENTS.md#portable-restore-only).
 Missing task files require storage investigation; never create a replacement task as automatic recovery.

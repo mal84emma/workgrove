@@ -213,7 +213,7 @@ vm_wt_failure() {
 host_recovery_hint() {
   local command
   command="wt -H $(shell_join "$1")"
-  printf '%s\n' "A host whose home folder was replaced looks new. Run: $command doctor --root <root> --json; then $command setup --root <root> --restore-only. If doctor reports missing prerequisites, run full setup: $command setup --root <root>."
+  printf '%s\n' "A host whose home folder was replaced looks new. Run: $command doctor --json; then $command doctor --root <root> --json; then $command setup --root <root> --restore-only. If doctor reports missing prerequisites, run full setup: $command setup --root <root>."
 }
 
 # Preserve SSH's exit status. Callers decide how to report transport failures.

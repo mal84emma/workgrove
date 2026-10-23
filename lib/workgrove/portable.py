@@ -11,10 +11,12 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from urllib.parse import urlsplit
 
@@ -311,18 +313,136 @@ def load_profile(root=None):
     return data
 
 
-def mounted(point):
-    # Mountinfo also identifies bind mounts that share a device number with their parent.
+def mount_list():
+    """Read mount points and types, including bind mounts and escaped paths."""
     path = Path("/proc/self/mountinfo")
-    if path.is_file():
-        for line in read(path).splitlines():
-            fields = line.split()
-            if len(fields) > 4:
-                name = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[4])
-                if Path(name) == point:
-                    return True
-        return False
+    if not path.is_file():
+        return []
+    points = []
+    for line in read(path).splitlines():
+        before, separator, after = line.partition(" - ")
+        fields, filesystem = before.split(), after.split()
+        if separator and len(fields) > 4 and filesystem:
+            name = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[4])
+            points.append((Path(name), filesystem[0]))
+    return points
+
+
+def mounted(point):
+    if Path("/proc/self/mountinfo").is_file():
+        return any(name == point for name, _ in mount_list())
     return os.path.ismount(point)
+
+
+def machine_path(root):
+    return root / ".local/state/workgrove/machine"
+
+
+def discover_root(host):
+    """Find one alias-matching volume root without changing readiness or personal state."""
+    result = dict(status="none", root=None, same_machine=None)
+    deadline = time.monotonic() + 10
+    folders = 0
+    matches = {}
+    seen_mounts = set()
+    excluded = {"proc", "sysfs", "tmpfs", "devtmpfs", "devpts", "cgroup", "cgroup2",
+                "mqueue", "overlay", "squashfs"}
+
+    class SearchLimit(Exception):
+        pass
+
+    def checkpoint():
+        if time.monotonic() >= deadline:
+            raise SearchLimit()
+
+    def inspect(function, *args):
+        checkpoint()
+        value = function(*args)
+        checkpoint()
+        return value
+
+    def search(candidate, mount, depth):
+        nonlocal folders
+        checkpoint()
+        if candidate.name.startswith(".") or (candidate != mount and candidate in mount_points):
+            return
+        try:
+            if not stat.S_ISDIR(inspect(candidate.lstat).st_mode):
+                return
+            if not inspect(os.access, candidate, os.R_OK | os.X_OK):
+                return
+        except SearchLimit:
+            raise
+        except Exception:
+            return
+        if folders >= 4096:
+            raise SearchLimit()
+        folders += 1
+        try:
+            path = candidate
+            for name, directory in ((".config", True), ("workgrove", True), ("profile.json", False)):
+                path = path / name
+                require(path not in mount_points, "invalid-discovery-candidate")
+                mode = inspect(path.lstat).st_mode
+                require(stat.S_ISDIR(mode) if directory else stat.S_ISREG(mode), "invalid-discovery-candidate")
+            profile = inspect(load_profile, candidate)
+            if profile["host"] == host and profile["storage"] == "volume" and profile["mount"] == str(mount):
+                root = profile["root"]
+                same_machine = None
+                try:
+                    record = machine_path(Path(root))
+                    if stat.S_ISREG(inspect(record.lstat).st_mode):
+                        same_machine = inspect(read, record) == socket.gethostname() + "\n"
+                except SearchLimit:
+                    raise
+                except Exception:
+                    pass
+                matches[root] = same_machine
+        except SearchLimit:
+            raise
+        except Exception:
+            pass
+        if depth == 2:
+            return
+        try:
+            checkpoint()
+            with os.scandir(candidate) as entries:
+                checkpoint()
+                while True:
+                    checkpoint()
+                    entry = next(entries, None)
+                    checkpoint()
+                    if entry is None:
+                        break
+                    if not entry.name.startswith("."):
+                        search(candidate / entry.name, mount, depth + 1)
+        except SearchLimit:
+            raise
+        except Exception:
+            pass
+
+    try:
+        mounts = inspect(mount_list)
+        mount_points = {mount for mount, _ in mounts}
+        excluded_points = {mount for mount, kind in mounts if kind in excluded}
+        for mount, _ in mounts:
+            checkpoint()
+            if mount == Path("/") or mount in excluded_points or mount in seen_mounts:
+                continue
+            seen_mounts.add(mount)
+            search(mount, mount, 0)
+        checkpoint()
+    except SearchLimit:
+        result["status"] = "incomplete"
+        return result
+    except Exception:
+        return result
+    if len(matches) == 1:
+        root, same_machine = next(iter(matches.items()))
+        result.update(status="found", root=root, same_machine=same_machine)
+    elif matches:
+        result["status"] = "ambiguous"
+    return result
 
 
 def storage(root, policy, mount):
@@ -1119,6 +1239,8 @@ def installation_lock(root):
 
 @configured_permissions
 def install(args):
+    if args.restore_only:
+        return restore(args)
     root = canonical(args.root)
     expected_profile = read(profile_path(root), missing=True)
     require(expected_profile == args.permission_profile_snapshot, "profile-changed-retry-setup")
@@ -1170,6 +1292,7 @@ def install(args):
             write(global_path, '[include]\n    path = ' + git_quote(personal) + '\n')
         write(profile_path(root), json.dumps(profile, indent=2) + "\n")
         install_files(profile, instruction_copies=instruction_copies)
+        write(machine_path(root), socket.gethostname() + "\n")
     print("workgrove: portable profile installed; run doctor before creating tasks")
 
 
@@ -1179,6 +1302,8 @@ def restore(args):
     expected_profile = read(profile_path(root))
     require(expected_profile == args.permission_profile_snapshot, "profile-changed-retry-setup")
     profile = load_profile(root)
+    require(args.host, "host-alias-required")
+    require(profile["host"] == args.host, "restore-host-mismatch")
     storage(root, profile["storage"], profile["mount"])
     validate_source(Path(profile["source"]), profile)
     restore_files = set()
@@ -1188,7 +1313,24 @@ def restore(args):
     with installation_lock(root):
         require(read(profile_path(root)) == expected_profile, "profile-changed-retry-setup")
         install_files(profile, restoring=True, restore_files=restore_files)
+        write(machine_path(root), socket.gethostname() + "\n")
+        restore_summary(profile)
     print("workgrove: portable links and environment restored; run doctor before recovery")
+
+
+def restore_summary(profile):
+    root = Path(profile["root"])
+    print("workgrove: restored root " + str(root) + "; alias " + profile["host"], file=sys.stderr)
+    print("  persist_agents: " + ("yes" if profile["persist_agents"] else "no"), file=sys.stderr)
+    for agent, files in AGENT_FILES.items():
+        base = canonical(profile["agent_roots"][agent])
+        inside = base == root or root in base.parents
+        label = str(base) if inside else "<" + agent + "-root>"
+        sign_in = next(name for name, role in files.items() if role == "state")
+        present = (base / sign_in).is_file()
+        print("  " + agent + ": " + label + "; inside root: " + ("yes" if inside else "no") +
+              "; " + sign_in + ": " + ("present" if present else "absent"), file=sys.stderr)
+    print("  ~/.gitconfig links to the saved Git config", file=sys.stderr)
 
 
 def supported_os():
@@ -1409,6 +1551,18 @@ def reinstall_flags(args):
     print(accepted)
 
 
+def root_recovery_hint(host, discovery):
+    command = "wt -H " + (shlex.quote(host) if host else "<host>")
+    found = discovery["status"] == "found"
+    root = shlex.quote(discovery["root"]) if found else "<root>"
+    text = "A host whose home folder was replaced looks new. "
+    if not found:
+        text += "The user must give the root. "
+    return (text + "Run: " + command + " doctor --root " + root + " --json; "
+            "then " + command + " setup --root " + root + " --restore-only. "
+            "If doctor reports missing prerequisites, run full setup: " + command + " setup --root " + root + ".")
+
+
 def doctor(args):
     result = readiness(args.root)
     if args.preflight:
@@ -1419,6 +1573,9 @@ def doctor(args):
     if args.probe:
         print("readiness\t" + json.dumps(result, separators=(",", ":")))
         return 0
+    result["root_discovery"] = dict(status="not-run", root=None, same_machine=None)
+    if args.host and not args.root and {"profile-missing", "remote-wt-missing"}.issubset(result["issues"]):
+        result["root_discovery"] = discover_root(args.host)
     if args.json:
         print(json.dumps(result))
     else:
@@ -1429,10 +1586,7 @@ def doctor(args):
             print("  " + issue)
         print("native relay and hook trust require a separate native-row check")
     if {"profile-missing", "remote-wt-missing"}.issubset(result["issues"]):
-        print("A host whose home folder was replaced looks new. "
-              "Run: wt -H <host> doctor --root <root> --json; "
-              "then wt -H <host> setup --root <root> --restore-only. "
-              "If doctor reports missing prerequisites, run full setup: wt -H <host> setup --root <root>.",
+        print(root_recovery_hint(args.host, result["root_discovery"]),
               file=sys.stderr if args.json else sys.stdout)
     return 0 if result["ready"] is not False else 1
 
@@ -1466,6 +1620,7 @@ def main():
     command.set_defaults(run=reinstall_flags, reinstall_parser=reinstall_parser)
     command = commands.add_parser("doctor")
     command.add_argument("--root")
+    command.add_argument("--host")
     command.add_argument("--json", action="store_true")
     command.add_argument("--probe", action="store_true")
     command.add_argument("--preflight", action="store_true")
@@ -1491,6 +1646,8 @@ def main():
                 return 1
     except Refusal as error:
         print("workgrove: " + str(error) + (": " + error.path if error.path else ""), file=sys.stderr)
+        if str(error) == "restore-host-mismatch":
+            print("workgrove: full setup with the new alias changes the saved alias", file=sys.stderr)
     except (OSError, ValueError, RuntimeError, UnicodeError, TypeError, AttributeError):
         print("workgrove: portable-operation-failed", file=sys.stderr)
     return 1

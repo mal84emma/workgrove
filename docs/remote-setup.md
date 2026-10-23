@@ -337,6 +337,32 @@ A host whose home folder was replaced looks new without its root.
 When doctor reports `profile-missing` and `remote-wt-missing` together, it prints recovery instructions.
 With `--json`, those instructions go to stderr; stdout contains only the JSON report.
 
+Without `--root`, targeted doctor can discover a saved volume root after home replacement.
+The JSON adds `root_discovery` with `status`, `root`, and `same_machine`.
+Discovery runs only when both `profile-missing` and `remote-wt-missing` appear.
+It does not run for inventory probes, preflight checks, or an explicit root.
+It changes no readiness result and writes no files.
+
+Discovery checks each eligible mount and its folders through two levels.
+Each search stops at nested mount boundaries.
+Discovery searches each eligible mount separately.
+It skips hidden folders, symbolic links, unreadable folders, file mounts, and system or temporary filesystems.
+
+Only valid volume profiles whose alias and mount match can qualify.
+Duplicate canonical roots count once.
+Exactly one match gives `found` and its root.
+Other results are `none`, `ambiguous`, `incomplete`, or `not-run`; they disclose no candidate paths, aliases, or counts.
+
+The search stops after 4096 folders or 10 seconds and reports `incomplete`.
+One filesystem call can still block on a mount in uninterruptible I/O.
+When duplicate mount records include an excluded filesystem type, discovery skips that mount.
+
+`same_machine` compares the current machine name with the last successful setup or restore record.
+It is `true` for a match, `false` for a difference, and `null` without a readable record or found root.
+Setup and restore write `<root>/.local/state/workgrove/machine` after their other changes succeed.
+Doctor never writes this record or prints the recorded name.
+Machine names can change after a restart; a match does not establish SSH host trust.
+
 Doctor reports fixed issue codes without printing settings, identity values, environment dumps, or captured command diagnostics.
 A failed readiness check returns a nonzero status and a JSON report when `--json` is selected.
 
@@ -371,17 +397,19 @@ Start the existing host and refresh its SSH endpoint through its supplier.
 Keep the same alias and independently verify any changed host identity.
 Workgrove does not start compute or repair the supplier's SSH configuration.
 
-Start with doctor and the saved persistent root:
-
-```bash
-wt -H <host> doctor --root <root> --json
-```
+Check doctor before choosing environment repair.
+Run `wt -H <host> doctor --json` without `--root` first.
+If discovery reports `found`, use that root for the explicit-root check.
+Otherwise, obtain the root from the user.
+Discovery never chooses between roots, and an alias in a profile does not prove ownership.
+Only use personal volumes that the user exclusively controls.
 
 If only links and environment were lost, run:
 
 ```bash
-wt -H <host> setup --root <root> --restore-only
 wt -H <host> doctor --root <root> --json
+wt -H <host> setup --root <root> --restore-only
+wt -H <host> doctor --json
 ```
 
 A supplier can export `WT_REMOTE_ROOT=<root>` from its own start environment.
@@ -395,6 +423,22 @@ It backs up regular home files that the host's start command writes, including `
 Each stderr line names the displaced file and its backup folder under `<root>`.
 An identical newest backup of that path prevents another copy.
 Directories, foreign symbolic links, and regular files at root-side link locations still cause refusal before any file changes.
+
+Restore requires an explicit alias and refuses `restore-host-mismatch` before changing the home folder when the saved alias differs.
+Full setup with the new alias changes the saved alias.
+Direct `portable.py restore` and local restore-only installer calls also require `--host`; the saved alias cannot confirm itself.
+Ordinary installation and update remain full setup.
+
+Restore keeps its stdout success line and prints its summary on stderr after any backup lines.
+The summary names the root and alias, `persist_agents`, each agent root's location, and each sign-in file's presence.
+Claude uses `.credentials.json`; Codex uses `auth.json`.
+External agent roots appear only as `<claude-root>` and `<codex-root>`.
+The summary also confirms the `~/.gitconfig` link to the saved Git config.
+It never prints sign-in contents.
+
+Agents follow the six conditions in the [portable restore policy](../home/.claude/AGENTS.md#portable-restore-only) before restoring without asking.
+That policy defines the checks, user-only steps, refusal rules, and required report.
+The user handles SSH host keys, sign-ins, full setup, alias changes, and task recovery flags.
 
 Before creating links, restore-only checks any required backup storage and records.
 Setup, restore-only, and doctor apply the same safety checks to managed personal configuration files.
