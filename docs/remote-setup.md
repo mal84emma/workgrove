@@ -89,6 +89,14 @@ The installer never invents an identity or copies a different user's sign-in.
 After the first installation, the saved global configuration remains authoritative.
 Full setup ignores replacement HOME configuration and inherited `GIT_CONFIG_GLOBAL` paths.
 An explicit `--git-identity` refresh preserves saved custom settings and credential-helper resets.
+
+Each full setup and `wt update` copies the saved identity into a new Git configuration generation under `<root>/.config/workgrove/git/<32-hex>/`.
+After installation succeeds, setup removes unreferenced generation folders under the installation lock.
+It checks nested includes, conditional includes, and exclusion file paths before removal.
+It removes only real folders with 32 lowercase hexadecimal characters in their names and never follows symbolic links during removal.
+If removal fails, setup keeps the folder and continues.
+If setup fails, it restores the previous active Git configuration and removes the new generation.
+
 If the saved global file is missing, setup requires an explicit identity file before rebuilding it.
 That repair cannot recover settings from the missing file.
 
