@@ -1,17 +1,26 @@
 # shellcheck shell=sh
 # shellcheck disable=SC2034
-# Use the same supported interpreter for setup, readiness, and capacity checks.
+# Use the same isolated interpreter on the Mac and the VM.
 wg_select_python() {
   wg_python='' wg_python_issue=missing-python
   for wg_candidate in "$(command -v python3 || true)" /usr/bin/python3; do
     [ -n "$wg_candidate" ] && [ -x "$wg_candidate" ] || continue
     wg_python_issue=python-3.9-required
-    if "$wg_candidate" -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+    if "$wg_candidate" -I -B -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
       wg_python=$wg_candidate
       return 0
     fi
   done
   return 1
+}
+
+wg_run_python() {
+  wg_select_python || return 1
+  if [ "${1:-}" = --exec ]; then
+    shift
+    exec "$wg_python" -I -B "$@"
+  fi
+  "$wg_python" -I -B "$@"
 }
 
 wg_python_readiness_error() {

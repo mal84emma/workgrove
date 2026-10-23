@@ -767,14 +767,14 @@ cmd_update() { # pull this repo and re-run its installer
     local flags flag
     local -a candidates=() accepted=()
     wg_select_python || die "$wg_python_issue"
-    flags=$("$wg_python" -B "$WG_LIB_DIR/portable.py" reinstall-flags) || return 1
+    flags=$(wg_run_python "$WG_LIB_DIR/portable.py" reinstall-flags) || return 1
     read -r -a candidates <<<"$flags"
     # Probe the update parser in a subshell so rejected flags cannot exit this command.
     for flag in "${candidates[@]}"; do
       if (wt_opts "$spec" opts "$flag") >/dev/null 2>&1; then accepted+=("$flag"); fi
     done
     for flag in "${pass[@]}"; do
-      "$wg_python" -B "$WG_LIB_DIR/portable.py" reinstall-flags -- "$flag" >/dev/null 2>&1 \
+      wg_run_python "$WG_LIB_DIR/portable.py" reinstall-flags -- "$flag" >/dev/null 2>&1 \
         || die "update: portable host refuses $flag; accepted flags: ${accepted[*]}"
     done
   fi

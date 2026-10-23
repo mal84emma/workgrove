@@ -31,8 +31,10 @@ if [[ -L $wg_path || ! -r $wg_lib ]]; then
   printf 'wt-ssh-host: cannot load its library; reinstall workgrove\n' >&2
   exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1; then
+# shellcheck source=lib/workgrove/vm/python-runtime.sh
+source "${wg_lib%/*}/vm/python-runtime.sh"
+if ! wg_select_python; then
   printf 'wt-ssh-host: needs Python 3; install Python and retry\n' >&2
   exit 1
 fi
-exec python3 -B "$wg_lib" "$@"
+wg_run_python --exec "$wg_lib" "$@"
