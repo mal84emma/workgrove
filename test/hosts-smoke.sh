@@ -292,4 +292,5 @@ scenario_doctor_alias() {
   end_scenario
 }
 scenario_doctor_alias
+python3 -B "$REPO/test/hosts_records_test.py"
 lib_summary
