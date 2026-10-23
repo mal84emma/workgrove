@@ -1,11 +1,11 @@
 # shellcheck shell=bash
-# Reads globals: CMUX_ROW_EXISTING, HOME, WG_LIB_DIR.
+# Reads globals: CMUX_ROW_EXISTING, HOME, WG_LIB_DIR, WT_PROTOCOL.
 # Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
 # Requires common.sh: die, hook_safe_path, host_recovery_hint, row_title, shell_join, tmux_cmd, usage, vm_result, vm_run_line,
 #   vm_ssh, vm_tmux, vm_wt, warn, wt_session, wt_version.
 # Requires version.sh: wt_read_version.
 # Requires options.sh: wt_opt_args, wt_opts, wt_spec.
-# Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent.
+# Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent, wt_register_tmpfile.
 # ---------------------------------------------------------------- wt -H <host> …
 remote_sh_raw() { vm_ssh "$1" "$2"; }
 remote_sh() {
@@ -77,9 +77,34 @@ WG_PREFLIGHT_END
 }
 
 host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
-  if ! remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" < <(host_preflight_source); then
+  local version protocol=null output_file rc=0
+  output_file=$(mktemp "${TMPDIR:-/tmp}/wt-new-preflight.XXXXXX") || return 1
+  wt_register_tmpfile "$output_file"
+  remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" < <(host_preflight_source) >"$output_file" || rc=$?
+  version=$(cat "$output_file")
+  rm -f "$output_file"
+  if [[ $rc != 0 ]]; then
+    [[ -z $version ]] || printf '%s\n' "$version" >&2
     warn "$(host_recovery_hint "$1")"
     return 1
+  fi
+  if version=$(wt_read_version <<<"$version" 2>/dev/null); then
+    protocol=$(jq -r '.protocol' <<<"$version")
+  fi
+  if [[ $protocol != "$WT_PROTOCOL" ]]; then
+    warn "$(host_protocol_message "$protocol"); run $(host_protocol_repair "$1" "$protocol")"
+  fi
+}
+
+host_protocol_message() {
+  printf 'VM protocol %s; Mac protocol %s' "${1:-unavailable}" "$WT_PROTOCOL"
+}
+
+host_protocol_repair() {
+  if [[ $2 =~ ^[0-9]+$ ]] && (($2 > WT_PROTOCOL)); then
+    printf 'wt update'
+  else
+    printf 'wt -H %s update' "$(shell_join "$1")"
   fi
 }
 
