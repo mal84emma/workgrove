@@ -68,6 +68,17 @@ prepare_cmux() {
 cat >"$TEST_ROOT/local/bin/ssh.fixture" <<'SSH'
 #!/usr/bin/env bash
 printf '%s\n' "$cmd" >>"$SSH_LOG"
+if [[ $cmd == 'sh -s -- '* && ${PREFLIGHT_REPLY_MODE:-} == transport ]]; then
+  cat >/dev/null
+  printf 'preflight stderr diagnostic\n' >&2
+  exit 255
+fi
+if [[ $cmd == 'sh -s -- '* && ${PREFLIGHT_REPLY_MODE:-} == noisy ]]; then
+  cat >/dev/null
+  printf 'preflight stdout diagnostic\n'
+  printf 'preflight stderr diagnostic\n' >&2
+  exit "${PREFLIGHT_STATUS:-0}"
+fi
 [[ ${REMOTE_OUTPUT_MODE:-} != text && ${REMOTE_OUTPUT_MODE:-} != legacy ]] || printf 'SSH warning\n' >&2
 if [[ "$SSH_MODE" == lost && "$cmd" == *' new '* ]]; then
   HOME="$REMOTE_HOME" CMUX_SSH_ATTEMPT_ID=1 WT_REPOS_DIR="$REMOTE_HOME/discovery" WT_AGENT="$REMOTE_DEFAULT_AGENT" PATH="$REMOTE_HOME/.local/bin:/usr/bin:/bin" \
@@ -96,6 +107,13 @@ if [[ ${REMOTE_FAIL_SUB:-} == "$1" ]]; then
   [[ -z ${REMOTE_FAIL_STDOUT:-} ]] || printf '%s\n' "$REMOTE_FAIL_STDOUT"
   [[ -z ${REMOTE_FAIL_STDERR:-} ]] || printf '%s\n' "$REMOTE_FAIL_STDERR" >&2
   exit "$REMOTE_FAIL_STATUS"
+fi
+if [[ $1 == version ]]; then
+  case ${REMOTE_VERSION_MODE:-} in
+    newer) printf '{"commit":"fixture","protocol":3}\n'; exit 0 ;;
+    unsupported) exit 1 ;;
+    malformed) printf '{broken\n'; exit 0 ;;
+  esac
 fi
 if [[ $1 == new ]]; then
   if [[ $REMOTE_OUTPUT_MODE == old ]]; then
@@ -178,6 +196,8 @@ invoke_wt() {
     REAL_WT="$REPO/bin/wt" FAKE_CMUX_STATE="$FAKE_CMUX_STATE" \
     SSH_LOG="$TEST_ROOT/ssh.log" CMUX_MODE="$CMUX_MODE" SSH_MODE="$SSH_MODE" \
     REMOTE_OUTPUT_MODE="${REMOTE_OUTPUT_MODE:-normal}" \
+    REMOTE_VERSION_MODE="${REMOTE_VERSION_MODE:-}" \
+    PREFLIGHT_REPLY_MODE="${PREFLIGHT_REPLY_MODE:-}" PREFLIGHT_STATUS="${PREFLIGHT_STATUS:-0}" \
     REMOTE_INSTALL_ROOT="${REMOTE_INSTALL_ROOT:-}" \
     REMOTE_FAIL_SUB="${REMOTE_FAIL_SUB:-}" REMOTE_FAIL_STATUS="${REMOTE_FAIL_STATUS:-141}" \
     REMOTE_FAIL_STDOUT="${REMOTE_FAIL_STDOUT:-}" REMOTE_FAIL_STDERR="${REMOTE_FAIL_STDERR:-}" \
@@ -219,6 +239,48 @@ scenario_installation_preflight() {
   end_scenario
 }
 scenario_installation_preflight
+
+scenario_preflight_version() {
+  begin_scenario 'creation consumes the VM version and preserves preflight failures' || return 0
+  local mode expected
+  CMUX_MODE=down SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  for mode in normal newer unsupported malformed noisy; do
+    REMOTE_VERSION_MODE=$mode PREFLIGHT_REPLY_MODE=$mode
+    rm -f "$TEST_ROOT/remote-new"
+    invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
+    assert_eq "$mode version does not block creation" 0 "$WT_RC"
+    assert_eq "$mode creation starts stdout with the task" 'created task' "${WT_STDOUT%%$'\n'*}"
+    expected=''
+    case $mode in
+      newer) expected='wt: VM protocol 3; Mac protocol 1; run wt update' ;;
+      unsupported|malformed|noisy) expected='wt: VM protocol null; Mac protocol 1; run wt -H fakevm update' ;;
+    esac
+    if [[ $mode == noisy ]]; then expected=$'preflight stderr diagnostic\n'"$expected"; fi
+    assert_eq "$mode version comparison stays on stderr" "$expected" "$WT_STDERR"
+    check "$([[ $WT_STDOUT != *'preflight stdout diagnostic'* && $WT_STDOUT != *'"protocol"'* ]] && echo yes)" \
+      "$mode leaked preflight stdout"
+  done
+  PREFLIGHT_REPLY_MODE=noisy PREFLIGHT_STATUS=42
+  rm -f "$TEST_ROOT/remote-new" "$TEST_ROOT/remote-new.calls"
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
+  assert_eq 'failed preflight retains creation failure status' 1 "$WT_RC"
+  assert_eq 'failed preflight has no stdout' '' "$WT_STDOUT"
+  assert_grep 'failed preflight sends captured diagnostics to stderr' "$TEST_ROOT/wt-stderr" 'preflight stdout diagnostic'
+  assert_grep 'failed preflight keeps its stderr' "$TEST_ROOT/wt-stderr" 'preflight stderr diagnostic'
+  assert_grep 'failed preflight keeps its recovery hint' "$TEST_ROOT/wt-stderr" 'wt -H fakevm doctor --root <root> --json'
+  assert_absent "$TEST_ROOT" remote-new.calls
+  PREFLIGHT_REPLY_MODE=transport
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
+  assert_eq 'preflight SSH failure retains its status' 1 "$WT_RC"
+  assert_eq 'preflight SSH failure has no stdout' '' "$WT_STDOUT"
+  assert_eq 'preflight SSH failure keeps its existing diagnostic' \
+    $'preflight stderr diagnostic\nwt: host unreachable: is the VM running? (ssh fakevm)' "$WT_STDERR"
+  assert_absent "$TEST_ROOT" remote-new.calls
+  REMOTE_VERSION_MODE='' PREFLIGHT_REPLY_MODE='' PREFLIGHT_STATUS=0 CMUX_MODE=alive
+  rm -f "$TEST_ROOT/ssh.log"
+  end_scenario
+}
+scenario_preflight_version
 
 scenario_preflight_recovery() {
   begin_scenario 'remote preflight and recovery' || return 0
@@ -641,7 +703,7 @@ scenario_vm_failures() {
   : >"$TEST_ROOT/cmux.log"
   invoke_wt -H fakevm new task -r wt-demo -a claude
   assert_eq 'silent new failure keeps its status' 141 "$WT_RC"
-  check "$(jq -e '.protocol == 1 and (.commit | type == "string")' <<<"$WT_STDOUT" >/dev/null && echo yes)" 'new changed its preflight stdout'
+  assert_eq 'creation consumes the preflight version even when new fails' '' "$WT_STDOUT"
   assert_eq 'silent new failure reports one stderr line with inspection advice' \
     'wt new on fakevm exited 141 (SIGPIPE); the worktree may exist; inspect with: wt -H fakevm list -r wt-demo before retrying' "$WT_STDERR"
   check "$(if ! grep -q '^ssh ' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'failed creation opened a row'

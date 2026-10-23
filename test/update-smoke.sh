@@ -53,7 +53,7 @@ scenario_version() {
   json=$(bash "$TEST_ROOT/vm/.local/bin/wt" version)
   printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/bin/tmux"
   chmod +x "$TEST_ROOT/bin/tmux"
-  assert_eq 'creation preflight reports the installed version' "$json" \
+  assert_eq 'creation preflight supplies the installed version for the Mac comparison' "$json" \
     "$(cat "$REPO/lib/workgrove/version.sh" "$REPO/lib/workgrove/vm/host-new-preflight.sh" |
        HOME="$TEST_ROOT/vm" PATH="$TEST_ROOT/bin:$PATH" sh -s -- '' none)"
   assert_eq 'linked script describes its own repository'  "$expected" "$(jq -r .commit <<<"$json")"
