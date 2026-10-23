@@ -1592,6 +1592,140 @@ sys.exit(module["main"]())
         self.assertFalse(command.exists())
         self.assertFalse(command.is_symlink())
 
+    def test_shell_path_survives_host_reset_and_reinstall(self):
+        old = self.root
+        self.root = self.base / "durable 'space-$\u00e9"
+        old.rename(self.root)
+        self.source = self.root / "workgrove"
+        self.script = self.source / "lib/workgrove/portable.py"
+        bashrc = self.home / ".bashrc"
+        bashrc.write_text('[ -z "$PS1" ] && return\nexport PATH=/usr/bin:/bin\n'
+                          'export CODEX_HOME="$HOME/supplier-codex"\n'
+                          'export CLAUDE_CONFIG_DIR="$HOME/supplier-claude"\n')
+        expected = f'{self.root}/.local/bin:{self.home}/.local/bin:'
+        for attempt in range(2):
+            self.install()
+            interactive = subprocess.run(
+                [str(self.tools / "bash"), "-ic", 'printf "%s\\n" "$PATH" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"'],
+                env=self.env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(interactive.returncode, 0, interactive.stderr)
+            self.assertEqual(interactive.stdout.splitlines(),
+                             [expected + "/usr/bin:/bin", str(self.home / "supplier-codex"),
+                              str(self.home / "supplier-claude")])
+            noninteractive = subprocess.run(
+                [str(self.tools / "bash"), "-c", '. "$HOME/.bashrc"; printf %s "$PATH"'],
+                env=self.env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(noninteractive.returncode, 0, noninteractive.stderr)
+            self.assertEqual(noninteractive.stdout, expected + self.env["PATH"])
+            for label in ("environment", "interactive path"):
+                for marker in (">>>", "<<<"):
+                    self.assertEqual(bashrc.read_text().count(f"# {marker} workgrove {label}\n"), 1)
+            self.assertTrue(bashrc.read_text().endswith("# <<< workgrove interactive path\n"))
+            self.assertNotIn("workgrove interactive path", (self.home / ".zshenv").read_text())
+            if attempt == 0:
+                with bashrc.open("a") as stream:
+                    stream.write("export PATH=/usr/bin:/bin\n")
+
+    def test_shell_path_only_adds_missing_folders(self):
+        self.install()
+        text = (self.home / ".bashrc").read_text()
+        self.assertIn("# >>> workgrove interactive path\n", text)
+        text = text.split("# >>> workgrove interactive path\n")[1]
+        root_bin, home_bin = str(self.root / ".local/bin"), str(self.home / ".local/bin")
+        for initial, expected in (("/usr/bin:/bin", f"{root_bin}:{home_bin}:/usr/bin:/bin"),
+                                  (f"/bin:{root_bin}", f"{home_bin}:/bin:{root_bin}"),
+                                  (f"{home_bin}:/bin", f"{root_bin}:{home_bin}:/bin"),
+                                  (f"/bin:{home_bin}:{root_bin}", f"/bin:{home_bin}:{root_bin}"),
+                                  (f"{root_bin}-other:{home_bin}-other",
+                                   f"{root_bin}:{home_bin}:{root_bin}-other:{home_bin}-other")):
+            with self.subTest(initial=initial):
+                result = subprocess.run([str(self.tools / "bash"), "-c", text + text + 'printf %s "$PATH"'],
+                                        env=dict(self.env, PATH=initial), capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
+
+    def test_restore_writes_both_shell_blocks_after_home_replacement(self):
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".bashrc").write_text('[ -z "$PS1" ] && return\nexport PATH=/usr/bin:/bin\n')
+        self.command("restore", "--root", str(self.root), env=dict(self.env, PATH=""))
+        text = (self.home / ".bashrc").read_text()
+        self.assertTrue(text.startswith("# >>> workgrove environment\n"))
+        self.assertTrue(text.endswith("# <<< workgrove interactive path\n"))
+        self.assertNotIn("workgrove interactive path", (self.home / ".zshenv").read_text())
+        result = subprocess.run([str(self.tools / "bash"), "-ic", 'printf %s "$PATH"'],
+                                env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, f"{self.root}/.local/bin:{self.home}/.local/bin:/usr/bin:/bin")
+
+    def test_shell_path_conflicts_refuse_before_install_or_restore_changes(self):
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        bashrc = self.home / ".bashrc"
+        start, end = "# >>> workgrove interactive path\n", "# <<< workgrove interactive path\n"
+        for text in (start, end, (start + ":\n" + end) * 2, end + start):
+            for operation in ("install", "restore"):
+                with self.subTest(text=text, operation=operation):
+                    bashrc.write_text(text)
+                    if operation == "install":
+                        result = self.install(ok=False)
+                    else:
+                        result = self.command("restore", "--root", str(self.root), ok=False)
+                    self.assertEqual(result.stderr, "workgrove: managed-text-conflict: ~/.bashrc\n")
+                    self.assertEqual(bashrc.read_text(), text)
+                    self.assertFalse((self.home / ".local").exists())
+                    self.assertFalse((self.home / ".zshenv").exists())
+
+    def test_linked_bashrc_gets_both_blocks_with_one_backup_and_write(self):
+        self.install()
+        bashrc = self.home / ".bashrc"
+        bashrc.unlink()
+        supplier = self.base / "supplier-bashrc"
+        supplier.write_text("export PATH=/usr/bin:/bin\n")
+        bashrc.symlink_to(supplier)
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(portable, "backup", wraps=portable.backup) as backup, \
+                patch.object(portable, "write", wraps=portable.write) as write:
+            portable.install_files(self.profile())
+        self.assertEqual([call.args for call in backup.call_args_list if call.args[0] == bashrc],
+                         [(bashrc, self.root)])
+        writes = [call.args[1] for call in write.call_args_list if call.args[0] == bashrc]
+        self.assertEqual(len(writes), 1)
+        self.assertIn("# >>> workgrove environment\n", writes[0])
+        self.assertTrue(writes[0].endswith("# <<< workgrove interactive path\n"))
+        self.assertFalse(bashrc.is_symlink())
+        self.assertEqual(supplier.read_text(), "export PATH=/usr/bin:/bin\n")
+
+    def test_interleaved_shell_blocks_refuse_before_home_backups(self):
+        self.install("--persist-agents")
+        environment = ("# >>> workgrove environment\n", "# <<< workgrove environment\n")
+        interactive = ("# >>> workgrove interactive path\n", "# <<< workgrove interactive path\n")
+        for outer, inner in ((environment, interactive), (interactive, environment)):
+            for operation in ("install", "restore"):
+                with self.subTest(outer=outer, operation=operation):
+                    shutil.rmtree(self.home)
+                    self.home.mkdir(mode=0o700)
+                    text = outer[0] + inner[0] + outer[1] + inner[1]
+                    (self.home / ".bashrc").write_text(text)
+                    gitconfig = self.home / ".gitconfig"
+                    gitconfig.write_bytes(b"supplier Git configuration")
+                    backups = self.root / ".local/state/workgrove/backups"
+                    before = set(backups.iterdir())
+                    if operation == "install":
+                        result = self.install(ok=False)
+                    else:
+                        result = self.command("restore", "--root", str(self.root), ok=False,
+                                              env=dict(self.env, PATH=""))
+                    self.assertEqual(result.stderr, "workgrove: managed-text-conflict: ~/.bashrc\n")
+                    self.assertEqual((self.home / ".bashrc").read_text(), text)
+                    self.assertFalse(gitconfig.is_symlink())
+                    self.assertEqual(gitconfig.read_bytes(), b"supplier Git configuration")
+                    self.assertEqual(set(backups.iterdir()), before)
+                    self.assertFalse((self.home / ".local").exists())
+                    self.assertFalse((self.home / ".zshenv").exists())
+
     def test_doctor_does_not_replace_personal_files_or_create_backups(self):
         self.install("--persist-agents")
         folder = self.root / ".config/workgrove"

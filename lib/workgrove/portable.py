@@ -828,6 +828,16 @@ def shell_environment(profile):
     return text
 
 
+def bash_path(profile):
+    text = ""
+    for folder in ('"$HOME/.local/bin"', shlex.quote(str(Path(profile["root"]) / ".local/bin"))):
+        text += ('case ":$PATH:" in\n'
+                 f'    *:{folder}:*) ;;\n'
+                 f'    *) export PATH={folder}:"$PATH" ;;\n'
+                 'esac\n')
+    return text
+
+
 def compatibility(profile):
     """Return (target, path, home) entries with each location's restoration role."""
     root, source = Path(profile["root"]), Path(profile["source"])
@@ -980,7 +990,12 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
             require(not path.is_symlink() or path.exists(), "shell-configuration-link-unavailable")
             if path.exists():
                 require(path.is_file(), "shell-configuration-conflict")
-                replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
+                text = replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
+                if relative == ".bashrc":
+                    try:
+                        replace_block(text, "interactive path", "placeholder")
+                    except ValueError:
+                        raise Refusal("managed-text-conflict") from None
                 if path.is_symlink():
                     backup_paths.add(path)
     instructions = validate_personal_files(profile, migrations, installing=not restoring)
@@ -1033,6 +1048,8 @@ def install_files(profile, restoring=False, instruction_copies=None, restore_fil
         original = read(path, missing=True)
         contents = f". {shlex.quote(str(env))}"
         text = replace_block(original, "environment", contents, first=filename == ".bashrc")
+        if filename == ".bashrc":
+            text = replace_block(text, "interactive path", bash_path(profile))
         if path.is_symlink():
             backup(path, root)
         write(path, text)
