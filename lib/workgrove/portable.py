@@ -688,16 +688,18 @@ def prepare_git(root, identity, previous):
 
 
 def display_path(path, root, profile=None):
+    locations = [(root, ""), (Path.home(), "~/")]
     if profile:
         for agent, value in profile["agent_roots"].items():
             base = Path(value)
             defaults = {root / ".config" / agent, Path.home() / ("." + agent)}
-            if base not in defaults and (path == base or base in path.parents):
-                return "<" + agent + "-root>/" + str(path.relative_to(base))
-    for base, prefix in ((root, ""), (Path.home(), "~/")):
-        if path == base or base in path.parents:
-            return prefix + str(path.relative_to(base))
-    return "<configuration>"
+            if base not in defaults:
+                locations.append((base, "<" + agent + "-root>/"))
+    matching = [(base, prefix) for base, prefix in locations if path == base or base in path.parents]
+    if not matching:
+        return "<configuration>"
+    base, prefix = max(matching, key=lambda entry: len(entry[0].parts))
+    return prefix + str(path.relative_to(base))
 
 
 def backup_records(root):

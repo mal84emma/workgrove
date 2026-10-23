@@ -1005,6 +1005,35 @@ sys.exit(module["main"]())
     def test_custom_agent_root_inside_persistent_root_stays_private_in_diagnostics(self):
         self.check_custom_agent_root_diagnostics(self.root)
 
+    def test_nested_custom_agent_roots_keep_the_inner_root_private(self):
+        outer = self.root / "selected-claude"
+        inner = outer / CANARY
+        inner.mkdir(parents=True, mode=0o700)
+        self.env.update(CLAUDE_CONFIG_DIR=str(outer), CODEX_HOME=str(inner))
+        self.install()
+        instructions = self.base / "personal-instructions"
+        instructions.write_text("Keep personal instructions.\n")
+        path = inner / "AGENTS.md"
+        path.unlink()
+        path.symlink_to(instructions)
+        result = self.install()
+        self.assertIn("backed up <codex-root>/AGENTS.md to .local/state/workgrove/backups/", result.stderr)
+        self.assertEqual(instructions.read_text(), "Keep personal instructions.\n")
+
+    def test_agent_root_containing_home_and_root_keeps_both_paths_private(self):
+        old = self.root
+        self.root = self.base / CANARY
+        old.rename(self.root)
+        self.source = self.root / "workgrove"
+        self.script = self.source / "lib/workgrove/portable.py"
+        self.env["CLAUDE_CONFIG_DIR"] = str(self.base)
+        path = self.root / ".local/bin/wt"
+        path.parent.mkdir(parents=True, mode=0o700)
+        path.write_text("supplier command")
+        result = self.install()
+        self.assertIn("backed up .local/bin/wt to .local/state/workgrove/backups/", result.stderr)
+        self.assertIn("backed up ~/.gitconfig to .local/state/workgrove/backups/", result.stderr)
+
     def test_fixed_conflicts_name_paths_and_keep_refusal_codes(self):
         directory = self.home / ".local/bin/wt"
         directory.mkdir(parents=True)
