@@ -112,8 +112,10 @@ These additional fields keep protocol version 1.
 
 `host_contract_doctor` uses the record and the command exit status to determine success.
 It displays the VM text and keeps the Mac protocol comparison separate.
-For older VMs without a record, it keeps the marked `WT_COMPAT` text checks.
+`vm_wt_failure` reports doctor failures through `doctor_result`.
+For older VMs without a record, its doctor policy keeps the marked `WT_COMPAT` text checks.
 Malformed or unsupported records cannot use that fallback.
+An unsupported record recommends updating the Mac.
 Older Macs continue to read the unchanged VM check lines.
 
 `require_wt` in `task.sh` emits a missing `path` record on standard error and exits 1 through `die`.
