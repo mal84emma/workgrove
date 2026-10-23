@@ -68,6 +68,11 @@ prepare_cmux() {
 cat >"$TEST_ROOT/local/bin/ssh.fixture" <<'SSH'
 #!/usr/bin/env bash
 printf '%s\n' "$cmd" >>"$SSH_LOG"
+if [[ $cmd == 'sh -s -- '* && ${PREFLIGHT_REPLY_MODE:-} == transport ]]; then
+  cat >/dev/null
+  printf 'preflight stderr diagnostic\n' >&2
+  exit 255
+fi
 if [[ $cmd == 'sh -s -- '* && ${PREFLIGHT_REPLY_MODE:-} == noisy ]]; then
   cat >/dev/null
   printf 'preflight stdout diagnostic\n'
@@ -263,6 +268,13 @@ scenario_preflight_version() {
   assert_grep 'failed preflight sends captured diagnostics to stderr' "$TEST_ROOT/wt-stderr" 'preflight stdout diagnostic'
   assert_grep 'failed preflight keeps its stderr' "$TEST_ROOT/wt-stderr" 'preflight stderr diagnostic'
   assert_grep 'failed preflight keeps its recovery hint' "$TEST_ROOT/wt-stderr" 'wt -H fakevm doctor --root <root> --json'
+  assert_absent "$TEST_ROOT" remote-new.calls
+  PREFLIGHT_REPLY_MODE=transport
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
+  assert_eq 'preflight SSH failure retains its status' 1 "$WT_RC"
+  assert_eq 'preflight SSH failure has no stdout' '' "$WT_STDOUT"
+  assert_eq 'preflight SSH failure keeps its existing diagnostic' \
+    $'preflight stderr diagnostic\nwt: host unreachable: is the VM running? (ssh fakevm)' "$WT_STDERR"
   assert_absent "$TEST_ROOT" remote-new.calls
   REMOTE_VERSION_MODE='' PREFLIGHT_REPLY_MODE='' PREFLIGHT_STATUS=0 CMUX_MODE=alive
   rm -f "$TEST_ROOT/ssh.log"

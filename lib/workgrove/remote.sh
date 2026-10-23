@@ -5,7 +5,7 @@
 #   vm_ssh, vm_tmux, vm_wt, warn, wt_session, wt_version.
 # Requires version.sh: wt_read_version.
 # Requires options.sh: wt_opt_args, wt_opts, wt_spec.
-# Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent.
+# Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent, wt_register_tmpfile.
 # ---------------------------------------------------------------- wt -H <host> …
 remote_sh_raw() { vm_ssh "$1" "$2"; }
 remote_sh() {
@@ -77,8 +77,13 @@ WG_PREFLIGHT_END
 }
 
 host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
-  local version protocol=null
-  if ! version=$(remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" < <(host_preflight_source)); then
+  local version protocol=null output_file rc=0
+  output_file=$(mktemp "${TMPDIR:-/tmp}/wt-new-preflight.XXXXXX") || return 1
+  wt_register_tmpfile "$output_file"
+  remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" < <(host_preflight_source) >"$output_file" || rc=$?
+  version=$(cat "$output_file")
+  rm -f "$output_file"
+  if [[ $rc != 0 ]]; then
     [[ -z $version ]] || printf '%s\n' "$version" >&2
     warn "$(host_recovery_hint "$1")"
     return 1
