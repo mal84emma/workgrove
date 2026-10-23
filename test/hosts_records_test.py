@@ -30,18 +30,35 @@ class HostRecordsTests(unittest.TestCase):
         return subprocess.run([interpreter, "-c", script, "fixture", str(REPO), *args],
                               capture_output=True, text=True, check=True).stdout
 
-    def record(self, report, host="test-host", status="0"):
-        return json.loads(self.shell('''
-            source "$1/lib/workgrove/common.sh"
-            source "$1/lib/workgrove/hosts.sh"
-            ssh_host_check() { return 0; }
-            fixture_report=$2 fixture_status=$4
-            probe_host() { printf '%s\\n' "$fixture_report"; return "$fixture_status"; }
-            host_record "$3"
-        ''', report, host, status))
+    def record(self, report, host="test-host", status="0", validate=None):
+        # Replacement can equal the supplied fallback, so record each validator's status.
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TEST_ROOT")) as scratch:
+            validation_log = Path(scratch) / "validation"
+            output = self.shell('''
+                source "$1/lib/workgrove/common.sh"
+                source "$1/lib/workgrove/hosts.sh"
+                fixture_report=$2 fixture_status=$4 fixture_validation_log=$5
+                ssh_host_check() { return 0; }
+                probe_host() { printf '%s\\n' "$fixture_report"; return "$fixture_status"; }
+                jq() {
+                    local rc=0
+                    command jq "$@" || rc=$?
+                    case ${2:-} in
+                        *'error("invalid capacity")'*) printf 'capacity:%s\\n' "$rc" >>"$fixture_validation_log" ;;
+                        *'error("invalid readiness")'*) printf 'readiness:%s\\n' "$rc" >>"$fixture_validation_log" ;;
+                    esac
+                    return "$rc"
+                }
+                host_record "$3"
+            ''', report, host, status, str(validation_log))
+            if validate is not None:
+                statuses = [line for line in validation_log.read_text().splitlines()
+                            if line.startswith(validate + ":")]
+                self.assertEqual(statuses, [validate + ":0"])
+            return json.loads(output)
 
     def accepted(self, report, issue, kind):
-        record = self.record(report)
+        record = self.record(report, validate=kind)
         self.assertEqual(record["status"], "available")
         self.assertEqual(record[kind + "_issues"], [issue])
         self.assertIs(record["capacity_verified" if kind == "capacity" else "workgrove_ready"], False)
