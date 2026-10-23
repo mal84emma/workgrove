@@ -17,7 +17,7 @@ def public_value($key; $value):
    redacted_fields:["title","subtitle","body"], command:["~/.local/bin/cmux-hook --event"]}
   | (.[$key] // []) | index($value) != null;
 def methods: ["workspace.list","workspace.create","workspace.action","workspace.close","workspace.select",
-  "workspace.remote.reconnect","notification.list","notification.dismiss","system.top","surface.read_text"];
+  "notification.list","notification.dismiss","system.top","surface.read_text"];
 . as $input
 | ([paths(strings) as $p | getpath($p)] + [.. | objects | keys[]]
     | map(select(test("^[A-Fa-f0-9]{8}(-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$"))) | unique) as $ids
