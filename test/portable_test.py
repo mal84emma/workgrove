@@ -5,6 +5,7 @@ import io
 import json
 import os
 import pty
+import re
 import select
 import shlex
 from pathlib import Path
@@ -2416,6 +2417,151 @@ sys.exit(module["main"]())
             self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.email").stdout.strip(), "edited@example.invalid")
             self.assertEqual(self.git("config", "--global", "--includes", "--get-all", "credential.helper").stdout, before)
 
+    def git_generations(self):
+        folder = self.root / ".config/workgrove/git"
+        return {path for path in folder.iterdir() if re.fullmatch(r"[0-9a-f]{32}", path.name)
+                and not path.is_symlink() and path.is_dir()}
+
+    def test_git_generations_keep_identity_after_three_plain_installs(self):
+        identity = self.home / "identity"
+        identity.write_text('[user]\n name = Selected User\n email = selected@example.invalid\n')
+        self.install("--git-identity", str(identity))
+        active = self.root / ".config/workgrove/git/global"
+        self.env["GIT_CONFIG_GLOBAL"] = str(active)
+        for _ in range(3):
+            previous = self.git_generations()
+            self.install()
+            current = self.git_generations()
+            self.assertLessEqual(len(current), 2)
+            for key, value in (("user.name", "Selected User"), ("user.email", "selected@example.invalid")):
+                self.assertEqual(self.git("config", "--global", "--includes", "--get", key).stdout.strip(), value)
+            overlay = portable.git_owned_path(active.read_text(), "identity", active.parent)
+            self.assertNotIn(overlay.parents[1], previous)
+        self.install("--git-identity", str(overlay))
+        self.assertFalse(overlay.exists())
+        self.assertEqual(self.git("config", "--global", "--includes", "--get", "user.email").stdout.strip(),
+                         "selected@example.invalid")
+
+    def test_failed_git_setup_before_activation_keeps_generations_and_active_configuration(self):
+        self.install()
+        active = self.root / ".config/workgrove/git/global"
+        before = self.git_generations(), active.read_bytes()
+        invalid = self.home / "invalid-identity"
+        invalid.write_text('[broken\n')
+        self.install("--git-identity", str(invalid), ok=False)
+        self.assertEqual((self.git_generations(), active.read_bytes()), before)
+
+    def test_failed_git_setup_after_activation_keeps_generations_and_active_configuration(self):
+        self.install()
+        active = self.root / ".config/workgrove/git/global"
+        stale = active.parent / ("a" * 32)
+        stale.mkdir()
+        before = self.git_generations(), active.read_bytes()
+        for step in ("install_files", "write"):
+            original = portable.write
+            def fail(*args, **kwargs):
+                if step == "install_files" or args[0] == portable.machine_path(self.root):
+                    raise portable.Refusal("synthetic-install-failure")
+                return original(*args, **kwargs)
+            with self.subTest(step=step), patch.dict(os.environ, self.env, clear=True), \
+                    patch.object(portable, step, side_effect=fail), \
+                    patch.object(sys, "argv", ["portable.py", "install", "--root", str(self.root), "--host", "test-host"]), \
+                    patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+                self.assertEqual(portable.main(), 1)
+            self.assertEqual((self.git_generations(), active.read_bytes()), before)
+
+    def test_failed_first_git_setup_removes_new_generation_and_active_configuration(self):
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(portable, "install_files", side_effect=portable.Refusal("synthetic-install-failure")), \
+                patch.object(sys, "argv", ["portable.py", "install", "--root", str(self.root), "--host", "test-host",
+                                           "--storage", "os-disk"]), \
+                patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+            self.assertEqual(portable.main(), 1)
+        self.assertEqual(self.git_generations(), set())
+        self.assertFalse((self.root / ".config/workgrove/git/global").exists())
+
+    def test_git_pruning_keeps_links_and_other_entries(self):
+        self.install()
+        folder = self.root / ".config/workgrove/git"
+        outside = self.base / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("keep\n")
+        link = folder / ("a" * 32)
+        link.symlink_to(outside, target_is_directory=True)
+        other = folder / "personal"
+        other.mkdir()
+        (other / "keep").write_text("keep\n")
+        stale = folder / ("b" * 32)
+        stale.mkdir()
+        (stale / "link").symlink_to(outside, target_is_directory=True)
+        (folder / "missing-defaults").write_text("keep\n")
+        with patch.dict(os.environ, self.env, clear=True), portable.installation_lock(self.root):
+            portable.prune_git_generations(folder, next(iter(self.git_generations() - {link, stale})))
+        self.assertFalse(stale.exists())
+        self.assertTrue(link.is_symlink())
+        self.assertEqual((outside / "keep").read_text(), "keep\n")
+        self.assertEqual((other / "keep").read_text(), "keep\n")
+        self.assertEqual((folder / "missing-defaults").read_text(), "keep\n")
+
+    def test_doctor_and_restore_leave_git_generations_unchanged(self):
+        self.install()
+        stale = self.root / ".config/workgrove/git" / ("c" * 32)
+        stale.mkdir()
+        before = self.git_generations()
+        self.command("doctor", "--root", str(self.root), "--json")
+        self.command("restore", "--root", str(self.root), "--host", "test-host")
+        self.assertEqual(self.git_generations(), before)
+
+    def test_git_pruning_keeps_reachable_legacy_nested_conditional_and_exclusion_files(self):
+        self.install()
+        folder = self.root / ".config/workgrove/git"
+        legacy, nested, conditional, exclusions, creating = [folder / (char * 32) for char in "abcde"]
+        for path in (legacy, nested, conditional, exclusions, creating):
+            path.mkdir()
+        (folder / "global").write_text('[include]\n path = ' + str(legacy / "global") + '\n')
+        (legacy / "global").write_text('[include]\n path = ../' + nested.name + '/config\n'
+                                       '[core]\n excludesFile = ' + str(legacy / "ignore") + '\n')
+        (legacy / "ignore").write_text("legacy\n")
+        (nested / "config").write_text('[includeIf "gitdir:/never-matches/"]\n path = ../' + conditional.name + '/config\n')
+        (conditional / "config").write_text('[core]\n excludesFile = ' + str(exclusions / "defaults") + '\n')
+        (exclusions / "defaults").write_text("excluded\n")
+        with patch.dict(os.environ, self.env, clear=True), portable.installation_lock(self.root):
+            portable.prune_git_generations(folder, creating)
+        self.assertEqual(self.git_generations(), {legacy, nested, conditional, exclusions, creating})
+
+    def test_git_pruning_failure_does_not_fail_installation(self):
+        self.install()
+        stale = self.root / ".config/workgrove/git" / ("f" * 32)
+        stale.mkdir()
+        original = portable.shutil.rmtree
+        def fail(path, *args, **kwargs):
+            if path == stale:
+                raise PermissionError("synthetic-prune-failure")
+            return original(path, *args, **kwargs)
+        with patch.dict(os.environ, self.env, clear=True), patch.object(portable.shutil, "rmtree", side_effect=fail) as removal, \
+                patch.object(sys, "argv", ["portable.py", "install", "--root", str(self.root), "--host", "test-host"]), \
+                patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+            self.assertEqual(portable.main(), 0)
+        removal.assert_any_call(stale)
+        self.assertTrue(stale.is_dir())
+
+    def test_git_pruning_checks_combined_graphs_and_cycles(self):
+        self.install()
+        folder = self.root / ".config/workgrove/git"
+        stale = self.git_generations()
+        creating = folder / ("e" * 32)
+        creating.mkdir()
+        includes = []
+        for number in range(70):
+            config = creating / str(number)
+            config.write_text('[include]\n path = ' + str(creating / "0") + '\n')
+            includes.append('[include]\n path = ' + str(config) + '\n')
+        (folder / "global").write_text("".join(includes))
+        with patch.dict(os.environ, self.env, clear=True), portable.installation_lock(self.root):
+            portable.prune_git_generations(folder, creating)
+        self.assertTrue(all(not path.exists() for path in stale))
+        self.assertEqual(self.git_generations(), {creating})
+
     def test_git_maintenance_keeps_user_entries_added_inside_managed_sections(self):
         self.install()
         self.git("config", "--global", "core.editor", "test-editor")
@@ -2475,6 +2621,7 @@ sys.exit(module["main"]())
         self.install("--git-identity", str(overlay))
         self.assertEqual(self.git("config", "--global", "--includes", "--get-all", "credential.helper").stdout, helpers)
         self.assertEqual(self.git("config", "--global", "--get", "custom.keep").stdout.strip(), "retained")
+        overlay = portable.git_owned_path(active.read_text(), "identity", active.parent)
         before = active.read_bytes(), overlay.read_bytes()
         invalid = self.home / "invalid-identity"
         invalid.write_text("[broken\n")
