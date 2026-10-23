@@ -113,7 +113,10 @@ def confirm_volume_trust(request):
 
 
 def confirm_volume_request(args):
-    request = json.loads(read(Path(args.request_file)).splitlines()[0])
+    lines = read(Path(args.request_file)).splitlines()
+    # WT_COMPAT: Remove untagged requests when all VMs send the trust-request record.
+    payload = next((line.split("\t", 1)[1] for line in lines if line.startswith("trust-request\t")), lines[0])
+    request = json.loads(payload)
     if not confirm_volume_trust(request):
         return 1
     print(request["root"] + "\n" + request["mount"])
@@ -1461,7 +1464,7 @@ def bootstrap(args):
     validate_installation(source, args.revision)
     args.root = str(root)
     # Execute the selected revision's installer rather than a different Mac revision's implementation.
-    command = [sys.executable, "-B", str(source / "lib/workgrove/portable.py"), "install", "--root", str(root)]
+    command = [sys.executable, "-I", "-B", str(source / "lib/workgrove/portable.py"), "install", "--root", str(root)]
     if args.trust_personal_volume or getattr(args, "strict_permissions", False):
         # The selected installer must not overwrite a concurrent trust change with stale acceptance.
         command.extend(("--expected-profile-digest", hashlib.sha256(args.permission_profile_snapshot.encode()).hexdigest()))
@@ -1707,7 +1710,7 @@ def main():
                         not args.trust_personal_volume and not args.strict_permissions and confirm_volume_trust(error.request):
                     args.trust_personal_volume = True
                     continue
-                print(json.dumps(error.request), file=sys.stderr)
+                print("trust-request\t" + json.dumps(error.request, separators=(",", ":")), file=sys.stderr)
                 print("workgrove: use --trust-personal-volume only for a volume you exclusively control", file=sys.stderr)
                 return 1
     except Refusal as error:
