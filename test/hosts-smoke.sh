@@ -13,6 +13,7 @@ source "$REPO/test/lib.sh"
 # shellcheck disable=SC2034
 KEEP_LABEL='host test files'
 trap lib_cleanup EXIT
+python3 -B "$REPO/test/hosts_records_test.py"
 mkdir -p "$TEST_ROOT/home/.ssh" "$TEST_ROOT/bin" "$TEST_ROOT/fixtures/pci/device0"
 cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
 Host alpha beta
