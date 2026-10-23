@@ -53,7 +53,7 @@ case "$host" in
   limited|uncertain|invalid-enhanced)
     printf 'probe_schema\t2\ncpu\t128\nmem_kib\t1073741824\ngpu_status\tok\ngpu\t0\tSynthetic GPU\t40960\ngpu\t1\tSynthetic GPU\t40960\n'
     case "$host" in
-      limited) printf 'capabilities\t{"schema":1,"capacity_verified":true,"cpu_logical":0,"memory_mib":8192,"gpu_allocation_verified":true,"gpu_indices":["1"]}\nreadiness\t{"schema":1,"ready":true,"status":"ready","issues":[]}\n' ;;
+      limited) printf 'capabilities\t{"schema":1,"capacity_verified":true,"cpu_logical":0,"memory_mib":8192,"gpu_allocation_verified":true,"gpu_indices":["1"]}\nreadiness\t{"schema":1,"ready":true,"status":"ready","issues":[],"warnings":["agent-command-unavailable"]}\n' ;;
       uncertain) printf 'capabilities\t{"schema":1,"capacity_verified":false,"cpu_logical":null,"memory_mib":null,"capacity_issues":["cpu-ancestors-hidden"],"gpu_allocation_verified":false}\nreadiness\t{"schema":1,"ready":false,"status":"incomplete","issues":["missing-prerequisites"]}\n' ;;
       invalid-enhanced) printf 'capabilities\t{"schema":1,"capacity_verified":true,"cpu_logical":"bad","memory_mib":1024}\nreadiness\tinvalid-json\n' ;;
     esac ;;
@@ -178,6 +178,8 @@ scenario_enhanced_reports() {
     "$(jq -r 'map(select(.host == "limited"))[0] | .capacity_verified == true and .cpu_logical == 0 and .memory_mib == 8192' <<<"$json")"
   assert_eq 'visible UUID filtering restricts GPU count' true \
     "$(jq -r 'map(select(.host == "limited"))[0] | (.gpus | length) == 1 and .gpu_allocation_verified == true' <<<"$json")"
+  assert_eq 'doctor warnings do not change inventory fields or readiness' true \
+    "$(jq -r 'map(select(.host == "limited"))[0] | .workgrove_ready == true and .readiness_issues == [] and (has("warnings") | not)' <<<"$json")"
   assert_eq 'SSH reachability remains separate from readiness' true \
     "$(jq -r 'map(select(.host == "uncertain"))[0] | .status == "available" and .workgrove_ready == false and .cpu_logical == null and .memory_mib == null' <<<"$json")"
   assert_eq 'malformed enhanced reports cannot become legacy physical capacity' true \
