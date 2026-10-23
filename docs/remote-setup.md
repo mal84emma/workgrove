@@ -368,6 +368,7 @@ Each stderr line names the displaced file and its backup folder under `<root>`.
 An identical newest backup of that path prevents another copy.
 Directories, foreign symbolic links, and regular files at root-side link locations still cause refusal before any file changes.
 
+Before creating links, restore-only checks any required backup storage and records.
 Setup, restore-only, and doctor apply the same safety checks to managed personal configuration files.
 They check ownership, permissions, repository boundaries, and link targets without requiring agent authentication.
 If packages or Python were also lost, run full setup with the saved root and explicit storage policy.
