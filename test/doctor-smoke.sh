@@ -349,6 +349,8 @@ case ${DOCTOR_OUTPUT_MODE:-} in
   text) printf '%s\n' "$output" | sed $'/^WT_RESULT\t/d' ;;
   reword) printf '%s\n' "$output" | sed 's/^PASS cmux-tui CLI$/cmux-tui is available/' ;;
   malformed) printf '%s\n' "$output" | sed $'s/^WT_RESULT\t.*/WT_RESULT\t{broken/' ;;
+  newer) printf '%s\n' "$output" | sed $'/^WT_RESULT\t/s/"version":1/"version":2/' ;;
+  record-fail) rc=0; printf '%s\n' "$output" ;;
   *) printf '%s\n' "$output" ;;
 esac
 exit "$rc"
@@ -364,6 +366,12 @@ WT
   if grep -q '^WT_RESULT' "$TEST_ROOT/output"; then fail 'remote doctor exposes its record'; else pass; fi
   DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=malformed invoke -H test-vm doctor
   assert_eq 'a malformed record cannot fall back to passing text' 1 "$STATUS"
+  DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=newer invoke -H test-vm doctor
+  assert_eq 'a newer doctor record fails' 1 "$STATUS"
+  assert_grep 'a newer record uses the shared protocol report' "$TEST_ROOT/output" 'unsupported result protocol; run wt update on the Mac'
+  assert_grep 'a newer record repairs the Mac' "$TEST_ROOT/output" 'Fix: wt update'
+  DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=record-fail TUI_CODEX_STATUS=absent invoke -H test-vm doctor
+  assert_eq 'a failed record overrides a zero command status' 1 "$STATUS"
   rm "$HOME/.local/bin/wt"
   ln -s "$REPO/bin/wt" "$HOME/.local/bin/wt"
   # Change only the Mac protocol; the VM keeps the installed protocol.
