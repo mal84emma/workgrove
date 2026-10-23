@@ -200,6 +200,47 @@ scenario_results() {
 }
 scenario_results
 
+scenario_doctor_results() {
+  begin_scenario 'doctor results validate checks without display text' || return 0
+  local record output parsed rc sample
+  record=$(WG_MACHINE_RESULT=1 wt_result doctor PASS '' '' '' '' \
+    '{"checks":[{"name":"check","status":"PASS","repair":"wt update"}]}')
+  local -A fields=()
+  rc=0
+  wt_read_result_into "$record" doctor fields || rc=$?
+  assert_eq 'doctor record is valid' 0 "$rc"
+  assert_eq 'doctor checks decode as JSON' 'check|PASS|wt update' \
+    "$(jq -r '.[] | [.name,.status,.repair] | join("|")' <<<"${fields[checks]:-[]}")"
+  for sample in warn fail empty missing nested unknown control duplicate duplicate-array duplicate-empty status inconsistent newer; do
+    rc=0
+    case $sample in
+      warn) output=${record/\"PASS\"/\"FAIL\"}; output=${output/\"status\":\"PASS\"/\"status\":\"WARN\"} ;;
+      fail) output=${record//\"PASS\"/\"FAIL\"} ;;
+      empty) output=$(jq -c '.checks=[]' <<<"${record#*$'\t'}") ;;
+      missing) output=$(jq -c 'del(.checks[0].repair)' <<<"${record#*$'\t'}") ;;
+      nested) output=$(jq -c '.checks[0].name={value:"check"}' <<<"${record#*$'\t'}") ;;
+      unknown) output=$(jq -c '.checks[0].extra="value"' <<<"${record#*$'\t'}") ;;
+      control) output=$(jq -c '.checks[0].repair="line\nnext"' <<<"${record#*$'\t'}") ;;
+      duplicate) output=${record/\"name\":\"check\"/\"name\":\"other\",\"name\":\"check\"} ;;
+      duplicate-array) output=${record/\"checks\":/\"checks\":[{\"name\":\"other\"\}],\"checks\":} ;;
+      duplicate-empty) output=${record/\"checks\":/\"checks\":[],\"checks\":} ;;
+      status) output=$(jq -c '.checks[0].status="OK"' <<<"${record#*$'\t'}") ;;
+      inconsistent) output=$(jq -c '.status="FAIL"' <<<"${record#*$'\t'}") ;;
+      newer) output=${record/\"version\":1/\"version\":2} ;;
+    esac
+    [[ $output == WT_RESULT$'\t'* ]] || output=WT_RESULT$'\t'$output
+    parsed=$(wt_read_result "$output" doctor 2>/dev/null) || rc=$?
+    case $sample in
+      warn|fail) assert_eq "$sample is valid" 0 "$rc"
+        assert_eq "$sample overall result fails" FAIL "$(jq -r .status <<<"$parsed")" ;;
+      newer) assert_eq 'newer doctor protocol requires an update' 3 "$rc" ;;
+      *) assert_eq "$sample doctor record is invalid" 1 "$rc" ;;
+    esac
+  done
+  end_scenario
+}
+scenario_doctor_results
+
 scenario_vm_results() {
   begin_scenario 'VM results preserve command status and reject invalid identities' || return 0
   local sample output expected

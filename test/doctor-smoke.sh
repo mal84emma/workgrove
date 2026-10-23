@@ -78,7 +78,7 @@ scenario_readiness_dispatch() {
 
 scenario_mac() {
   begin_scenario 'Mac contract checks pass and detect unsupported releases and missing methods' || return 0
-  invoke doctor
+  FAKE_CMUX_MISSING_METHOD=workspace.remote.reconnect invoke doctor
   assert_eq 'supported cmux passes' 0 "$STATUS"
   assert_grep 'the commit and protocol are reported' "$TEST_ROOT/output" 'PASS wt version {"commit":'
   for version in 0.64.0 0.65.2; do
@@ -93,9 +93,9 @@ scenario_mac() {
     repair_command=$(sed -n 's/^  Fix: //p' "$TEST_ROOT/output" | head -1)
     if bash -n <<<"$repair_command"; then pass; else fail 'the installer command is not valid shell syntax'; fi
   done
-  FAKE_CMUX_MISSING_METHOD=workspace.remote.reconnect invoke doctor
+  FAKE_CMUX_MISSING_METHOD=workspace.list invoke doctor
   assert_eq 'a missing method fails' 1 "$STATUS"
-  assert_grep 'missing method is named' "$TEST_ROOT/output" 'FAIL cmux method workspace.remote.reconnect'
+  assert_grep 'missing method is named' "$TEST_ROOT/output" 'FAIL cmux method workspace.list'
   assert_grep 'later checks still run' "$TEST_ROOT/output" 'PASS wt version'
   end_scenario
 }
@@ -281,6 +281,19 @@ TMUX
   export CMUX_SSH_ATTEMPT_ID=doctor-test WT_HOST=test-vm WT_REPOS_DIR="$TEST_ROOT/repos"
   invoke doctor
   assert_eq 'VM checks pass' 0 "$STATUS"
+  WT_MACHINE=1 invoke doctor
+  assert_eq 'machine doctor passes' 0 "$STATUS"
+  local record
+  record=$(sed -n $'s/^WT_RESULT\t//p' "$TEST_ROOT/output")
+  assert_eq 'machine doctor reports every check' true "$(jq '
+    .version == 1 and .command == "doctor" and .status == "PASS"
+    and (.checks | length == 8 and all(.[]; .status == "PASS"
+      and (.name | type == "string") and (.repair | type == "string")))' <<<"$record")"
+  WT_MACHINE=1 TUI_CODEX_STATUS=absent invoke doctor
+  record=$(sed -n $'s/^WT_RESULT\t//p' "$TEST_ROOT/output")
+  assert_eq 'machine doctor retains failed check and repair' true "$(jq '
+    .status == "FAIL" and any(.checks[]; .name == "cmux-tui codex hook"
+      and .status == "FAIL" and .repair == "cmux-tui agent hook install claude codex")' <<<"$record")"
   TUI_BAD_JSON=1 invoke doctor
   assert_eq 'non-JSON cmux-tui status fails the contract check' 1 "$STATUS"
   assert_grep 'malformed status names the hook check' "$TEST_ROOT/output" 'FAIL cmux-tui claude hook'
@@ -314,6 +327,32 @@ TMUX
   assert_eq 'remote doctor passes' 0 "$STATUS"
   TUI_CODEX_STATUS=absent invoke -H test-vm doctor
   assert_eq 'remote absent hook fails' 1 "$STATUS"
+  rm "$HOME/.local/bin/wt"
+  cat >"$HOME/.local/bin/wt" <<'WT'
+#!/usr/bin/env bash
+output=$(bash "$DOCTOR_TEST_REPO/bin/wt" "$@")
+rc=$?
+case ${DOCTOR_OUTPUT_MODE:-} in
+  text) printf '%s\n' "$output" | sed $'/^WT_RESULT\t/d' ;;
+  reword) printf '%s\n' "$output" | sed 's/^PASS cmux-tui CLI$/cmux-tui is available/' ;;
+  malformed) printf '%s\n' "$output" | sed $'s/^WT_RESULT\t.*/WT_RESULT\t{broken/' ;;
+  *) printf '%s\n' "$output" ;;
+esac
+exit "$rc"
+WT
+  chmod +x "$HOME/.local/bin/wt"
+  DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=text invoke -H test-vm doctor
+  assert_eq 'legacy text doctor passes' 0 "$STATUS"
+  DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=text TUI_CODEX_STATUS=absent invoke -H test-vm doctor
+  assert_eq 'legacy text doctor fails for a failed check' 1 "$STATUS"
+  DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=reword invoke -H test-vm doctor
+  assert_eq 'record passes despite reworded VM check text' 0 "$STATUS"
+  assert_grep 'the reworded check remains visible' "$TEST_ROOT/output" 'cmux-tui is available'
+  if grep -q '^WT_RESULT' "$TEST_ROOT/output"; then fail 'remote doctor exposes its record'; else pass; fi
+  DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=malformed invoke -H test-vm doctor
+  assert_eq 'a malformed record cannot fall back to passing text' 1 "$STATUS"
+  rm "$HOME/.local/bin/wt"
+  ln -s "$REPO/bin/wt" "$HOME/.local/bin/wt"
   # Change only the Mac protocol; the VM keeps the installed protocol.
   mkdir -p "$TEST_ROOT/mac/bin" "$TEST_ROOT/mac/lib"
   cp "$REPO/bin/wt" "$TEST_ROOT/mac/bin/"

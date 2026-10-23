@@ -117,7 +117,7 @@ wt_version() (
   jq -cn --arg commit "$commit" --argjson protocol "$WT_PROTOCOL" '{commit:$commit,protocol:$protocol}'
 )
 
-# Unknown scalar keys are kept. New fields are additive.
+# Unknown scalar keys are kept. Doctor also accepts a checks array. New fields are additive.
 # Increase the version only when a field changes meaning.
 # Unsupported versions also print an update hint for callers such as the Mac hook.
 # Keep the protocol 1 decoder when the maximum accepted version increases.
@@ -128,12 +128,22 @@ wt_read_result() {
   [[ ${#records[@]} -gt 0 ]] || return 2
   [[ ${#records[@]} -eq 1 ]] || return 1
   parsed=$(printf '%s\n' "${records[0]#*$'\t'}" | jq --stream -esc --arg command "$command" '
-    map(select(length == 2)) as $fields
-    | if (map(select(length == 1)) | length) == 1
-        and all($fields[]; (.[0] | length == 1 and (.[0] | type == "string"))
-          and (.[1] | type != "array" and type != "object"))
-        and ($fields | map(.[0]) | unique | length) == ($fields | length)
-      then $fields | map({key: .[0][0], value: .[1]}) | from_entries
+    . as $stream
+    | map(select(length == 2)) as $fields
+    | (map(if length == 2 then .[0]
+        elif (.[0] | length == 2 and .[0] == "checks") then .[0][:-1]
+        else empty end)) as $keys
+    | if (map(select(length == 1 and (.[0] | length == 1))) | length) == 1
+        and all($fields[];
+          ((.[0] | length == 1 and (.[0] | type == "string"))
+            and (.[1] | type != "array" and type != "object"))
+          or ($command == "doctor" and
+            ((.[0] == ["checks"] and .[1] == [])
+              or ((.[0] | length == 3 and .[0] == "checks"
+                  and (.[1] | type == "number") and (.[2] | IN("name", "status", "repair")))
+                and (.[1] | type == "string")))))
+        and ($keys | unique | length) == ($keys | length)
+      then fromstream($stream[])
       else error("invalid wt result") end
     | if (.version | type == "number" and . >= 1 and floor == .) and .command == $command
       then . else error("invalid wt result") end' 2>/dev/null) || return 1
@@ -149,6 +159,14 @@ wt_read_result() {
         and all(to_entries[]; if .key == "agent" or .key == "attached" or .key == "started"
           then (.value | type == "boolean")
           elif .key == "path" then (.value | type == "string" and (explode | all(. >= 32 and . != 127)))
+          else true end)
+        and (if .command == "doctor" then
+          (.status | IN("PASS", "FAIL"))
+          and (.checks | type == "array" and length > 0 and all(.[];
+            keys == ["name", "repair", "status"]
+            and all(.[]; type == "string" and (explode | all(. >= 32 and . != 127)))
+            and (.status | IN("PASS", "FAIL", "WARN"))))
+          and (.status == (if all(.checks[]; .status == "PASS") then "PASS" else "FAIL" end))
           else true end)
       then . else error("invalid wt result") end' <<<"$parsed" 2>/dev/null || return 1
 }
