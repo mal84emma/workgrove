@@ -22,6 +22,7 @@ for script in "${SCRIPTS[@]}"; do
 done
 # A copy loads the libraries from ../lib, as the scripts in bin/ do. So copies/ needs lib/ beside it.
 cp "$REPO"/lib/workgrove/*.sh "$REPO"/lib/workgrove/*.py "$TEST_ROOT/lib/workgrove/"
+cp -R "$REPO/lib/workgrove/vm" "$TEST_ROOT/lib/workgrove/"
 # These copies have no ../lib, so they test what each script does when it cannot load the library.
 for script in wt wt-ssh-host cmux-hook agent-notify; do
   cp "$REPO/bin/$script" "$TEST_ROOT/nolib/bin/$script"
