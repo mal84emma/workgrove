@@ -700,15 +700,26 @@ def display_path(path, root, profile=None):
     return "<configuration>"
 
 
+def backup_records(root):
+    base = root / ".local/state/workgrove/backups"
+    private_path(base / uuid.uuid4().hex)
+    records = []
+    for record in base.glob("*/.workgrove-backup.json"):
+        if record.is_file() and not record.is_symlink():
+            data = json.loads(read(record))
+            if not (isinstance(data, dict) and isinstance(data.get("path"), str)
+                    and type(data.get("order")) is int and data["order"] > 0):
+                raise ValueError("invalid backup record")
+            records.append((data, record.parent))
+    return records
+
+
 def backup(path, root, label=None):
     if not path.exists() and not path.is_symlink():
         return
     private_path(path, detach=True)
     base = root / ".local/state/workgrove/backups"
-    records = []
-    for record in base.glob("*/.workgrove-backup.json"):
-        if record.is_file() and not record.is_symlink():
-            records.append((json.loads(read(record)), record.parent))
+    records = backup_records(root)
     original = str(path.absolute())
     matching = [(data["order"], folder) for data, folder in records if data["path"] == original]
     label = label or display_path(path, root)
@@ -936,6 +947,7 @@ def validate_personal_files(profile, migrations=(), installing=False):
 def preflight_files(profile, migrations, restoring, restore_files=None):
     root = Path(profile["root"])
     moved = {start: target for start, target in migrations}
+    backups_needed = bool(migrations)
     for target, path, home in compatibility(profile):
         with refusal_path(display_path(path, root, profile)):
             private_path(path, detach=True)
@@ -943,6 +955,7 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
                 if path.is_symlink() and canonical(path) == canonical(target):
                     continue
                 require(not restoring or (home and stat.S_ISREG(path.lstat().st_mode)), "restore-link-conflict")
+                backups_needed = True
                 if restoring and restore_files is not None:
                     restore_files.add(path)
                 if path.is_dir() and not path.is_symlink():
@@ -955,6 +968,7 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
             if path.exists():
                 require(path.is_file(), "shell-configuration-conflict")
                 replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
+                backups_needed = backups_needed or path.is_symlink()
     instructions = validate_personal_files(profile, migrations, installing=not restoring)
     for agent in ("claude", "codex"):
         base = Path(profile["agent_roots"][agent])
@@ -967,6 +981,8 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
                 template = "home/.claude/settings.base.json" if agent == "claude" else "home/.codex/hooks.base.json"
                 merge_hooks(json.loads(read(path)), json.loads(read(Path(profile["source"]) / template)))
     validate_migration_links(migrations, instructions, profile["agent_roots"].values())
+    if backups_needed or instructions:
+        backup_records(root)
     return instructions
 
 

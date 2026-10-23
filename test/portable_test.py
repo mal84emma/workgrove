@@ -927,6 +927,38 @@ sys.exit(module["main"]())
         self.assertEqual((self.home / ".gitconfig").read_bytes(), b"supplier")
         self.assertEqual(sorted((self.root / ".local/state/workgrove/backups").iterdir()), before)
 
+    def test_restore_checks_backup_permissions_before_any_home_changes(self):
+        self.install("--persist-agents")
+        backups = self.root / ".local/state/workgrove/backups"
+        before = sorted(backups.iterdir())
+        backups.chmod(0o777)
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".gitconfig").write_text("supplier configuration")
+        result = self.command("restore", "--root", str(self.root), ok=False, env=dict(self.env, PATH=""))
+        self.assertEqual(result.stderr, "workgrove: shared-configuration-parent\n")
+        self.assertFalse((self.home / ".local").exists())
+        self.assertFalse((self.home / ".config").exists())
+        self.assertEqual((self.home / ".gitconfig").read_text(), "supplier configuration")
+        self.assertEqual(sorted(backups.iterdir()), before)
+
+    def test_restore_checks_backup_records_before_any_home_changes(self):
+        self.install("--persist-agents")
+        backups = self.root / ".local/state/workgrove/backups"
+        record = next(backups.glob("*/.workgrove-backup.json"))
+        before = sorted(backups.iterdir())
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".gitconfig").write_text("supplier configuration")
+        for contents in ("{invalid", "[]", '{}', '{"path": "example", "order": "invalid"}'):
+            record.write_text(contents)
+            result = self.command("restore", "--root", str(self.root), ok=False, env=dict(self.env, PATH=""))
+            self.assertEqual(result.stderr, "workgrove: portable-operation-failed\n")
+            self.assertFalse((self.home / ".local").exists())
+            self.assertFalse((self.home / ".config").exists())
+            self.assertEqual((self.home / ".gitconfig").read_text(), "supplier configuration")
+            self.assertEqual(sorted(backups.iterdir()), before)
+
     def test_restore_refuses_root_files_even_inside_home(self):
         old = self.root
         self.root = self.home / "durable"
