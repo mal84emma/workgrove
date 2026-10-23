@@ -2,7 +2,7 @@
 # Reads globals: CMUX_ROW_EXISTING, HOME, WG_LIB_DIR, WT_PROTOCOL.
 # Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
 # Requires common.sh: die, hook_safe_path, host_recovery_hint, row_title, shell_join, tmux_cmd, usage, vm_result, vm_run_line,
-#   vm_ssh, vm_tmux, vm_wt, warn, wt_session, wt_version.
+#   vm_ssh, vm_tmux, vm_wt, vm_wt_failure, warn, wt_session, wt_version.
 # Requires version.sh: wt_read_version.
 # Requires options.sh: wt_opt_args, wt_opts, wt_spec.
 # Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent, wt_register_tmpfile.
@@ -11,14 +11,12 @@ remote_sh_raw() { vm_ssh "$1" "$2"; }
 remote_sh() {
   local rc=0
   remote_sh_raw "$@" || rc=$?
-  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $1)"
-  return "$rc"
+  vm_wt_failure "$1" raw "$rc" "" 0
 }
 remote_wt() {
   local rc=0
   vm_wt "$@" || rc=$?
-  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $1)"
-  return "$rc"
+  vm_wt_failure "$1" raw "$rc" "" 0
 }
 
 remote_row() { # remote_row <host> <session> <title> <repo> <command> [shared] [cmux flags…]
@@ -138,19 +136,9 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   [[ -z $err ]] || printf '%s\n' "$err" >&2
   if [[ $rc != 0 ]]; then
     [[ -z "$out" ]] || printf '%s\n' "$out" >&2
-    if [[ $rc -eq 255 ]]; then
-      warn "SSH disconnected during creation on $host; could not confirm whether a worktree was created; inspect with: $inspect"
-      warn "a disconnected create may still be finishing; recheck before starting the same task elsewhere"
-    fi
-    return "$rc"
   fi
-  [[ -z "$out" ]] || printf '%s\n' "$out"
-  case $result_rc in
-    0) [[ ${result[status]} == created ]] || die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying" ;;
-    2) die "$host did not report created/repo/session; the worktree may exist; inspect with: $inspect before retrying" ;;
-    3) die "unsupported result protocol from $host; run wt update on the Mac; the worktree may exist; inspect with: $inspect before retrying" ;;
-    *) die "unexpected output from $host; the worktree may exist; inspect with: $inspect before retrying" ;;
-  esac
+  if [[ $rc == 0 && -n $out ]]; then printf '%s\n' "$out"; fi
+  vm_wt_failure "$host" new "$rc" "$inspect" "$result_rc" "${result[status]-}" || return $?
   name=${result[name]} repo=${result[repo]} session=${result[session]}
   if [[ $no_workspace -eq 1 ]]; then
     printf 'start later: wt -H %s attach -r %s %s\n' "$host" "$(shell_join "$repo")" "$(shell_join "$name")"
@@ -190,13 +178,8 @@ host_open() { # VS Code Remote-SSH on a VM worktree
   local -A result=()
   vm_result "$host" path result out err rc -- "$name" -r "$repo" || result_rc=$?
   [[ -z $err ]] || printf '%s\n' "$err" >&2
-  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
-  if [[ $rc != 0 ]]; then
-    [[ -z $out ]] || printf '%s\n' "$out" >&2
-    return "$rc"
-  fi
-  [[ $result_rc != 3 ]] || die "unsupported result protocol from $host; run wt update on the Mac"
-  [[ $result_rc == 0 && ${result[status]} == found ]] || die "unexpected output from $host"
+  if [[ $rc != 0 && $rc != 255 && -n $out ]]; then printf '%s\n' "$out" >&2; fi
+  vm_wt_failure "$host" path "$rc" "" "$result_rc" "${result[status]-}" || return $?
   p=${result[path]}
   hook_safe_path "$p" || die "open: refusing an unsafe path from $host ($p)"
   open_code "vscode-remote://ssh-remote+$host$p/" "$host:$p"
@@ -252,7 +235,7 @@ wt_update_record() {
 host_version() {
   local output rc=0
   output=$(vm_wt "$1" version) || rc=$?
-  [[ $rc != 255 ]] || { warn "host unreachable: is the VM running? (ssh $1)"; return 1; }
+  vm_wt_failure "$1" version "$rc" "" 0 || return $?
   if [[ $rc == 0 ]] && output=$(wt_read_version <<<"$output" 2>/dev/null); then
     printf '%s\n' "$output"
   else
@@ -268,8 +251,7 @@ host_update() {
   wt_update_record before VM "$version"
   local rc=0
   vm_wt "$host" --tty update "${@:2}" || rc=$?
-  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
-  [[ $rc == 0 ]] || return "$rc"
+  vm_wt_failure "$host" raw "$rc" "" 0 || return $?
   version=$(host_version "$host") || version='{"commit":null,"protocol":null}'
   if ! jq -e '.commit != null and .protocol != null' <<<"$version" >/dev/null; then
     warn "update on $host succeeded; could not read its version (ssh $host)"

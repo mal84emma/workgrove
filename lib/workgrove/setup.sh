@@ -53,8 +53,7 @@ host_setup() {
   fi
   cat "$error_file" >&2
   rm -f "$error_file"
-  [[ $status != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
-  return "$status"
+  vm_wt_failure "$host" raw "$status" "" 0
 }
 
 host_environment_doctor() {
@@ -67,7 +66,8 @@ host_environment_doctor() {
   bootstrap=$(cat "$WG_LIB_DIR/vm/python-runtime.sh")$'\n'
   # shellcheck disable=SC2016
   bootstrap+='wg_select_python || { wg_python_readiness_error; exit 1; }; exec "$wg_python" -B - '
-  remote_sh "$host" "$bootstrap$(shell_join doctor --host "$host" "${args[@]}")" <"$WG_LIB_DIR/portable.py"
+  bootstrap+="$(shell_join doctor --host "$host" "${args[@]}")"
+  remote_sh "$host" "/bin/sh -c $(shell_join "$bootstrap")" <"$WG_LIB_DIR/portable.py"
 }
 
 cmd_setup() {
