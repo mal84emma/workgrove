@@ -2801,13 +2801,21 @@ sys.exit(subprocess.run(["/bin/sh", "-c", sys.argv[-1]], env=environment, check=
     def test_remote_volume_prompt_accepts_legacy_json_without_spacing_dependency(self):
         self.remote_volume_prompt(tagged=False)
 
-    def remote_volume_prompt(self, tagged):
+    def test_legacy_volume_prompt_does_not_run_jq(self):
+        self.remote_volume_prompt(tagged=False, unavailable_jq=True)
+
+    def remote_volume_prompt(self, tagged, unavailable_jq=False):
         environment = self.transport()
+        jq_marker = self.base / "unexpected-jq"
+        if unavailable_jq:
+            jq = Path(environment["PATH"].split(":")[0]) / "jq"
+            jq.write_text("#!/bin/sh\nprintf called >" + shlex.quote(str(jq_marker)) + "\nexit 127\n")
+            jq.chmod(0o700)
         marker = self.base / "accepted"
         ssh = Path(environment["PATH"].split(":")[0]) / "ssh"
         request = ("trust-request\t" if tagged else "") + json.dumps(
             {"error": "personal-volume-trust-required", "root": str(self.root), "mount": str(self.root)},
-            separators=(",", ":"))
+            separators=None if unavailable_jq else (",", ":"))
         ssh.write_text(f'''#!{sys.executable}
 import pathlib,sys
 sys.stdin.read()
@@ -2858,6 +2866,7 @@ sys.exit(1)
             marker.unlink(missing_ok=True)
         self.remote(environment, *arguments[:-1], "--trust-personal-volume", "--")
         self.assertTrue(marker.exists())
+        self.assertFalse(jq_marker.exists())
 
     def test_hosts_and_environment_doctor_ignore_login_json_module(self):
         self.install("--persist-agents")

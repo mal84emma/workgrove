@@ -44,7 +44,8 @@ host_setup() {
   # WT_COMPAT: Remove the JSON fallback when all selected revisions emit trust-request records.
   if ((status != 0)) && [[ ! -v opts[trust] && ! -v opts[strict] && ! -v opts[restore] && -t 0 && -t 2 ]] &&
       { LC_ALL=C grep $'^trust-request\t' "$error_file" >/dev/null ||
-        jq -Rse 'split("\n")[0] | fromjson? | .error == "personal-volume-trust-required"' "$error_file" >/dev/null 2>&1; } &&
+        wg_run_python -c 'import json,sys; sys.exit(json.loads(open(sys.argv[1]).readline()).get("error") != "personal-volume-trust-required")' \
+          "$error_file" >/dev/null 2>&1; } &&
       wg_select_python; then
     if consent=$(wg_run_python "$WG_LIB_DIR/portable.py" confirm-volume-trust --request-file "$error_file"); then
       local -a approved=()
