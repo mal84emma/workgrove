@@ -7,6 +7,8 @@ host_setup() {
   [[ -n ${opts[root]:-} && ${opts[root]} == /* ]] || die 'setup: --root needs an absolute remote path'
   local args=() bootstrap policy=${opts[storage]:-} mount=${opts[mount]:-}
   wt_opt_args opts args
+  # shellcheck source=lib/workgrove/vm/python-runtime.sh
+  source "$WG_LIB_DIR/vm/python-runtime.sh"
   # Python receives standard input. The shell bootstrap never reads the uploaded source.
   bootstrap=$(cat "$WG_LIB_DIR/vm/python-runtime.sh")$'\n'
   # shellcheck disable=SC2016
@@ -29,7 +31,7 @@ host_setup() {
     "$@" update </dev/null >/dev/null 2>&1 && "$@" install -y python3 </dev/null >/dev/null 2>&1 || { echo "workgrove: Python-install-failed" >&2; exit 1; }
     wg_select_python || { echo "workgrove: supported-Python-unavailable" >&2; exit 1; }
   fi
-  exec "$wg_python" -B - '
+  wg_run_python --exec - '
   local mode=full
   [[ ! -v opts[restore] ]] || mode=restore
   # Keep bootstrap positional parameters separate from the Python arguments after its command text.
@@ -39,10 +41,12 @@ host_setup() {
   wt_register_tmpfile "$error_file"
   remote_sh_raw "$host" "/bin/sh -c $(shell_join "$bootstrap" wt-setup "$mode" "${opts[root]}" "$policy" "$mount")" \
     <"$WG_LIB_DIR/portable.py" 2>"$error_file" || status=$?
+  # WT_COMPAT: Remove the JSON fallback when all selected revisions emit trust-request records.
   if ((status != 0)) && [[ ! -v opts[trust] && ! -v opts[strict] && ! -v opts[restore] && -t 0 && -t 2 ]] &&
-      LC_ALL=C grep -F '"error": "personal-volume-trust-required"' "$error_file" >/dev/null &&
-      command -v python3 >/dev/null 2>&1; then
-    if consent=$(python3 -B "$WG_LIB_DIR/portable.py" confirm-volume-trust --request-file "$error_file"); then
+      { LC_ALL=C grep $'^trust-request\t' "$error_file" >/dev/null ||
+        jq -Rse 'split("\n")[0] | fromjson? | .error == "personal-volume-trust-required"' "$error_file" >/dev/null 2>&1; } &&
+      wg_select_python; then
+    if consent=$(wg_run_python "$WG_LIB_DIR/portable.py" confirm-volume-trust --request-file "$error_file"); then
       local -a approved=()
       mapfile -t approved <<<"$consent"
       rm -f "$error_file"
@@ -65,7 +69,7 @@ host_environment_doctor() {
   local bootstrap
   bootstrap=$(cat "$WG_LIB_DIR/vm/python-runtime.sh")$'\n'
   # shellcheck disable=SC2016
-  bootstrap+='wg_select_python || { wg_python_readiness_error; exit 1; }; exec "$wg_python" -B - '
+  bootstrap+='wg_select_python || { wg_python_readiness_error; exit 1; }; wg_run_python --exec - '
   bootstrap+="$(shell_join doctor --host "$host" "${args[@]}")"
   remote_sh "$host" "/bin/sh -c $(shell_join "$bootstrap")" <"$WG_LIB_DIR/portable.py"
 }
@@ -83,5 +87,5 @@ cmd_environment_doctor() {
   # shellcheck source=lib/workgrove/vm/python-runtime.sh
   source "$WG_LIB_DIR/vm/python-runtime.sh"
   wg_select_python || { wg_python_readiness_error; return 1; }
-  "$wg_python" -B "$WG_LIB_DIR/portable.py" doctor "${args[@]}"
+  wg_run_python "$WG_LIB_DIR/portable.py" doctor "${args[@]}"
 }
