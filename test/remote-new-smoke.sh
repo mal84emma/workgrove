@@ -200,6 +200,16 @@ scenario_preflight_recovery() {
   run_wt wt-demo codex
   check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/ssh.log" ]] && echo yes)" 'cmux refusal made an SSH call'
 
+  CMUX_MODE=alive
+  mv "$TEST_ROOT/remote/.local/bin/wt" "$TEST_ROOT/remote/.local/bin/saved-wt"
+  run_wt wt-demo claude
+  assert_grep 'preflight names the missing executable' "$TEST_ROOT/wt-stderr" 'remote wt is missing'
+  assert_grep 'preflight names doctor with the root' "$TEST_ROOT/wt-stderr" 'wt -H fakevm doctor --root <root> --json'
+  assert_grep 'preflight names restore-only' "$TEST_ROOT/wt-stderr" 'wt -H fakevm setup --root <root> --restore-only'
+  assert_eq 'preflight prints one recovery hint' 1 "$(grep -c 'A host whose home folder was replaced looks new.' "$TEST_ROOT/wt-stderr")"
+  check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'missing wt did not stop creation'
+  mv "$TEST_ROOT/remote/.local/bin/saved-wt" "$TEST_ROOT/remote/.local/bin/wt"
+
   # If the requested agent or repo is missing, creation must stop before remote new.
   CMUX_MODE=alive
   rm "$TEST_ROOT/remote/.local/bin/codex"

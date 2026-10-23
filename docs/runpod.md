@@ -73,20 +73,20 @@ Run doctor with the saved root to see the real state:
 wt -H <host> doctor --root <root> --json
 ```
 
-Use restore-only when compatibility links were lost; use full setup when prerequisites were also lost.
-Restore-only backs up regular files that the host's start command writes in the home folder, including `~/.gitconfig`.
-Run restore-only with the saved root:
+When only compatibility links and environment were lost, restore them:
 
 ```bash
 wt -H <host> setup --root <root> --restore-only
+wt -H <host> doctor --root <root> --json
 ```
 
+Restore-only backs up regular files that the host's start command writes in the home folder, including `~/.gitconfig`.
 This command keeps the saved storage policy and volume trust when the root and mount are unchanged.
 It reports each displaced home path and its backup folder relative to `<root>`.
 An identical newest backup of the same path prevents another copy.
 Directories, foreign symbolic links, and regular files at root-side link locations still cause refusal before any file changes.
 
-Run doctor again to check readiness before task recovery.
+If doctor reports missing prerequisites, use full setup with the saved root and storage policy.
 Then inspect and attach selected tasks using the ordinary Azure VM attachment decisions.
 
 Do not add installation commands to container entrypoints, supplier startup hooks, or shell startup files.

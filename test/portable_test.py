@@ -1299,6 +1299,111 @@ sys.exit(module["main"]())
         self.assertIn("remote-wt-missing", json.loads(result.stdout)["issues"])
         self.assertFalse((self.root / ".config/workgrove").exists())
 
+    def test_replaced_home_doctor_explains_explicit_root_recovery(self):
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        result = self.command("doctor", "--json", ok=False)
+        self.assertEqual(json.loads(result.stdout)["issues"], ["profile-missing", "remote-wt-missing"])
+        hint = ("A host whose home folder was replaced looks new. "
+                "Run: wt -H <host> doctor --root <root> --json; "
+                "then wt -H <host> setup --root <root> --restore-only. "
+                "If doctor reports missing prerequisites, run full setup: wt -H <host> setup --root <root>.")
+        self.assertEqual(result.stderr, hint + "\n")
+        text = self.command("doctor", ok=False)
+        self.assertIn("workgrove: incomplete\n", text.stdout)
+        self.assertIn("  profile-missing\n  remote-wt-missing\n", text.stdout)
+        self.assertIn(hint, text.stdout)
+        self.assertEqual(text.stderr, "")
+        explicit = self.command("doctor", "--root", str(self.root), "--json", ok=False)
+        self.assertEqual(json.loads(explicit.stdout)["issues"],
+                         ["compatibility-links-missing", "remote-wt-missing"])
+        self.assertEqual(explicit.stderr, "")
+        supplied = self.command("doctor", "--json", ok=False,
+                                env=dict(self.env, WT_REMOTE_ROOT=str(self.root)))
+        self.assertEqual(json.loads(supplied.stdout), json.loads(explicit.stdout))
+
+    def test_doctor_separates_restore_conflicts_from_missing_links(self):
+        self.install("--persist-agents")
+        locations = ((self.home / ".gitconfig", "directory"),
+                     (self.home / ".gitconfig", "foreign-link"),
+                     (self.root / ".local/bin/wt", "file"),
+                     (next((self.root / ".agents/skills").iterdir()), "file"),
+                     (next((self.root / ".config/claude/skills").iterdir()), "file"))
+        for path, kind in locations:
+            with self.subTest(path=path, kind=kind):
+                target = path.readlink()
+                path.unlink()
+                if kind == "directory":
+                    path.mkdir()
+                elif kind == "foreign-link":
+                    path.symlink_to(self.base / "foreign-target")
+                else:
+                    path.write_text("supplier file")
+                try:
+                    report = json.loads(self.command("doctor", "--root", str(self.root), "--json", ok=False).stdout)
+                    self.assertEqual(report["issues"], ["compatibility-links-conflict"])
+                    refused = self.command("restore", "--root", str(self.root), ok=False)
+                    self.assertIn("restore-link-conflict", refused.stderr)
+                finally:
+                    if kind == "directory":
+                        path.rmdir()
+                    else:
+                        path.unlink()
+                    path.symlink_to(target)
+        path = self.home / ".gitconfig"
+        path.unlink()
+        path.write_text("supplier file")
+        report = json.loads(self.command("doctor", "--root", str(self.root), "--json", ok=False).stdout)
+        self.assertEqual(report["issues"], ["compatibility-links-missing"])
+        self.command("restore", "--root", str(self.root))
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+
+    def test_doctor_finds_conflicts_after_missing_links(self):
+        self.install("--persist-agents")
+        (self.root / ".local/bin/agent-notify").unlink()
+        path = self.home / ".gitconfig"
+        path.unlink()
+        path.mkdir()
+        report = json.loads(self.command("doctor", "--root", str(self.root), "--json", ok=False).stdout)
+        self.assertEqual(report["issues"], ["compatibility-links-conflict", "compatibility-links-missing"])
+        self.assertTrue(path.is_dir())
+        self.assertFalse((self.root / ".local/bin/agent-notify").exists())
+
+    def test_doctor_uses_link_roles_when_root_is_inside_home(self):
+        previous = self.root
+        self.root = self.home / "durable"
+        previous.rename(self.root)
+        self.source = self.root / "workgrove"
+        self.script = self.source / "lib/workgrove/portable.py"
+        self.install()
+        for path in (self.root / ".local/bin/wt", next((self.home / ".claude/skills").iterdir())):
+            with self.subTest(path=path):
+                target = path.readlink()
+                path.unlink()
+                path.write_text("persistent file")
+                report = json.loads(self.command("doctor", "--root", str(self.root), "--json", ok=False).stdout)
+                self.assertEqual(report["issues"], ["compatibility-links-conflict"])
+                path.unlink()
+                path.symlink_to(target)
+
+    def test_hosts_preserves_restore_conflict_readiness(self):
+        self.install("--persist-agents")
+        path = self.root / ".local/bin/wt"
+        path.unlink()
+        path.write_text("persistent file")
+        environment = self.transport()
+        config = Path(environment["HOME"]) / ".ssh/config"
+        config.parent.mkdir()
+        config.write_text("Host test-host\n")
+        result = subprocess.run([str(self.tools / "bash"), str(REPO / "bin/wt"), "hosts", "--json"],
+                                env=environment, capture_output=True, text=True, timeout=30, check=True)
+        self.assertNotIn(CANARY, result.stdout + result.stderr)
+        report, = json.loads(result.stdout)
+        self.assertEqual(report["host"], "test-host")
+        self.assertEqual(report["readiness_issues"], ["compatibility-links-conflict"])
+        self.assertFalse(report["workgrove_ready"])
+
     def test_restore_detects_replaced_installation(self):
         self.install()
         (self.source / "bin/wt").write_text("#!/bin/sh\nexit 0\n")
@@ -2012,10 +2117,20 @@ sys.exit(subprocess.run(["/bin/sh", "-c", sys.argv[-1]], env=environment, check=
 
     def test_remote_setup_and_doctor_work_before_remote_wt_exists(self):
         environment = self.transport()
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        mac_before = {str(path.relative_to(environment["HOME"])) for path in Path(environment["HOME"]).rglob("*")}
         missing = self.remote(environment, "repos", ok=False)
-        self.assertIn("setup --root", missing.stderr)
+        self.assertEqual(missing.returncode, 127)
+        self.assertIn("doctor --root <root> --json", missing.stderr)
+        self.assertIn("setup --root <root> --restore-only", missing.stderr)
         result = self.remote(environment, "doctor", "--json", ok=False)
         self.assertIn("remote-wt-missing", json.loads(result.stdout)["issues"])
+        self.assertIn(result.stderr.strip().replace("<host>", "test-host"), missing.stderr)
+        self.assertIn("A host whose home folder was replaced looks new.", result.stderr)
+        self.assertIn("doctor --root <root> --json", result.stderr)
+        self.assertIn("setup --root <root> --restore-only", result.stderr)
+        mac_after = {str(path.relative_to(environment["HOME"])) for path in Path(environment["HOME"]).rglob("*")}
+        self.assertEqual(mac_after, mac_before)
         self.remote(environment, "setup", "--root", str(self.root), "--storage", "os-disk",
                     "--revision", self.revision, "--persist-agents")
         self.assertTrue(json.loads(self.remote(environment, "doctor", "--json").stdout)["ready"])

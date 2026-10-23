@@ -303,16 +303,29 @@ wt hosts --json
 ```
 
 Doctor works even when the remote `wt` compatibility link is missing.
-Use `doctor --root <root> --json` when the home profile link was lost.
-It reports fixed issue codes without printing settings, identity values, environment dumps, or captured command diagnostics.
+Use `wt -H <host> doctor --root <root> --json` when the home profile link was lost.
+
+A host whose home folder was replaced looks new without its root.
+When doctor reports `profile-missing` and `remote-wt-missing` together, it prints recovery instructions.
+With `--json`, those instructions go to stderr; stdout contains only the JSON report.
+
+Doctor reports fixed issue codes without printing settings, identity values, environment dumps, or captured command diagnostics.
 A failed readiness check returns a nonzero status and a JSON report when `--json` is selected.
 
 Doctor checks the profile, storage, installation identity, compatibility links, tools, terminal descriptions, Git identity, and task exclusions.
 It checks installation object connectivity when Git is available.
+
+`compatibility-links-missing` identifies links that restore-only can repair, including regular files at home link locations.
+`compatibility-links-conflict` identifies directories, foreign symbolic links, or regular files at root-side link locations.
+Restore-only refuses those conflicts; resolve them privately before restoration.
+Doctor checks every link, so both codes can appear together.
+The link's role applies even when its root-side location is under the home folder.
+
 Deleted persistent agent directories block readiness and task creation; doctor never recreates personal data.
 Missing selected external agent directories also require explicit repair.
 An unavailable or unsupported Python runtime produces a fixed JSON issue.
 Task creation refuses an existing portable installation when Python cannot validate it.
+
 Agent executable availability and native-hook presence have separate fields.
 An SSH-only probe cannot verify native-row relay behavior or the user's hook trust decisions.
 Those checks remain separate from `ready`.
@@ -330,13 +343,23 @@ Start the existing host and refresh its SSH endpoint through its supplier.
 Keep the same alias and independently verify any changed host identity.
 Workgrove does not start compute or repair the supplier's SSH configuration.
 
-Check doctor before choosing environment repair.
+Start with doctor and the saved persistent root:
+
+```bash
+wt -H <host> doctor --root <root> --json
+```
+
 If only links and environment were lost, run:
 
 ```bash
 wt -H <host> setup --root <root> --restore-only
-wt -H <host> doctor --json
+wt -H <host> doctor --root <root> --json
 ```
+
+A supplier can export `WT_REMOTE_ROOT=<root>` from its own start environment.
+If `.bashrc` sources the supplier's environment file, put that source before the non-interactive return.
+Doctor reads `WT_REMOTE_ROOT` first when no `--root` is supplied.
+Workgrove does not write the supplier's environment file or store the root on the Mac.
 
 Restore-only uses the durable installation and Python's standard library.
 It performs no download, package installation, Git update, login, or agent restart.
@@ -344,6 +367,7 @@ It backs up regular home files that the host's start command writes, including `
 Each stderr line names the displaced file and its backup folder under `<root>`.
 An identical newest backup of that path prevents another copy.
 Directories, foreign symbolic links, and regular files at root-side link locations still cause refusal before any file changes.
+
 Before creating links, restore-only checks any required backup storage and records.
 Setup, restore-only, and doctor apply the same safety checks to managed personal configuration files.
 They check ownership, permissions, repository boundaries, and link targets without requiring agent authentication.

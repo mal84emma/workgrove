@@ -45,6 +45,11 @@ The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥
    3. Consider only entries with `status == "available"` and known `cpu_logical` and `memory_mib` values that meet the requested minimums.
       Exclude entries with `capacity_verified == false` or `workgrove_ready == false`.
       Null or absent capability fields retain legacy compatibility; immediate task preflight still applies.
+
+      Read `readiness_issues` when preparation is incomplete.
+      `compatibility-links-conflict` means restore-only will refuse a link location; report it before recovery.
+      `compatibility-links-missing` permits regular files at home link locations that restore-only backs up.
+      Follow the [ssh-host procedure](../ssh-host/SKILL.md) for authorized repair, starting with doctor and the supplied root.
    4. Compare the converted thresholds with the reported usable RAM and GPU memory. Do not apply a percentage tolerance. The reported usable memory must meet a stated usable-memory requirement in full.
    5. For a GPU request, the host must also meet all of these conditions:
       - `gpu_status == "ok"` and `gpu_allocation_verified != false`.

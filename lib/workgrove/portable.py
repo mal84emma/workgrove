@@ -967,6 +967,11 @@ def validate_personal_files(profile, migrations=(), installing=False):
     return instruction_copies
 
 
+def restore_can_backup(path, home):
+    """Use the link's restoration role to permit regular home files only."""
+    return home and stat.S_ISREG(path.lstat().st_mode)
+
+
 def preflight_files(profile, migrations, restoring, restore_files=None):
     root = Path(profile["root"])
     moved = {start: target for start, target in migrations}
@@ -977,7 +982,7 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
             if path.exists() or path.is_symlink():
                 if path.is_symlink() and canonical(path) == canonical(target):
                     continue
-                require(not restoring or (home and stat.S_ISREG(path.lstat().st_mode)), "restore-link-conflict")
+                require(not restoring or restore_can_backup(path, home), "restore-link-conflict")
                 backup_paths.add(path)
                 if restoring and restore_files is not None:
                     restore_files.add(path)
@@ -1300,8 +1305,10 @@ def _readiness(root=None):
             for target, path, home in compatibility(profile):
                 private_path(path, detach=True)
                 if not path.is_symlink() or canonical(path) != canonical(target):
-                    issues.append("compatibility-links-missing")
-                    break
+                    if (path.exists() or path.is_symlink()) and not restore_can_backup(path, home):
+                        issues.append("compatibility-links-conflict")
+                    else:
+                        issues.append("compatibility-links-missing")
             env = Path(profile["root"]) / ".config/workgrove/env.sh"
             validate_personal_files(profile)
             if not env.is_file() or read(env) != shell_environment(profile):
@@ -1421,6 +1428,12 @@ def doctor(args):
         for issue in result["issues"]:
             print("  " + issue)
         print("native relay and hook trust require a separate native-row check")
+    if {"profile-missing", "remote-wt-missing"}.issubset(result["issues"]):
+        print("A host whose home folder was replaced looks new. "
+              "Run: wt -H <host> doctor --root <root> --json; "
+              "then wt -H <host> setup --root <root> --restore-only. "
+              "If doctor reports missing prerequisites, run full setup: wt -H <host> setup --root <root>.",
+              file=sys.stderr if args.json else sys.stdout)
     return 0 if result["ready"] is not False else 1
 
 

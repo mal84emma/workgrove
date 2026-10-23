@@ -36,5 +36,12 @@ For Runpod storage and restart notes, read [the Runpod guide](../../../../docs/r
    Follow the [recovery policy](../../../.claude/AGENTS.md#vm-task-recovery) before attach recovery or either explicit recovery flag.
 
 After a host restart, refresh SSH through its supplier and follow the shared VM recovery procedure.
-Use explicit restore-only or full preparation when doctor identifies lost setup.
+
+Run `wt -H <host> doctor --root <root> --json` with the persistent root supplied by the user.
+For lost links and environment, use authorized `wt -H <host> setup --root <root> --restore-only`.
+A regular file at a home link location remains `compatibility-links-missing`; restore-only backs it up.
+If doctor reports `compatibility-links-conflict`, stop and report the conflict before restoration.
+Directories, foreign symbolic links, and regular root-side files require private resolution.
+Use full preparation when doctor reports missing prerequisites.
+
 Missing task files require storage investigation; never create a replacement task as automatic recovery.

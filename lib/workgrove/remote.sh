@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Reads globals: CMUX_ROW_EXISTING, HOME, WG_LIB_DIR.
 # Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
-# Requires common.sh: die, hook_safe_path, row_title, shell_join, tmux_cmd, usage, vm_result, vm_run_line,
+# Requires common.sh: die, hook_safe_path, host_recovery_hint, row_title, shell_join, tmux_cmd, usage, vm_result, vm_run_line,
 #   vm_ssh, vm_tmux, vm_wt, warn, wt_session, wt_version.
 # Requires version.sh: wt_read_version.
 # Requires options.sh: wt_opt_args, wt_opts, wt_spec.
@@ -78,7 +78,7 @@ WG_PREFLIGHT_END
 
 host_new_preflight() { # read-only checks in the same non-interactive SSH environment as remote_wt
   if ! remote_sh "$1" "sh -s -- $(shell_join "$2" "$3")" < <(host_preflight_source); then
-    warn "prepare the host explicitly: wt -H $1 doctor --json; wt -H $1 setup --root <persistent-root>"
+    warn "$(host_recovery_hint "$1")"
     return 1
   fi
 }
