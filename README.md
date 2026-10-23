@@ -228,6 +228,7 @@ workgrove/
 │   ├── ssh_host_test.py       synthetic registration, trust, and confidentiality fixtures
 │   ├── portable-smoke.sh      portable installation and explicit restoration
 │   ├── portable_test.py       home replacement, personal state, and shared task recovery
+│   ├── python-runtime-smoke.sh  Python isolation and shared runtime calls
 │   ├── capacity-smoke.sh      effective CPU, RAM, and GPU allocation checks
 │   ├── capacity_test.py       synthetic cgroup and GPU visibility fixtures
 │   ├── github-guard-smoke.sh  what the GitHub guard approves and denies, with a fake gh
@@ -273,7 +274,7 @@ It also describes what a run changes, the repo's test suites, and how to remove 
     exit 0 and do nothing, so they block no agent and no notification.
   - `install.sh` still runs under bash 3.2. To check that, run its smoke test with `INSTALL_BASH=/bin/bash`
     (see Tests).
-- **Python and OpenSSH:** SSH registration needs Python 3 and OpenSSH. Portable remote setup needs Python 3.9 or later.
+- **Python and OpenSSH:** SSH registration and portable remote setup need Python 3.9 or later. SSH registration also needs OpenSSH.
 - **tmux:** the VMs have tmux 3.2a, and `home/.tmux.conf` is written for that version.
 - **cmux:** workgrove supports 0.65.1 (build 110). Version 0.65.2 is unverified.
   Support moves to a newer release after verification, rather than automatically when that release appears.
