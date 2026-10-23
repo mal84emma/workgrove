@@ -247,7 +247,7 @@ class RootDiscoveryTests(unittest.TestCase):
     def test_doctor_hint_uses_only_a_found_root_and_keeps_readiness(self):
         root = str(self.mount / "space root's data")
         baseline = dict(status="incomplete", ready=False, issues=["profile-missing", "remote-wt-missing"],
-                        storage_permission_policy=None, tools={})
+                        warnings=[], storage_permission_policy=None, tools={})
         for status in ("found", "none", "ambiguous", "incomplete", "not-run"):
             for as_json in (False, True):
                 with self.subTest(status=status, json=as_json):
