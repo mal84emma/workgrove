@@ -1592,6 +1592,7 @@ def readiness(root=None):
     except (Refusal, OSError, ValueError, RuntimeError, UnicodeError, TypeError, AttributeError):
         return {"schema": 1, "status": "incomplete", "ready": False,
                 "issues": ["readiness-probe-failed"], "warnings": [], "tools": {}, "agents": {},
+                "git_identity": None, "worktree_exclusion": None, "terminfo": {},
                 "storage_permission_policy": None, "storage_permission_warnings": [],
                 "native_hooks": {}, "native_relay": "requires-row-check"}
 

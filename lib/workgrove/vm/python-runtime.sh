@@ -14,8 +14,16 @@ wg_select_python() {
   return 1
 }
 
+wg_capabilities_error() {
+  printf '{"schema":1,"capacity_verified":false,"cpu_logical":null,"memory_mib":null,"capacity_issues":["%s"]}\n' "$1"
+}
+
+wg_readiness_error() {
+  printf '{"schema":1,"status":"incomplete","ready":false,"issues":["%s"],"warnings":[],"tools":{},"agents":{},"git_identity":null,"worktree_exclusion":null,"storage_permission_policy":null,"storage_permission_warnings":[],"terminfo":{},"native_hooks":{},"native_relay":"requires-row-check"}\n' "$1"
+}
+
 wg_python_readiness_error() {
-  printf '{"schema":1,"status":"incomplete","ready":false,"issues":["%s"],"native_relay":"requires-row-check"}\n' "$wg_python_issue"
+  wg_readiness_error "$wg_python_issue"
 }
 
 wg_has_portable_profile() {

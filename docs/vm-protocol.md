@@ -60,6 +60,71 @@ The value must match `^[1-9][0-9]*$` and cannot exceed `922337203685477580`.
 An invalid value returns 1; an exceeded deadline returns 124.
 `host_record` converts either failure into an unavailable host record with an error message.
 
+## Host inventory records
+
+`host_probe_source` sends the capacity and readiness probes with `vm/python-runtime.sh`.
+The VM needs no installed `wt` to run these probes.
+Each enhanced record has a name, one tab, and one JSON object.
+`host_record` validates each object before it builds the public inventory.
+Older probes can omit optional fields.
+Malformed enhanced records produce explicit failure codes instead of legacy hardware values.
+
+### The capabilities record
+
+`capabilities` reports effective allocation through `vm/capacity.py`.
+`wg_capabilities_error` supplies shell fallbacks for unavailable Python and invalid records.
+The fallback omits optional fields; the reader retains their unknown values.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema` | Integer | Always `1`. |
+| `capacity_verified` | Boolean | Both effective CPU and memory values are known. |
+| `cpu_logical` | Nonnegative integer or null | Whole usable logical CPUs. |
+| `memory_mib` | Nonnegative integer or null | Effective memory in MiB. |
+| `capacity_issues` | Array of strings | Failure codes, including `python-3.9-required`. Older probes can omit this field. |
+| `environment` | String | Optional: `host`, `container`, or `unknown`. |
+| `observed_cpu_logical` | Nonnegative integer or null | Optional observed CPU limit before ancestor verification. The inventory reader ignores it. |
+| `observed_memory_mib` | Nonnegative integer or null | Optional observed memory limit before ancestor verification. The inventory reader ignores it. |
+| `gpu_allocation_verified` | Boolean or null | Optional verification of whole visible GPU allocation. |
+| `gpu_indices` | Array of strings or null | Optional allocated GPU indices, written as decimal strings. |
+
+### The readiness record
+
+`portable.py` emits `readiness` through `doctor --probe`.
+Its exception fallback and `wg_readiness_error` retain all keys with empty or null values for unknown checks.
+`wg_python_readiness_error` uses the same shell record with the interpreter failure code.
+`root_discovery` belongs to doctor output and does not appear in the probe record.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema` | Integer | Always `1`. |
+| `status` | String | `ready`, `incomplete`, `legacy`, or `unknown`. |
+| `ready` | Boolean or null | Basic setup readiness; null identifies a legacy environment. |
+| `issues` | Array of strings | Failure codes, including `compatibility-links-conflict`. |
+| `warnings` | Array of strings | Advisory codes that do not change readiness. |
+| `tools` | Object of booleans | Availability of each checked prerequisite. |
+| `agents` | Object of booleans | Availability of each checked agent. |
+| `git_identity` | Boolean or null | Whether the Git identity is configured; null means unchecked. |
+| `worktree_exclusion` | Boolean or null | Whether Git excludes worktrees; null means unchecked. |
+| `storage_permission_policy` | String or null | `strict`, `trusted-personal-volume`, or null without a profile. |
+| `storage_permission_warnings` | Array of strings | Storage policy warnings. |
+| `terminfo` | Object of booleans | Availability of each checked terminal definition. |
+| `native_hooks` | Object of booleans | Hook configuration for each checked agent. |
+| `native_relay` | String | Always `requires-row-check`; the probe cannot verify the native relay. |
+
+The reader accepts older readiness records without the diagnostic fields after `issues`.
+It uses only `schema`, `status`, `ready`, and `issues` for the inventory.
+
+### The unavailable host record
+
+`host_unavailable_record` builds one public object for an invalid alias or a failed SSH probe.
+It sets `status` to `unavailable` and places the failure reason in `error`.
+Unknown measurements and verification fields are null; issue and GPU arrays are empty.
+The environment, readiness status, and GPU status are `unknown`.
+The [host JSON contract](wt-json.md#read-effective-host-capacity-and-readiness) defines the capacity and readiness fields and types.
+The remaining fields are `host` and `error` strings, the `status` string, the `gpu_status` string, and the `gpus` array.
+The [version contract](wt-json.md#read-installation-versions) defines the two nullable version fields.
+
 ## Result records and versions
 
 `WT_PROTOCOL` in `common.sh` is currently `1`.
