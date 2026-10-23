@@ -80,11 +80,11 @@ if [[ ${1:-} == --remote-root ]]; then
   remote_root=$2
   shift 2
   portable_python
-  exec "$wg_python" -B "$R/lib/workgrove/portable.py" install --root "$remote_root" "$@"
+  wg_run_python --exec "$R/lib/workgrove/portable.py" install --root "$remote_root" "$@"
 fi
 if wg_has_portable_profile "$R/.."; then
   portable_python
-  exec "$wg_python" -B "$R/lib/workgrove/portable.py" reinstall --source "$R" "$@"
+  wg_run_python --exec "$R/lib/workgrove/portable.py" reinstall --source "$R" "$@"
 fi
 OS="${FORCE_OS:-$(uname -s)}"        # FORCE_OS exists only so that test/install-smoke.sh can drive the
                                      # Linux-only steps from a Mac: above all hook_bashrc, the most intricate

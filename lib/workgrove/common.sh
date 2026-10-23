@@ -479,11 +479,13 @@ ssh_host_check() {
   local config="$HOME/.ssh/config"
   [[ -f $config ]] || return 0
   LC_ALL=C grep -F 'wt-ssh-host' "$config" >/dev/null || return 0
-  if ! command -v python3 >/dev/null 2>&1; then
-    warn 'managed SSH registration needs Python 3 for validation'
-    return 1
-  fi
-  "${VM_SSH_CHECK_RUN[@]}" python3 -B "$WG_VERSION_ROOT/lib/workgrove/ssh_host.py" check "$1"
+  # Keep interpreter selection inside the hook's deadline too.
+  # shellcheck disable=SC2016
+  "${VM_SSH_CHECK_RUN[@]}" /bin/sh -c '
+    . "$1/vm/python-runtime.sh"
+    wg_select_python || { printf "%s: managed SSH registration needs Python 3 for validation\n" "$3" >&2; exit 1; }
+    wg_run_python --exec "$1/ssh_host.py" check "$2"
+  ' wt-ssh-check "$WG_VERSION_ROOT/lib/workgrove" "$1" "${WG_PREFIX:-wt}"
 }
 # known_host <alias> — the alias is one that ssh_hosts prints. grep reads all its input (no -q),
 # so sort never gets SIGPIPE, and the answer stays correct under pipefail.
