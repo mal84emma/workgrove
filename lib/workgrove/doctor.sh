@@ -285,11 +285,7 @@ host_contract_doctor() {
   }
   protocol=$(jq -r '.protocol' <<<"$version")
   [[ $protocol == "$WT_PROTOCOL" ]] || rc=1
-  if [[ $protocol =~ ^[0-9]+$ ]] && ((protocol > WT_PROTOCOL)); then
-    doctor_result "$rc" "VM protocol ${protocol:-unavailable}; Mac protocol $WT_PROTOCOL" 'wt update'
-  else
-    doctor_result "$rc" "VM protocol ${protocol:-unavailable}; Mac protocol $WT_PROTOCOL" "wt -H $(shell_join "$host") update"
-  fi
+  doctor_result "$rc" "$(host_protocol_message "$protocol")" "$(host_protocol_repair "$host" "$protocol")"
   [[ $failed == 0 && $DOCTOR_FAILED == 0 ]]
 }
 
