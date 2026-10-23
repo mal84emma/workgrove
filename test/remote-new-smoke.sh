@@ -265,6 +265,7 @@ scenario_preflight_version() {
   assert_grep 'failed preflight keeps its recovery hint' "$TEST_ROOT/wt-stderr" 'wt -H fakevm doctor --root <root> --json'
   assert_absent "$TEST_ROOT" remote-new.calls
   REMOTE_VERSION_MODE='' PREFLIGHT_REPLY_MODE='' PREFLIGHT_STATUS=0 CMUX_MODE=alive
+  rm -f "$TEST_ROOT/ssh.log"
   end_scenario
 }
 scenario_preflight_version
