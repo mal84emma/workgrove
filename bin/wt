@@ -433,16 +433,16 @@ cmd_show() {
     "$nn" "$path" "$REPO" "$br" "$ah" "$be" "$base" "$mg" "$title $(row_tag "" "$REPO")" "$(prompt_line "$name")" "$di" "$last"
   [[ -z "$model" ]] || printf '  model:   %s\n' "$model"
   local state=''
+  local -A session_status=()
   if is_remote; then
-    state=$(session_state "$name")
+    session_state "$name" session_status
+    state=${session_status[state]}
     printf '  session: %s (%s)\n' "$(wt_session "$name" "$REPO")" "$state"
   fi
-  local facts='{}' agent=false attached=false started=false clients session
+  local facts='{}' agent=false attached=false started=false
   if [[ -n ${WG_MACHINE_RESULT:-} ]]; then
-    session=$(wt_session "$name" "$REPO")
     if is_remote; then
-      if tmux_agent "$session" >/dev/null 2>&1; then agent=true; fi
-      if clients=$(tmux list-clients -t "=$session" 2>/dev/null) && [[ -n $clients ]]; then attached=true; fi
+      agent=${session_status[agent]} attached=${session_status[attached]}
     fi
     [[ ! -e "$(wt_started "$name")" ]] || started=true
     facts=$(jq -cn --argjson agent "$agent" --argjson attached "$attached" --argjson started "$started" \

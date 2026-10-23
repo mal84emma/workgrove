@@ -361,21 +361,34 @@ request_row() { # request_row <name> — VM side: ask the Mac for a cmux row, an
   printf 'on the Mac: wt -H %s attach -r %s %s\n' "$h" "$(shell_join "$REPO")" "$1"
 }
 
-session_state() { # session_state <name> — what the VM's tmux holds for this task, and whether a row holds that
-  local s state=none t; s=$(wt_session "$1" "$REPO")
-  if tmux has-session -t "=$s" 2>/dev/null; then
-    state='shell only'
-    while IFS= read -r t; do                           # the agent is a child of `wt run`, so it is never the pane's
-      [[ -n "$t" ]] || continue                        # own command; everything on the pane's tty is what counts
-      if pgrep -t "${t#/dev/}" -x 'claude|codex' >/dev/null 2>&1; then state='agent running'; break; fi
-    done < <(tmux list-panes -s -t "=$s" -F '#{pane_tty}' 2>/dev/null)
-    if [[ -z "$(tmux list-clients -t "=$s" 2>/dev/null)" ]]; then state="$state, detached"; fi
+session_state() { # session_state <name> <associative output> — the VM's session display and boolean facts.
+  local -n __session=$2
+  local s clients='' rc=0 present=false
+  s=$(wt_session "$1" "$REPO")
+  tmux_agent "$s" present >/dev/null 2>&1 || rc=$?
+  if [[ $rc != 1 || $present == true ]]; then
+    clients=$(tmux list-clients -t "=$s" 2>/dev/null) || clients=''
   fi
-  printf '%s' "$state"
+  __session=(["state"]=none ["agent"]=false ["attached"]=false)
+  case $rc in
+    0) __session["state"]='agent running'; __session["agent"]=true ;;
+    1) if [[ $present == true ]]; then __session["state"]='shell only'; fi ;;
+    # Unreadable status displays shell only because the agent fact is false.
+    2) __session["state"]='shell only' ;;
+  esac
+  if [[ -n $clients ]]; then __session["attached"]=true; fi
+  if [[ ${__session["state"]} != none && ${__session["attached"]} == false ]]; then
+    __session["state"]+=', detached'
+  fi
 }
 
-tmux_agent() { # tmux_agent <session> — 0 for a running agent, 1 for absent or idle, 2 for unreadable status.
+# Status is 0 for a running agent, 1 for absent or idle, and 2 for unreadable status.
+tmux_agent() { # tmux_agent <session> [session exists output]
   local err panes t rc=0
+  if [[ -n ${2:-} ]]; then
+    local -n __present=$2
+    __present=false
+  fi
   err=$(LC_ALL=C tmux has-session -t "=$1" 2>&1) || rc=$?
   if [[ $rc -ne 0 ]]; then
     case "$err" in
@@ -384,6 +397,7 @@ tmux_agent() { # tmux_agent <session> — 0 for a running agent, 1 for absent or
       *) printf '%s\n' "$err" >&2; return 2 ;;
     esac
   fi
+  if [[ -n ${2:-} ]]; then __present=true; fi
   panes=$(tmux list-panes -s -t "=$1" -F '#{pane_tty}' 2>&1) || { printf '%s\n' "$panes" >&2; return 2; }
   [[ -n "$panes" ]] || return 2
   while IFS= read -r t; do
