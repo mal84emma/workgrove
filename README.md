@@ -209,7 +209,9 @@ workgrove/
 │   ├── doctor-smoke.sh        cmux contracts, VM hooks, and redacted fixture recording
 │   ├── fakes/
 │   │   ├── cmux              the shared cmux and cmux-tui fake
-│   │   └── rows.sh           builds scenario data from recorded responses
+│   │   ├── pgrep             supplies the fake VM's pane process status
+│   │   ├── rows.sh           builds scenario data from recorded responses
+│   │   └── tmux              supplies the fake VM's session, pane, and client answers
 │   ├── fixtures/
 │   │   └── cmux-0.65.1/      redacted responses recorded from real cmux
 │   │       ├── REDACTED.txt   redaction notice
