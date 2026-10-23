@@ -8,6 +8,7 @@ The VM checks require a reachable VM and a task with a running agent.
    Each failed check prints a repair command.
    The probe requires only methods that workgrove calls.
    It does not require `workspace.remote.reconnect`.
+
    A version warning names the verified release.
    Its repair command installs that release from its versioned disk image.
    Quit cmux before running the installer command, then run `wt doctor` again.

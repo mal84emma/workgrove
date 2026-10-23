@@ -106,6 +106,7 @@ Each entry has `name`, `status`, and `repair` strings.
 `doctor_result` collects each check when it prints the check line.
 The check status is `PASS`, `FAIL`, or `WARN`.
 The `repair` field contains the repair command, including for passing checks.
+
 The overall `status` is `PASS` only when every check passes; failures and warnings produce `FAIL`.
 The record uses empty `name`, `repo`, `session`, and `state` fields.
 These additional fields keep protocol version 1.
@@ -113,6 +114,7 @@ These additional fields keep protocol version 1.
 `host_contract_doctor` uses the record and the command exit status to determine success.
 It displays the VM text and keeps the Mac protocol comparison separate.
 `vm_wt_failure` reports doctor failures through `doctor_result`.
+
 For older VMs without a record, its doctor policy keeps the marked `WT_COMPAT` text checks.
 Malformed or unsupported records cannot use that fallback.
 An unsupported record recommends updating the Mac.
@@ -127,6 +129,7 @@ Ordinary `wt path` prints only the path when no machine-result request exists.
 It validates a positive integer version and string fields for `status`, `name`, `repo`, `session`, and `state`.
 Every key and string value, including unknown fields, must omit control characters below 32 and character 127.
 The optional `agent`, `attached`, and `started` fields must be booleans. The optional `path` field must be a string.
+
 Doctor entries require exactly the three string fields above, without control characters.
 The reader rejects an overall doctor status that disagrees with its checks.
 The reader preserves unknown scalar fields.
