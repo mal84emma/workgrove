@@ -76,6 +76,19 @@ scenario_readiness_dispatch() {
   end_scenario
 }
 
+scenario_environment_shell() {
+  begin_scenario 'remote environment doctor uses POSIX sh through the zsh login shell' || return 0
+  # shellcheck disable=SC2016  # The fake SSH expands its command and scratch path.
+  printf 'printf "%%s\\n" "$cmd" >"$TEST_ROOT/environment-command"\n' >"$TEST_ROOT/environment.fixture"
+  make_fake_ssh "$TEST_ROOT/bin/ssh" "$TEST_ROOT/environment.fixture"
+  TEST_ROOT="$TEST_ROOT" invoke -H test-vm doctor --environment --json
+  assert_grep 'the script starts through POSIX sh' "$TEST_ROOT/environment-command" '/bin/sh -c '
+  assert_eq 'environment doctor returns readiness JSON' true "$(jq -r '.schema == 1 and (.issues | type == "array")' "$TEST_ROOT/output" 2>/dev/null || echo false)"
+  rm "$TEST_ROOT/bin/ssh"
+  end_scenario
+}
+scenario_environment_shell
+
 scenario_mac() {
   begin_scenario 'Mac contract checks pass and detect unsupported releases and missing methods' || return 0
   FAKE_CMUX_MISSING_METHOD=workspace.remote.reconnect invoke doctor

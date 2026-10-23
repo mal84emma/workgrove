@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # Reads globals: BASHPID, BASH_SOURCE, HOME, TMUX, WG_EXIT_HANDLERS, WG_EXIT_PID, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
-#   VM_SSH_RUN, VM_WT_CAPTURE_FAILURE, VM_WT_RECOVERY_HINT, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT,
+#   VM_SSH_CHECK_RUN, VM_SSH_OPTIONS, VM_SSH_RUN, VM_WT_CAPTURE_FAILURE, VM_WT_RECOVERY_HINT, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT,
 #   WT_PROTOCOL, WT_TMPFILES.
-# Requires no functions from other modules. Loads cmux.sh, task.sh, options.sh, and version.sh.
+# Requires bin/cmux-hook: log for the close policy. Loads cmux.sh, task.sh, options.sh, and version.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
 # bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
 # This file needs bash 5. Bash reads a sourced file one command at a time, so an older bash returns at
@@ -148,7 +148,7 @@ wt_read_result() {
     | if (.version | type == "number" and . >= 1 and floor == .) and .command == $command
       then . else error("invalid wt result") end' 2>/dev/null) || return 1
   if jq -e --argjson protocol "$WT_PROTOCOL" '.version > $protocol' <<<"$parsed" >/dev/null; then
-    warn "unsupported result protocol; run wt update on the Mac"
+    vm_wt_failure "" protocol 0 "" 3
     return 3
   fi
   jq -ec --argjson protocol "$WT_PROTOCOL" '
@@ -192,15 +192,67 @@ vm_run_line() { printf '"$HOME/.local/bin/wt" run %s' "$(shell_join "$1" -r "$2"
 
 # The hook injects its deadline runner here, as it does for cmux calls.
 VM_SSH_RUN=(ssh)
+VM_SSH_CHECK_RUN=()
+VM_SSH_OPTIONS=(-o BatchMode=yes -o NumberOfPasswordPrompts=0 -o ConnectTimeout=5
+  -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=2)
 vm_ssh() {
   local host=$1 line=$2; shift 2
   ssh_host_check "$host" || return 1
-  "${VM_SSH_RUN[@]}" -o BatchMode=yes -o ConnectTimeout=5 \
-    -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$@" "$host" "$line"
+  "${VM_SSH_RUN[@]}" "${VM_SSH_OPTIONS[@]}" "$@" "$host" "$line"
 }
 
+# Without parser arguments, report the remote command failure at the capture boundary.
+# With parser arguments, apply caller policy: <parse> <record status> <name> <repo>.
 vm_wt_failure() {
   local host=$1 sub=$2 rc=$3 hint=${4:-} signal='' detail=''
+  if (($# >= 5)); then
+    local parse=$5 status=${6:-} name=${7:-} repo=${8:-} message='' from=" from $host"
+    if [[ $sub == close ]]; then
+      if [[ $parse == 3 ]]; then
+        from=''
+      elif [[ $rc == 1 && $parse == 0 && $status == missing ]]; then
+        return 0
+      else
+        message='could not confirm its worktree is gone'
+      fi
+    elif [[ $sub == protocol ]]; then
+      from=''
+    elif [[ $rc == 255 ]]; then
+      if [[ $sub == new ]]; then
+        warn "SSH disconnected during creation on $host; could not confirm whether a worktree was created; inspect with: $hint"
+        warn "a disconnected create may still be finishing; recheck before starting the same task elsewhere"
+        return "$rc"
+      fi
+      message="host unreachable: is the VM running? (ssh $host)"
+    elif [[ $sub == version ]]; then
+      return 0
+    elif [[ $rc != 0 ]]; then
+      return "$rc"
+    elif [[ $parse == 0 ]]; then
+      case $sub:$status in
+        new:created|show:found|path:found|raw:*) return 0 ;;
+      esac
+      parse=1
+    fi
+    if [[ -z $message ]]; then
+      case $parse in
+        3) message="unsupported result protocol$from; run wt update on the Mac" ;;
+        2)
+          case $sub in
+            new) message="$host did not report created/repo/session" ;;
+            show) message="$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))" ;;
+          esac ;;
+      esac
+      [[ -n $message ]] || message="unexpected output from $host"
+      [[ $sub != new ]] || message+="; the worktree may exist; inspect with: $hint before retrying"
+    fi
+    case $sub in
+      protocol) warn "$message"; return 3 ;;
+      close) log "ignored wt-close for task $name of $repo on $host: $message"; return 1 ;;
+      version) warn "$message"; return 1 ;;
+      *) die "$message" ;;
+    esac
+  fi
   if ((rc != 0 && rc != 255)); then
     if ((rc > 128)); then
       # Ubuntu VMs use Linux signal numbers, which differ from the Mac's numbers.
@@ -401,7 +453,7 @@ ssh_host_check() {
     warn 'managed SSH registration needs Python 3 for validation'
     return 1
   fi
-  python3 -B "$WG_VERSION_ROOT/lib/workgrove/ssh_host.py" check "$1"
+  "${VM_SSH_CHECK_RUN[@]}" python3 -B "$WG_VERSION_ROOT/lib/workgrove/ssh_host.py" check "$1"
 }
 # known_host <alias> — the alias is one that ssh_hosts prints. grep reads all its input (no -q),
 # so sort never gets SIGPIPE, and the answer stays correct under pipefail.
