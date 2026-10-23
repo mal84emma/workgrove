@@ -760,7 +760,7 @@ misbehaves after it reconnects, find your symptom in this table:
 
 ## `wt` commands
 
-`bash bin/wt help` is the reference, and it includes every flag. This table shows the shape of the command set:
+Use `bash bin/wt help` for the grouped option reference. This table summarizes the commands:
 
 | Command | Does |
 |---|---|
@@ -776,7 +776,7 @@ misbehaves after it reconnects, find your symptom in this table:
 | `wt prune [--dry-run]` | Remove worktrees whose branch is merged, by ancestry or by content, and whose tree is clean |
 | `wt task` | The task picker on ⌃⌥⌘T (Mac, needs fzf) |
 | `wt driver` | Open or select the `driver` row |
-| `wt update [--refresh-config]` | `git pull --ff-only` this repo, then re-run `install.sh` |
+| `wt update [--refresh-config] [--opinionated-config] [--with-*]` | Pull this repo with `git pull --ff-only`, then re-run `install.sh`. Portable hosts accept only `--refresh-config` and `--with-tmux-conf`. |
 | `wt repos [<name>] [--porcelain\|--table]` | List every repo (name, task count, location on a terminal; `name<TAB>path` when piped), or print one repo's path |
 | `wt doctor [--record DIR]` | Check cmux contracts and hook paths. Save redacted fixtures below `DIR/cmux-<version>/` |
 | `wt -H <vm> doctor` | Check VM tools, cmux-tui hooks, folders, and the protocol against the Mac |
