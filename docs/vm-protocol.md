@@ -74,7 +74,7 @@ An invalid value returns 1; an exceeded deadline returns 124.
 
 `WT_PROTOCOL` in `common.sh` is currently `1`.
 `vm_result` calls `vm_wt --machine` to request records with `WT_MACHINE=$WT_PROTOCOL`.
-Creation, attach, open, and the Mac hook use this reader.
+Creation, attach, open, doctor, and the Mac hook use this reader.
 It returns decoded fields, stdout, stderr, and command status separately, and removes records from both visible streams.
 It discovers records on either stream and uses only stdout for a legacy successful path.
 At startup, `bin/wt` consumes `WT_MACHINE`, stores it in nonexported `WG_MACHINE_RESULT`, and unsets the request.
@@ -84,31 +84,54 @@ Nested `wt` calls and `.wt-setup` therefore do not inherit machine-result mode.
 Each record starts with `WT_RESULT`, one tab, and one compact JSON object on the same line.
 Human output can surround the record.
 `wt_read_result` in `common.sh` finds and validates the record; it does not parse unrelated lines.
-`wt_read_result_into` validates the record before decoding its scalar fields into an associative array.
+`wt_read_result_into` validates the record before decoding its fields into an associative array.
+The doctor checks array becomes a JSON string in that array.
 
 | Field | Value and producer | Reader |
 |---|---|---|
 | `version` | `wt_result` emits the lower of the requested version and `WT_PROTOCOL`. Protocol 1 VMs therefore emit 1 for every valid request. | `common.sh`: `wt_read_result`. |
-| `command` | `new`, `show`, or `path`, supplied by `cmd_new`, `cmd_show`, or `cmd_path` in `bin/wt`. | `common.sh`: `wt_read_result` requires the expected command. |
-| `status` | `created` for `new`; `found` for `show` or successful `path`; `missing` for an absent `path`. | `remote.sh`: `host_new`; `recovery.sh`: `host_attach`; `bin/cmux-hook`: the `wt-close` handler. |
-| `name` | The task name supplied by the producer. | `common.sh`: `vm_result` validates creation names and checks the requested name for lookup results. |
-| `repo` | The absolute main checkout path supplied by the producer. | `common.sh`: `vm_result` derives task sessions and requires the requested repository for a missing path. |
-| `session` | `common.sh`: `wt_session` supplies `wt-<repo-id>-<name>` for `new` and `show`; `path` supplies an empty string. | `common.sh`: `vm_result` requires the derived session name for creation and show results. |
+| `command` | `new`, `show`, `path`, or `doctor`, supplied by their command functions. | `common.sh`: `wt_read_result` requires the expected command. |
+| `status` | `created` for `new`; `found` for `show` or successful `path`; `missing` for an absent `path`; `PASS` or `FAIL` for `doctor`. | `remote.sh`: `host_new`; `recovery.sh`: `host_attach`; `doctor.sh`: `host_contract_doctor`; `bin/cmux-hook`: the `wt-close` handler. |
+| `name` | The task name supplied by the producer; empty for `doctor`. | `common.sh`: `vm_result` validates creation names and checks the requested name for lookup results. |
+| `repo` | The absolute main checkout path supplied by the producer; empty for `doctor`. | `common.sh`: `vm_result` derives task sessions and requires the requested repository for a missing path. |
+| `session` | `common.sh`: `wt_session` supplies `wt-<repo-id>-<name>` for `new` and `show`; `path` and `doctor` supply an empty string. | `common.sh`: `vm_result` requires the derived session name for creation and show results. |
 | `state` | `cmd_show` uses `session_state` on a VM. Other producers supply an empty string. | `recovery.sh`: `host_attach` displays it and uses wording only when boolean facts are absent. |
 | `agent` | `cmd_show` reports whether the checked tmux probe found an agent. | `host_attach` requires a running agent unless first-start or explicit recovery applies. |
 | `attached` | `cmd_show` reports whether tmux lists an attached client. | `host_attach` checks a detached session before reattaching a shell row. |
 | `started` | `cmd_show` reports whether the task's started marker exists. | `host_attach` permits a first start only when the marker and session are absent. |
 | `path` | `cmd_path` supplies the worktree path for a found result. | `host_open` validates the path before opening VS Code. |
 
+`cmd_contract_doctor` adds a `checks` array to the `doctor` record.
+Each entry has `name`, `status`, and `repair` strings.
+`doctor_result` collects each check when it prints the check line.
+The check status is `PASS`, `FAIL`, or `WARN`.
+The `repair` field contains the repair command, including for passing checks.
+
+The overall `status` is `PASS` only when every check passes; failures and warnings produce `FAIL`.
+The record uses empty `name`, `repo`, `session`, and `state` fields.
+These additional fields keep protocol version 1.
+
+`host_contract_doctor` uses the record and the command exit status to determine success.
+It displays the VM text and keeps the Mac protocol comparison separate.
+`vm_wt_failure` reports doctor failures through `doctor_result`.
+
+For older VMs without a record, its doctor policy keeps the marked `WT_COMPAT` text checks.
+Malformed or unsupported records cannot use that fallback.
+An unsupported record recommends updating the Mac.
+Older Macs continue to read the unchanged VM check lines.
+
 `require_wt` in `task.sh` emits a missing `path` record on standard error and exits 1 through `die`.
 It checks the Git worktree registration before reporting absence.
 Successful records go to standard output.
 Ordinary `wt path` prints only the path when no machine-result request exists.
 
-`wt_read_result` requires exactly one record, unique keys, and scalar values without nested objects or arrays.
+`wt_read_result` requires exactly one record, unique keys, and scalar values, except for the doctor `checks` array.
 It validates a positive integer version and string fields for `status`, `name`, `repo`, `session`, and `state`.
 Every key and string value, including unknown fields, must omit control characters below 32 and character 127.
 The optional `agent`, `attached`, and `started` fields must be booleans. The optional `path` field must be a string.
+
+Doctor entries require exactly the three string fields above, without control characters.
+The reader rejects an overall doctor status that disagrees with its checks.
 The reader preserves unknown scalar fields.
 Additive fields retain the version; a changed field meaning requires a new version.
 

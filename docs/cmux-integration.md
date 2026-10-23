@@ -15,7 +15,7 @@ The probe does not create rows, execute agent hooks, or verify the complete user
 |---|---|
 | The cmux version | `doctor_mac` parses `cmux version` and compares it with `WG_CMUX_SUPPORTED` in [cmux.sh](../lib/workgrove/cmux.sh), currently `0.65.1`. |
 | Available methods | `doctor_mac` requires `workspace.list`, `workspace.create`, `workspace.action`, `workspace.close`, and `workspace.select` in `.methods`. |
-| Other methods | `doctor_mac` also requires `workspace.remote.reconnect`, `notification.list`, `notification.dismiss`, `system.top`, and `surface.read_text`. |
+| Other methods | `doctor_mac` also requires `notification.list`, `notification.dismiss`, `system.top`, and `surface.read_text`. |
 | Window and row JSON | `doctor_mac` calls `cmux_rows_load checked` in `cmux.sh`. The next tables define the fields. |
 | Agent and notification JSON | `doctor_mac` validates `top --json` and `--json list-notifications`. |
 | The native automation | `doctor_mac` compares `automation show wt-native-relay` with the complete repository rule. It checks that `~/.local/bin/cmux-hook` is executable. |
@@ -24,8 +24,8 @@ The probe does not create rows, execute agent hooks, or verify the complete user
 | VM tools and configuration | `doctor_vm` checks cmux-tui, both installed provider hooks, the executable helper, tmux 3.2 minimum, `WT_HOST`, and `WT_REPOS_DIR` folders. |
 | The workgrove version | `cmd_doctor` validates `wt version`. `host_doctor` compares the VM protocol with the Mac protocol. |
 
-`workspace.remote.reconnect` remains a capability check.
-Current recovery code in [recovery.sh](../lib/workgrove/recovery.sh) does not call that method.
+`workspace.remote.reconnect` is not required because workgrove does not call that method.
+The Mac reads VM check results from a [doctor result record](vm-protocol.md#result-records-and-versions).
 The hook path checks reject changes to `PATH`, `HOME`, `ENV`, `BASH_ENV`, `ZDOTDIR`, or `SHELL`.
 `doctor_static_environment` treats these names as executable lookup or shell initialization controls.
 
