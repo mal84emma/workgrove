@@ -949,7 +949,9 @@ sys.exit(module["main"]())
     def test_personal_volume_requires_explicit_acceptance_before_private_writes(self):
         self.root.chmod(0o777)
         result = self.volume_install(ok=False)
-        request = json.loads(result.stderr.splitlines()[0])
+        tag, payload = result.stderr.splitlines()[0].split("\t", 1)
+        self.assertEqual(tag, "trust-request")
+        request = json.loads(payload)
         self.assertEqual(request, {"error": "personal-volume-trust-required", "root": str(self.root), "mount": str(self.root)})
         self.assertIn("--trust-personal-volume", result.stderr)
         self.assertFalse((self.root / ".config").exists())
@@ -2784,7 +2786,9 @@ sys.exit(subprocess.run(["/bin/sh", "-c", sys.argv[-1]], env=environment, check=
         environment = self.transport()
         marker = self.base / "accepted"
         ssh = Path(environment["PATH"].split(":")[0]) / "ssh"
-        request = json.dumps({"error": "personal-volume-trust-required", "root": str(self.root), "mount": str(self.root)})
+        request = "trust-request\t" + json.dumps(
+            {"error": "personal-volume-trust-required", "root": str(self.root), "mount": str(self.root)},
+            separators=(",", ":"))
         ssh.write_text(f'''#!{sys.executable}
 import pathlib,sys
 sys.stdin.read()
@@ -2835,6 +2839,31 @@ sys.exit(1)
             marker.unlink(missing_ok=True)
         self.remote(environment, *arguments[:-1], "--trust-personal-volume", "--")
         self.assertTrue(marker.exists())
+
+    def test_hosts_and_environment_doctor_ignore_login_json_module(self):
+        self.install("--persist-agents")
+        environment = self.transport()
+        config = Path(environment["HOME"]) / ".ssh/config"
+        config.parent.mkdir()
+        config.write_text("Host test-host\n")
+        ssh = Path(environment["PATH"].split(":")[0]) / "ssh"
+        ssh.write_text(ssh.read_text().replace(
+            'env=environment, check=False', 'env=environment, cwd=environment["HOME"], check=False'))
+        marker = self.base / "login-module-imported"
+        (self.home / "json.py").write_text(
+            "from pathlib import Path\nPath(" + repr(str(marker)) + ").touch()\n"
+            "raise RuntimeError('login json imported')\n")
+        for arguments in (("hosts", "--json"), ("-H", "test-host", "doctor", "--environment")):
+            with self.subTest(arguments=arguments):
+                marker.unlink(missing_ok=True)
+                result = subprocess.run([str(self.tools / "bash"), str(REPO / "bin/wt"), *arguments],
+                                        env=environment, capture_output=True, text=True, timeout=30)
+                self.assertFalse(marker.exists(), result.stdout + result.stderr)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if arguments[0] == "hosts":
+                    self.assertTrue(json.loads(result.stdout)[0]["workgrove_ready"])
+                else:
+                    self.assertIn("native relay", result.stdout)
 
     def test_vm_and_container_restart_share_task_recovery_and_row_identity(self):
         self.install("--persist-agents")
@@ -2911,6 +2940,7 @@ sys.exit(1)
         result = subprocess.run([str(self.tools / "git"), "-C", str(source), "rev-parse", "--abbrev-ref", "@{u}"],
                                 env=self.env, text=True, capture_output=True, check=True)
         self.assertTrue(result.stdout.strip().startswith("origin/"))
+        self.assertEqual(execute.call_args.args[1][:3], [sys.executable, "-I", "-B"])
         self.assertIn(str(source / "lib/workgrove/portable.py"), execute.call_args.args[1])
         self.assertTrue(any(command[0] == "checkout" and self.revision in command for command in calls))
 
