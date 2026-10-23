@@ -1,12 +1,15 @@
 # shellcheck shell=bash
-# Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WT_BASE_FETCHES, WT_DIRNAME, WT_MERGE_TREE, WT_META, WT_TMPFILES.
+# Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WG_VERSION_ROOT, WT_BASE_FETCHES, WT_DIRNAME, WT_MERGE_TREE, WT_META, WT_TMPFILES.
 # Requires common.sh: have, warn.
 # Requires task.sh: meta_require, wt_register_tmpfile.
 file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shasum, Linux sha256sum)
   local h=""
   if have shasum; then h=$(shasum -a 256 "$1" 2>/dev/null) || h=""
   elif have sha256sum; then h=$(sha256sum "$1" 2>/dev/null) || h=""
-  else h=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1" 2>/dev/null) || h=""
+  else
+    # shellcheck source=lib/workgrove/vm/python-runtime.sh
+    source "$WG_VERSION_ROOT/lib/workgrove/vm/python-runtime.sh"
+    h=$(wg_run_python -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1" 2>/dev/null) || h=""
   fi
   printf '%s' "${h%% *}"
 }

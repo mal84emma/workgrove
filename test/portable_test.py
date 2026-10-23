@@ -1149,6 +1149,19 @@ sys.exit(module["main"]())
         with patch.object(portable.sys, "stdin", io.StringIO("yes\n")), patch.object(portable.sys, "stderr", io.StringIO()):
             self.assertFalse(portable.confirm_volume_trust(request))
 
+    def test_confirmation_reads_tagged_requests_and_legacy_json(self):
+        request = {"error": "personal-volume-trust-required", "root": "/example/root", "mount": "/example"}
+        path = self.base / "request"
+        for prefix in ("", "diagnostic before the record\ntrust-request\t"):
+            with self.subTest(prefix=prefix):
+                path.write_text(prefix + json.dumps(request, separators=(",", ":")) + "\nother diagnostic\n")
+                output = io.StringIO()
+                with patch.object(portable, "confirm_volume_trust", return_value=True) as confirm, \
+                        patch.object(sys, "stdout", output):
+                    self.assertEqual(portable.confirm_volume_request(Namespace(request_file=str(path))), 0)
+                confirm.assert_called_once_with(request)
+                self.assertEqual(output.getvalue(), "/example/root\n/example\n")
+
     def test_persistent_identity_exclusions_tools_and_sticky_preferences(self):
         self.install("--persist-agents", "--with-tmux-conf", "--codex-args-json", '["--no-alt-screen"]')
         self.assertEqual((self.home / ".local/bin/wt").readlink(), self.source / "bin/wt")
