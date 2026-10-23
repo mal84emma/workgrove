@@ -247,7 +247,7 @@ class RootDiscoveryTests(unittest.TestCase):
     def test_doctor_hint_uses_only_a_found_root_and_keeps_readiness(self):
         root = str(self.mount / "space root's data")
         baseline = dict(status="incomplete", ready=False, issues=["profile-missing", "remote-wt-missing"],
-                        storage_permission_policy=None, tools={})
+                        warnings=[], storage_permission_policy=None, tools={})
         for status in ("found", "none", "ambiguous", "incomplete", "not-run"):
             for as_json in (False, True):
                 with self.subTest(status=status, json=as_json):
@@ -1698,6 +1698,93 @@ sys.exit(module["main"]())
         result = self.command("doctor", "--json", ok=False)
         self.assertIn("remote-wt-missing", json.loads(result.stdout)["issues"])
         self.assertFalse((self.root / ".config/workgrove").exists())
+
+    def test_doctor_has_no_agent_warning_without_a_profile(self):
+        result = self.command("doctor", "--json", ok=False)
+        self.assertEqual(json.loads(result.stdout)["warnings"], [])
+
+    def test_doctor_has_no_agent_warning_for_null_commands(self):
+        self.install()
+        self.assertEqual(self.profile()["agent_commands"], dict(claude=None, codex=None))
+        self.assertEqual(json.loads(self.command("doctor", "--json").stdout)["warnings"], [])
+
+    def test_readiness_fallback_has_warnings(self):
+        with patch.object(portable, "_readiness", side_effect=OSError):
+            report = portable.readiness()
+        self.assertEqual(report["issues"], ["readiness-probe-failed"])
+        self.assertEqual(report["warnings"], [])
+
+    def test_doctor_checks_saved_agent_commands_without_running_them(self):
+        directory = self.root / "agent-tools"
+        directory.mkdir()
+        marker = self.base / "agent-ran"
+        targets = []
+        for agent in ("claude", "codex"):
+            target = directory / (agent + "-target")
+            target.write_text("#!/bin/sh\ntouch " + shlex.quote(str(marker)) + "\n")
+            target.chmod(0o700)
+            (directory / agent).symlink_to(target.name)
+            targets.append(target)
+        self.env["PATH"] = str(directory) + ":" + self.env["PATH"]
+        self.install()
+        before = json.loads(self.command("doctor", "--json").stdout)
+        self.assertTrue(before["ready"])
+        self.assertEqual(before["issues"], [])
+        self.assertFalse(marker.exists())
+        for agent, target in zip(("claude", "codex"), targets):
+            self.assertEqual(self.profile()["agent_commands"][agent], str(directory / agent))
+            content = target.read_text()
+            for kind in ("removed", "non-executable", "dangling-link", "directory"):
+                with self.subTest(agent=agent, kind=kind):
+                    target.unlink()
+                    if kind == "non-executable":
+                        target.write_text(content)
+                        target.chmod(0o600)
+                    elif kind == "dangling-link":
+                        target.symlink_to(directory / "missing")
+                    elif kind == "directory":
+                        target.mkdir()
+                    try:
+                        result = self.command("doctor", "--json")
+                        report = json.loads(result.stdout)
+                        self.assertEqual(report["warnings"], ["agent-command-unavailable"])
+                        for key in ("ready", "status", "issues", "storage_permission_warnings"):
+                            self.assertEqual(report[key], before[key])
+                        self.assertNotIn(str(directory), result.stdout + result.stderr)
+                        self.assertFalse(marker.exists())
+                    finally:
+                        if kind == "directory":
+                            target.rmdir()
+                        elif kind != "removed":
+                            target.unlink()
+                        target.write_text(content)
+                        target.chmod(0o700)
+        self.assertEqual(before["warnings"], [])
+
+    def test_doctor_prints_agent_warning_and_preserves_exit_status(self):
+        directory = self.root / "agent-tools"
+        directory.mkdir()
+        command = directory / "codex"
+        command.write_text("#!/bin/sh\nexit 0\n")
+        command.chmod(0o700)
+        self.env["PATH"] = str(directory) + ":" + self.env["PATH"]
+        self.install()
+        for ready in (True, False):
+            if not ready:
+                (self.home / ".local/bin/wt").unlink()
+            before = self.command("doctor", ok=ready)
+            command.unlink()
+            result = self.command("doctor", ok=ready)
+            self.assertEqual(result.returncode, before.returncode)
+            self.assertEqual(result.stdout, before.stdout.replace(
+                "native relay", "  agent-command-unavailable\nnative relay"))
+            self.assertNotIn(str(command), result.stdout + result.stderr)
+            probe = self.command("doctor", "--probe")
+            self.assertTrue(probe.stdout.startswith("readiness\t"))
+            self.assertEqual(json.loads(probe.stdout.split("\t", 1)[1])["warnings"],
+                             ["agent-command-unavailable"])
+            command.write_text("#!/bin/sh\nexit 0\n")
+            command.chmod(0o700)
 
     def test_replaced_home_doctor_explains_explicit_root_recovery(self):
         self.install("--persist-agents")

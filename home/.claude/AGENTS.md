@@ -228,7 +228,8 @@ An agent may run restore-only without asking only when all six conditions hold:
    Name the alias and the root in that one question.
 5. `wt -H <host> doctor --root <root> --json` reports no issue outside this allowlist:
    `compatibility-links-missing`, `remote-wt-missing`, and `environment-incomplete`.
-   Any other code needs the user, including `missing-prerequisites`, conflict codes, and saved-agent-command codes.
+   Any other code needs the user, including `missing-prerequisites`, conflict codes, and the warning `agent-command-unavailable`.
+   Report `agent-command-unavailable` and stop before starting or restarting a task.
 6. Run exactly `wt -H <host> setup --root <root> --restore-only`, with no other option.
    Restore ignores options such as `--git-identity` and `--persist-agents`.
 

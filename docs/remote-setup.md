@@ -333,6 +333,12 @@ wt hosts --json
 Doctor works even when the remote `wt` compatibility link is missing.
 Use `wt -H <host> doctor --root <root> --json` when the home profile link was lost.
 
+Doctor reports `agent-command-unavailable` in `warnings` when a saved agent command does not resolve to an executable regular file.
+This warning does not change readiness or the exit status.
+It contains no path.
+Doctor does not run the command.
+If doctor reports this warning, report it to the user and stop before starting or restarting a task.
+
 A host whose home folder was replaced looks new without its root.
 When doctor reports `profile-missing` and `remote-wt-missing` together, it prints recovery instructions.
 With `--json`, those instructions go to stderr; stdout contains only the JSON report.

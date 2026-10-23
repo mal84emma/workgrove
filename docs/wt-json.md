@@ -138,6 +138,17 @@ It can report missing remote tools or links without invoking the remote `wt` exe
 Both codes can appear in `issues` and inventory's `readiness_issues` when different locations need different repairs.
 
 Its `ready` value excludes separate personal sign-ins, native relay verification, and hook trust decisions.
+
+`warnings` is an array of codes that do not change `ready`, `status`, `issues`, or the exit status.
+It contains `agent-command-unavailable` when a saved, non-null `agent_commands` path does not resolve to an executable regular file.
+A missing target, dangling symbolic link, directory, or non-executable file causes this warning.
+Doctor checks the saved path without using PATH or running the command.
+The warning contains no path.
+Saved paths with executable regular-file targets, null entries, and a missing profile cause no warning.
+
+Text output prints each warning, and the `--probe` readiness line includes `warnings`.
+The `wt hosts --json` fields remain unchanged.
+
 `storage_permission_policy` is `strict`, `trusted-personal-volume`, or null when no portable profile is available.
 `storage_permission_warnings` contains `unix-mode-checks-relaxed` when the user accepted a personal volume exception; otherwise it is empty.
 These fields describe the saved policy, including when other readiness checks fail.
