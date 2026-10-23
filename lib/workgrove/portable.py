@@ -1556,6 +1556,10 @@ def _readiness(root=None):
         if not all(terminals.values()):
             issues.append("terminfo-missing")
     agents = {name: shutil.which(name, path=environment.get("PATH")) is not None for name in ("claude", "codex")}
+    warnings = []
+    if profile and any(command is not None and not (os.path.isfile(command) and os.access(command, os.X_OK))
+                       for command in profile["agent_commands"].values()):
+        warnings.append("agent-command-unavailable")
     hooks = {}
     for agent in ("claude", "codex"):
         configured = Path(profile["agent_roots"][agent]) if profile else Path.home() / ("." + agent)
@@ -1574,7 +1578,7 @@ def _readiness(root=None):
         issues.append("portable-profile-missing")
     legacy = profile is None and issues == ["profile-missing"]
     return {"schema": 1, "status": "legacy" if legacy else "incomplete" if issues else "ready",
-            "ready": None if legacy else not issues, "issues": sorted(set(issues)), "tools": tools,
+            "ready": None if legacy else not issues, "issues": sorted(set(issues)), "warnings": warnings, "tools": tools,
             "agents": agents, "git_identity": bool(git_identity), "worktree_exclusion": exclusions,
             "storage_permission_policy": ("trusted-personal-volume" if profile["trust_personal_volume"]
                                           else "strict") if profile else None,
@@ -1587,7 +1591,7 @@ def readiness(root=None):
         return _readiness(root)
     except (Refusal, OSError, ValueError, RuntimeError, UnicodeError, TypeError, AttributeError):
         return {"schema": 1, "status": "incomplete", "ready": False,
-                "issues": ["readiness-probe-failed"], "tools": {}, "agents": {},
+                "issues": ["readiness-probe-failed"], "warnings": [], "tools": {}, "agents": {},
                 "storage_permission_policy": None, "storage_permission_warnings": [],
                 "native_hooks": {}, "native_relay": "requires-row-check"}
 
@@ -1643,6 +1647,8 @@ def doctor(args):
             print("storage permissions: trusted personal volume; Unix mode checks are relaxed within its mount")
         for issue in result["issues"]:
             print("  " + issue)
+        for warning in result["warnings"]:
+            print("  " + warning)
         print("native relay and hook trust require a separate native-row check")
     if {"profile-missing", "remote-wt-missing"}.issubset(result["issues"]):
         print(root_recovery_hint(args.host, result["root_discovery"]),
