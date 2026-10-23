@@ -309,6 +309,7 @@ The hook uses the same message definitions but writes failures to its log.
 
 The hook runs managed SSH registration validation and SSH under the same absolute deadline through `capped`.
 `VM_SSH_CHECK_RUN` applies that runner to the Python validation process, including its `ssh -G` children.
+A signal-killed validator returns failure and cannot authorize SSH or row closure.
 The close check reserves 12 seconds for verification and five seconds for session removal after row closure.
 
 When the VM's `wt` fails, `vm_wt` prints one summary line on standard error and preserves the command's exit status.
