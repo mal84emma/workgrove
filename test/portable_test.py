@@ -959,6 +959,58 @@ sys.exit(module["main"]())
             self.assertEqual((self.home / ".gitconfig").read_text(), "supplier configuration")
             self.assertEqual(sorted(backups.iterdir()), before)
 
+    def test_restore_checks_backup_storage_ancestors_before_home_changes(self):
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".gitconfig").write_text("supplier configuration")
+        for relative in (".local/state", ".local/state/workgrove", ".local/state/workgrove/backups"):
+            path = self.root / relative
+            saved = path.with_name(path.name + "-saved")
+            path.rename(saved)
+            path.write_text("occupied storage location")
+            result = self.command("restore", "--root", str(self.root), ok=False, env=dict(self.env, PATH=""))
+            self.assertEqual(result.stderr, "workgrove: portable-operation-failed\n")
+            self.assertFalse((self.home / ".local").exists())
+            self.assertFalse((self.home / ".config").exists())
+            self.assertEqual((self.home / ".gitconfig").read_text(), "supplier configuration")
+            path.unlink()
+            saved.rename(path)
+
+    @unittest.skipIf(os.geteuid() == 0, "Root can write directories without write permission.")
+    def test_restore_checks_backup_write_access_before_home_changes(self):
+        self.install("--persist-agents")
+        backups = self.root / ".local/state/workgrove/backups"
+        before = sorted(backups.iterdir())
+        backups.chmod(0o500)
+        self.addCleanup(backups.chmod, 0o700)
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".gitconfig").write_text("supplier configuration")
+        result = self.command("restore", "--root", str(self.root), ok=False, env=dict(self.env, PATH=""))
+        self.assertEqual(result.stderr, "workgrove: portable-operation-failed\n")
+        self.assertFalse((self.home / ".local").exists())
+        self.assertFalse((self.home / ".config").exists())
+        self.assertEqual((self.home / ".gitconfig").read_text(), "supplier configuration")
+        self.assertEqual(sorted(backups.iterdir()), before)
+
+    def test_full_setup_reuses_identical_backup_in_read_only_storage(self):
+        self.install("--persist-agents", "--with-tmux-conf")
+        path = self.home / ".tmux.conf"
+        path.unlink()
+        path.write_text("supplier configuration")
+        self.install()
+        backups = self.root / ".local/state/workgrove/backups"
+        before = sorted(backups.iterdir())
+        backups.chmod(0o500)
+        self.addCleanup(backups.chmod, 0o700)
+        path.unlink()
+        path.write_text("supplier configuration")
+        result = self.install()
+        self.assertIn("removed ~/.tmux.conf; identical backup in .local/state/workgrove/backups/", result.stderr)
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(sorted(backups.iterdir()), before)
+
     def test_restore_refuses_root_files_even_inside_home(self):
         old = self.root
         self.root = self.home / "durable"

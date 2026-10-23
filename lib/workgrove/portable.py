@@ -705,6 +705,9 @@ def display_path(path, root, profile=None):
 def backup_records(root):
     base = root / ".local/state/workgrove/backups"
     private_path(base / uuid.uuid4().hex)
+    for parent in (base, *base.parents):
+        if (parent.exists() or parent.is_symlink()) and not parent.is_dir():
+            raise NotADirectoryError("backup storage parent is not a directory")
     records = []
     for record in base.glob("*/.workgrove-backup.json"):
         if record.is_file() and not record.is_symlink():
@@ -716,6 +719,24 @@ def backup_records(root):
     return records
 
 
+def identical_backup(path, records):
+    if not path.exists() or not stat.S_ISREG(path.lstat().st_mode):
+        return None
+    original = str(path.absolute())
+    matching = [(data["order"], folder) for data, folder in records if data["path"] == original]
+    if matching:
+        _, folder = max(matching)
+        previous = folder / path.name
+        if previous.exists() and stat.S_ISREG(previous.lstat().st_mode):
+            try:
+                if previous.read_bytes() == path.read_bytes():
+                    return folder
+            except OSError:
+                # Keep setup's existing ability to move unreadable files.
+                pass
+    return None
+
+
 def backup(path, root, label=None):
     if not path.exists() and not path.is_symlink():
         return
@@ -723,22 +744,12 @@ def backup(path, root, label=None):
     base = root / ".local/state/workgrove/backups"
     records = backup_records(root)
     original = str(path.absolute())
-    matching = [(data["order"], folder) for data, folder in records if data["path"] == original]
     label = label or display_path(path, root)
-    if matching and stat.S_ISREG(path.lstat().st_mode):
-        _, folder = max(matching)
-        previous = folder / path.name
-        identical = False
-        if previous.exists() and stat.S_ISREG(previous.lstat().st_mode):
-            try:
-                identical = previous.read_bytes() == path.read_bytes()
-            except OSError:
-                # Keep setup's existing ability to move unreadable files.
-                pass
-        if identical:
-            path.unlink()
-            print(f"workgrove: removed {label}; identical backup in {folder.relative_to(root)}", file=sys.stderr)
-            return
+    folder = identical_backup(path, records)
+    if folder is not None:
+        path.unlink()
+        print(f"workgrove: removed {label}; identical backup in {folder.relative_to(root)}", file=sys.stderr)
+        return
     folder = base / uuid.uuid4().hex
     mkdir(folder)
     shutil.move(str(path), str(folder / path.name))
@@ -949,7 +960,7 @@ def validate_personal_files(profile, migrations=(), installing=False):
 def preflight_files(profile, migrations, restoring, restore_files=None):
     root = Path(profile["root"])
     moved = {start: target for start, target in migrations}
-    backups_needed = bool(migrations)
+    backup_paths = set(moved)
     for target, path, home in compatibility(profile):
         with refusal_path(display_path(path, root, profile)):
             private_path(path, detach=True)
@@ -957,7 +968,7 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
                 if path.is_symlink() and canonical(path) == canonical(target):
                     continue
                 require(not restoring or (home and stat.S_ISREG(path.lstat().st_mode)), "restore-link-conflict")
-                backups_needed = True
+                backup_paths.add(path)
                 if restoring and restore_files is not None:
                     restore_files.add(path)
                 if path.is_dir() and not path.is_symlink():
@@ -970,7 +981,8 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
             if path.exists():
                 require(path.is_file(), "shell-configuration-conflict")
                 replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
-                backups_needed = backups_needed or path.is_symlink()
+                if path.is_symlink():
+                    backup_paths.add(path)
     instructions = validate_personal_files(profile, migrations, installing=not restoring)
     for agent in ("claude", "codex"):
         base = Path(profile["agent_roots"][agent])
@@ -983,8 +995,15 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
                 template = "home/.claude/settings.base.json" if agent == "claude" else "home/.codex/hooks.base.json"
                 merge_hooks(json.loads(read(path)), json.loads(read(Path(profile["source"]) / template)))
     validate_migration_links(migrations, instructions, profile["agent_roots"].values())
-    if backups_needed or instructions:
-        backup_records(root)
+    backup_paths.update(instructions)
+    if backup_paths:
+        records = backup_records(root)
+        if any(identical_backup(path, records) is None for path in backup_paths):
+            parent = root / ".local/state/workgrove/backups"
+            while not parent.exists():
+                parent = parent.parent
+            if not os.access(parent, os.W_OK | os.X_OK):
+                raise PermissionError("backup storage is not writable")
     return instructions
 
 
