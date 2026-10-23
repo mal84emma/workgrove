@@ -22,6 +22,10 @@ from urllib.parse import urlsplit
 class Refusal(Exception):
     """Return a fixed diagnostic without disclosing personal configuration."""
 
+    def __init__(self, code, path=None):
+        super().__init__(code)
+        self.path = path
+
 
 class VolumeTrustRequired(Refusal):
     def __init__(self, root, mount):
@@ -119,9 +123,20 @@ class Parser(argparse.ArgumentParser):
         raise Refusal("invalid-arguments: " + message)
 
 
-def require(value, code):
+def require(value, code, path=None):
     if not value:
-        raise Refusal(code)
+        raise Refusal(code, path)
+
+
+@contextlib.contextmanager
+def refusal_path(path):
+    """Name a fixed location without changing an existing refusal path or code."""
+    try:
+        yield
+    except Refusal as error:
+        if error.path is None:
+            error.path = path
+        raise
 
 
 def canonical(path):
@@ -436,7 +451,8 @@ def select_agent_roots(root, persist, previous):
     for agent, variable, default in (("claude", "CLAUDE_CONFIG_DIR", ".claude"),
                                      ("codex", "CODEX_HOME", ".codex")):
         home = Path.home() / default
-        require(not home.is_symlink() or home.exists(), "agent-configuration-link-unavailable")
+        label = "~/" + default if persist else None
+        require(not home.is_symlink() or home.exists(), "agent-configuration-link-unavailable", label)
         old = previous["agent_roots"][agent] if previous else None
         configured = old or os.environ.get(variable)
         current = canonical(configured) if configured else canonical(home)
@@ -444,18 +460,20 @@ def select_agent_roots(root, persist, previous):
             require(current.is_dir(), "persistent-agent-configuration-missing")
         if configured and current != canonical(home) and root not in current.parents:
             require(current.is_dir(), "external-agent-configuration-missing")
-        private_path(current)
+        with refusal_path(label if current == canonical(home) else None):
+            private_path(current)
         if persist and (not configured or current == canonical(home)) and not home.is_symlink():
             target = root / ".config" / agent
         else:
             target = current
-        private_path(target)
+        with refusal_path(label if target == canonical(home) else None):
+            private_path(target)
         if persist and current != target and current.exists() and target.exists():
-            raise Refusal("agent-configuration-conflict")
+            raise Refusal("agent-configuration-conflict", label)
         if persist and home.exists() and canonical(home) != target and configured and current != canonical(home):
-            raise Refusal("agent-home-conflict")
+            raise Refusal("agent-home-conflict", label)
         if persist and current != target and current.exists():
-            require(current.is_dir(), "invalid-agent-root")
+            require(current.is_dir(), "invalid-agent-root", label)
             migrations.append((current, target))
         chosen[agent] = str(target)
     return chosen, migrations
@@ -669,22 +687,85 @@ def prepare_git(root, identity, previous):
     return active
 
 
-def backup(path, root):
+def display_path(path, root, profile=None):
+    locations = [(root, ""), (Path.home(), "~/")]
+    if profile:
+        for agent, value in profile["agent_roots"].items():
+            base = Path(value)
+            defaults = {root / ".config" / agent, Path.home() / ("." + agent)}
+            if base not in defaults:
+                locations.append((base, "<" + agent + "-root>/"))
+    matching = [(base, prefix) for base, prefix in locations if path == base or base in path.parents]
+    if not matching:
+        return "<configuration>"
+    base, prefix = max(matching, key=lambda entry: len(entry[0].parts))
+    return prefix + str(path.relative_to(base))
+
+
+def backup_records(root):
+    base = root / ".local/state/workgrove/backups"
+    private_path(base / uuid.uuid4().hex)
+    for parent in (base, *base.parents):
+        if (parent.exists() or parent.is_symlink()) and not parent.is_dir():
+            raise NotADirectoryError("backup storage parent is not a directory")
+    records = []
+    for record in base.glob("*/.workgrove-backup.json"):
+        if record.is_file() and not record.is_symlink():
+            data = json.loads(read(record))
+            if not (isinstance(data, dict) and isinstance(data.get("path"), str)
+                    and type(data.get("order")) is int and data["order"] > 0):
+                raise ValueError("invalid backup record")
+            records.append((data, record.parent))
+    return records
+
+
+def identical_backup(path, records):
+    if not path.exists() or not stat.S_ISREG(path.lstat().st_mode):
+        return None
+    original = str(path.absolute())
+    matching = [(data["order"], folder) for data, folder in records if data["path"] == original]
+    if matching:
+        _, folder = max(matching)
+        previous = folder / path.name
+        if previous.exists() and stat.S_ISREG(previous.lstat().st_mode):
+            try:
+                if previous.read_bytes() == path.read_bytes():
+                    return folder
+            except OSError:
+                # Keep setup's existing ability to move unreadable files.
+                pass
+    return None
+
+
+def backup(path, root, label=None):
     if not path.exists() and not path.is_symlink():
         return
     private_path(path, detach=True)
-    folder = root / ".local/state/workgrove/backups" / uuid.uuid4().hex
+    base = root / ".local/state/workgrove/backups"
+    records = backup_records(root)
+    original = str(path.absolute())
+    label = label or display_path(path, root)
+    folder = identical_backup(path, records)
+    if folder is not None:
+        path.unlink()
+        print(f"workgrove: removed {label}; identical backup in {folder.relative_to(root)}", file=sys.stderr)
+        return
+    folder = base / uuid.uuid4().hex
     mkdir(folder)
     shutil.move(str(path), str(folder / path.name))
+    # The sequence records move order without depending on filesystem timestamps.
+    order = max((data["order"] for data, _ in records), default=0) + 1
+    write(folder / ".workgrove-backup.json", json.dumps(dict(path=original, order=order)) + "\n")
+    print(f"workgrove: backed up {label} to {folder.relative_to(root)}", file=sys.stderr)
 
 
-def link(target, path, root, replace=False):
+def link(target, path, root, replace=False, label=None):
     private_path(path, detach=True)
     if path.is_symlink() and canonical(path) == canonical(target):
         return
     if path.exists() or path.is_symlink():
-        require(replace, "link-conflict")
-        backup(path, root)
+        require(replace, "link-conflict", label)
+        backup(path, root, label)
     mkdir(path.parent)
     temporary = path.with_name(".workgrove-link-" + uuid.uuid4().hex)
     try:
@@ -748,33 +829,34 @@ def shell_environment(profile):
 
 
 def compatibility(profile):
+    """Return (target, path, home) entries with each location's restoration role."""
     root, source = Path(profile["root"]), Path(profile["source"])
     links = []
     for item in sorted((source / "bin").iterdir()):
         if item.is_file():
-            links.extend(((item, root / ".local/bin" / item.name),
-                          (item, Path.home() / ".local/bin" / item.name)))
+            links.extend(((item, root / ".local/bin" / item.name, False),
+                          (item, Path.home() / ".local/bin" / item.name, True)))
     for agent, command in profile["agent_commands"].items():
         if command:
             target = Path(command)
-            links.append((target, root / ".local/bin" / agent))
+            links.append((target, root / ".local/bin" / agent, False))
             home = Path.home() / ".local/bin" / agent
             if not home.exists() or (home.is_symlink() and canonical(home) == canonical(target)):
-                links.append((target, home))
+                links.append((target, home, True))
     for item in sorted((source / "home/.agents/skills").iterdir()):
         if item.is_dir():
-            links.extend(((item, root / ".agents/skills" / item.name),
-                          (item, Path.home() / ".agents/skills" / item.name),
-                          (item, Path(profile["agent_roots"]["claude"]) / "skills" / item.name)))
+            links.extend(((item, root / ".agents/skills" / item.name, False),
+                          (item, Path.home() / ".agents/skills" / item.name, True),
+                          (item, Path(profile["agent_roots"]["claude"]) / "skills" / item.name, False)))
     for agent, default in (("claude", ".claude"), ("codex", ".codex")):
         if profile["persist_agents"]:
-            links.append((Path(profile["agent_roots"][agent]), Path.home() / default))
-    links.append((profile_path(root), Path.home() / ".config/workgrove/profile.json"))
-    links.append((root / ".config/workgrove/env.sh", Path.home() / ".config/workgrove/env.sh"))
-    links.append((root / ".config/workgrove/git/global", Path.home() / ".gitconfig"))
+            links.append((Path(profile["agent_roots"][agent]), Path.home() / default, True))
+    links.append((profile_path(root), Path.home() / ".config/workgrove/profile.json", True))
+    links.append((root / ".config/workgrove/env.sh", Path.home() / ".config/workgrove/env.sh", True))
+    links.append((root / ".config/workgrove/git/global", Path.home() / ".gitconfig", True))
     if profile["tmux"]:
-        links.append((source / "home/.tmux.conf", Path.home() / ".tmux.conf"))
-    return [(a, b) for a, b in links if a.absolute() != b.absolute()]
+        links.append((source / "home/.tmux.conf", Path.home() / ".tmux.conf", True))
+    return [(a, b, home) for a, b, home in links if a.absolute() != b.absolute()]
 
 
 AGENT_FILES = {
@@ -875,25 +957,32 @@ def validate_personal_files(profile, migrations=(), installing=False):
     return instruction_copies
 
 
-def preflight_files(profile, migrations, restoring):
+def preflight_files(profile, migrations, restoring, restore_files=None):
     root = Path(profile["root"])
     moved = {start: target for start, target in migrations}
-    for target, path in compatibility(profile):
-        private_path(path, detach=True)
-        if path.exists() or path.is_symlink():
-            if path.is_symlink() and canonical(path) == canonical(target):
-                continue
-            # Full installation can back up ordinary files. Restoration preserves new conflicting data.
-            require(not restoring, "restore-link-conflict")
-            if path.is_dir() and not path.is_symlink():
-                require(path in moved, "directory-conflict")
+    backup_paths = set(moved)
+    for target, path, home in compatibility(profile):
+        with refusal_path(display_path(path, root, profile)):
+            private_path(path, detach=True)
+            if path.exists() or path.is_symlink():
+                if path.is_symlink() and canonical(path) == canonical(target):
+                    continue
+                require(not restoring or (home and stat.S_ISREG(path.lstat().st_mode)), "restore-link-conflict")
+                backup_paths.add(path)
+                if restoring and restore_files is not None:
+                    restore_files.add(path)
+                if path.is_dir() and not path.is_symlink():
+                    require(path in moved, "directory-conflict")
     for relative in (".bashrc", ".zshenv"):
         path = Path.home() / relative
-        private_path(path, detach=True)
-        require(not path.is_symlink() or path.exists(), "shell-configuration-link-unavailable")
-        if path.exists():
-            require(path.is_file(), "shell-configuration-conflict")
-            replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
+        with refusal_path("~/" + relative):
+            private_path(path, detach=True)
+            require(not path.is_symlink() or path.exists(), "shell-configuration-link-unavailable")
+            if path.exists():
+                require(path.is_file(), "shell-configuration-conflict")
+                replace_block(read(path), "environment", ". placeholder", first=relative == ".bashrc")
+                if path.is_symlink():
+                    backup_paths.add(path)
     instructions = validate_personal_files(profile, migrations, installing=not restoring)
     for agent in ("claude", "codex"):
         base = Path(profile["agent_roots"][agent])
@@ -906,6 +995,15 @@ def preflight_files(profile, migrations, restoring):
                 template = "home/.claude/settings.base.json" if agent == "claude" else "home/.codex/hooks.base.json"
                 merge_hooks(json.loads(read(path)), json.loads(read(Path(profile["source"]) / template)))
     validate_migration_links(migrations, instructions, profile["agent_roots"].values())
+    backup_paths.update(instructions)
+    if backup_paths:
+        records = backup_records(root)
+        if any(identical_backup(path, records) is None for path in backup_paths):
+            parent = root / ".local/state/workgrove/backups"
+            while not parent.exists():
+                parent = parent.parent
+            if not os.access(parent, os.W_OK | os.X_OK):
+                raise PermissionError("backup storage is not writable")
     return instructions
 
 
@@ -918,15 +1016,16 @@ def require_agent_roots(profile):
             require(target.is_dir(), "external-agent-configuration-missing")
 
 
-def install_files(profile, restoring=False, instruction_copies=None):
+def install_files(profile, restoring=False, instruction_copies=None, restore_files=()):
     root, source = Path(profile["root"]), Path(profile["source"])
     for path in profile["agent_roots"].values():
         mkdir(Path(path))
     for path, contents in (instruction_copies or {}).items():
-        backup(path, root)
+        backup(path, root, display_path(path, root, profile))
         write(path, contents)
-    for target, path in compatibility(profile):
-        link(target, path, root, replace=not restoring)
+    for target, path, home in compatibility(profile):
+        link(target, path, root, replace=not restoring or path in restore_files,
+             label=display_path(path, root, profile))
     env = root / ".config/workgrove/env.sh"
     write(env, shell_environment(profile))
     for filename in (".bashrc", ".zshenv"):
@@ -1039,11 +1138,11 @@ def install(args):
             finally:
                 if temporary.exists():
                     shutil.rmtree(temporary)
-            backup(old, root)
+            backup(old, root, display_path(old, root, profile))
         if global_contents is not None:
             write(global_target, global_contents)
             for old in global_originals:
-                backup(old, root)
+                backup(old, root, display_path(old, root, profile))
         global_path = root / ".config/workgrove/git/global"
         if canonical(personal) != canonical(global_path):
             write(global_path, '[include]\n    path = ' + git_quote(personal) + '\n')
@@ -1060,12 +1159,13 @@ def restore(args):
     profile = load_profile(root)
     storage(root, profile["storage"], profile["mount"])
     validate_source(Path(profile["source"]), profile)
-    preflight_files(profile, [], True)
+    restore_files = set()
+    preflight_files(profile, [], True, restore_files)
     require((root / ".config/workgrove/git/global").is_file(), "personal-git-configuration-missing")
     require_agent_roots(profile)
     with installation_lock(root):
         require(read(profile_path(root)) == expected_profile, "profile-changed-retry-setup")
-        install_files(profile, restoring=True)
+        install_files(profile, restoring=True, restore_files=restore_files)
     print("workgrove: portable links and environment restored; run doctor before recovery")
 
 
@@ -1180,7 +1280,7 @@ def _readiness(root=None):
             validate_source(Path(profile["source"]), profile)
             source_valid = True
             require_agent_roots(profile)
-            for target, path in compatibility(profile):
+            for target, path, home in compatibility(profile):
                 private_path(path, detach=True)
                 if not path.is_symlink() or canonical(path) != canonical(target):
                     issues.append("compatibility-links-missing")
@@ -1360,7 +1460,7 @@ def main():
                 print("workgrove: use --trust-personal-volume only for a volume you exclusively control", file=sys.stderr)
                 return 1
     except Refusal as error:
-        print("workgrove: " + str(error), file=sys.stderr)
+        print("workgrove: " + str(error) + (": " + error.path if error.path else ""), file=sys.stderr)
     except (OSError, ValueError, RuntimeError, UnicodeError, TypeError, AttributeError):
         print("workgrove: portable-operation-failed", file=sys.stderr)
     return 1
