@@ -392,6 +392,28 @@ scenario_close_protocol_hint() {
 }
 scenario_close_protocol_hint
 
+scenario_host_check_deadline() {
+  begin_scenario 'the hook bounds a slow SSH host check by its close budget' || return 0
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  printf 'Host test-vm\n# wt-ssh-host\n' >"$HOME/.ssh/config"
+  cat >"$TEST_ROOT/bin/python3" <<'PYTHON'
+#!/bin/sh
+printf started >"$HOST_CHECK_STARTED"
+exec sleep 25
+PYTHON
+  chmod +x "$TEST_ROOT/bin/python3"
+  local started=$SECONDS out
+  out=$(HOST_CHECK_STARTED="$TEST_ROOT/check-started" hook)
+  assert_grep 'the managed host check ran' "$TEST_ROOT/check-started" started
+  assert_eq 'the hook finishes within twenty seconds' 1 "$((SECONDS - started < 20))"
+  assert_eq 'a timed-out check retains the notification' '' "$out"
+  lacks "$CMUX_LOG" 'workspace close'
+  rm "$TEST_ROOT/bin/python3"
+  printf 'Host test-vm\n' >"$HOME/.ssh/config"
+  end_scenario
+}
+scenario_host_check_deadline
+
 scenario_notification_budget() {
   begin_scenario 'notification bursts do not consume the open request budget' || return 0
   # Model cmux 0.65's admission window for an ordinary notification followed by two open requests.

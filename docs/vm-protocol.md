@@ -17,9 +17,19 @@ With `-H`, a repository must be an absolute VM path or a plain repository name.
 `vm_wt` in [common.sh](../lib/workgrove/common.sh) executes `"$HOME/.local/bin/wt"` on the VM through SSH.
 `vm_wt_line` and `vm_run_line` build commands without executing them.
 `vm_ssh` supplies shared SSH options, including keepalives; `vm_tmux` handles session queries and removal.
+`VM_SSH_OPTIONS` in `common.sh` supplies the same connection options to `vm_ssh` and `probe_host`.
+Both use batch mode, zero password prompts, one connection attempt, and a five-second connection timeout.
+Both send keepalives every five seconds and stop after two unanswered keepalives.
+The alias's SSH configuration controls host-key checking; neither path overrides that policy.
+Managed registrations require `StrictHostKeyChecking yes`.
+A plain alias can retain an explicit `accept-new` policy, including aliases from `azml-ssh-host`.
+Without an explicit policy, OpenSSH's default checking applies; batch mode cannot prompt for an unknown key.
+The probe alone adds `-T`; interactive callers can still request a terminal.
 `shell_join` in [common.sh](../lib/workgrove/common.sh) quotes each argument for the remote shell.
 Values such as `WT_MACHINE=1` appear inline in the command; the connection does not require SSH `AcceptEnv`.
 The Mac ships preflight and recovery scripts on standard input, so those scripts use the Mac's implementation.
+`host_environment_doctor` quotes its bootstrap with `shell_join` and runs it through `/bin/sh -c`.
+The VM's login shell does not parse the bootstrap's script syntax.
 
 | Mac command or operation | VM command or input | What the Mac reads | File and reader |
 |---|---|---|---|
@@ -129,7 +139,7 @@ The [version contract](wt-json.md#read-installation-versions) defines the two nu
 
 `WT_PROTOCOL` in `common.sh` is currently `1`.
 `vm_result` calls `vm_wt --machine` to request records with `WT_MACHINE=$WT_PROTOCOL`.
-Creation, attach, open, and the Mac hook use this reader.
+Creation, attach, open, doctor, and the Mac hook use this reader.
 It returns decoded fields, stdout, stderr, and command status separately, and removes records from both visible streams.
 It discovers records on either stream and uses only stdout for a legacy successful path.
 At startup, `bin/wt` consumes `WT_MACHINE`, stores it in nonexported `WG_MACHINE_RESULT`, and unsets the request.
@@ -139,31 +149,49 @@ Nested `wt` calls and `.wt-setup` therefore do not inherit machine-result mode.
 Each record starts with `WT_RESULT`, one tab, and one compact JSON object on the same line.
 Human output can surround the record.
 `wt_read_result` in `common.sh` finds and validates the record; it does not parse unrelated lines.
-`wt_read_result_into` validates the record before decoding its scalar fields into an associative array.
+`wt_read_result_into` validates the record before decoding its fields into an associative array.
+The doctor checks array becomes a JSON string in that array.
 
 | Field | Value and producer | Reader |
 |---|---|---|
 | `version` | `wt_result` emits the lower of the requested version and `WT_PROTOCOL`. Protocol 1 VMs therefore emit 1 for every valid request. | `common.sh`: `wt_read_result`. |
-| `command` | `new`, `show`, or `path`, supplied by `cmd_new`, `cmd_show`, or `cmd_path` in `bin/wt`. | `common.sh`: `wt_read_result` requires the expected command. |
-| `status` | `created` for `new`; `found` for `show` or successful `path`; `missing` for an absent `path`. | `remote.sh`: `host_new`; `recovery.sh`: `host_attach`; `bin/cmux-hook`: the `wt-close` handler. |
-| `name` | The task name supplied by the producer. | `common.sh`: `vm_result` validates creation names and checks the requested name for lookup results. |
-| `repo` | The absolute main checkout path supplied by the producer. | `common.sh`: `vm_result` derives task sessions and requires the requested repository for a missing path. |
-| `session` | `common.sh`: `wt_session` supplies `wt-<repo-id>-<name>` for `new` and `show`; `path` supplies an empty string. | `common.sh`: `vm_result` requires the derived session name for creation and show results. |
+| `command` | `new`, `show`, `path`, or `doctor`, supplied by their command functions. | `common.sh`: `wt_read_result` requires the expected command. |
+| `status` | `created` for `new`; `found` for `show` or successful `path`; `missing` for an absent `path`; `PASS` or `FAIL` for `doctor`. | `remote.sh`: `host_new`; `recovery.sh`: `host_attach`; `doctor.sh`: `host_contract_doctor`; `bin/cmux-hook`: the `wt-close` handler. |
+| `name` | The task name supplied by the producer; empty for `doctor`. | `common.sh`: `vm_result` validates creation names and checks the requested name for lookup results. |
+| `repo` | The absolute main checkout path supplied by the producer; empty for `doctor`. | `common.sh`: `vm_result` derives task sessions and requires the requested repository for a missing path. |
+| `session` | `common.sh`: `wt_session` supplies `wt-<repo-id>-<name>` for `new` and `show`; `path` and `doctor` supply an empty string. | `common.sh`: `vm_result` requires the derived session name for creation and show results. |
 | `state` | `cmd_show` uses `session_state` on a VM. Other producers supply an empty string. | `recovery.sh`: `host_attach` displays it and uses wording only when boolean facts are absent. |
 | `agent` | `cmd_show` reports whether the checked tmux probe found an agent. | `host_attach` requires a running agent unless first-start or explicit recovery applies. |
 | `attached` | `cmd_show` reports whether tmux lists an attached client. | `host_attach` checks a detached session before reattaching a shell row. |
 | `started` | `cmd_show` reports whether the task's started marker exists. | `host_attach` permits a first start only when the marker and session are absent. |
 | `path` | `cmd_path` supplies the worktree path for a found result. | `host_open` validates the path before opening VS Code. |
 
+`cmd_contract_doctor` adds a `checks` array to the `doctor` record.
+Each entry has `name`, `status`, and `repair` strings.
+`doctor_result` collects each check when it prints the check line.
+The check status is `PASS`, `FAIL`, or `WARN`.
+The `repair` field contains the repair command, including for passing checks.
+The overall `status` is `PASS` only when every check passes; failures and warnings produce `FAIL`.
+The record uses empty `name`, `repo`, `session`, and `state` fields.
+These additional fields keep protocol version 1.
+
+`host_contract_doctor` uses the record and the command exit status to determine success.
+It displays the VM text and keeps the Mac protocol comparison separate.
+For older VMs without a record, it keeps the marked `WT_COMPAT` text checks.
+Malformed or unsupported records cannot use that fallback.
+Older Macs continue to read the unchanged VM check lines.
+
 `require_wt` in `task.sh` emits a missing `path` record on standard error and exits 1 through `die`.
 It checks the Git worktree registration before reporting absence.
 Successful records go to standard output.
 Ordinary `wt path` prints only the path when no machine-result request exists.
 
-`wt_read_result` requires exactly one record, unique keys, and scalar values without nested objects or arrays.
+`wt_read_result` requires exactly one record, unique keys, and scalar values, except for the doctor `checks` array.
 It validates a positive integer version and string fields for `status`, `name`, `repo`, `session`, and `state`.
 Every key and string value, including unknown fields, must omit control characters below 32 and character 127.
 The optional `agent`, `attached`, and `started` fields must be booleans. The optional `path` field must be a string.
+Doctor entries require exactly the three string fields above, without control characters.
+The reader rejects an overall doctor status that disagrees with its checks.
 The reader preserves unknown scalar fields.
 Additive fields retain the version; a changed field meaning requires a new version.
 
@@ -268,6 +296,18 @@ The tmux queries read `/dev/null`, so the helper receives the agent payload on s
 `cmux_tui_agent_helper` in `cmux.sh` and the wrapper reject wrapper paths as helper targets to prevent recursion.
 
 ## Exit statuses and failure handling
+
+`vm_wt_failure` in `common.sh` owns the failure messages and caller policies.
+Without parser arguments, it supplies the existing command summary at the `vm_wt` or `vm_result` boundary.
+With parser arguments, it combines the SSH status, parser status, and record status into the caller's message and exit status.
+A caller supplies its policy, such as `new`, `show`, `path`, or `raw`, in one call.
+Creation keeps its inspection advice and preserves status 255 after a disconnection.
+`host_version` warns and returns 1 for status 255, so a later version query can retain its fallback.
+The hook uses the same message definitions but writes failures to its log.
+
+The hook runs managed SSH registration validation and SSH under the same absolute deadline through `capped`.
+`VM_SSH_CHECK_RUN` applies that runner to the Python validation process, including its `ssh -G` children.
+The close check reserves 12 seconds for verification and five seconds for session removal after row closure.
 
 When the VM's `wt` fails, `vm_wt` prints one summary line on standard error and preserves the command's exit status.
 The line names the subcommand, host, and status: `wt show on <vm> exited 141 (SIGPIPE)`.

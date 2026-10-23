@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Reads globals: TMPDIR, WG_HOST_PROBE_TIMEOUT, WG_LIB_DIR.
+# Reads globals: TMPDIR, WG_HOST_PROBE_TIMEOUT, WG_LIB_DIR, VM_SSH_OPTIONS.
 # Requires common.sh: valid_host. Requires task.sh: wt_register_tmpfile.
 # Requires version.sh: wt_read_version.
 # Send public probes inline so missing remote installation links cannot hide prerequisites.
@@ -7,12 +7,12 @@ host_probe_source() {
   cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/probe-host.sh" "$WG_LIB_DIR/vm/python-runtime.sh"
   cat <<'WG_PROBE_HEADER'
 if wg_select_python; then
-"$wg_python" -B - <<'WG_CAPACITY_SOURCE'
+wg_run_python - <<'WG_CAPACITY_SOURCE'
 WG_PROBE_HEADER
   cat "$WG_LIB_DIR/vm/capacity.py"
   cat <<'WG_PROBE_MIDDLE'
 WG_CAPACITY_SOURCE
-"$wg_python" -B - doctor --probe <<'WG_READINESS_SOURCE'
+wg_run_python - doctor --probe <<'WG_READINESS_SOURCE'
 WG_PROBE_MIDDLE
   cat "$WG_LIB_DIR/portable.py"
   cat <<'WG_PROBE_END'
@@ -42,9 +42,7 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
   # The remote timeout limits an nvidia-smi that ignores TERM. The client deadline also limits a remote
   # command that is stuck in uninterruptible I/O: SSH may stay connected and answer keepalives forever.
   # Redirect SSH to files, so that an unkillable child cannot hold this function's output pipes open.
-  ssh -T -o BatchMode=yes -o NumberOfPasswordPrompts=0 -o StrictHostKeyChecking=yes \
-      -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=5 \
-      -o ServerAliveCountMax=2 "$1" 'sh -s' >"$out_file" 2>"$err_file" < <(host_probe_source) &
+  ssh "${VM_SSH_OPTIONS[@]}" -T "$1" 'sh -s' >"$out_file" 2>"$err_file" < <(host_probe_source) &
   ssh_pid=$!
   for ((tick=0; tick<timeout*10; tick++)); do
     kill -0 "$ssh_pid" 2>/dev/null || break

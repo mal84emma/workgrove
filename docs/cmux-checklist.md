@@ -6,6 +6,8 @@ The VM checks require a reachable VM and a task with a running agent.
 
 1. On the Mac, run `wt doctor`.
    Each failed check prints a repair command.
+   The probe requires only methods that workgrove calls.
+   It does not require `workspace.remote.reconnect`.
    A version warning names the verified release.
    Its repair command installs that release from its versioned disk image.
    Quit cmux before running the installer command, then run `wt doctor` again.
@@ -14,6 +16,7 @@ The VM checks require a reachable VM and a task with a running agent.
 2. From the Mac, run `wt -H <vm> doctor`.
    Both cmux-tui agent hooks must show `installed`.
    The VM protocol must match the Mac protocol.
+   The Mac reads a result record from current VMs and uses check text from older VMs.
 3. Start a disposable task with `wt -H <vm> new cmux-check -r <repo>`.
    Confirm that its row shows `@<vm> · <repo>` on the second line.
 4. On the VM, run `wt open cmux-check -r <repo>`.

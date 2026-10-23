@@ -3,7 +3,7 @@
 # Requires cmux.sh: close_row, cmux_row_field, cmux_screen, cmux_select, row_label,
 #   row_remote_field, row_shell_prompt, send_tmux_line.
 # Requires common.sh: die, row_title, shell_join, tmux_cmd, usage, vm_result, vm_run_line,
-#   vm_tmux, warn, wg_sleep.
+#   vm_tmux, vm_wt_failure, warn, wg_sleep.
 # Requires options.sh: wt_opts, wt_spec.
 # Requires remote.sh: agent_on_vm, remote_row, remote_sh, remote_sh_raw.
 # Requires task.sh: cmux_require, row_tag.
@@ -66,17 +66,8 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   local -A result=()
   vm_result "$host" show result out err rc -- "$name" -r "$repo" || result_rc=$?
   [[ -z $err ]] || printf '%s\n' "$err" >&2
-  [[ $rc != 255 ]] || die "host unreachable: is the VM running? (ssh $host)"
-  if [[ $rc != 0 ]]; then
-    [[ -z $out ]] || printf '%s\n' "$out" >&2
-    return "$rc"
-  fi
-  case $result_rc in
-    0) [[ ${result[status]} == found ]] || die "unexpected output from $host" ;;
-    2) die "$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))" ;;
-    3) die "unsupported result protocol from $host; run wt update on the Mac" ;;
-    *) die "unexpected output from $host" ;;
-  esac
+  if [[ $rc != 0 && $rc != 255 && -n $out ]]; then printf '%s\n' "$out" >&2; fi
+  vm_wt_failure "$host" show "$rc" "" "$result_rc" "${result[status]-}" "$name" "$repo" || return $?
   session=${result[session]} path=${result[repo]} state=${result[state]-}
   agent=${result[agent]-} attached=${result[attached]-} started=${result[started]-}
   # WT_COMPAT: Keep wording checks for VMs that omit the boolean fields.

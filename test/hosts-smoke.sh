@@ -105,6 +105,8 @@ run_stubbed_probe() (
   WG_LIB_DIR="$REPO/lib/workgrove"
   TMPDIR="$TEST_ROOT"
   if [[ -n $2 ]]; then WG_HOST_PROBE_TIMEOUT=$2; else unset WG_HOST_PROBE_TIMEOUT; fi
+  # shellcheck source=lib/workgrove/common.sh
+  source "$REPO/lib/workgrove/common.sh"
   # shellcheck source=lib/workgrove/hosts.sh
   source "$REPO/lib/workgrove/hosts.sh"
   : >"$TEST_ROOT/probe-calls"
@@ -136,7 +138,7 @@ scenario_records() {
   assert_eq 'confirmed absence' 'true' "$(printf '%s' "$json" | jq -r '.[4] | .gpu_status == "none" and .gpus == []')"
   assert_eq 'unknown VRAM retained' 'true' "$(printf '%s' "$json" | jq -r '.[7] | .gpu_status == "ok" and .gpus[0].memory_mib == null')"
   assert_eq 'only literal aliases contacted' '8' "$(wc -l <"$TEST_ROOT/ssh.log" | tr -d ' ')"
-  assert_eq 'strict SSH and keepalives' 'true' "$(awk '/StrictHostKeyChecking=yes/ && /ServerAliveInterval=5/ && /ServerAliveCountMax=2/ {found=1} END {print found ? "true" : "false"}' "$TEST_ROOT/ssh.log")"
+  assert_eq 'shared SSH options and keepalives' 'true' "$(awk '/BatchMode=yes/ && /ConnectionAttempts=1/ && /ServerAliveInterval=5/ && /ServerAliveCountMax=2/ {found=1} END {print found ? "true" : "false"}' "$TEST_ROOT/ssh.log")"
   assert_eq 'parallel probes met' 'true' "$([[ -e "$TEST_ROOT/slow1.start" && -e "$TEST_ROOT/slow2.start" ]] && echo true || echo false)"
   table=$(run_wt hosts)
   assert_eq 'table shows failure reason' 'true' "$([[ "$table" == *'Permission denied'* && "$table" == *'ERROR'* ]] && echo true || echo false)"
