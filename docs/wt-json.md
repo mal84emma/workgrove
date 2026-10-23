@@ -139,12 +139,12 @@ Both codes can appear in `issues` and inventory's `readiness_issues` when differ
 
 Its `ready` value excludes separate personal sign-ins, native relay verification, and hook trust decisions.
 
-`warnings` is an array of fixed codes that do not change `ready`, `status`, `issues`, or the exit status.
+`warnings` is an array of codes that do not change `ready`, `status`, `issues`, or the exit status.
 It contains `agent-command-unavailable` when a saved, non-null `agent_commands` path does not resolve to an executable regular file.
-A missing target, dangling symbolic link, directory, or non-executable file produces this warning.
+A missing target, dangling symbolic link, directory, or non-executable file causes this warning.
 Doctor checks the saved path without using PATH or running the command.
-The warning names no path.
-Valid commands, null entries, and an absent profile produce no warning.
+The warning contains no path.
+Saved paths with executable regular-file targets, null entries, and a missing profile cause no warning.
 
 Text output prints each warning, and the `--probe` readiness line includes `warnings`.
 The `wt hosts --json` fields remain unchanged.
