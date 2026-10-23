@@ -279,28 +279,7 @@ host_contract_doctor() {
   VM_WT_RECOVERY_HINT=0 vm_result "$host" doctor result output errors failed -- || parsed=$?
   [[ -z $errors ]] || printf '%s\n' "$errors" >&2
   printf '%s\n' "$output"
-  if [[ $failed == 255 ]]; then
-    doctor_result 1 'VM doctor connection from the Mac' "ssh $(shell_join "$host")"
-    return 1
-  fi
-  if [[ $failed == 127 ]]; then
-    doctor_result 1 'VM doctor unavailable' "$(host_recovery_hint "$host")"
-    return 1
-  fi
-  case $parsed in
-    0) [[ ${result[status]} == PASS && $failed == 0 ]] || failed=1 ;;
-    2)
-      # WT_COMPAT: Remove text checks when every VM emits doctor result records.
-      if [[ $failed == 0 ]] && ! grep -Eq '^(PASS|FAIL|WARN) cmux-tui CLI$' <<<"$output"; then
-        failed=1
-      fi
-      if [[ $failed != 0 ]] && ! grep -Eq '^(FAIL|WARN) ' <<<"$output"; then
-        doctor_result 1 'VM doctor unavailable' "wt -H $(shell_join "$host") update"
-      fi ;;
-    *)
-      failed=1
-      doctor_result 1 'VM doctor unavailable' "wt -H $(shell_join "$host") update" ;;
-  esac
+  vm_wt_failure "$host" doctor "$failed" "$output" "$parsed" "${result[status]:-}" || return 1
   printf 'Mac comparison:\n'
   version=$(host_version "$host") || {
     doctor_result 1 'VM version connection from the Mac' "ssh $(shell_join "$host")"
