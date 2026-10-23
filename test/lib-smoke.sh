@@ -294,6 +294,99 @@ scenario_vm_streams() {
 }
 scenario_vm_streams
 
+scenario_vm_failure_policy() {
+  begin_scenario 'VM failure policies preserve messages and exit statuses' || return 0
+  local policy command_rc parsed status rc output expected
+  while IFS='|' read -r policy command_rc parsed status rc expected; do
+    local actual_rc=0
+    output=$({
+      # shellcheck disable=SC2329  # The close policy invokes this function.
+      log() { printf '%s\n' "$*"; }
+      vm_wt_failure fixture "$policy" "$command_rc" 'wt -H fixture list -r /repo' "$parsed" "$status" task /repo
+    } 2>&1) || actual_rc=$?
+    assert_eq "$policy/$command_rc/$parsed/$status preserves status" "$rc" "$actual_rc"
+    assert_eq "$policy/$command_rc/$parsed/$status preserves message" "$expected" "$output"
+  done <<'CASES'
+raw|0|0||0|
+raw|42|0||42|
+raw|255|0||1|wt: host unreachable: is the VM running? (ssh fixture)
+version|255|0||1|wt: host unreachable: is the VM running? (ssh fixture)
+version|127|0||0|
+new|0|0|created|0|
+new|0|2||1|wt: fixture did not report created/repo/session; the worktree may exist; inspect with: wt -H fixture list -r /repo before retrying
+new|0|3||1|wt: unsupported result protocol from fixture; run wt update on the Mac; the worktree may exist; inspect with: wt -H fixture list -r /repo before retrying
+new|0|0|found|1|wt: unexpected output from fixture; the worktree may exist; inspect with: wt -H fixture list -r /repo before retrying
+path|0|0|found|0|
+path|0|2||1|wt: unexpected output from fixture
+path|0|3||1|wt: unsupported result protocol from fixture; run wt update on the Mac
+path|42|3||42|
+show|0|2||1|wt: fixture reported no session for task (try: wt -H fixture show task -r /repo)
+show|0|1||1|wt: unexpected output from fixture
+close|1|0|missing|0|
+close|0|0|missing|1|ignored wt-close for task task of /repo on fixture: could not confirm its worktree is gone
+close|255|2||1|ignored wt-close for task task of /repo on fixture: could not confirm its worktree is gone
+close|1|3||1|ignored wt-close for task task of /repo on fixture: unsupported result protocol; run wt update on the Mac
+protocol|0|3||3|wt: unsupported result protocol; run wt update on the Mac
+CASES
+  output=$({
+    vm_wt_failure fixture version 255 '' 0 || true
+    printf 'caller continued'
+  } 2>&1)
+  assert_eq 'version failure returns without exiting its caller' true "$([[ $output == *'caller continued' ]] && echo true || echo false)"
+  end_scenario
+}
+scenario_vm_failure_policy
+
+scenario_vm_definitions() {
+  begin_scenario 'VM failure messages have one definition' || return 0
+  local message
+  for message in 'host unreachable' 'unsupported result protocol'; do
+    assert_eq "$message has one definition" 1 "$(grep -rn "$message" "$REPO/bin" "$REPO/lib" | wc -l | tr -d ' ')"
+  done
+  end_scenario
+}
+scenario_vm_definitions
+
+scenario_vm_options() {
+  begin_scenario 'VM calls and probes share connection options without disabling terminals' || return 0
+  local fixture="$TEST_ROOT/shared-options" option output
+  mkdir -p "$fixture/bin"
+  cat >"$fixture/bin/ssh" <<'SSH'
+#!/bin/sh
+printf '%s\n' "$@" >"$SSH_OPTIONS_LOG"
+cat >/dev/null
+SSH
+  chmod +x "$fixture/bin/ssh"
+  # shellcheck disable=SC2016  # The child shell owns these variables.
+  PATH="$fixture/bin:$PATH" SSH_OPTIONS_LOG="$fixture/call" "$BASH" -c '
+    source "$1/lib/workgrove/common.sh"
+    source "$1/lib/workgrove/hosts.sh"
+    WG_LIB_DIR="$1/lib/workgrove"
+    ssh_host_check() { :; }
+    vm_ssh fixture true -t </dev/null
+    SSH_OPTIONS_LOG="$2/probe" probe_host fixture
+  ' bash "$REPO" "$fixture"
+  for option in BatchMode=yes NumberOfPasswordPrompts=0 ConnectTimeout=5 ConnectionAttempts=1 ServerAliveInterval=5 ServerAliveCountMax=2; do
+    assert_grep "VM call uses $option" "$fixture/call" "$option"
+    assert_grep "probe uses $option" "$fixture/probe" "$option"
+  done
+  for output in call probe; do
+    assert_eq "$output retains the alias host-key policy" 0 "$(grep -c StrictHostKeyChecking "$fixture/$output" || true)"
+  done
+  assert_grep 'the caller can request a terminal' "$fixture/call" '-t'
+  assert_eq 'VM calls do not disable terminals' 0 "$(grep -cx -- -T "$fixture/call" || true)"
+  assert_grep 'probes disable terminals' "$fixture/probe" '-T'
+  for option in yes accept-new; do
+    printf 'Host fixture\n  StrictHostKeyChecking %s\n' "$option" >"$fixture/config"
+    output=$(ssh -G -F "$fixture/config" "${VM_SSH_OPTIONS[@]}" fixture 2>/dev/null)
+    local expected=$option
+    [[ $option != yes ]] || expected=true
+    assert_eq "SSH retains the configured $option policy" 1 "$(grep -cx "stricthostkeychecking $expected" <<<"$output" | tr -d ' ')"
+  done
+  end_scenario
+}
+scenario_vm_options
+
 scenario_vm_ssh() {
   begin_scenario 'VM commands share SSH options and preserve argument quoting' || return 0
   local output

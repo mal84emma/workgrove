@@ -17,9 +17,19 @@ With `-H`, a repository must be an absolute VM path or a plain repository name.
 `vm_wt` in [common.sh](../lib/workgrove/common.sh) executes `"$HOME/.local/bin/wt"` on the VM through SSH.
 `vm_wt_line` and `vm_run_line` build commands without executing them.
 `vm_ssh` supplies shared SSH options, including keepalives; `vm_tmux` handles session queries and removal.
+`VM_SSH_OPTIONS` in `common.sh` supplies the same connection options to `vm_ssh` and `probe_host`.
+Both use batch mode, zero password prompts, one connection attempt, and a five-second connection timeout.
+Both send keepalives every five seconds and stop after two unanswered keepalives.
+The alias's SSH configuration controls host-key checking; neither path overrides that policy.
+Managed registrations require `StrictHostKeyChecking yes`.
+A plain alias can retain an explicit `accept-new` policy, including aliases from `azml-ssh-host`.
+Without an explicit policy, OpenSSH's default checking applies; batch mode cannot prompt for an unknown key.
+The probe alone adds `-T`; interactive callers can still request a terminal.
 `shell_join` in [common.sh](../lib/workgrove/common.sh) quotes each argument for the remote shell.
 Values such as `WT_MACHINE=1` appear inline in the command; the connection does not require SSH `AcceptEnv`.
 The Mac ships preflight and recovery scripts on standard input, so those scripts use the Mac's implementation.
+`host_environment_doctor` quotes its bootstrap with `shell_join` and runs it through `/bin/sh -c`.
+The VM's login shell does not parse the bootstrap's script syntax.
 
 | Mac command or operation | VM command or input | What the Mac reads | File and reader |
 |---|---|---|---|
@@ -203,6 +213,18 @@ The tmux queries read `/dev/null`, so the helper receives the agent payload on s
 `cmux_tui_agent_helper` in `cmux.sh` and the wrapper reject wrapper paths as helper targets to prevent recursion.
 
 ## Exit statuses and failure handling
+
+`vm_wt_failure` in `common.sh` owns the failure messages and caller policies.
+Without parser arguments, it supplies the existing command summary at the `vm_wt` or `vm_result` boundary.
+With parser arguments, it combines the SSH status, parser status, and record status into the caller's message and exit status.
+A caller supplies its policy, such as `new`, `show`, `path`, or `raw`, in one call.
+Creation keeps its inspection advice and preserves status 255 after a disconnection.
+`host_version` warns and returns 1 for status 255, so a later version query can retain its fallback.
+The hook uses the same message definitions but writes failures to its log.
+
+The hook runs managed SSH registration validation and SSH under the same absolute deadline through `capped`.
+`VM_SSH_CHECK_RUN` applies that runner to the Python validation process, including its `ssh -G` children.
+The close check reserves 12 seconds for verification and five seconds for session removal after row closure.
 
 When the VM's `wt` fails, `vm_wt` prints one summary line on standard error and preserves the command's exit status.
 The line names the subcommand, host, and status: `wt show on <vm> exited 141 (SIGPIPE)`.
