@@ -440,6 +440,7 @@ Agents follow the six conditions in the [portable restore policy](../home/.claud
 That policy defines the checks, user-only steps, refusal rules, and required report.
 The user handles SSH host keys, sign-ins, full setup, alias changes, and task recovery flags.
 
+Before creating links, restore-only checks any required backup storage and records.
 Setup, restore-only, and doctor apply the same safety checks to managed personal configuration files.
 They check ownership, permissions, repository boundaries, and link targets without requiring agent authentication.
 If packages or Python were also lost, run full setup with the saved root and explicit storage policy.

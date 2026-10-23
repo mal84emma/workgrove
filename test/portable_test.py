@@ -1326,6 +1326,120 @@ sys.exit(module["main"]())
         self.assertEqual((self.home / ".gitconfig").read_bytes(), b"supplier")
         self.assertEqual(sorted((self.root / ".local/state/workgrove/backups").iterdir()), before)
 
+    def test_restore_checks_backup_permissions_before_any_home_changes(self):
+        self.install("--persist-agents")
+        backups = self.root / ".local/state/workgrove/backups"
+        before = sorted(backups.iterdir())
+        backups.chmod(0o777)
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".gitconfig").write_text("supplier configuration")
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False, env=dict(self.env, PATH=""))
+        self.assertEqual(result.stderr, "workgrove: shared-configuration-parent\n")
+        self.assertFalse((self.home / ".local").exists())
+        self.assertFalse((self.home / ".config").exists())
+        self.assertEqual((self.home / ".gitconfig").read_text(), "supplier configuration")
+        self.assertEqual(sorted(backups.iterdir()), before)
+
+    def test_restore_checks_backup_records_before_any_home_changes(self):
+        self.install("--persist-agents")
+        backups = self.root / ".local/state/workgrove/backups"
+        record = next(backups.glob("*/.workgrove-backup.json"))
+        before = sorted(backups.iterdir())
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".gitconfig").write_text("supplier configuration")
+        for contents in ("{invalid", "[]", '{}', '{"path": "example", "order": "invalid"}'):
+            record.write_text(contents)
+            result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False, env=dict(self.env, PATH=""))
+            self.assertEqual(result.stderr, "workgrove: portable-operation-failed\n")
+            self.assertFalse((self.home / ".local").exists())
+            self.assertFalse((self.home / ".config").exists())
+            self.assertEqual((self.home / ".gitconfig").read_text(), "supplier configuration")
+            self.assertEqual(sorted(backups.iterdir()), before)
+
+    def test_restore_checks_backup_storage_ancestors_before_home_changes(self):
+        self.install("--persist-agents")
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".gitconfig").write_text("supplier configuration")
+        for relative in (".local/state", ".local/state/workgrove", ".local/state/workgrove/backups"):
+            path = self.root / relative
+            saved = path.with_name(path.name + "-saved")
+            path.rename(saved)
+            path.write_text("occupied storage location")
+            result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False, env=dict(self.env, PATH=""))
+            self.assertEqual(result.stderr, "workgrove: portable-operation-failed\n")
+            self.assertFalse((self.home / ".local").exists())
+            self.assertFalse((self.home / ".config").exists())
+            self.assertEqual((self.home / ".gitconfig").read_text(), "supplier configuration")
+            path.unlink()
+            saved.rename(path)
+
+    @unittest.skipIf(os.geteuid() == 0, "Root can write directories without write permission.")
+    def test_restore_checks_backup_write_access_before_home_changes(self):
+        self.install("--persist-agents")
+        backups = self.root / ".local/state/workgrove/backups"
+        before = sorted(backups.iterdir())
+        backups.chmod(0o500)
+        self.addCleanup(backups.chmod, 0o700)
+        shutil.rmtree(self.home)
+        self.home.mkdir(mode=0o700)
+        (self.home / ".gitconfig").write_text("supplier configuration")
+        result = self.command("restore", "--host", "test-host", "--root", str(self.root), ok=False, env=dict(self.env, PATH=""))
+        self.assertEqual(result.stderr, "workgrove: portable-operation-failed\n")
+        self.assertFalse((self.home / ".local").exists())
+        self.assertFalse((self.home / ".config").exists())
+        self.assertEqual((self.home / ".gitconfig").read_text(), "supplier configuration")
+        self.assertEqual(sorted(backups.iterdir()), before)
+
+    def test_full_setup_reuses_identical_backup_in_read_only_storage(self):
+        self.install("--persist-agents", "--with-tmux-conf")
+        path = self.home / ".tmux.conf"
+        path.unlink()
+        path.write_text("supplier configuration")
+        self.install()
+        backups = self.root / ".local/state/workgrove/backups"
+        before = sorted(backups.iterdir())
+        backups.chmod(0o500)
+        self.addCleanup(backups.chmod, 0o700)
+        path.unlink()
+        path.write_text("supplier configuration")
+        result = self.install()
+        self.assertIn("removed ~/.tmux.conf; identical backup in .local/state/workgrove/backups/", result.stderr)
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(sorted(backups.iterdir()), before)
+
+    def test_nested_custom_agent_roots_keep_the_inner_root_private(self):
+        outer = self.root / "selected-claude"
+        inner = outer / CANARY
+        inner.mkdir(parents=True, mode=0o700)
+        self.env.update(CLAUDE_CONFIG_DIR=str(outer), CODEX_HOME=str(inner))
+        self.install()
+        instructions = self.base / "personal-instructions"
+        instructions.write_text("Keep personal instructions.\n")
+        path = inner / "AGENTS.md"
+        path.unlink()
+        path.symlink_to(instructions)
+        result = self.install()
+        self.assertIn("backed up <codex-root>/AGENTS.md to .local/state/workgrove/backups/", result.stderr)
+        self.assertEqual(instructions.read_text(), "Keep personal instructions.\n")
+
+    def test_agent_root_containing_home_and_root_keeps_both_paths_private(self):
+        old = self.root
+        self.root = self.base / CANARY
+        old.rename(self.root)
+        self.source = self.root / "workgrove"
+        self.script = self.source / "lib/workgrove/portable.py"
+        self.env["CLAUDE_CONFIG_DIR"] = str(self.base)
+        path = self.root / ".local/bin/wt"
+        path.parent.mkdir(parents=True, mode=0o700)
+        path.write_text("supplier command")
+        result = self.install()
+        self.assertIn("backed up .local/bin/wt to .local/state/workgrove/backups/", result.stderr)
+        self.assertIn("backed up ~/.gitconfig to .local/state/workgrove/backups/", result.stderr)
+
+
     def test_restore_refuses_root_files_even_inside_home(self):
         old = self.root
         self.root = self.home / "durable"
