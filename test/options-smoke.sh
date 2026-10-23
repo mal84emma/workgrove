@@ -60,6 +60,34 @@ absent 'remote attach does not mark repo optional' "$OUTPUT" '[-r REPO]'
 contains 'remote attach rejects updates' "$OUTPUT" 'With -H, attach rejects -a/--agent and -p/--prompt.'
 end_scenario
 
+begin_scenario 'each command help names every declared option'
+while IFS='|' read -r command aliases mode rest; do
+  invoke "$command" -h
+  assert_eq "$command help status" 0 "$STATUS"
+  help_options=$(grep -oE -- '--?[[:alnum:]][[:alnum:]_-]*\*?' <<<"$OUTPUT" || true)
+  for form in direct remote; do
+    mapfile -t rows <<<"$(wt_spec "$command" "$form")"
+    for row in "${rows[@]:1}"; do
+      IFS='|' read -r aliases key rest <<<"$row"
+      [[ $key != @error ]] || continue
+      names=()
+      IFS=',' read -r -a names <<<"$aliases"
+      found=0
+      for alias in "${names[@]}"; do
+        if grep -Fxq -- "$alias" <<<"$help_options"; then found=1; break; fi
+      done
+      assert_eq "$command $form help names one of $aliases" 1 "$found"
+    done
+  done
+done <<<"$WT_COMMANDS"
+invoke update -h
+contains 'update names opinionated config' "$OUTPUT" '--opinionated-config'
+contains 'update names installer config flags' "$OUTPUT" '--with-*'
+contains 'update names portable flags' "$OUTPUT" 'Portable hosts accept only --refresh-config and --with-tmux-conf.'
+invoke doctor -h
+absent 'doctor excludes its internal host option' "$OUTPUT" '--host'
+end_scenario
+
 begin_scenario 'shared parsing preserves values, repetitions, and positional boundaries'
 declare -A parsed=()
 wt_opts "$(wt_spec new)" parsed --repo='a path=one' --prompt=-r --agent none --agent=codex --head --head -- -task
