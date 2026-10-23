@@ -17,11 +17,11 @@
 #   wt show <name> [--diff|--json] [-r PATH]                   show a status summary. --diff also opens a cmux diff pane
 #                                                             --json prints task status for scripts.
 #   wt open [name] [-r PATH]                                  open a worktree in VS Code (default: the one you are in)
-#   wt diff <name>                                            = wt show <name> --diff
+#   wt diff <name> [-r PATH]                                  = wt show <name> --diff
 #   wt attach <name> [-a AGENT] [-p TEXT] [-r PATH]           open a cmux row for an existing worktree
-#   wt sync <name> [--merge]                                  rebase (default) or merge the worktree branch onto its base
-#   wt pr <name> [--draft]                                    push the branch and open a GitHub pull request (with gh)
-#   wt rm <name> [--force] [--keep-branch] [--discard-commits]
+#   wt sync <name> [--merge] [-r PATH]                        rebase (default) or merge the worktree branch onto its base
+#   wt pr <name> [--draft] [-r PATH]                          push the branch and open a GitHub pull request (with gh)
+#   wt rm <name> [--force] [--keep-branch] [--discard-commits] [-r PATH]
 #                                                             remove a worktree. To protect work, rm refuses if it finds
 #                                                             any of these:
 #                                                             - uncommitted changes
@@ -38,13 +38,17 @@
 #                                                             When rm runs in the task's own VM tmux session, it asks
 #                                                             the Mac to close the task's row and to stop that session
 #                                                             after removal
-#   wt prune [--dry-run]                                      remove worktrees whose branch is merged (by ancestry or
+#   wt prune [--dry-run] [-r PATH]                           remove worktrees whose branch is merged (by ancestry or
 #                                                             as a squash) and whose tree is clean
 #   wt repos [<name>] [--porcelain|--table]                   list every git repo in $WT_REPOS_DIR.
 #                                                             On a terminal: a table of name, task count and location.
 #                                                             Piped: "<name><tab><path>" per repo.
 #                                                             With a name or path: print only that repo's path
-#   wt setup --root PATH [--storage volume|os-disk]          prepare a host with -H; see docs/remote-setup.md
+#   wt setup --root PATH [--storage volume|os-disk] [--mount PATH]
+#           [--source URL] [--revision COMMIT] [--git-identity FILE]
+#           [--persist-agents] [--with-tmux-conf] [--restore-only]
+#           [--claude-args-json JSON] [--codex-args-json JSON]
+#                                                             prepare a host with -H; see docs/remote-setup.md
 #                                                             --trust-personal-volume accepts relaxed mode checks for one personal volume
 #                                                             --strict-permissions removes a saved permission exception after strict checks pass
 #   wt doctor [--record DIR]                                check cmux contracts; save redacted fixtures below DIR
@@ -55,8 +59,10 @@
 #                                                             then start the task (on the Mac; needs fzf)
 #   wt driver                                                 open (or select) the driver row (@local)
 #   wt version                                              print the repository commit and protocol number as JSON
-#   wt update [--refresh-config]                              show what git pull would bring in. After you confirm,
+#   wt update [--refresh-config] [--opinionated-config] [--with-*]
+#                                                             show what git pull would bring in. After you confirm,
 #                                                             wt pulls this repo and re-runs install.sh
+#                                                             Portable hosts accept only --refresh-config and --with-tmux-conf.
 #   wt path <name> [-r PATH]
 #   wt current
 #   wt help
