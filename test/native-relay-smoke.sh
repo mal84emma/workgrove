@@ -421,6 +421,7 @@ scenario_host_check_signal() {
   printf 'Host test-vm\n# wt-ssh-host\n' >"$HOME/.ssh/config"
   cat >"$TEST_ROOT/bin/python3" <<'PYTHON'
 #!/bin/sh
+case "$*" in *ssh_host.py*) ;; *) exit 0 ;; esac
 printf started >"$HOST_CHECK_STARTED"
 kill -KILL "$$"
 PYTHON
