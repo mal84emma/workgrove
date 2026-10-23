@@ -691,6 +691,70 @@ def git_owned_path(text, label, managed):
     return path if managed in path.parents else None
 
 
+def git_config_entries(path):
+    read(path)
+    output = git(["config", "--file", str(path), "--no-includes", "--null", "--list"]).stdout
+    for record in output.split("\0"):
+        if record:
+            yield record.partition("\n")
+
+
+def prune_git_generations(destination, generation):
+    referenced = {generation}
+    visited = set()
+
+    def visit(path, config=True):
+        physical = canonical(path)
+        for selected in (path.absolute(), physical):
+            if destination in selected.parents:
+                referenced.add(destination / selected.relative_to(destination).parts[0])
+        # One file can resolve relative includes from different parent directories.
+        location = (physical, canonical(path.parent))
+        if not config or location in visited or not path.is_file():
+            return
+        visited.add(location)
+        for key, separator, value in git_config_entries(path):
+            include = key == "include.path" or (key.startswith("includeif.") and key.endswith(".path"))
+            if separator and (include or key == "core.excludesfile"):
+                require("%(" not in value and "\n" not in value, "unsupported-git-include")
+                target = Path(value).expanduser()
+                if not target.is_absolute():
+                    target = path.parent / target
+                visit(target, include)
+
+    try:
+        visit(destination / "global")
+        candidates = list(destination.iterdir())
+    except (OSError, Refusal):
+        return
+    for path in candidates:
+        if path in referenced or not re.fullmatch(r"[0-9a-f]{32}", path.name):
+            continue
+        try:
+            if stat.S_ISDIR(path.lstat().st_mode):
+                shutil.rmtree(path)
+        except OSError:
+            pass
+
+
+@contextlib.contextmanager
+def git_generation(root):
+    destination = root / ".config/workgrove/git"
+    active = destination / "global"
+    previous = read(active) if active.exists() else None
+    generation = destination / uuid.uuid4().hex
+    try:
+        yield generation
+    except BaseException:
+        if previous is not None:
+            write(active, previous)
+        elif active.exists():
+            active.unlink()
+        shutil.rmtree(generation, ignore_errors=True)
+        raise
+    prune_git_generations(destination, generation)
+
+
 def git_config_graph(start, destination, managed=None, skip=(), missing_excludes="", overlay=None):
     """Preserve Git entry order and anchor relative paths at their logical source locations."""
     mapping = {}
@@ -705,13 +769,8 @@ def git_config_graph(start, destination, managed=None, skip=(), missing_excludes
         require(len(mapping) < 64, "git-includes-too-deep")
         target = destination / f"config-{len(mapping)}"
         mapping[path] = target
-        read(path)
-        output = git(["config", "--file", str(path), "--no-includes", "--null", "--list"]).stdout
         entries = []
-        for record in output.split("\0"):
-            if not record:
-                continue
-            key, separator, value = record.partition("\n")
+        for key, separator, value in git_config_entries(path):
             section, _, name = key.partition(".")
             subsection = None
             if "." in name:
@@ -753,7 +812,7 @@ def git_config_graph(start, destination, managed=None, skip=(), missing_excludes
     return visit(start)
 
 
-def prepare_git(root, identity, previous):
+def prepare_git(root, identity, previous, generation):
     destination = root / ".config/workgrove/git"
     active = destination / "global"
     configured = os.environ.get("GIT_CONFIG_GLOBAL")
@@ -776,7 +835,6 @@ def prepare_git(root, identity, previous):
         else:
             require(destination not in selected.parents, "managed-git-identity-source-refused")
     require(identity or originals, "personal-git-identity-required")
-    generation = destination / uuid.uuid4().hex
     mkdir(generation)
     implicit = (destination / "missing-defaults" if previous else
                 Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "git/ignore")
@@ -787,9 +845,10 @@ def prepare_git(root, identity, previous):
         if selected.is_absolute() and destination in selected.parents and selected.name == "ignore":
             legacy_text = read(selected, missing=True)
     fallback = augmented_excludes(old_default or implicit, generation / "defaults", legacy_text)
-    overlay = old_identity
-    if identity and not any(canonical(identity) == canonical(path) for path in originals):
-        overlay = git_config_graph(Path(identity), generation / "identity", destination)
+    overlay = None
+    selected_identity = identity or old_identity
+    if selected_identity and not any(canonical(selected_identity) == canonical(path) for path in originals):
+        overlay = git_config_graph(Path(selected_identity), generation / "identity", destination)
     skip = {old_default} if old_default is not None else set()
     replacement = (old_identity, overlay) if old_identity is not None else None
     bases = [git_config_graph(path, generation / str(index), destination, skip, legacy_text, replacement)
@@ -1268,9 +1327,9 @@ def install(args):
                    claude_config_dir=claude_directory(agents, persist, previous), runtime_manifest=manifest)
     instruction_copies = preflight_files(profile, migrations, False)
     global_target, global_contents, global_originals = plan_claude_state(profile, previous, migrations)
-    with installation_lock(root):
+    with installation_lock(root), git_generation(root) as generation:
         require(read(profile_path(root), missing=True) == expected_profile, "profile-changed-retry-setup")
-        personal = prepare_git(root, args.git_identity, previous)
+        personal = prepare_git(root, args.git_identity, previous, generation)
         for old, target in migrations:
             require(not target.exists(), "agent-configuration-conflict")
             mkdir(target.parent)
