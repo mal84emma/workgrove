@@ -64,7 +64,7 @@ capped() { # capped <cmd…>: one cmux call, inside what is left of that budget.
   "$PERL" -e 'my $t = shift; my $p = fork; defined $p or exit 127;
               unless ($p) { setpgrp(0, 0); exec @ARGV; exit 127 }   # own group, so nothing it spawns
               $SIG{ALRM} = sub { kill 9, -$p; waitpid $p, 0; exit 142 };   # survives to hold the pipe open
-              alarm $t; waitpid $p, 0; exit($? >> 8)' "$left" "$@"
+              alarm $t; waitpid $p, 0; my $s = $?; exit(($s & 127) ? 128 + ($s & 127) : ($s >> 8))' "$left" "$@"
 }
 event_handled() {
   [[ $mode == --event ]] || return 0
