@@ -1,9 +1,15 @@
 # shellcheck shell=bash
-# Reads globals: WG_LIB_DIR, WG_VERSION_ROOT, WG_CMUX_SUPPORTED, WT_PROTOCOL, HOME, WT_HOST, WT_REPOS_DIR.
+# Reads globals: WG_LIB_DIR, WG_VERSION_ROOT, WG_CMUX_SUPPORTED, WG_MACHINE_RESULT, WT_PROTOCOL, HOME, WT_HOST, WT_REPOS_DIR.
 # Requires common.sh, task.sh, cmux.sh, options.sh, and remote.sh from bin/wt.
 
 # Keep checking after a failure so one run reports every repair.
 doctor_result() {
+  local status=${4:-FAIL}
+  [[ $1 != 0 ]] || status=PASS
+  if [[ ${WG_MACHINE_RESULT:-} =~ ^[1-9][0-9]*$ ]]; then
+    DOCTOR_CHECKS+=("$(jq -cn --arg name "$2" --arg status "$status" --arg repair "$3" \
+      '{name:$name,status:$status,repair:$repair}')")
+  fi
   if [[ $1 == 0 ]]; then printf 'PASS %s\n' "$2"
   else
     printf '%s %s\n' "${4:-FAIL}" "$2"
@@ -175,7 +181,7 @@ doctor_mac() {
 
   methods=$(cmux_call capabilities 2>/dev/null) || methods=''
   for method in workspace.list workspace.create workspace.action workspace.close workspace.select \
-      workspace.remote.reconnect notification.list notification.dismiss system.top surface.read_text; do
+      notification.list notification.dismiss system.top surface.read_text; do
     rc=0
     jq -e --arg method "$method" '.methods | type == "array" and index($method) != null' <<<"$methods" >/dev/null 2>&1 || rc=1
     doctor_result "$rc" "cmux method $method" "$repair" FAIL "$warning"
@@ -247,6 +253,7 @@ cmd_contract_doctor() {
   local -A opts=()
   local DOCTOR_FAILED=0 DOCTOR_CMUX_VERSION='' DOCTOR_ROWS='' DOCTOR_TOP='' DOCTOR_NOTIFICATIONS='' DOCTOR_AUTOMATION=''
   local version rc=0
+  local -a DOCTOR_CHECKS=()
   wt_opts "$(wt_spec doctor)" opts "$@"
   if is_remote; then
     [[ ! -v opts[record] ]] || die 'doctor: --record runs on the Mac'
@@ -255,29 +262,24 @@ cmd_contract_doctor() {
   version=$(wt_version | wt_read_version 2>/dev/null) || rc=1
   doctor_result "$rc" "wt version ${version:-unavailable}" 'wt update'
   if [[ -v opts[record] ]]; then doctor_record "${opts[record]}" || DOCTOR_FAILED=1; fi
+  if is_remote && [[ ${WG_MACHINE_RESULT:-} =~ ^[1-9][0-9]*$ ]]; then
+    local status=PASS checks
+    [[ $DOCTOR_FAILED == 0 ]] || status=FAIL
+    checks=$(printf '%s\n' "${DOCTOR_CHECKS[@]}" | jq -sc '{checks:.}')
+    wt_result doctor "$status" '' '' '' '' "$checks"
+  fi
   [[ $DOCTOR_FAILED == 0 ]]
 }
 
 host_contract_doctor() {
-  local host=$1 version='' rc=0 failed=0 protocol='' output DOCTOR_FAILED=0
+  local host=$1 version='' rc=0 failed=0 protocol='' output errors parsed=0 DOCTOR_FAILED=0
+  local -A result=()
   printf 'VM checks for %s; run their repair commands on the VM.\n' "$host"
   # Report recovery once, with the unavailable doctor result.
-  output=$(VM_WT_RECOVERY_HINT=0 vm_wt "$host" doctor) || failed=$?
+  VM_WT_RECOVERY_HINT=0 vm_result "$host" doctor result output errors failed -- || parsed=$?
+  [[ -z $errors ]] || printf '%s\n' "$errors" >&2
   printf '%s\n' "$output"
-  if [[ $failed == 255 ]]; then
-    doctor_result 1 'VM doctor connection from the Mac' "ssh $(shell_join "$host")"
-    return 1
-  fi
-  if [[ $failed == 127 ]]; then
-    doctor_result 1 'VM doctor unavailable' "$(host_recovery_hint "$host")"
-    return 1
-  fi
-  if [[ $failed == 0 ]] && ! grep -Eq '^(PASS|FAIL|WARN) cmux-tui CLI$' <<<"$output"; then
-    failed=1
-  fi
-  if [[ $failed != 0 ]] && ! grep -Eq '^(FAIL|WARN) ' <<<"$output"; then
-    doctor_result 1 'VM doctor unavailable' "wt -H $(shell_join "$host") update"
-  fi
+  vm_wt_failure "$host" doctor "$failed" "$output" "$parsed" "${result[status]:-}" || return 1
   printf 'Mac comparison:\n'
   version=$(host_version "$host") || {
     doctor_result 1 'VM version connection from the Mac' "ssh $(shell_join "$host")"
