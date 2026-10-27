@@ -343,7 +343,7 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   It checks real VM `new`, `show`, and `path` commands.
   It also checks these cases:
   - remote task preflight and model forwarding
-  - an older VM's option refusal
+  - rejection of missing or incomplete VM result records
   - a row failure after worktree creation
   - an SSH disconnect after creation but before the Mac receives the result
   - that a brief, agent, and model survive an interrupted `.wt-setup`

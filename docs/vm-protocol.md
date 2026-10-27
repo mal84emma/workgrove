@@ -156,7 +156,7 @@ The [version contract](wt-json.md#read-installation-versions) defines the nullab
 `vm_result` calls `vm_wt --machine` to request records with `WT_MACHINE=$WT_PROTOCOL`.
 Creation, attach, open, doctor, and the Mac hook use this reader.
 It returns decoded fields, stdout, stderr, and command status separately, and removes records from both visible streams.
-It discovers records on either stream and uses only stdout for a legacy successful path.
+It discovers records on either stream. A successful path lookup requires the recorded `path`.
 At startup, `bin/wt` consumes `WT_MACHINE`, stores it in nonexported `WG_MACHINE_RESULT`, and unsets the request.
 Nested `wt` calls and `.wt-setup` therefore do not inherit machine-result mode.
 
@@ -175,7 +175,7 @@ The doctor checks array becomes a JSON string in that array.
 | `name` | The task name supplied by the producer; empty for `doctor`. | `common.sh`: `vm_result` validates creation names and checks the requested name for lookup results. |
 | `repo` | The absolute main checkout path supplied by the producer; empty for `doctor`. | `common.sh`: `vm_result` derives task sessions and requires the requested repository for a missing path. |
 | `session` | `common.sh`: `wt_session` supplies `wt-<repo-id>-<name>` for `new` and `show`; `path` and `doctor` supply an empty string. | `common.sh`: `vm_result` requires the derived session name for creation and show results. |
-| `state` | `cmd_show` uses `session_state` on a VM. Other producers supply an empty string. | `recovery.sh`: `host_attach` displays it and uses wording only when boolean facts are absent. |
+| `state` | `cmd_show` uses `session_state` on a VM. Other producers supply an empty string. | `recovery.sh`: `host_attach` uses it only for display. |
 | `agent` | `cmd_show` reports whether the checked tmux probe found an agent. | `host_attach` requires a running agent unless first-start or explicit recovery applies. |
 | `attached` | `cmd_show` reports whether tmux lists an attached client. | `host_attach` checks a detached session before reattaching a shell row. |
 | `started` | `cmd_show` reports whether the task's started marker exists. | `host_attach` permits a first start only when the marker and session are absent. |
