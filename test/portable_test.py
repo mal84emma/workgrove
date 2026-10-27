@@ -290,6 +290,13 @@ class OperationPolicyTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "workgrove: source-required\n")
 
+    def test_reinstall_keeps_empty_source_refusal(self):
+        result = subprocess.run([sys.executable, "-B", str(REPO / "lib/workgrove/portable.py"),
+                                 "reinstall", "--source", ""], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "workgrove: absolute-path-required\n")
+
     def test_debug_reports_internal_errors_only_when_enabled(self):
         for error_type in (OSError, ValueError, RuntimeError, UnicodeError, TypeError, AttributeError):
             for debug in (None, "", "0", "1"):

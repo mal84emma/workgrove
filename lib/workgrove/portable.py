@@ -1608,7 +1608,7 @@ def readiness(root=None):
 
 
 def reinstall(args):
-    require(args.source, "source-required")
+    require(args.source is not None, "source-required")
     # Bare reruns use the owning checkout even when HOME has lost its profile link.
     root = canonical(args.source).parent
     require(profile_path(root).is_file(), "portable-profile-missing-run-explicit-setup")
