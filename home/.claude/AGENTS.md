@@ -48,12 +48,13 @@ A **task** is one unit of work that changes code, in its own git worktree.
 Use `wt` to manage tasks; see `wt help`.
 A **row** is a cmux workspace. The **main checkout** is the repository's primary working tree.
 
-- For a task, feature, fix, or experiment, work in the current worktree.
-  Otherwise, first run `wt new <name> -p "<brief>"`.
+- When starting a task, feature, fix, or experiment, check whether you are inside a worktree.
+  If you are, work there. Otherwise, first run `wt new <name> -p "<brief>"`.
 - Never do task work in the main checkout unless the user explicitly requests a quick edit there.
-- Inside `.worktrees/<name>`, stay there and commit on `wt/<name>`. Make small commits and describe each one.
-- Never edit the main checkout or sibling worktrees, switch branches, or create nested worktrees.
-- Keep dependencies and environment settings in the worktree. Do not use the main checkout's copies.
+- Inside `.worktrees/<name>`, stay there for task work and commit on `wt/<name>`.
+  Make small commits and describe each one.
+  Never edit the main checkout or sibling worktrees, switch branches, or create nested worktrees.
+  Keep dependencies and environment settings in the worktree. Do not use the main checkout's copies.
 - These conventions provide no sandbox or Claude worktree isolation. You must keep task work inside the worktree.
 - Split work only when the parts touch different files. Give each part its own worktree and agent session.
 - Do not code in a driver session. Start a task session for that work.
@@ -107,7 +108,7 @@ These commands belong to the user's own session on the Mac.
 ## Opening apps
 
 When the user requests an app launch on the Mac, use `wt open` for worktrees and `/usr/bin/open` for other files.
-For code requests, open VS Code with `wt open`; do not print files instead.
+When the user wants to look at a worktree's code, run `wt open`; do not print files instead.
 For status or changes, run `wt list` and `wt show <name>`; never open VS Code for this.
 In a task session, "the worktree" means this task's worktree, not the `wt` tool.
 Never request broader sandbox or network access to open an app.

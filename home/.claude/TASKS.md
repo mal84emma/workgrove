@@ -6,12 +6,12 @@ Read this file on demand.
 
 ## Task lifecycle
 
-- For a task, feature, fix, or experiment, use the [worktree-create skill](../.agents/skills/worktree-create/SKILL.md).
-  If you are already inside a worktree, work there.
+- When starting a task, feature, fix, or experiment, choose the skill for your current location.
+  If you are inside a worktree, use the [worktree-work skill](../.agents/skills/worktree-work/SKILL.md) and work there.
+  Otherwise, use the [worktree-create skill](../.agents/skills/worktree-create/SKILL.md) to create a worktree first.
 - For several independent tasks, create one worktree per task with `wt new ... -p ...`.
   Each worktree gets its own agent session in cmux.
   Use the [task-driver skill](../.agents/skills/task-driver/SKILL.md) to drive several tasks, or VM tasks, from one session.
-- Inside a worktree, use the [worktree-work skill](../.agents/skills/worktree-work/SKILL.md).
 - For "show me the code", "open the worktree", or "let me see it", use the [worktree-show skill](../.agents/skills/worktree-show/SKILL.md).
   Run `wt open`, which opens the worktree in VS Code.
 - For "what changed" or "how far is it", run `wt list` and `wt show <name>`.
