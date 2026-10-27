@@ -350,6 +350,7 @@ prepare_cmux() {
   local CMUX_STUB_FAIL_PING=0 CMUX_STUB_AGENTS=0 CMUX_STUB_CALLER=other-row CMUX_STUB_BUSY_ROWS=''
   local CMUX_STUB_FAIL_TOP=0 CMUX_STUB_BAD_TOP=0
   local CMUX_STUB_FAIL_LIST='' CMUX_STUB_EMPTY_LIST='' CMUX_STUB_FAIL_CLOSE=0
+  local CMUX_STUB_CONFIRM_CLOSE=0
   local CMUX_STUB_DIFF_STATUS=0
   for assignment in "${WT_RELAY_ENV[@]}"; do local "$assignment"; done
   rm -f "$FAKE_CMUX_STATE/fail/"* "$FAKE_CMUX_STATE/top/"*.json
@@ -373,7 +374,7 @@ prepare_cmux() {
   if [[ -n $CMUX_STUB_EMPTY_LIST ]]; then fake_queue "workspace-list--$CMUX_STUB_EMPTY_LIST" ''; fi
   if [[ $CMUX_STUB_FAIL_CLOSE == 1 ]]; then fake_failure workspace-close 1 'Error: socket access denied'; fi
   if [[ $CMUX_STUB_DIFF_STATUS != 0 ]]; then fake_failure diff "$CMUX_STUB_DIFF_STATUS"; fi
-  if ((CMUX_STUB_AGENTS > 0)); then
+  if ((CMUX_STUB_AGENTS > 0)) || [[ $CMUX_STUB_CONFIRM_CLOSE == 1 ]]; then
     printf 'Error: confirmation_required: Workspace has a running process; retry with --force\n' >"$FAKE_CMUX_STATE/close-confirmation"
   else rm -f "$FAKE_CMUX_STATE/close-confirmation"; fi
   if [[ -f $TEST_ROOT/cmux-send-fail ]]; then fake_failure send 1; fi
@@ -2279,6 +2280,77 @@ STUB
   WT_RELAY_ENV=()
 
   stub_cmux dead
+  end_scenario
+}
+
+# A shared server can preserve another terminal's caller context.
+scenario_codex_caller_context() {
+  begin_scenario "$1" || return 0
+  local r id saved tip mac_bin="$TEST_ROOT/caller-mac-bin" WT_PATH_PREFIX=''
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  WT_PATH_PREFIX=$mac_bin
+  r=$(new_repo caller-context)
+  id=$(basename "$r")
+  stub_cmux alive
+  assert_wt_ok 'create requester task' new requester -a codex --no-workspace -r "$r"
+  fake_rows "$(fake_row requester-row requester "@local · $id")" >"$WT_ROWS"
+  saved=$(cat "$r/.git/wt/requester.json")
+  tip=$(fixture_git "$r" rev-parse wt/requester)
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_AGENTS=1" "CMUX_WORKSPACE_ID=seed-row")
+  assert_wt_fails 1 'another agent is running in cmux row requester-row; kept the worktree' rm requester -r "$r"
+  assert_dir 'caller mismatch preserves the worktree' "$r/.worktrees/requester"
+  assert_eq 'caller mismatch preserves the branch' "$tip" "$(fixture_git "$r" rev-parse wt/requester)"
+  assert_eq 'caller mismatch preserves the sidecar' "$saved" "$(cat "$r/.git/wt/requester.json")"
+  assert_registered "$r" requester yes
+  assert_lacks 'caller mismatch sends no close request' "$(cat "$CMUX_LOG")" 'workspace close'
+  WT_CWD=$r
+  assert_wt_fails 1 'another agent is running in cmux row requester-row' rm requester -r "$r"
+  assert_lacks 'changing directory cannot repair caller identity' "$(cat "$CMUX_LOG")" 'workspace close'
+  assert_wt_ok 'prune currently reports success despite the refusal' prune -r "$r"
+  assert_has 'prune retains its refused candidate' "$WT_OUT" 'keep requester (removal refused above)'
+  assert_dir 'prune did not remove the requesting task' "$r/.worktrees/requester"
+  assert_lacks 'prune sends no close request' "$(cat "$CMUX_LOG")" 'workspace close'
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=" "CMUX_STUB_AGENTS=1")
+  assert_wt_fails 1 'another agent is running in cmux row requester-row' rm requester -r "$r"
+  assert_dir 'missing caller identity also keeps the task' "$r/.worktrees/requester"
+  # This models corrected context. It does not prove a provider launch configuration fixes inheritance.
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=requester-row" "CMUX_STUB_AGENTS=1" "CMUX_WORKSPACE_ID=requester-row")
+  : >"$CMUX_LOG"
+  assert_wt_ok 'correct caller identity permits normal self-removal' rm requester -r "$r"
+  assert_has 'only verified self-close skips confirmation' "$(cat "$CMUX_LOG")" 'workspace close requester-row --force'
+  assert_gone 'corrected fixture removes its worktree' "$r/.worktrees/requester"
+  assert_branch "$r" wt/requester no
+  assert_absent "$r" .git/wt/requester.json
+  WT_RELAY_ENV=() WT_CWD=''
+  end_scenario
+}
+
+# Agent discovery and terminal-close confirmation use different observations.
+scenario_close_confirmation_failure() {
+  begin_scenario "$1" || return 0
+  local r id mac_bin="$TEST_ROOT/confirmation-mac-bin" WT_PATH_PREFIX=''
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  WT_PATH_PREFIX=$mac_bin
+  r=$(new_repo close-confirmation)
+  id=$(basename "$r")
+  stub_cmux alive
+  assert_wt_ok 'create late confirmation fixture' new late --no-workspace -r "$r"
+  fake_rows "$(fake_row late-row late "@local · $id")" >"$WT_ROWS"
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_CONFIRM_CLOSE=1")
+  assert_wt_fails 1 'confirmation_required: Workspace has a running process; retry with --force' rm late -r "$r"
+  assert_has 'the earlier removed line remains in the failed command output' "$WT_OUT" 'removed late'
+  assert_has 'the close failure names the remaining row' "$WT_OUT" 'could not close cmux row late-row'
+  assert_has 'the failed close command does not claim self' "$(cat "$CMUX_LOG")" 'workspace close late-row'
+  assert_lacks 'an unknown caller never gets a forced close' "$(cat "$CMUX_LOG")" 'workspace close late-row --force'
+  assert_gone 'worktree removal finished before confirmation failed' "$r/.worktrees/late"
+  assert_branch "$r" wt/late no
+  assert_absent "$r" .git/wt/late.json
+  assert_wt_fails 1 "no worktree named 'late'" rm late -r "$r"
+  WT_RELAY_ENV=()
   end_scenario
 }
 

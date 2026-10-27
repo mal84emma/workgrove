@@ -322,7 +322,10 @@ An access-denied response is not equivalent to an absent socket.
 
 `row_agent` uses `cmux top` and its caller workspace identity.
 A matching caller workspace is `self`; another row with coding-agent processes is `busy`.
-This proves row membership, not exclusive ownership of every process or agent inside that row.
+The [Codex follow-up](codex-self-teardown.md) reproduces a stale caller environment that misclassifies this investigation's own row.
+That report also distinguishes environment-supplied identity from verified session ownership.
+
+This compares advertised row context; it does not prove session membership or exclusive process ownership.
 It does not compare a saved task process identifier (PID) with the calling shell's PID.
 Multiple agents in one caller row require additional checks before claiming safe exclusive shutdown.
 
@@ -517,6 +520,8 @@ Provider daemon behavior, real socket authentication, terminal exit, and VM shut
 A fake successful close response cannot establish them.
 
 ## Validation record
+
+This record describes the initial investigation; the [Codex follow-up](codex-self-teardown.md#validation) records the later checks.
 
 The final checks ran on the Mac with Bash `5.3.20`, Apple Git `2.39.3`, Python `3.9.6`, and ShellCheck `0.11.0`.
 

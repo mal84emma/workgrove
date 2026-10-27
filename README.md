@@ -255,6 +255,7 @@ workgrove/
     ├── vm-agent-status.md     agent status in VM rows after cmux 0.65
     ├── wt-json.md             the JSON status contract of wt list --json and wt show --json
     ├── self-teardown-squash.md investigation of stacked squash removal and session cleanup
+    ├── codex-self-teardown.md caller identity and failure reporting for local Codex teardown
     ├── documentation-style.md the writing rules for docs, agent instructions and comments
     └── ssh-config.example     the Host block a VM alias needs
 ```
