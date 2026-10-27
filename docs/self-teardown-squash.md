@@ -96,18 +96,24 @@ A deleted remote-tracking base also fails before `fetch_base` runs if its local 
 Custom fetch mappings can leave only `FETCH_HEAD` updated; the function does not validate the compared ref's refreshed object.
 Its SSH connection timeout does not bound every transport or the complete fetch duration.
 
-`branch_landed` computes a common ancestor and rejects an empty net change.
+`branch_landed` computes a common ancestor and checks for an empty net change.
+It rejects an empty net change when its initial `diff-tree --quiet` command succeeds.
 It then compares the simulated merge tree with the candidate base tree.
+
 Git 2.38 or later uses `merge-tree --write-tree`.
 Older Git uses a temporary index and a stricter file-level comparison.
 The modern check can write Git objects, although it does not edit a working tree or its index.
 A no-op merge proves current net content preservation, not publication of every historical commit.
 
-The content check rejects unrelated histories, conflicts, missing trees, and comparison failures.
+`branch_landed` rejects failed merge-base, base-tree resolution, and merge-tree operations.
 It rejects a reverted squash when merging would restore changes.
 An ordinary ancestry merge takes a separate fast path, including when the base later reverts its content.
 That path proves commit preservation, not current content equivalence.
 Neither path makes a deleted remote head proof of landing.
+
+The initial `diff-tree --quiet` guard does not distinguish changed content from a command error.
+An empty-net-change branch can therefore appear landed when that comparison fails but the later simulated merge succeeds.
+The dry-run comparison fixture records this unchecked error without deleting the branch or its worktree.
 
 A missing head branch is a different failure from a missing base.
 The expected `wt/<name>` must resolve before any preservation verdict.
@@ -154,13 +160,14 @@ The direct content probe demonstrates sufficiency of a valid candidate for this 
 It does not implement a base resolver or a teardown workaround.
 The existing squash scenario retains ordinary successful removal, reverts, conflicts, post-merge work, and old-Git coverage.
 
-`scenario_teardown_evidence_limits` records three current behaviors through dry runs:
+`scenario_teardown_evidence_limits` records four current behaviors through dry runs:
 
 | Setup | Current result | Required change |
 |---|---|---|
 | Cached upstream holds task tip; remote branch rewinds | Prune says it would remove the task. | Validate the current remote object's ancestry. |
 | Cached base contains squash; remote base reverts it | Prune accepts the cached positive comparison. | Refresh remote candidates before positive decisions. |
 | `rev-list` fails with status `128` | Prune treats the count as zero. | Preserve the error and refuse deletion. |
+| `diff-tree --quiet` fails on an empty-net-change branch | Prune accepts the later no-op merge as preservation evidence. | Distinguish command errors from changed content before continuing. |
 
 These assertions characterize limitations; they must change when production fixes land.
 They are not acceptance criteria for the proposed implementation.

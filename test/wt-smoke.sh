@@ -1260,7 +1260,7 @@ scenario_stacked_squash_base() {
 # These dry runs record current limitations. They never authorize deletion.
 scenario_teardown_evidence_limits() {
   begin_scenario "$1" || return 0
-  local r e initial head shim="$TEST_ROOT/comparison-error" real_git
+  local r e initial head shim="$TEST_ROOT/comparison-error" real_git net_shim="$TEST_ROOT/net-comparison-error"
   local WT_PATH_PREFIX=''
   export GIT_ALLOW_PROTOCOL=file
   r=$(new_repo remote-evidence)
@@ -1311,6 +1311,37 @@ scenario_teardown_evidence_limits() {
   assert_wt_ok 'inspect comparison failure without deletion' prune --dry-run -r "$r"
   assert_has 'current count errors become zero' "$WT_OUT" 'would remove error'
   assert_dir 'the investigation preserves unpublished work' "$r/.worktrees/error"
+
+  WT_PATH_PREFIX=''
+  r=$(new_repo empty-net-error)
+  assert_wt_ok 'create empty-net comparison fixture' new empty --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/empty" transient.txt transient
+  fixture_git "$r/.worktrees/empty" rm -q transient.txt
+  fixture_git "$r/.worktrees/empty" commit -q -m 'undo transient change'
+  fixture_commit "$r" upstream.txt 'later base change'
+  head=$(fixture_git "$r" rev-parse wt/empty)
+  assert_wt_ok 'inspect an empty net change before comparison failure' prune --dry-run -r "$r"
+  assert_has 'the normal content guard keeps canceled commits' "$WT_OUT" 'keep empty ('
+  assert_has 'the normal content guard explains its refusal' "$WT_OUT" 'is empty, which proves nothing'
+  mkdir -p "$net_shim"
+  {
+    cat <<'GIT'
+#!/usr/bin/env bash
+diff_tree=0 quiet=0
+for argument in "$@"; do
+  case $argument in diff-tree) diff_tree=1 ;; --quiet) quiet=1 ;; esac
+done
+if ((diff_tree && quiet)); then exit 128; fi
+GIT
+    printf 'exec %q "$@"\n' "$real_git"
+  } >"$net_shim/git"
+  chmod +x "$net_shim/git"
+  WT_PATH_PREFIX=$net_shim
+  assert_wt_ok 'inspect an empty-net comparison failure without deletion' prune --dry-run -r "$r"
+  assert_has 'the unchecked empty-net comparison error permits a candidate' "$WT_OUT" 'would remove empty'
+  assert_dir 'the dry run preserves the empty-net worktree' "$r/.worktrees/empty"
+  assert_eq 'the dry run preserves canceled commit history' "$head" "$(fixture_git "$r" rev-parse wt/empty)"
+  assert_regular "$r" .git/wt/empty.json
   end_scenario
 }
 
