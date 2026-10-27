@@ -1162,6 +1162,157 @@ scenario_rm_refusals() {
   end_scenario
 }
 
+# This investigation checks an alternative base without changing the child's sidecar.
+scenario_stacked_squash_base() {
+  begin_scenario "$1" || return 0
+  local r e child saved parent_head child_head probe rc=0 sidecar
+  local mac_bin="$TEST_ROOT/stack-mac-bin" WT_PATH_PREFIX=''
+  export GIT_ALLOW_PROTOCOL=file
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  WT_PATH_PREFIX=$mac_bin
+  r=$(new_repo stacked-base)
+  e=$(add_origin "$r")
+  stub_cmux dead
+  assert_wt_ok 'create parent' new parent --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/parent" parent.txt parent
+  fixture_git "$r/.worktrees/parent" push -q -u origin wt/parent
+  parent_head=$(fixture_git "$r" rev-parse wt/parent)
+  assert_wt_ok 'create child on local parent' new child -b wt/parent --no-workspace -r "$r"
+  child="$r/.worktrees/child"
+  fixture_commit "$child" child.txt child
+  fixture_git "$child" push -q -u origin wt/child
+  saved=$(cat "$r/.git/wt/child.json")
+  land_squash "$e" wt/parent 'parent squash'
+  assert_eq 'parent squash preserves the complete tree' \
+    "$(fixture_git "$r" rev-parse "$parent_head^{tree}")" "$(fixture_git "$e" rev-parse 'main^{tree}')"
+  assert_wt_ok 'ordinary squash teardown removes the parent' rm parent -r "$r"
+  assert_branch "$r" wt/parent no
+  assert_absent "$r" .git/wt/parent.json
+  assert_eq 'parent removal leaves child metadata intact' "$saved" "$(cat "$r/.git/wt/child.json")"
+  fixture_git "$child" merge -q --no-edit origin/main
+  fixture_git "$child" push -q origin wt/child
+  child_head=$(fixture_git "$r" rev-parse wt/child)
+  # The editor represents a retargeted PR. It merges into main, independent of the saved base.
+  land_squash "$e" wt/child 'child squash after PR retarget'
+  fixture_git "$r" fetch -q --prune origin
+  assert_eq 'child squash preserves the complete tree' \
+    "$(fixture_git "$r" rev-parse "$child_head^{tree}")" "$(fixture_git "$e" rev-parse 'main^{tree}')"
+  for probe in wt/parent wt/child; do
+    rc=0
+    fixture_git "$r" ls-remote --exit-code --heads origin "refs/heads/$probe" >/dev/null || rc=$?
+    assert_eq "$probe is absent on the fake remote" 2 "$rc"
+    rc=0
+    fixture_git "$r" show-ref --verify "refs/remotes/origin/$probe" >/dev/null 2>&1 || rc=$?
+    assert_eq "$probe has no remote-tracking ref" 128 "$rc"
+  done
+  assert_wt_ok 'JSON show reports an unknown comparison' show child --json -r "$r"
+  assert_eq 'show retains the deleted creation base' wt/parent "$(jq -r .base <<<"$WT_OUT")"
+  assert_eq 'show has no ahead count' null "$(jq -r .ahead <<<"$WT_OUT")"
+  assert_eq 'show cannot determine landing' '?' "$(jq -r .merged <<<"$WT_OUT")"
+  assert_wt_ok 'prune retains the child' prune --dry-run -r "$r"
+  assert_has 'prune names the missing parent' "$WT_OUT" "base 'wt/parent' cannot be compared"
+  assert_wt_fails 3 "base 'wt/parent' cannot be compared" rm child -r "$r"
+  assert_dir 'refusal preserves child worktree' "$child"
+  assert_branch "$r" wt/child yes
+  assert_eq 'refusal preserves child metadata' "$saved" "$(cat "$r/.git/wt/child.json")"
+  WT_SANDBOX=seatbelt
+  assert_wt_fails 3 "base 'wt/parent' cannot be compared" rm child -r "$r"
+  assert_lacks 'base refusal precedes the sandbox check' "$WT_OUT" 'rerun this command with escalation'
+  WT_SANDBOX=''
+  # Run the existing content check against a candidate. This does not select a production base.
+  sidecar=$(sha256_of "$r/.git/wt/child.json")
+  rc=0
+  # shellcheck disable=SC2016  # The child shell expands these expressions.
+  probe=$(env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT \
+    HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" "$BASH" -c '
+    source "$1/lib/workgrove/common.sh"
+    source "$1/lib/workgrove/safety.sh"
+    REPO=$2
+    why=""
+    branch_landed refs/heads/wt/child refs/remotes/origin/main why || { printf "%s" "$why"; exit 1; }
+    printf "%s" "$why"
+  ' _ "$REPO" "$r") || rc=$?
+  assert_eq 'the fetched default branch passes content validation' '' "$probe"
+  assert_eq 'content validation preserves the sidecar' "$sidecar" "$(sha256_of "$r/.git/wt/child.json")"
+  assert_eq 'content validation returned success' 0 "$rc"
+  fixture_commit "$child" unpublished.txt 'post-merge work'
+  rc=0
+  # shellcheck disable=SC2016  # The child shell expands these expressions.
+  probe=$(env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT \
+    HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" "$BASH" -c '
+    source "$1/lib/workgrove/common.sh"
+    source "$1/lib/workgrove/safety.sh"
+    REPO=$2
+    why=""
+    branch_landed refs/heads/wt/child refs/remotes/origin/main why && exit 0
+    printf "%s" "$why"
+    exit 1
+  ' _ "$REPO" "$r") || rc=$?
+  assert_eq 'content validation rejects a post-merge commit' 1 "$rc"
+  assert_has 'content validation identifies unpreserved content' "$probe" 'would still change 1 path(s)'
+  assert_dir 'the probe leaves the child intact' "$child"
+  end_scenario
+}
+
+# These dry runs record current limitations. They never authorize deletion.
+scenario_teardown_evidence_limits() {
+  begin_scenario "$1" || return 0
+  local r e initial head shim="$TEST_ROOT/comparison-error" real_git
+  local WT_PATH_PREFIX=''
+  export GIT_ALLOW_PROTOCOL=file
+  r=$(new_repo remote-evidence)
+  e=$(add_origin "$r")
+  initial=$(fixture_git "$r" rev-parse main)
+  stub_cmux dead
+  assert_wt_ok 'create pushed task' new rewound --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/rewound" unique.txt 'unique work'
+  fixture_git "$r/.worktrees/rewound" push -q -u origin wt/rewound
+  head=$(fixture_git "$r" rev-parse wt/rewound)
+  fixture_git "$TEST_ROOT/origins/$(basename "$r").git" update-ref refs/heads/wt/rewound "$initial"
+  assert_eq 'local upstream still holds the old tip' "$head" "$(fixture_git "$r" rev-parse origin/wt/rewound)"
+  assert_eq 'remote head no longer holds that tip' "$initial" \
+    "$(fixture_git "$r" ls-remote --heads origin refs/heads/wt/rewound | cut -f1)"
+  assert_wt_ok 'inspect rewound remote without deletion' prune --dry-run -r "$r"
+  assert_has 'current pushed check accepts ref existence' "$WT_OUT" 'would remove rewound'
+  assert_dir 'dry run preserves unpublished content' "$r/.worktrees/rewound"
+
+  r=$(new_repo stale-evidence)
+  e=$(add_origin "$r")
+  assert_wt_ok 'create squash task' new stale --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/stale" landed.txt landed
+  fixture_git "$r/.worktrees/stale" push -q -u origin wt/stale
+  land_squash "$e" wt/stale 'squash before revert'
+  fixture_git "$r" fetch -q --prune origin
+  fixture_git "$e" revert --no-edit main >/dev/null
+  fixture_git "$e" push -q origin main
+  assert_wt_ok 'inspect cached positive comparison' prune --dry-run -r "$r"
+  assert_has 'a stale positive comparison skips the fetch' "$WT_OUT" 'would remove stale'
+  fixture_git "$r" fetch -q --prune origin
+  assert_wt_ok 'inspect the refreshed revert' prune --dry-run -r "$r"
+  assert_has 'the current base rejects the reverted squash' "$WT_OUT" 'keep stale ('
+  assert_dir 'both dry runs preserve the squash task' "$r/.worktrees/stale"
+
+  r=$(new_repo comparison-error)
+  assert_wt_ok 'create comparison failure task' new error --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/error" unique.txt 'unpublished work'
+  real_git=$(command -v git)
+  mkdir -p "$shim"
+  {
+    printf '#!/usr/bin/env bash\n'
+    # shellcheck disable=SC2016  # The generated script expands its arguments.
+    printf 'for arg in "$@"; do [[ $arg != rev-list ]] || exit 128; done\n'
+    printf 'exec %q "$@"\n' "$real_git"
+  } >"$shim/git"
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX=$shim
+  assert_wt_ok 'inspect comparison failure without deletion' prune --dry-run -r "$r"
+  assert_has 'current count errors become zero' "$WT_OUT" 'would remove error'
+  assert_dir 'the investigation preserves unpublished work' "$r/.worktrees/error"
+  end_scenario
+}
+
 # 6b. The reason that scenario 6 could not provoke, the other way round: a branch whose work has landed on
 # the base. Yet none of its commits has become an ancestor of the base. GitHub's "squash and merge" is the
 # default on most repos. It lands a PR as one new commit and deletes the head branch. After that, every

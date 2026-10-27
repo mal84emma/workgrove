@@ -12,6 +12,8 @@ wt_scenarios() {
   "$@" scenario_include_and_setup "5. .wt-include copies ignored files; .wt-setup runs in the new worktree"
   "$@" scenario_rm_refusals "6. wt rm refuses to destroy work, and --force is the one way past it"
   "$@" scenario_squash_merge "6b. wt rm after a squash merge: work that landed is not a reason, work that did not still is"
+  "$@" scenario_stacked_squash_base "6c. a deleted stacked base blocks landed work without changing child metadata"
+  "$@" scenario_teardown_evidence_limits "6d. teardown dry runs expose stale remote and failed comparison limits"
   "$@" scenario_prune_agrees "7. wt prune --dry-run keeps exactly what wt rm refuses"
   "$@" scenario_self_rm_vm "7b. a VM task can remove itself after changing to its main checkout"
   "$@" scenario_cmux "8. a cmux that is not running, and one that is"
