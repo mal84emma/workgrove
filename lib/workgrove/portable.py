@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from urllib.parse import urlsplit
 
@@ -65,34 +66,40 @@ def volume_permissions(root, policy, mount, trusted=False):
         _volume_policy.reset(token)
 
 
-def configured_permissions(function):
-    def operation(args):
-        root = canonical(args.root)
-        snapshot = read(profile_path(root), missing=True)
-        expected = getattr(args, "expected_profile_digest", None)
-        require(expected is None or expected == hashlib.sha256(snapshot.encode()).hexdigest(), "profile-changed-retry-setup")
-        previous = load_profile(root) if profile_path(root).exists() else None
-        require(read(profile_path(root), missing=True) == snapshot, "profile-changed-retry-setup")
-        args.permission_profile_snapshot = snapshot
-        policy = args.storage or (previous["storage"] if previous else None)
-        mount = args.mount or (previous["mount"] if previous else str(root) if policy == "volume" else None)
-        mount = str(canonical(mount)) if mount and policy == "volume" else mount
-        explicit = getattr(args, "trust_personal_volume", False)
-        strict = getattr(args, "strict_permissions", False)
-        require(not (explicit and strict), "conflicting-storage-permission-options")
-        saved = bool(previous and previous["trust_personal_volume"])
-        same_scope = bool(previous and policy == previous["storage"] and mount == previous["mount"])
-        restoring = function.__name__ == "restore" or getattr(args, "restore_only", False)
-        if restoring:
-            require(previous and same_scope, "restore-storage-policy-conflict")
-            require(not explicit or saved, "restore-cannot-change-volume-trust")
-            require(not strict or not saved, "restore-cannot-change-volume-trust")
-        require(not saved or same_scope or explicit or strict, "personal-volume-trust-scope-changed")
-        args.storage, args.mount = policy, mount
-        args.trust_personal_volume = explicit or (saved and same_scope and not strict)
-        with volume_permissions(root, policy, mount, args.trust_personal_volume):
-            return function(args)
-    return operation
+def storage_policy(root, args, previous):
+    policy = args.storage or (previous["storage"] if previous else None)
+    mount = args.mount or (previous["mount"] if previous else str(root) if policy == "volume" else None)
+    mount = str(canonical(mount)) if mount and policy == "volume" else mount
+    return policy, mount
+
+
+def configured_permissions(*, restoring=False):
+    def decorate(function):
+        def operation(args):
+            root = canonical(args.root)
+            snapshot = read(profile_path(root), missing=True)
+            expected = getattr(args, "expected_profile_digest", None)
+            require(expected is None or expected == hashlib.sha256(snapshot.encode()).hexdigest(), "profile-changed-retry-setup")
+            previous = load_profile(root) if profile_path(root).exists() else None
+            require(read(profile_path(root), missing=True) == snapshot, "profile-changed-retry-setup")
+            args.permission_profile_snapshot = snapshot
+            policy, mount = storage_policy(root, args, previous)
+            explicit = getattr(args, "trust_personal_volume", False)
+            strict = getattr(args, "strict_permissions", False)
+            require(not (explicit and strict), "conflicting-storage-permission-options")
+            saved = bool(previous and previous["trust_personal_volume"])
+            same_scope = bool(previous and policy == previous["storage"] and mount == previous["mount"])
+            if restoring or getattr(args, "restore_only", False):
+                require(previous and same_scope, "restore-storage-policy-conflict")
+                require(not explicit or saved, "restore-cannot-change-volume-trust")
+                require(not strict or not saved, "restore-cannot-change-volume-trust")
+            require(not saved or same_scope or explicit or strict, "personal-volume-trust-scope-changed")
+            args.storage, args.mount = policy, mount
+            args.trust_personal_volume = explicit or (saved and same_scope and not strict)
+            with volume_permissions(root, policy, mount, args.trust_personal_volume):
+                return function(args)
+        return operation
+    return decorate
 
 
 def confirm_volume_trust(request):
@@ -1303,7 +1310,7 @@ def installation_lock(root):
         yield
 
 
-@configured_permissions
+@configured_permissions()
 def install(args):
     if args.restore_only:
         return restore(args)
@@ -1311,8 +1318,7 @@ def install(args):
     expected_profile = read(profile_path(root), missing=True)
     require(expected_profile == args.permission_profile_snapshot, "profile-changed-retry-setup")
     previous = load_profile(root) if profile_path(root).exists() else None
-    policy = args.storage or (previous["storage"] if previous else None)
-    mount = args.mount or (previous["mount"] if previous else str(root) if policy == "volume" else None)
+    policy, mount = args.storage, args.mount
     storage(root, policy, mount)
     source = root / "workgrove"
     revision, manifest = validate_installation(source, args.revision)
@@ -1362,7 +1368,7 @@ def install(args):
     print("workgrove: portable profile installed; run doctor before creating tasks")
 
 
-@configured_permissions
+@configured_permissions(restoring=True)
 def restore(args):
     root = canonical(args.root)
     expected_profile = read(profile_path(root))
@@ -1427,13 +1433,10 @@ def packages():
     run([*prefix, "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", *sorted(missing)])
 
 
-@configured_permissions
+@configured_permissions()
 def bootstrap(args):
     root = canonical(args.root)
-    old = load_profile(root) if profile_path(root).exists() else None
-    policy = args.storage or (old["storage"] if old else None)
-    mount = args.mount or (old["mount"] if old else str(root) if policy == "volume" else None)
-    storage(root, policy, mount)
+    storage(root, args.storage, args.mount)
     source = root / "workgrove"
     if args.restore_only:
         return restore(args)
@@ -1605,6 +1608,7 @@ def readiness(root=None):
 
 
 def reinstall(args):
+    require(args.source, "source-required")
     # Bare reruns use the owning checkout even when HOME has lost its profile link.
     root = canonical(args.source).parent
     require(profile_path(root).is_file(), "portable-profile-missing-run-explicit-setup")
@@ -1722,6 +1726,8 @@ def main():
         if str(error) == "restore-host-mismatch":
             print("workgrove: full setup with the new alias changes the saved alias", file=sys.stderr)
     except (OSError, ValueError, RuntimeError, UnicodeError, TypeError, AttributeError):
+        if os.environ.get("WG_DEBUG") == "1":
+            traceback.print_exc()
         print("workgrove: portable-operation-failed", file=sys.stderr)
     return 1
 
