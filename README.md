@@ -72,9 +72,9 @@ The [Mac–VM protocol](docs/vm-protocol.md) defines remote commands, result rec
     Only the listing is limited to the caller's window.
     On cmux 0.65.1, a moved native VM row kept its UUID, title, and ref.
     Combined window lookup, description updates, targeted input, and self-removal also passed.
-  - *The decision:* `rows_json` in `lib/workgrove/cmux.sh` and `ws_load` in `bin/cmux-hook` enumerate the windows and merge their lists.
+  - *The decision:* `cmux_rows_load` in `lib/workgrove/cmux.sh` enumerates the windows and merges their row lists. Both `rows_json` and the Mac hook use it.
     Because the commands that act on a row already reach it in any window, no other code had to change.
-    Both functions enumerate windows by window uuid, never by the index that `cmux list-windows` prints first, because opening a window renumbers the other windows.
+    The loader uses window UUIDs because opening a window renumbers the indices that `cmux list-windows` prints first.
 
 - **Git owns the worktree; sidecar files own the launch metadata.**
   `wt` gets the worktrees from `git worktree list`.
@@ -652,7 +652,7 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   Set `GUARD_BASH=/bin/bash` to start the guard with bash 3.2, which hands it to bash 5. The suite checks these
   results:
   - A command that only mentions `gh api` or `git push` (a commit message, a heredoc, a `grep`) gets no answer.
-  - Approved: reads, pushes to any branch but the default one, pull requests, issues, comments, reviews,
+  - Approved: reads, pushes to branches other than `main`, `master`, and the default branch, pull requests, issues, comments, reviews,
     edits of your own issues and comments, and thread resolution.
   - Denied: pipes, substitutions, brace expansions, and control characters.
   - Denied: another repository, named or through `GH_REPO`, `GH_HOST`, or `gh repo set-default`.
@@ -1026,8 +1026,9 @@ This table lists configuration variables, test overrides, and repository setting
 | `WT_AGENT` | `claude`. Selects the default agent for new tasks. |
 | `WT_AGENT_ARGS` | Empty. Adds shell-split agent arguments. |
 | `WT_MACHINE` | Unset. The highest accepted record version enables versioned results for supported commands. The Mac sets it for VM requests. |
+| `WG_POLL_INTERVAL` | `1` second. Passes directly to `sleep` for poll waits. Tests can set `0`; invalid values produce a sleep error. |
+| `WG_HOST_PROBE_TIMEOUT` | `20` seconds. Limits the Mac's SSH host probe. Accepts decimal integers from 1 through 922337203685477580, without leading zeros. Invalid values return 1; timeouts return 124. |
 | `WG_DEBUG` | Unset. `1` adds tracebacks for unexpected errors in `portable.py`, including calls through `install.sh`. Set it in the host process environment. `wt -H <host> setup` does not forward the Mac's value. Expected refusals keep their usual output. |
-| `WT_CMUX_TUI_HOOK` | Internal helper path for the hook wrapper. `wt run` sets it from `CMUX_TUI_HOOK` or the cmux-tui data folder. |
 | `WT_CLOSE_WAIT_SECONDS` | `22`. Sets the wait for older VM rows to close during self-removal. |
 | `WT_STATUS_LEASE_SECONDS` | Retired with the TCP status paths. Current code ignores it. |
 | `AGENT_NOTIFY_MIN_SECONDS` | `180`. Suppresses completion banners for shorter turns outside cmux. |
@@ -1042,6 +1043,32 @@ This table lists configuration variables, test overrides, and repository setting
 | `.wt-include` | Absent. Lists gitignore-style patterns of ignored files to copy into new worktrees. |
 | `.wt-setup` | Absent. An executable repository hook that runs inside each new worktree. |
 | `~/.zshenv.local` | Optional machine-local shell overrides. `~/.zshenv` sources it; the VM installer adds missing host and repository settings. |
+
+The variables below are internal. Workgrove writes them; do not set them as user configuration.
+`test/docs_check.py` checks reads in `bin/` and `lib/` against the table and this explicit list.
+
+<!-- Internal variables begin. -->
+- `WT_REMOTE_ROOT` holds the portable root. `portable.py` writes it to the profile's `env.sh`; doctor and repository lookup read it.
+- `WT_CLAUDE_ARGS_JSON` and `WT_CODEX_ARGS_JSON` hold JSON argument arrays from the portable profile. `portable.py` writes them to `env.sh`; `wt run` reads them.
+- `WT_CMUX_TUI_HOOK` holds the original agent hook helper. `wt run` sets it from `CMUX_TUI_HOOK` or the cmux-tui data folder.
+- `WT_CMUX_CLOSE_ON_EXIT` marks native task attachments in tmux. Self-removal reads it before closing the row.
+- `WT_NAME` and `WT_REPO` identify the task and main checkout for `.wt-setup`.
+- `WG_LIB_DIR`, `WG_VERSION_ROOT`, and `WG_PREFIX` identify the library, installation, and diagnostic prefix.
+- `WG_COMMON_LOADED` and `WG_TASK_LOADED` prevent repeated module loading.
+- `WG_EXIT_HANDLERS` and `WG_EXIT_PID` track process cleanup handlers.
+- `WG_MACHINE_RESULT` holds the consumed `WT_MACHINE` request without exporting it.
+- `WG_CMUX_SUPPORTED` records the verified cmux version.
+- `WG_NEW_PREFLIGHT` selects repository checks for remote task creation.
+- `WT_PROTOCOL` records the supported result protocol. `WT_FS` separates row fields.
+- `WT_COMMANDS`, `WT_COMMAND`, `WT_REMOTE`, and `WT_SUMMARY` describe command dispatch.
+- `WT_SPEC`, `WT_REMOTE_SPEC`, and `WT_HELP_COMMAND` select command options and help.
+- `WT_DIRNAME` holds the repository's worktree folder from `wt.dir`.
+- `WT_META`, `WT_META_FILE`, `WT_META_JSON`, and `WT_META_FILTER` hold cached sidecar data and its decoder.
+- `WT_STATUS_FIELDS` and `WT_SHOW_FIELDS` define task status fields.
+- `WT_BASE_FETCHES` caches base-fetch results. `WT_MERGE_TREE` caches merge support.
+- `WT_TMPFILES` and `WT_TMPFILES_PID` track temporary files for each process.
+- `WT_PR_FORM` holds the guard's approved `wt pr` diagnostic.
+<!-- Internal variables end. -->
 
 A model chosen with `wt new -m` persists for every `wt run` launch, including Claude resumes. It overrides
 model options in `WT_AGENT_ARGS`. When the task has a model, `wt` also removes Claude's `--fallback-model`.
@@ -1501,7 +1528,7 @@ this check. Before the fix:
   the asking host. The check failed closed. The VM's `wt open` did nothing except write a line to
   `~/.local/state/cmux-hook.log`.
 
-Now `ws_load` merges the row lists of every window. This widens what the check can see, not what it will
+Now `cmux_rows_load` merges the row lists of every window. This widens what the check can see, not what it will
 accept. The check still finds the row whose id is the sending row's workspace id, and compares that row's ssh
 destination with the host.
 

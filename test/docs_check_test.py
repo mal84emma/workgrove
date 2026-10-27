@@ -75,6 +75,71 @@ class DocsCheckTests(unittest.TestCase):
         path.write_text(path.read_text() + self.compatibility_rows().splitlines()[0] + "\n")
         self.assertEqual([], docs_check.check_compatibility(self.root))
 
+    def variable_fixture(self):
+        self.git("init", "-q")
+        self.write("README.md", "### Environment variables\n\n"
+                   "| Knob | Default and behavior |\n|---|---|\n"
+                   "| `WG_PUBLIC` | A setting. |\n\n"
+                   "<!-- Internal variables begin. -->\n"
+                   "- `WT_INTERNAL` holds generated data.\n"
+                   "<!-- Internal variables end. -->\n")
+
+    def test_documented_shell_and_python_variable_reads_pass(self):
+        self.variable_fixture()
+        self.write("bin/tool", '#!/usr/bin/env bash\nprintf "%s" "$WG_PUBLIC" "${WT_INTERNAL:-}"\n')
+        self.write("lib/reader.py", 'import os\nos.environ.get("WG_PUBLIC")\nos.environ["WT_INTERNAL"]\n')
+        self.git("add", ".")
+        self.assertEqual([], docs_check.check_variables(self.root))
+
+    def test_undocumented_reads_report_the_source_and_line(self):
+        self.variable_fixture()
+        self.write("bin/tool", '#!/bin/sh\necho "${WG_MISSING:-}"\n')
+        self.write("lib/reader.py", 'import os\nos.getenv("WT_MISSING")\n')
+        self.git("add", ".")
+        self.assertEqual(["bin/tool:2: undocumented variable read: WG_MISSING",
+                          "lib/reader.py:2: undocumented variable read: WT_MISSING"],
+                         docs_check.check_variables(self.root))
+
+    def test_variable_mentions_outside_inventory_do_not_satisfy_coverage(self):
+        self.variable_fixture()
+        path = self.root / "README.md"
+        path.write_text(path.read_text() + "Mention `WG_MISSING` in prose.\n"
+                        "### Other section\n| `WT_MISSING` | Wrong table. |\n")
+        self.write("lib/reader.sh", 'echo "$WG_MISSING" "$WT_MISSING"\n')
+        self.git("add", ".")
+        self.assertEqual(len(docs_check.check_variables(self.root)), 2)
+
+    def test_variable_scan_uses_tracked_bin_and_lib_sources(self):
+        self.variable_fixture()
+        self.write("lib/reader.sh", 'echo "$WG_PUBLIC"\n')
+        self.write("test/example.sh", 'echo "$WT_OUTSIDE"\n')
+        self.git("add", ".")
+        self.write("lib/untracked.sh", 'echo "$WT_UNTRACKED"\n')
+        self.assertEqual([], docs_check.check_variables(self.root))
+
+    def test_shell_variable_forms_and_comments(self):
+        source = ('# $WT_COMMENT ${WG_COMMENT} ((WT_COMMENT))\n'
+                  'WG_ASSIGNED=1 # $WT_INLINE\n'
+                  'echo "$WG_SIMPLE" "${WT_DEFAULT:-}" "${#WT_LENGTH}" "${!WT_INDIRECT}"\n'
+                  'echo "${WT_ARRAY[@]}" "${WT_TRIM##*/}" # ${WT_HIDDEN}\n'
+                  '((WT_COUNT > 0)); echo "$((WG_SECONDS * 10))"\n'
+                  '[[ -v WT_PRESENT ]]; [[ -v "WG_PRESENT" ]]\n'
+                  'sh -c \'echo "$WT_REMOTE"\'\n'
+                  'cat <<\'WT_DELIMITER\'\necho "$WG_PAYLOAD"\nWT_DELIMITER\n'
+                  'printf "# hash" "$WT_AFTER_HASH" # $WT_HIDDEN\n')
+        self.assertEqual({"WG_SIMPLE", "WT_DEFAULT", "WT_LENGTH", "WT_INDIRECT", "WT_ARRAY", "WT_TRIM",
+                          "WT_COUNT", "WG_SECONDS", "WT_PRESENT", "WG_PRESENT", "WT_REMOTE", "WG_PAYLOAD",
+                          "WT_AFTER_HASH"}, {name for _, name in docs_check.shell_variable_reads(source)})
+
+    def test_python_environment_forms_ignore_comments_strings_and_writes(self):
+        source = ('import os as system\nfrom os import environ as env, getenv as read_env\n'
+                  '# os.getenv("WT_COMMENT")\nlabel = "WT_LITERAL"\n'
+                  'system.environ["WT_WRITE"] = "generated"\n'
+                  'system.environ["WT_SUBSCRIPT"]\nsystem.environ.get("WG_GET", "")\n'
+                  'system.getenv("WT_GETENV")\nenv["WT_ALIAS"]\nread_env("WG_ALIAS")\n')
+        self.assertEqual({"WT_SUBSCRIPT", "WG_GET", "WT_GETENV", "WT_ALIAS", "WG_ALIAS"},
+                         {name for _, name in docs_check.python_variable_reads(source)})
+
     def test_valid_relative_links_and_encoded_anchors(self):
         self.assertEqual([], self.links("[go](docs/target.md#target)\n[local](#heading)\n# Heading\n"))
         self.write("docs/a file.md", "# Heading\n")

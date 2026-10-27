@@ -28,13 +28,13 @@ The probe alone adds `-T`; interactive callers can still request a terminal.
 `shell_join` in [common.sh](../lib/workgrove/common.sh) quotes each argument for the remote shell.
 Values such as `WT_MACHINE=1` appear inline in the command; the connection does not require SSH `AcceptEnv`.
 The Mac ships preflight and recovery scripts on standard input, so those scripts use the Mac's implementation.
-`host_environment_doctor` quotes its bootstrap with `shell_join` and runs it through `/bin/sh -c`.
+`host_setup` and `host_environment_doctor` quote their bootstraps with `shell_join` and run them through `/bin/sh -c`.
 The VM's login shell does not parse the bootstrap's script syntax.
 
 | Mac command or operation | VM command or input | What the Mac reads | File and reader |
 |---|---|---|---|
 | `new` | `new --no-workspace --prompt-stdin`, with requested name, repository, base, agent, and model options. Standard input holds the brief. | Status 0 and a `new/created` record supply `name`, `repo`, and `session`. The session must match `wt_session`. | `remote.sh`: `host_new`. |
-| Creation preflight | `sh -s -- <repo> <agent>` receives `version.sh` and `vm/host-new-preflight.sh`. | The Mac reads the version JSON without forwarding stdout. It warns on stderr when protocols differ or the version is unavailable, then continues. The script's exit status checks `wt`, the repository, tmux, and the requested or default agent. | `remote.sh`: `host_new_preflight`, `host_new`. |
+| Creation preflight | `sh -s -- <repo> <agent>` receives `version.sh`, `vm/python-runtime.sh`, `portable.py`, and `vm/host-new-preflight.sh`. It runs `portable.py doctor --preflight` before repository and agent checks. | The Mac reads the version JSON without forwarding stdout. It warns on stderr when protocols differ or the version is unavailable, then continues. The script's exit status checks `wt`, the repository, tmux, and the requested or default agent. | `remote.sh`: `host_new_preflight`, `host_new`. |
 | `attach` | `show <name> -r <repo>` with a machine-result request. | A `show/found` record supplies identity and the `agent`, `attached`, and `started` booleans. The name and derived session must match. | [recovery.sh](../lib/workgrove/recovery.sh): `host_attach`. |
 | `attach` recovery | tmux queries and `vm/reinit-client-*.sh` scripts. | The Mac checks session clients, a single PID/TTY pair, and fresh screen markers before replacing a client. | `recovery.sh`: `vm_session_detached`, `reattach_shell_row`, `reinit_task_client`. |
 | `show` | `show` with the supplied options. | The Mac forwards output and exit status. It does not parse the user's report. | `bin/wt`: `cmd_host`; `remote.sh`: `remote_wt`. |
@@ -43,17 +43,26 @@ The VM's login shell does not parse the bootstrap's script syntax.
 | `open` | `path <name> -r <repo>` with a machine-result request. | The recorded `path` must pass `hook_safe_path`. Older records and text-only VMs use stdout as the path. | `remote.sh`: `host_open`. |
 | `list` or `ls` | `list`, with `--all` added when `-r` is absent. | The Mac forwards the table or requested JSON. | `remote.sh`: `host_list`. |
 | `repos` | `repos` with the supplied options. A terminal receives `--table` unless a mode was requested. | The Mac forwards repository lookup, table, or porcelain output. | `remote.sh`: `host_repos`. |
-| `doctor` | `doctor`, followed by `version`. | The Mac prints checks, recognizes SSH failure, and compares the reported protocol with `WT_PROTOCOL`. Remote `--record` is unsupported. | [doctor.sh](../lib/workgrove/doctor.sh): `host_doctor`. |
+| Contract `doctor` | `doctor`, followed by `version`. | The Mac prints checks, recognizes SSH failure, and compares the reported protocol with `WT_PROTOCOL`. Remote `--record` is unsupported. | [doctor.sh](../lib/workgrove/doctor.sh): `host_doctor`. |
+| `setup` | `/bin/sh -c` runs `vm/python-runtime.sh` and starts `portable.py bootstrap --host <host>` from standard input with the setup options. | The Mac forwards output and status. Full setup can install Python on supported Ubuntu hosts; restore-only cannot. A tagged trust request permits interactive confirmation and retry. | [setup.sh](../lib/workgrove/setup.sh): `host_setup`. |
+| Environment `doctor` | `/bin/sh -c` runs `vm/python-runtime.sh` and starts `portable.py doctor --host <host>` from standard input. | `--environment`, `--root`, or `--json` selects this path. The Mac forwards text or readiness JSON and status without requiring installed `wt`. Missing Python emits a readiness error and returns 1. | `setup.sh`: `host_environment_doctor`. |
 | `version` | `version`. | The Mac forwards the VM's JSON object. | `bin/wt`: `cmd_host`; `remote.sh`: `remote_wt`. |
 | `update` | `version`, `update` with installation flags, then `version`. | The Mac validates version objects and prints before/after update records. It lends a terminal to interactive update confirmation. | `remote.sh`: `host_version`, `host_update`; `common.sh`: `vm_wt --tty`. |
 | `help`, `-h`, or `--help` | The normalized `help` command. | The Mac forwards help text and exit status. | `bin/wt`: `cmd_host`; `remote.sh`: `remote_wt`. |
 | Agent safety probe | The Mac sends its `tmux_agent` function on stdin to `bash -s`. | Status 0 means an agent runs; 1 means absent or idle; 2 means unreadable status. | `remote.sh`: `agent_on_vm`; [task.sh](../lib/workgrove/task.sh): `tmux_agent`. |
 | Task row startup | The SSH row runs `tmux_cmd`, then `wt run <name> -r <repo>` inside the new session. | The Mac uses the command's session identity, rather than parsing `wt run` output. | `remote.sh`: `remote_row`; `common.sh`: `vm_run_line`, `tmux_cmd`. |
-| `hosts` inventory | `sh -s` receives `version.sh` and `vm/probe-host.sh`. This is not a remote `wt hosts` command. | Tab-separated `wt_version`, `cpu`, `mem_kib`, `gpu_status`, and `gpu` rows become host JSON. | [hosts.sh](../lib/workgrove/hosts.sh): `probe_host`, `host_record`. |
+| `hosts` inventory | `sh -s` receives `version.sh`, `vm/probe-host.sh`, `vm/python-runtime.sh`, `vm/capacity.py`, and `portable.py`. This is not a remote `wt hosts` command. | `probe_schema`, `wt_version`, `cpu`, `mem_kib`, `gpu_status`, and `gpu` rows accompany `capabilities` and `readiness` JSON records. The Mac validates the records before building host JSON. | [hosts.sh](../lib/workgrove/hosts.sh): `probe_host`, `host_record`. |
 
 `host_new` consumes `-p` or `--prompt-stdin` on the Mac and sends both forms through the same standard-input channel.
 `--no-workspace` skips the Mac cmux requirement and row creation, but still runs VM preflight and creates the worktree.
 `host_new` does not retry creation after a disconnected SSH call because the VM might already have created the task.
+
+Creation preflight uses the Mac's uploaded `portable.py`, rather than the VM's installed copy.
+`doctor --preflight` refuses when readiness is false and `issues` does not contain `profile-missing`.
+Otherwise, it returns 0 without printing a readiness record.
+Without supported Python, preflight refuses a detected portable profile; a legacy host continues with the shell checks.
+The environment doctor returns `root_discovery` with its readiness report; the inventory probe omits it.
+Contract doctor retains its separate versioned result checks.
 
 `host_attach` uses the boolean facts when the VM supplies them.
 `state` remains display text. Older VMs use marked wording fallbacks for the values `none`, `shell only`, `shell only, detached`, `agent running`, and `agent running, detached`.
@@ -77,7 +86,13 @@ The VM needs no installed `wt` to run these probes.
 Each enhanced record has a name, one tab, and one JSON object.
 `host_record` validates each object before it builds the public inventory.
 Older probes can omit optional fields.
-Malformed enhanced records produce explicit failure codes instead of legacy hardware values.
+The reader requires exactly one object for each enhanced record, with schema `1`.
+It validates the capacity fields and the four readiness fields described below.
+A verified capacity record must contain non-null CPU and memory values.
+Issue codes must match `^[a-z0-9.-]+$`; GPU indices must contain decimal digits.
+A `probe_schema` value of `2`, or either enhanced record, selects enhanced validation.
+Missing or malformed enhanced records produce `invalid-capacity-report` or `invalid-readiness-report` instead of legacy values.
+The reader uses legacy CPU and memory values only when the probe has no enhanced marker or records.
 
 ### The capabilities record
 
