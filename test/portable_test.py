@@ -1339,7 +1339,7 @@ sys.exit(module["main"]())
             shutil.copytree(self.source, source, symlinks=True, ignore=shutil.ignore_patterns(".git"))
         env = dict(self.env, HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
                    GIT_CONFIG_GLOBAL=str(home / ".gitconfig"), FORCE_OS=platform, WT_HOST="test-host")
-        result = subprocess.run([os.environ.get("INSTALL_BASH", str(self.tools / "bash")),
+        result = subprocess.run([os.environ.get("INSTALL_BASH") or str(self.tools / "bash"),
                                  str(source / "install.sh"), *flags], env=env, stdin=subprocess.DEVNULL,
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1356,7 +1356,8 @@ sys.exit(module["main"]())
                     self.assertEqual(actual, expected)
 
     def test_agent_policy_linux_parity(self):
-        classic = self.classic_config()
+        with patch.dict(os.environ, INSTALL_BASH=""):
+            classic = self.classic_config()
         self.install()
         self.assert_config_parity(classic)
         settings = json.loads((self.home / ".claude/settings.json").read_text())
