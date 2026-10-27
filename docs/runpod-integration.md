@@ -79,7 +79,7 @@ Workgrove must not select credentials, merge sessions, replace a supplier's envi
 The Mac supplies setup and doctor code over ordinary SSH because a new or restarted host can lack its remote `wt` executable.
 Bootstrap delivery uses workgrove's existing safe argument quoting.
 
-Preparation does not need a row, tmux session, or task.
+Do not create a row, tmux session, or task merely to prepare a host.
 It must not create compute, authenticate project services, install project dependencies, or invoke project hooks.
 Preparation must not require oh-my-zsh or impose optional shell preferences.
 
@@ -157,7 +157,8 @@ Task creation does not resume old tasks or require every saved agent to restart 
 Prepared hosts retain the existing picker, task flags, paths, row descriptions, status, open relay, and removal safeguards.
 The [task JSON contract](wt-json.md) owns task schemas.
 
-No separate cloud picker or remote form of a local-only command is required.
+Do not add a separate cloud picker.
+Do not add remote forms for commands currently restricted to local execution.
 Task removal never stops compute.
 
 ## Confidentiality and publication
