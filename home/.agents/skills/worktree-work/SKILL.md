@@ -28,5 +28,5 @@ If conflicts occur, resolve them inside the worktree. Then run `git rebase --con
 ## Handing back
 
 Follow the [GitHub write policy](../../../.claude/AGENTS.md#github-writes-and-publishing)
-and the [reporting requirements](../../../.claude/AGENTS.md#reporting).
-The [approved command forms](../../../.claude/AGENTS.md#run-approved-github-commands) cover authorized GitHub writes.
+and the [reporting requirements](../../../.claude/TASKS.md#reporting).
+The [approved command forms](../../../.claude/TASKS.md#run-approved-github-commands) cover authorized GitHub writes.

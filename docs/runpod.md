@@ -88,7 +88,7 @@ wt -H <host> doctor --json
 
 Restore refuses a different saved alias before changing the home folder.
 Its stderr summary reports the active root, alias, personal state, sign-in file presence, and saved Git link.
-Agents follow the [portable restore policy](../home/.claude/AGENTS.md#portable-restore-only) before restoring without asking.
+Agents follow the [portable restore policy](../home/.claude/TASKS.md#portable-restore-only) before restoring without asking.
 The user handles host keys, sign-ins, full setup, and task recovery flags.
 
 Restore-only backs up regular files that the host's start command writes in the home folder, including `~/.gitconfig`.

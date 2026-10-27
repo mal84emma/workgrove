@@ -482,7 +482,8 @@ def check_citations(root):
 
 def check_links(root):
     errors = []
-    paths = [root / "README.md", root / "AGENTS.md", root / "home/.claude/AGENTS.md"]
+    paths = [root / "README.md", root / "AGENTS.md"]
+    paths += sorted((root / "home/.claude").glob("*.md"))
     paths += sorted((root / "docs").rglob("*.md"))
     paths += sorted((root / "home/.agents/skills").rglob("*.md"))
     cache = {}

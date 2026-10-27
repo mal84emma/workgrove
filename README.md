@@ -162,6 +162,7 @@ workgrove/
 │   ├── .oh-my-zsh/custom/themes/workgrove.zsh-theme   with the .zshrc opt-in
 │   ├── .claude/
 │   │   ├── AGENTS.md          the working conventions both agents read
+│   │   ├── TASKS.md           task procedures that agents read on demand
 │   │   ├── CLAUDE.md          one line: @AGENTS.md
 │   │   ├── settings.base.json
 │   │   ├── keybindings.json   opt-in

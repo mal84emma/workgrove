@@ -41,7 +41,7 @@ When the user names a model, pass `-m <model>`. This works with Claude or Codex,
 ## Task policy and brief
 
 Follow the [task policy](../../../.claude/AGENTS.md#tasks-run-in-worktrees)
-and the [reporting requirements](../../../.claude/AGENTS.md#reporting).
+and the [reporting requirements](../../../.claude/TASKS.md#reporting).
 Use the [task-driver procedure](../task-driver/SKILL.md#driving-tasks-from-a-driver-session)
 for a complete brief and VM preparation before launch.
 If you omit the name, pass `-p` so `wt` can derive the name from the brief.
@@ -57,7 +57,7 @@ For several tasks, or for a task on a VM from the Mac, see `task-driver`.
 
 ## Per-repo setup (once, on request)
 
-Follow the [per-repo setup policy](../../../.claude/AGENTS.md#per-repo-setup). Each repo needs these files once.
+Follow the [per-repo setup policy](../../../.claude/AGENTS.md#tasks-run-in-worktrees). Each repo needs these files once.
 
 - `.wt-include` in the repo root: gitignore-style patterns of ignored files to copy into each new worktree (for example, `.env` or local configs).
 - `.wt-setup` executable in the repo root: runs inside every new worktree after creation (for example, `uv sync`, `npm ci`, or `conda env` activation notes).

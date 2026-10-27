@@ -15,7 +15,7 @@ Use this skill to show a task worktree to the user. Find the user's intent first
 | "what changed", "how far is it", "status of <task>" | `wt show <name>` | Summarize in a few sentences. |
 | "what tasks are running", "list the worktrees" | `wt list` | Summarize. |
 
-Follow the [display and status policy](../../../.claude/AGENTS.md#what-to-do-in-each-situation).
+Follow the [display and status policy](../../../.claude/TASKS.md#task-lifecycle).
 
 ## Commands
 
