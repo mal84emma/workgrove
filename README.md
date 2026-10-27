@@ -226,6 +226,7 @@ workgrove/
 │   │       └── windows.json
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
+│   ├── hosts_records_test.py  host fallback records and inventory validation
 │   ├── ssh-host-smoke.sh      offline SSH fragment registration tests
 │   ├── ssh_host_test.py       synthetic registration, trust, and confidentiality fixtures
 │   ├── portable-smoke.sh      portable installation and explicit restoration

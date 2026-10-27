@@ -18,8 +18,8 @@ WG_PROBE_MIDDLE
   cat <<'WG_PROBE_END'
 WG_READINESS_SOURCE
 else
-printf 'capabilities\t{"schema":1,"capacity_verified":false,"cpu_logical":null,"memory_mib":null,"capacity_issues":["%s"]}\n' "$wg_python_issue"
-printf 'readiness\t{"schema":1,"ready":false,"status":"incomplete","issues":["%s"]}\n' "$wg_python_issue"
+printf 'capabilities\t'; wg_capabilities_error "$wg_python_issue"
+printf 'readiness\t'; wg_python_readiness_error
 fi
 WG_PROBE_END
 }
@@ -62,10 +62,15 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
   return "$rc"
 }
 
+host_unavailable_record() {
+  jq -nc --arg host "$1" --arg error "$2" \
+    '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,capacity_verified:null,capacity_issues:[],environment:"unknown",workgrove_ready:null,readiness_status:"unknown",readiness_issues:[],gpu_allocation_verified:null,gpu_status:"unknown",gpus:[],error:$error}'
+}
+
 host_record() { # stable JSON for agents; unknown hardware never becomes a false zero
   local host="$1" report="" rc=0 err_file err="" version capabilities readiness
   if ! valid_host "$host"; then
-    jq -nc --arg host "$host" '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,capacity_verified:null,capacity_issues:[],environment:"unknown",workgrove_ready:null,readiness_status:"unknown",readiness_issues:[],gpu_allocation_verified:null,gpu_status:"unknown",gpus:[],error:"invalid SSH alias"}'
+    host_unavailable_record "$host" "invalid SSH alias"
     return
   fi
   err_file=$(mktemp "${TMPDIR:-/tmp}/wt-host-error.XXXXXX") || return 1
@@ -78,8 +83,7 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
   if [[ $rc -ne 0 ]]; then
     err=$(sed -n '1p' "$err_file" | LC_ALL=C tr -d '\r' | cut -c1-180)
     rm -f "$err_file"
-    jq -nc --arg host "$host" --arg error "SSH probe failed (exit $rc)${err:+: $err}" \
-      '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,capacity_verified:null,capacity_issues:[],environment:"unknown",workgrove_ready:null,readiness_status:"unknown",readiness_issues:[],gpu_allocation_verified:null,gpu_status:"unknown",gpus:[],error:$error}'
+    host_unavailable_record "$host" "SSH probe failed (exit $rc)${err:+: $err}"
     return
   fi
   rm -f "$err_file"
@@ -91,7 +95,7 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
       and (.cpu_logical == null or (.cpu_logical | type == "number" and . >= 0 and floor == .))
       and (.memory_mib == null or (.memory_mib | type == "number" and . >= 0 and floor == .))
       and (if .capacity_verified then .cpu_logical != null and .memory_mib != null else true end)
-      and (.capacity_issues == null or (.capacity_issues | type == "array" and all(.[]; type == "string" and test("^[a-z0-9-]+$"))))
+      and (.capacity_issues == null or (.capacity_issues | type == "array" and all(.[]; type == "string" and test("^[a-z0-9.-]+$"))))
       and (.environment == null or (.environment | IN("host", "container", "unknown")))
       and (.gpu_allocation_verified == null or (.gpu_allocation_verified | type == "boolean"))
       and (.gpu_indices == null or (.gpu_indices | type == "array" and all(.[]; type == "string" and test("^[0-9]+$")))))
@@ -103,8 +107,10 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
       and (.issues | type == "array" and all(.[]; type == "string" and test("^[a-z0-9.-]+$"))))
     then .[0] else error("invalid readiness") end' 2>/dev/null) || readiness='null'
   if [[ $report == *$'probe_schema\t2'* || $report == *$'capabilities\t'* || $report == *$'readiness\t'* ]]; then
-    [[ $capabilities != null ]] || capabilities='{"schema":1,"capacity_verified":false,"cpu_logical":null,"memory_mib":null,"capacity_issues":["invalid-capacity-report"]}'
-    [[ $readiness != null ]] || readiness='{"schema":1,"ready":false,"status":"incomplete","issues":["invalid-readiness-report"]}'
+    # shellcheck source=lib/workgrove/vm/python-runtime.sh
+    source "${BASH_SOURCE[0]%/*}/vm/python-runtime.sh" || return
+    [[ $capabilities != null ]] || capabilities=$(wg_capabilities_error invalid-capacity-report)
+    [[ $readiness != null ]] || readiness=$(wg_readiness_error invalid-readiness-report)
   fi
   printf '%s' "$report" | jq -Rsc --argjson capabilities "$capabilities" --argjson readiness "$readiness" --arg host "$host" --argjson version "$version" '
     def field($rows; $key): [ $rows[] | select(.[0] == $key) | .[1] ][0] // "";
