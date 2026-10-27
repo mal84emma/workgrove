@@ -32,6 +32,7 @@ exit "${CODE_FAIL:-0}"
 CODE
 cat > "$TEST_ROOT/bin/ssh" <<'SSH'
 #!/bin/sh
+[ -z "${SSH_CALL_LOG:-}" ] || printf '%s\n' "$*" >>"$SSH_CALL_LOG"
 case "$*" in
   *' path task -r /vm/repos/repo')
     if [ -n "${REMOTE_PATH_RESULT:-}" ]; then printf '%s\n' "$REMOTE_PATH_RESULT" >&2; exit 1; fi
@@ -391,6 +392,51 @@ scenario_close_protocol_hint() {
   end_scenario
 }
 scenario_close_protocol_hint
+
+scenario_host_check_deadline() {
+  begin_scenario 'the hook bounds a slow SSH host check by its close budget' || return 0
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  printf 'Host test-vm\n# wt-ssh-host\n' >"$HOME/.ssh/config"
+  cat >"$TEST_ROOT/bin/python3" <<'PYTHON'
+#!/bin/sh
+printf started >"$HOST_CHECK_STARTED"
+exec sleep 25
+PYTHON
+  chmod +x "$TEST_ROOT/bin/python3"
+  local started=$SECONDS out
+  out=$(HOST_CHECK_STARTED="$TEST_ROOT/check-started" hook)
+  assert_grep 'the managed host check ran' "$TEST_ROOT/check-started" started
+  assert_eq 'the hook finishes within twenty seconds' 1 "$((SECONDS - started < 20))"
+  assert_eq 'a timed-out check retains the notification' '' "$out"
+  lacks "$CMUX_LOG" 'workspace close'
+  rm "$TEST_ROOT/bin/python3"
+  printf 'Host test-vm\n' >"$HOME/.ssh/config"
+  end_scenario
+}
+scenario_host_check_deadline
+
+scenario_host_check_signal() {
+  begin_scenario 'a signal-killed SSH validator cannot authorize row closure' || return 0
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  printf 'Host test-vm\n# wt-ssh-host\n' >"$HOME/.ssh/config"
+  cat >"$TEST_ROOT/bin/python3" <<'PYTHON'
+#!/bin/sh
+printf started >"$HOST_CHECK_STARTED"
+kill -KILL "$$"
+PYTHON
+  chmod +x "$TEST_ROOT/bin/python3"
+  local out
+  : >"$TEST_ROOT/validator-ssh-calls"
+  out=$(SSH_CALL_LOG="$TEST_ROOT/validator-ssh-calls" HOST_CHECK_STARTED="$TEST_ROOT/signal-check-started" hook)
+  assert_grep 'the managed validator ran' "$TEST_ROOT/signal-check-started" started
+  assert_eq 'a killed validator retains the notification' '' "$out"
+  assert_eq 'a killed validator prevents SSH' 0 "$(wc -l <"$TEST_ROOT/validator-ssh-calls" | tr -d ' ')"
+  lacks "$CMUX_LOG" 'workspace close'
+  rm "$TEST_ROOT/bin/python3"
+  printf 'Host test-vm\n' >"$HOME/.ssh/config"
+  end_scenario
+}
+scenario_host_check_signal
 
 scenario_notification_budget() {
   begin_scenario 'notification bursts do not consume the open request budget' || return 0
