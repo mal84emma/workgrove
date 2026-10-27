@@ -3,7 +3,7 @@
 This investigation explains a removal refusal after a stacked task's pull request (PR) merged through a squash.
 It recommends a bounded design for safe comparison and session closure.
 The design is proposed, not implemented.
-Changes add fixtures, this report, and its README entry; production behavior remains unchanged.
+Changes add fixtures, this report, and its entry in the development layout; production behavior remains unchanged.
 
 ## Result and incident evidence
 
