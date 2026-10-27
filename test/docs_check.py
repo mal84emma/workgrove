@@ -563,7 +563,17 @@ def shell_variable_reads(text):
     Ignore comments, assignment names, record labels, and heredoc delimiters.
     """
     tokens = re.compile(r"('([^']*)'|\"(?:\\.|[^\"\\])*\"|\$\{[^}]*\}|\\.)|(?<![^\s;|&()])#[^\n]*")
-    source = tokens.sub(lambda match: match[0] if match[1] else blank(match[0]), text)
+    def mask(source):
+        def token(match):
+            value = match[0]
+            if not match[1] or value.startswith("\\"):
+                return blank(value)
+            if value.startswith("'"):
+                return "'" + mask(value[1:-1]) + "'"
+            return re.sub(r"\\.", lambda escaped: blank(escaped[0]), value)
+        return tokens.sub(token, source)
+
+    source = mask(text)
     expansion = re.compile(r"\$(?:\{[!#]?)?(" + VARIABLE_NAME + r")\b")
     for match in expansion.finditer(source):
         yield text.count("\n", 0, match.start(1)) + 1, match[1]
@@ -572,6 +582,9 @@ def shell_variable_reads(text):
             yield text.count("\n", 0, arithmetic.start(1) + match.start()) + 1, match[0]
     for match in re.finditer(r"(?<!\S)-v\s+[\"']?(" + VARIABLE_NAME + r")\b", source):
         yield text.count("\n", 0, match.start(1)) + 1, match[1]
+    for command in re.finditer(r"\btmux\s+show-environment\b[^\n;|&]*", source):
+        for match in re.finditer(r"\b" + VARIABLE_NAME + r"\b", command[0]):
+            yield text.count("\n", 0, command.start() + match.start()) + 1, match[0]
 
 
 def python_variable_reads(text):
@@ -625,7 +638,7 @@ def check_variables(root):
             continue
         path = root / name
         text = path.read_text()
-        if path.suffix == ".py":
+        if path.suffix == ".py" or re.match(r"#![^\n]*\bpython[0-9.]*\b", text):
             reads = python_variable_reads(text)
         elif path.suffix == ".sh" or re.match(r"#![^\n]*\b(?:ba|z|da|k)?sh\b", text):
             reads = shell_variable_reads(text)

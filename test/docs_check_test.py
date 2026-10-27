@@ -117,6 +117,30 @@ class DocsCheckTests(unittest.TestCase):
         self.write("lib/untracked.sh", 'echo "$WT_UNTRACKED"\n')
         self.assertEqual([], docs_check.check_variables(self.root))
 
+    def test_tmux_environment_read_requires_documentation(self):
+        self.variable_fixture()
+        self.write("bin/tool", '#!/bin/sh\ntmux show-environment -t "=$session" WT_CMUX_CLOSE_ON_EXIT\n')
+        self.git("add", ".")
+        self.assertEqual(["bin/tool:2: undocumented variable read: WT_CMUX_CLOSE_ON_EXIT"],
+                         docs_check.check_variables(self.root))
+        path = self.root / "README.md"
+        path.write_text(path.read_text().replace("`WT_INTERNAL`", "`WT_CMUX_CLOSE_ON_EXIT`"))
+        self.assertEqual([], docs_check.check_variables(self.root))
+
+    def test_extensionless_python_command_requires_documentation(self):
+        self.variable_fixture()
+        self.write("bin/tool", '#!/usr/bin/env python3\nimport os\nos.environ.get("WG_UNDOCUMENTED")\n')
+        self.git("add", ".")
+        self.assertEqual(["bin/tool:3: undocumented variable read: WG_UNDOCUMENTED"],
+                         docs_check.check_variables(self.root))
+
+    def test_shell_escaped_literals_and_deferred_comments_are_hidden(self):
+        source = ('printf "%s" "\\$WT_LITERAL" \\$WT_UNQUOTED\n'
+                  "sh -c '# $WT_COMMENT\necho \"$WG_LIVE\"'\n"
+                  'echo "# $WT_HASH_DATA" # $WT_COMMENT\n')
+        self.assertEqual([(3, "WG_LIVE"), (4, "WT_HASH_DATA")],
+                         list(docs_check.shell_variable_reads(source)))
+
     def test_shell_variable_forms_and_comments(self):
         source = ('# $WT_COMMENT ${WG_COMMENT} ((WT_COMMENT))\n'
                   'WG_ASSIGNED=1 # $WT_INLINE\n'
