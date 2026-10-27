@@ -15,6 +15,7 @@ wt_scenarios() {
   "$@" scenario_prune_agrees "7. wt prune --dry-run keeps exactly what wt rm refuses"
   "$@" scenario_self_rm_vm "7b. a VM task can remove itself after changing to its main checkout"
   "$@" scenario_cmux "8. a cmux that is not running, and one that is"
+  "$@" scenario_commands "8b. wt diff / sync / pr / repos / driver use isolated services"
   "$@" scenario_host_args "9. wt -H: the checks that happen before any ssh"
   "$@" scenario_connected_attach "10. wt -H attach checks connected clients and shell prompts"
   "$@" scenario_shared_helpers "11. bash startup, shared library loading, and tmux launch behavior"
