@@ -63,6 +63,26 @@ class HostRecordsTests(unittest.TestCase):
         self.assertEqual(record[kind + "_issues"], [issue])
         self.assertIs(record["capacity_verified" if kind == "capacity" else "workgrove_ready"], False)
 
+    def test_version_capabilities_survive_inventory(self):
+        for capabilities in ([], ["show-facts", "future-capability"]):
+            report = "wt_version\t" + json.dumps({"commit": "abc", "protocol": 1,
+                                                    "capabilities": capabilities})
+            record = self.record(report)
+            self.assertEqual(record["wt_capabilities"], capabilities)
+            self.assertEqual(record["wt_commit"], "abc")
+        for capabilities in (None, "show-facts", [1]):
+            report = "wt_version\t" + json.dumps({"commit": "abc", "protocol": 1,
+                                                    "capabilities": capabilities})
+            record = self.record(report)
+            self.assertEqual(record["wt_capabilities"], [])
+            self.assertEqual(record["wt_protocol"], 1)
+
+    def test_legacy_and_unavailable_capabilities_are_empty(self):
+        for report, host, status in (("wt_version\t{\"commit\":\"abc\",\"protocol\":1}", "test-host", "0"),
+                                     ("", "test-host", "0"), ("", "invalid alias", "0"),
+                                     ("", "test-host", "42")):
+            self.assertEqual(self.record(report, host, status)["wt_capabilities"], [])
+
     def test_shell_fallbacks_and_python_runtime_error(self):
         for issue in ("missing-python", "python-3.9-required", "invalid-capacity-report"):
             report = self.shell('''

@@ -547,6 +547,10 @@ WT
   done
   assert_eq 'valid extra fields are normalized' '{"commit":"abc","protocol":1}' \
     "$(wt_read_version <<<'{"extra":true,"protocol":1,"commit":"abc"}')"
+  reply='{"commit":"abc","protocol":1,"capabilities":["show-facts","future"]}'
+  assert_eq 'capability arrays survive validation' "$reply" "$(wt_read_version <<<"$reply")"
+  assert_eq 'capabilities survive the VM probe' "$reply" \
+    "$(HOME="$home" VERSION_REPLY="$reply" wt_vm_version)"
   end_scenario
 }
 scenario_version_validation
@@ -954,7 +958,7 @@ scenario_row_windows() {
 scenario_row_windows
 
 scenario_row_failures() {
-  begin_scenario 'cmux window failures and older versions' || return 0
+  begin_scenario 'cmux window failures' || return 0
   for policy in skip stop checked; do
     row_cmux_reset
     ROW_WINDOWS="${ROW_WINDOWS%]},{\"id\":\"$ROW_WINDOW_TWO\"},{\"id\":\"$ROW_WINDOW_THREE\"}]"
@@ -966,24 +970,24 @@ scenario_row_failures() {
       check_rows_load "$policy" 142 '' 0
       assert_eq "$policy stops at the failing window" "workspace list --json --window $ROW_WINDOW_TWO" "$(tail -1 "$FAKE_CMUX_STATE/calls.log")"
     fi
-    row_cmux_reset
-    ROW_WINDOWS='' ROW_WINDOWS_RC=1
-    if [[ $policy == checked ]]; then
-      check_rows_load "$policy" 1 '' 0
-      assert_eq 'checked requires successful enumeration' '--json list-windows' "$(cat "$FAKE_CMUX_STATE/calls.log")"
-    else
-      check_rows_load "$policy" 0 "{\"workspaces\":[$ROW_ONE]}" 0
-      assert_eq "$policy falls back without --json list-windows" $'--json list-windows\nworkspace list --json' "$(cat "$FAKE_CMUX_STATE/calls.log")"
-    fi
   done
-  row_cmux_reset
-  ROW_WINDOWS='a window line in a new format'
-  check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
-  check_rows_load checked 1 '' 0
-  row_cmux_reset
-  ROW_WINDOWS="${ROW_WINDOWS%]}"',{ "id":"unrecognized-window"}]'
-  check_rows_load stop 0 "{\"workspaces\":[$ROW_ONE]}" 0
-  check_rows_load checked 1 '' 0
+  for policy in skip stop checked; do
+    row_cmux_reset
+    ROW_WINDOWS_RC=142
+    if [[ $policy == skip ]]; then check_rows_load "$policy" 0 '{"workspaces":[]}' 0
+    elif [[ $policy == stop ]]; then check_rows_load "$policy" 142 '' 0
+    else check_rows_load "$policy" 1 '' 0; fi
+    assert_eq "$policy never queries an unscoped row list after enumeration fails" \
+      '--json list-windows' "$(cat "$FAKE_CMUX_STATE/calls.log")"
+    for invalid in 'a window line in a new format' '[{"id":"unrecognized-window"}]' '{}'; do
+      row_cmux_reset
+      ROW_WINDOWS=$invalid
+      if [[ $policy == skip ]]; then check_rows_load "$policy" 0 '{"workspaces":[]}' 0
+      else check_rows_load "$policy" 1 '' 0; fi
+      assert_eq "$policy never queries rows after invalid enumeration" \
+        '--json list-windows' "$(cat "$FAKE_CMUX_STATE/calls.log")"
+    done
+  done
   row_cmux_reset
   ROW_WINDOWS='[]'
   check_rows_load checked 0 "{\"workspaces\":[$ROW_ONE]}" 1

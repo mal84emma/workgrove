@@ -50,6 +50,8 @@ scenario_version() {
   expected=$(git -C "$TEST_ROOT/clone" rev-parse --short HEAD)
   json=$(run_wt -H fixture version)
   assert_eq 'remote version describes VM installation' true "$(jq -r --arg commit "$expected" '.commit == $commit and .protocol == 1' <<<"$json")"
+  assert_eq 'VM reports the compatibility capabilities' true \
+    "$(jq -r '.capabilities | sort == (["result-records","show-facts","path-field","model-option","agent-probe","doctor-records"] | sort)' <<<"$json")"
   json=$(bash "$TEST_ROOT/vm/.local/bin/wt" version)
   printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/bin/tmux"
   chmod +x "$TEST_ROOT/bin/tmux"
@@ -68,7 +70,8 @@ scenario_version() {
   cp -R "$TEST_ROOT/source" "$TEST_ROOT/ambient/seed"
   rm -rf "$TEST_ROOT/ambient/seed/.git"
   json=$(bash "$TEST_ROOT/ambient/seed/bin/wt" version)
-  assert_eq 'seed never borrows a parent repository commit' '{"commit":"unknown","protocol":1}' "$json"
+  assert_eq 'seed never borrows a parent repository commit' true \
+    "$(jq -r '.commit == "unknown" and .protocol == 1' <<<"$json")"
   run_wt version unexpected >/dev/null 2>&1 || rc=$?
   assert_eq 'local version rejects arguments' 1 "$rc"
   rc=0
@@ -86,6 +89,8 @@ scenario_update() {
   output=$(bash "$TEST_ROOT/clone/bin/wt" update)
   json=$(records <<<"$output")
   assert_eq 'local update reports both stages' true "$(jq -r --arg commit "$expected" 'map(.stage) == ["before","after"] and all(.[]; .side == "local" and .commit == $commit and .protocol == 1)' <<<"$json")"
+  assert_eq 'update records retain their existing keys' true \
+    "$(jq -r 'all(.[]; keys == ["commit","event","protocol","side","stage"])' <<<"$json")"
   assert_eq 'existing up-to-date line remains' true "$([[ $output == *'Already up to date.'* ]] && echo true || echo false)"
   assert_eq 'scratch installer runs' true "$([[ $output == *'installer stub'* ]] && echo true || echo false)"
   local flag

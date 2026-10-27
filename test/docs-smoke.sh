@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check the README tree, required citations, and local documentation links.
+# Check the README tree, compatibility markers, citations, and local documentation links.
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 # shellcheck source=test/lib.sh
@@ -26,6 +26,11 @@ scenario_links() {
   check_docs links
   end_scenario
 }
+scenario_compatibility() {
+  begin_scenario 'compatibility inventory matches tracked markers' || return 0
+  check_docs compatibility
+  end_scenario
+}
 scenario_regressions() {
   begin_scenario 'documentation checker regression fixtures' || return 0
   local output status=0
@@ -34,6 +39,7 @@ scenario_regressions() {
   end_scenario
 }
 scenario_regressions
+scenario_compatibility
 scenario_layout
 scenario_citations
 scenario_links

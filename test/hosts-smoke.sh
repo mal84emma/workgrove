@@ -34,6 +34,11 @@ if [[ "$PROBE_MODE" == doctor-source ]]; then
   cat >"$TEST_ROOT/$host.source"
   exit 0
 fi
+if [[ "$PROBE_MODE" == compatibility ]]; then
+  [[ "$host" != unavailable ]] || { cat >/dev/null; exit 255; }
+  HOME="$TEST_ROOT/$host" fake_ssh_run "$cmd"
+  exit $?
+fi
 if [[ "$PROBE_MODE" == actual ]]; then
   script=$(mktemp "$TEST_ROOT/probe.XXXXXX")
   sed -e "s|/proc/meminfo|$TEST_ROOT/fixtures/meminfo|g" \
@@ -190,6 +195,34 @@ scenario_enhanced_reports() {
   end_scenario
 }
 scenario_enhanced_reports
+
+# shellcheck disable=SC2031  # run_stubbed_probe changes REPO only inside its subshell.
+scenario_vm_compatibility() {
+  begin_scenario 'installed VM capabilities identify legacy and unavailable hosts' || return 0
+  local json command output
+  mkdir -p "$TEST_ROOT/current/.local/bin" "$TEST_ROOT/legacy/.local/bin"
+  ln -s "$REPO/bin/wt" "$TEST_ROOT/current/.local/bin/wt"
+  printf '#!/bin/sh\nprintf '\''{"commit":"legacy","protocol":1}\n'\''\n' >"$TEST_ROOT/legacy/.local/bin/wt"
+  chmod +x "$TEST_ROOT/legacy/.local/bin/wt"
+  printf 'Host current legacy unavailable\n' >"$TEST_ROOT/home/.ssh/config"
+  PROBE_MODE=compatibility
+  json=$(run_wt hosts --json)
+  assert_eq 'the current VM retains show facts through the uploaded version probe' true \
+    "$(jq -r '.[0].wt_capabilities | index("show-facts") != null' <<<"$json")"
+  assert_eq 'older VM commit and protocol remain available' true \
+    "$(jq -r '.[1] | .wt_commit == "legacy" and .wt_protocol == 1 and .wt_capabilities == []' <<<"$json")"
+  command=$(python3 - "$REPO/docs/vm-protocol.md" <<'PYTHON'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text().split("### Measure group B", 1)[1]
+print(text.split("```bash\n", 1)[1].split("```", 1)[0].split(" | ", 1)[1])
+PYTHON
+  )
+  output=$(bash -c "$command" <<<"$json")
+  assert_eq 'the documented command lists every host with unknown capabilities' $'legacy\nunavailable' "$output"
+  printf 'Group B fake VM check:\n%s\n' "$output"
+  end_scenario
+}
+scenario_vm_compatibility
 
 scenario_probe_deadline() {
   begin_scenario 'client deadline bounds an unresponsive SSH session' || return 0

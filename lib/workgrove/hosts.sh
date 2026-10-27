@@ -62,7 +62,7 @@ probe_host() { # one SSH login proves remote-command access and gathers Linux ha
 
 host_unavailable_record() {
   jq -nc --arg host "$1" --arg error "$2" \
-    '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,cpu_logical:null,memory_mib:null,capacity_verified:null,capacity_issues:[],environment:"unknown",workgrove_ready:null,readiness_status:"unknown",readiness_issues:[],gpu_allocation_verified:null,gpu_status:"unknown",gpus:[],error:$error}'
+    '{host:$host,status:"unavailable",wt_commit:null,wt_protocol:null,wt_capabilities:[],cpu_logical:null,memory_mib:null,capacity_verified:null,capacity_issues:[],environment:"unknown",workgrove_ready:null,readiness_status:"unknown",readiness_issues:[],gpu_allocation_verified:null,gpu_status:"unknown",gpus:[],error:$error}'
 }
 
 host_record() { # stable JSON for agents; unknown hardware never becomes a false zero
@@ -133,7 +133,7 @@ host_record() { # stable JSON for agents; unknown hardware never becomes a false
              | $capabilities.gpu_indices | index($index)) | .value]
        else $gpus end) as $allocated_gpus
     | {host:$host,status:"available",
-       wt_commit:$version.commit,wt_protocol:$version.protocol,
+       wt_commit:$version.commit,wt_protocol:$version.protocol,wt_capabilities:($version.capabilities // []),
        cpu_logical:(if $capabilities != null then $capabilities.cpu_logical else (if $cpu != null and $cpu > 0 then $cpu else null end) end),
        memory_mib:(if $capabilities != null then $capabilities.memory_mib else (if $mem != null and $mem > 0 then ($mem / 1024 | floor) else null end) end),
        capacity_verified:$capabilities.capacity_verified,capacity_issues:($capabilities.capacity_issues // []),

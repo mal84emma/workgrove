@@ -32,6 +32,49 @@ class DocsCheckTests(unittest.TestCase):
         env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
         subprocess.run(["git", *args], cwd=self.root, env=env, check=True, capture_output=True)
 
+    def compatibility_fixture(self, rows):
+        self.git("init", "-q")
+        self.write("docs/vm-protocol.md", "## Compatibility inventory\n\n"
+                   "| File | Function | Group | Condition | Check | Removal |\n"
+                   "|---|---|---|---|---|---|\n" + rows)
+        self.write("lib/example.sh", "first() {\n  # WT_COMPAT: First.\n}\n"
+                   "# WT_COMPAT: Second.\nsecond() { :; }\n")
+        self.write("lib/example.py", "def confirm():\n    # WT_COMPAT: Python.\n    pass\n")
+        self.write("bin/tool", "# WT_COMPAT: Top level.\ntrue\n")
+        self.write("install.sh", "install() {\n  # WT_COMPAT: Installer.\n}\n")
+        self.git("add", ".")
+
+    def compatibility_rows(self):
+        return ("| `lib/example.sh` | `first` | B | Old. | Probe. | Remove. |\n"
+                "| `lib/example.sh` | `second` | B | Old. | Probe. | Remove. |\n"
+                "| `lib/example.py` | `confirm` | B | Old. | Probe. | Remove. |\n"
+                "| `bin/tool` | `<module>` | B | Old. | Probe. | Remove. |\n"
+                "| `install.sh` | `install` | B | Old. | Probe. | Remove. |\n")
+
+    def test_compatibility_matches_shell_python_bin_and_installer(self):
+        self.compatibility_fixture(self.compatibility_rows())
+        self.write("lib/untracked.py", "# WT_COMPAT: Not tracked.\n")
+        self.write("test/example.sh", "# WT_COMPAT: Outside the scan.\n")
+        self.git("add", "test/example.sh")
+        self.assertEqual([], docs_check.check_compatibility(self.root))
+
+    def test_compatibility_reports_missing_marker_and_stale_entry(self):
+        rows = self.compatibility_rows().replace("`first`", "`removed`")
+        self.compatibility_fixture(rows)
+        errors = docs_check.check_compatibility(self.root)
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(any("lib/example.sh:2:" in error and "first" in error for error in errors))
+        self.assertTrue(any("removed" in error and "no code marker" in error for error in errors))
+
+    def test_compatibility_counts_each_marker_in_one_function(self):
+        self.compatibility_fixture(self.compatibility_rows())
+        self.write("lib/example.sh", "first() {\n# WT_COMPAT: One.\n# WT_COMPAT: Two.\n}\n"
+                   "second() {\n# WT_COMPAT: Three.\n}\n")
+        self.assertEqual(len(docs_check.check_compatibility(self.root)), 1)
+        path = self.root / "docs/vm-protocol.md"
+        path.write_text(path.read_text() + self.compatibility_rows().splitlines()[0] + "\n")
+        self.assertEqual([], docs_check.check_compatibility(self.root))
+
     def test_valid_relative_links_and_encoded_anchors(self):
         self.assertEqual([], self.links("[go](docs/target.md#target)\n[local](#heading)\n# Heading\n"))
         self.write("docs/a file.md", "# Heading\n")

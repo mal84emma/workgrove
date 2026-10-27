@@ -133,7 +133,7 @@ Unknown measurements and verification fields are null; issue and GPU arrays are 
 The environment, readiness status, and GPU status are `unknown`.
 The [host JSON contract](wt-json.md#read-effective-host-capacity-and-readiness) defines the capacity and readiness fields and types.
 The remaining fields are `host` and `error` strings, the `status` string, the `gpu_status` string, and the `gpus` array.
-The [version contract](wt-json.md#read-installation-versions) defines the two nullable version fields.
+The [version contract](wt-json.md#read-installation-versions) defines the nullable version fields and the capability array.
 
 ## Result records and versions
 
@@ -337,3 +337,91 @@ Status 255 keeps the existing SSH failure handling below and does not add this s
 
 Run `wt doctor` on the Mac and `wt -H <vm> doctor` for the VM checks.
 Use the [cmux update checklist](cmux-checklist.md) for live flows that the probes cannot establish.
+
+## Compatibility inventory
+
+Each row identifies one `WT_COMPAT` marker by file and function.
+`ROW_JQ` and `WT_META_FILTER` identify module variables instead of functions.
+Repeated function names identify separate conditions in that function.
+The documentation check compares marker counts for each file and function, including Python files.
+It scans the tracked files selected by `git grep -n WT_COMPAT bin lib install.sh`.
+
+Group A supported cmux without `--json list-windows`.
+The supported cmux release, 0.65.1, provides that command, so this branch and its fallback tests are removed.
+When enumeration fails, `skip` returns an empty row list and status 0.
+`stop` preserves the failing command's status; `checked` returns status 1.
+When enumeration prints a non-list or invalid window IDs, `skip` returns an empty list; the other policies return status 1.
+None of these paths reads the current window as a substitute.
+Successful enumeration retains its existing behavior, including an unscoped read when no window supplies a document.
+
+The bare JSON row array remains outside group A.
+It normalizes the row document independently of window enumeration and cannot replace a failed enumeration.
+Both bare arrays and `workspaces` objects retain their current validation and tests.
+Issue #116 can retain those shape tests.
+
+| Unmarked input | Group decision and reason | How to check | Removal step |
+|---|---|---|---|
+| `lib/workgrove/cmux.sh`: `cmux_rows_load`, bare row arrays | Outside A. Row shape normalization cannot replace failed window enumeration. | Run the row shape and window failure tests in `test/lib-smoke.sh`. | Keep both row shapes and their tests. |
+
+Group B covers older installed VM commands and result records.
+The doctor-record marker belongs here because installed VM code supplies that record.
+The model-option marker belongs here even though it moved to `common.sh`.
+Group C covers protocol 1 emission for older Macs.
+Group D stays because a global migration cannot safely recover missing hashes, original bases, or manually changed row titles.
+Group E stays while Ubuntu 22.04 and its Git 2.34 are supported.
+Group F covers trust requests from selected source revisions.
+Setup uploads the Mac's Python source, so the installed VM version cannot measure these two readers' removal condition.
+
+| File | Function | Group | Condition | How to check | Removal step |
+|---|---|---|---|---|---|
+| `lib/workgrove/cmux.sh` | `ROW_JQ` | D | Old rows have repository-prefixed titles. | Compare open row titles with sidecar titles on each machine. | Keep. Remove the old-title match only after all old rows close. |
+| `lib/workgrove/common.sh` | `wt_result` | C | Macs request protocol 1. | Identify the first Mac release that requests protocol 2. | After that release, remove version 1 emission under the new protocol policy. |
+| `lib/workgrove/common.sh` | `vm_wt_failure` | B | VM doctor omits result records. | Run the group B command; require `doctor-records`. | In #120, remove the text doctor checks. |
+| `lib/workgrove/common.sh` | `vm_result` | B | VM new rejects the model option. | Run the group B command; require `model-option`. | In #120, remove the old-option diagnostic match. |
+| `lib/workgrove/common.sh` | `vm_result` | B | VM commands emit text without result records. | Run the group B command; require `result-records`. | In #120, remove text result decoding. |
+| `lib/workgrove/common.sh` | `vm_result` | B | VM path records omit the path field. | Run the group B command; require `path-field`. | In #120, require the recorded path. |
+| `lib/workgrove/portable.py` | `confirm_volume_request` | F | Selected revisions emit untagged trust requests. | Check selected source revisions for the `trust-request` prefix. | Keep until supported sources all tag requests; then remove untagged decoding. |
+| `lib/workgrove/recovery.sh` | `host_attach` | B | VM show omits agent and attached booleans. | Run the group B command; require `show-facts`. | In #120, remove state wording checks. |
+| `lib/workgrove/recovery.sh` | `host_attach` | B | VM show omits the started boolean. | Run the group B command; require `show-facts`. | In #120, remove the remote started-file probe. |
+| `lib/workgrove/remote.sh` | `agent_on_vm` | B | VM commands use an older agent probe. | Run the group B command; require `agent-probe`. | In #120, remove the supplied probe after preserving removal safety. |
+| `lib/workgrove/remote.sh` | `host_version` | B | VM has no usable version command. | Run the group B command; require a valid capability report. | In #120, remove the unsupported-command fallback. |
+| `lib/workgrove/safety.sh` | `changed_includes` | D | Sidecars store include paths without hashes. | Inspect `includes` in each repository's sidecars for entries without SHA-256 hashes. | Keep. Do not invent historical hashes; remove only after old tasks end. |
+| `lib/workgrove/safety.sh` | `unexplained_dirt` | D | Sidecars omit setup output. | Inspect each sidecar for a missing `setup` key. | Keep. Remove only after tasks with missing setup records end. |
+| `lib/workgrove/safety.sh` | `branch_landed` | E | Git lacks merge-tree support from 2.38. | Check supported operating systems and their Git versions. | Keep while Ubuntu 22.04 is supported. Then remove the read-tree branch. |
+| `lib/workgrove/safety.sh` | `rm_reasons` | D | Sidecars store a literal HEAD base. | Inspect each sidecar's `base` for `HEAD`. | Keep. Remove only after these tasks end or receive a verified base. |
+| `lib/workgrove/setup.sh` | `host_setup` | F | Selected revisions emit untagged trust requests. | Check selected source revisions for the `trust-request` prefix. | Keep until supported sources all tag requests; then remove the JSON fallback. |
+| `lib/workgrove/task.sh` | `WT_META_FILTER` | D | Sidecars store includes and setup as strings. | Inspect the types of `includes` and `setup` in each sidecar. | Keep. Remove string decoding only after old tasks end. |
+| `lib/workgrove/task.sh` | `task_title` | D | Sidecars retain repository-prefixed titles. | Compare each sidecar's `title` with its repository and task name. | Keep. Remove conversion only after old tasks and rows end. |
+| `lib/workgrove/task.sh` | `wt_status` | D | Sidecars store a literal HEAD base. | Inspect each sidecar's `base` for `HEAD`. | Keep. Remove the guard with the matching removal guard in `safety.sh`. |
+| `lib/workgrove/version.sh` | `wt_read_version` | B | Older version reports omit capabilities. | Run the group B command; require a valid capability report. | In #120, require the capability array. |
+| `lib/workgrove/version.sh` | `wt_vm_version` | B | VM has no usable version command. | Run the group B command; require a valid capability report. | In #120, remove the unsupported-command fallback. |
+
+### Measure group B
+
+`wt version` reports `capabilities` alongside `commit` and `protocol`.
+`wt hosts --json` preserves this array as `wt_capabilities` on every host record.
+Missing, malformed, and unreachable reports produce an empty capability array.
+Older version readers ignore the extra key and keep validating commit and protocol.
+A new Mac accepts older reports without capabilities and retains the existing fallbacks.
+Capabilities do not increase the result protocol number.
+
+| Capability | Installed VM behavior |
+|---|---|
+| `result-records` | Commands emit protocol 1 machine results. |
+| `show-facts` | Show results include the #69 `agent`, `attached`, and `started` booleans. |
+| `path-field` | Path results include the path field. |
+| `model-option` | New accepts the model option. |
+| `agent-probe` | Task commands use the checked agent probe. |
+| `doctor-records` | Doctor emits its result record and checks array. |
+
+Run this command on the Mac to list configured VMs that still need group B:
+
+```bash
+wt hosts --json | jq -r '.[] | select(
+  (["result-records","show-facts","path-field","model-option","agent-probe","doctor-records"]
+   - .wt_capabilities) != []) | .host'
+```
+
+Unavailable VMs remain in this list because their capabilities are unknown.
+No output permits #120 only after the inventory includes every VM that must remain supported.
+The command does not measure group F's selected source revisions or group D's stored sidecars and open rows.
