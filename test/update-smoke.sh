@@ -123,40 +123,55 @@ scenario_update() {
 }
 scenario_update
 
-scenario_older_vm() {
-  begin_scenario 'old VM becomes versioned and failed updates retain their status' || return 0
-  local output json rc=0
+scenario_failed_vm_update() {
+  begin_scenario 'failed updates retain their status without version fallbacks' || return 0
+  local rc=0
   rm "$TEST_ROOT/vm/.local/bin/wt"
   cat >"$TEST_ROOT/vm/.local/bin/wt" <<'VM'
 #!/bin/sh
 case "$1" in
-  version) echo 'unknown command' >&2; exit 1 ;;
-  update)
-    [ "${UPDATE_FAIL:-0}" = 0 ] || exit "$UPDATE_FAIL"
-    printf 'old update output\n'
-    cat >"$HOME/.local/bin/wt" <<'NEW'
-#!/bin/sh
-printf '{"commit":"abcdef0","protocol":1}\n'
-NEW
-    ;;
+  version) printf '{"commit":"fixture","protocol":1,"capabilities":[]}\n' ;;
+  update) exit 23 ;;
 esac
 VM
   chmod +x "$TEST_ROOT/vm/.local/bin/wt"
-  output=$(UPDATE_FAIL=23 run_wt -H fixture update) || rc=$?
+  run_wt -H fixture update >"$TEST_ROOT/failed-update" 2>&1 || rc=$?
   assert_eq 'remote update failure status survives reporting' 23 "$rc"
-  assert_eq 'failed update has no after records' true "$(records <<<"$output" | jq -r 'all(.[]; .stage == "before")')"
-  output=$(run_wt -H fixture update)
-  json=$(records <<<"$output")
-  assert_eq 'old VM before values are null' true "$(jq -r '.[] | select(.side == "VM" and .stage == "before") | .commit == null and .protocol == null' <<<"$json")"
-  assert_eq 'after report queries the updated VM' true "$(jq -r '.[] | select(.side == "VM" and .stage == "after") | .commit == "abcdef0" and .protocol == 1' <<<"$json")"
-  assert_eq 'old update output survives' true "$([[ $output == *'old update output'* ]] && echo true || echo false)"
   rc=0
   SSH_FAIL=255 run_wt -H fixture update >"$TEST_ROOT/disconnected" 2>&1 || rc=$?
   assert_eq 'transport failure retains existing update exit status' 1 "$rc"
   assert_eq 'transport failure names SSH recovery' true "$([[ $(cat "$TEST_ROOT/disconnected") == *'host unreachable'* ]] && echo true || echo false)"
   end_scenario
 }
-scenario_older_vm
+scenario_failed_vm_update
+
+scenario_initial_version_refusal() {
+  begin_scenario 'invalid initial versions cannot run an update' || return 0
+  local mode rc
+  cat >"$TEST_ROOT/vm/.local/bin/wt" <<'VM'
+#!/bin/sh
+case "$1" in
+  version)
+    case "$INITIAL_VERSION_MODE" in
+      unsupported) exit 42 ;;
+      missing) printf '{"commit":"fixture","protocol":1}\n' ;;
+      malformed) printf '{broken\n' ;;
+    esac ;;
+  update) : >"$TEST_ROOT/invalid-version-update" ;;
+esac
+VM
+  for mode in unsupported missing malformed; do
+    rc=0
+    INITIAL_VERSION_MODE=$mode run_wt -H fixture update >"$TEST_ROOT/initial-error" 2>&1 || rc=$?
+    local expected=1
+    [[ $mode != unsupported ]] || expected=42
+    assert_eq "$mode initial version fails" "$expected" "$rc"
+    assert_absent "$TEST_ROOT" invalid-version-update
+    assert_eq "$mode failure emits no update records" '[]' "$(records <"$TEST_ROOT/initial-error")"
+  done
+  end_scenario
+}
+scenario_initial_version_refusal
 
 scenario_refusal() {
   begin_scenario 'incoming commits still require an interactive confirmation' || return 0

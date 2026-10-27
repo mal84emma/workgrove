@@ -285,14 +285,13 @@ scenario_vm_results() {
   for sample in facts text malformed version wrong-name wrong-session missing wrong-repo path-old path-facts transport field-injection; do
     case $sample in
       facts) expected='0|0|visible|task|wt-repo-task|false|true|' ;;
-      text) expected='0|0|created task
-  repo: /repo
-  session: wt-repo-task|task|wt-repo-task|||' ;;
+      text) expected=2 ;;
       malformed|wrong-name|wrong-session|wrong-repo|field-injection) expected=1 ;;
       version) expected=3 ;;
       missing) expected='0|1||task||||' ;;
-      path-old|path-facts) expected='0|0|/repo/.worktrees/task|task||||/repo/.worktrees/task' ;;
-      transport) expected='2|255|connection lost|task||||' ;;
+      path-old) expected=1 ;;
+      path-facts) expected='0|0|/repo/.worktrees/task|task||||/repo/.worktrees/task' ;;
+      transport) expected='2|255|connection lost|||||' ;;
     esac
     output=$(
       vm_wt() {
@@ -329,7 +328,7 @@ scenario_vm_results() {
       if [[ $rc != 0 && $rc != 255 ]]; then expected_errors="wt $sub on fixture exited $rc"; fi
       [[ $errors == "$expected_errors" ]] || printf 'unexpected diagnostic: %s' "$errors"
       case $sample in
-        malformed|version|wrong-name|wrong-session|wrong-repo|field-injection) printf '%s' "$parsed" ;;
+        text|path-old|malformed|version|wrong-name|wrong-session|wrong-repo|field-injection) printf '%s' "$parsed" ;;
         *) printf '%s|%s|%s|%s|%s|%s|%s|%s' "$parsed" "$rc" "$visible" \
           "${record[name]-}" "${record[session]-}" "${record[agent]-}" "${record[started]-}" "${record[path]-}" ;;
       esac
@@ -346,8 +345,43 @@ scenario_vm_results() {
 }
 scenario_vm_results
 
+scenario_required_vm_records() {
+  begin_scenario 'VM boundaries require records and command facts before acting' || return 0
+  local sample output rc
+  for sample in text agent attached started path empty-path; do
+    rc=0
+    output=$(
+      exec 2>&1
+      vm_wt() {
+        printf '/repo/.worktrees/task\n'
+        [[ $sample != text ]] || return 0
+        local command=show facts='{"agent":false,"attached":false,"started":false}'
+        case $sample in
+          path) command=path; facts='{}' ;;
+          empty-path) command=path; facts='{"path":""}' ;;
+          *) facts=$(jq -c --arg key "$sample" 'del(.[$key])' <<<"$facts") ;;
+        esac
+        WG_MACHINE_RESULT=1 wt_result "$command" found task /repo wt-repo-task none "$facts"
+      }
+      local -A fields=()
+      local visible errors status parsed=0 command=show
+      case $sample in path|empty-path|text) command=path ;; esac
+      vm_result fixture "$command" fields visible errors status -- task -r /repo || parsed=$?
+      vm_wt_failure fixture "$command" "$status" '' "$parsed" "${fields[status]-}" task /repo
+    ) 2>&1 || rc=$?
+    assert_eq "$sample cannot authorize a VM action" 1 "$rc"
+    assert_eq "$sample names the VM update command" true "$([[ $output == *'wt -H fixture update'* ]] && echo true || echo false)"
+  done
+  rc=0
+  output=$(WG_MACHINE_RESULT=1 wt_result show found task /repo wt-repo-task none)
+  wt_read_result "$output" show >/dev/null || rc=$?
+  assert_eq 'other readers can accept additive fields omitted from a record' 0 "$rc"
+  end_scenario
+}
+scenario_required_vm_records
+
 scenario_vm_streams() {
-  begin_scenario 'VM result decoding keeps diagnostics out of legacy paths' || return 0
+  begin_scenario 'VM result decoding keeps diagnostics separate and rejects missing paths' || return 0
   local mode output
   for mode in text legacy facts; do
     output=$(
@@ -367,7 +401,10 @@ scenario_vm_streams() {
     )
     local visible_path=/repo/.worktrees/task
     [[ $mode != facts ]] || visible_path=''
-    assert_eq "$mode keeps the path and diagnostic separate" "0|0|/repo/.worktrees/task|SSH warning|$visible_path" "$output"
+    local expected="0|0|/repo/.worktrees/task|SSH warning|$visible_path"
+    [[ $mode != text ]] || expected="2|0||SSH warning|$visible_path"
+    [[ $mode != legacy ]] || expected="1|0||SSH warning|$visible_path"
+    assert_eq "$mode keeps diagnostics separate" "$expected" "$output"
   done
   end_scenario
 }
@@ -392,15 +429,15 @@ raw|255|0||1|wt: host unreachable: is the VM running? (ssh fixture)
 version|255|0||1|wt: host unreachable: is the VM running? (ssh fixture)
 version|127|0||0|
 new|0|0|created|0|
-new|0|2||1|wt: fixture did not report created/repo/session; the worktree may exist; inspect with: wt -H fixture list -r /repo before retrying
+new|0|2||1|wt: missing result record from fixture; run wt -H fixture update; the worktree may exist; inspect with: wt -H fixture list -r /repo before retrying
 new|0|3||1|wt: unsupported result protocol from fixture; run wt update on the Mac; the worktree may exist; inspect with: wt -H fixture list -r /repo before retrying
-new|0|0|found|1|wt: unexpected output from fixture; the worktree may exist; inspect with: wt -H fixture list -r /repo before retrying
+new|0|0|found|1|wt: unexpected output from fixture; run wt -H fixture update; the worktree may exist; inspect with: wt -H fixture list -r /repo before retrying
 path|0|0|found|0|
-path|0|2||1|wt: unexpected output from fixture
+path|0|2||1|wt: missing result record from fixture; run wt -H fixture update
 path|0|3||1|wt: unsupported result protocol from fixture; run wt update on the Mac
 path|42|3||42|
-show|0|2||1|wt: fixture reported no session for task (try: wt -H fixture show task -r /repo)
-show|0|1||1|wt: unexpected output from fixture
+show|0|2||1|wt: missing result record from fixture; run wt -H fixture update
+show|0|1||1|wt: unexpected output from fixture; run wt -H fixture update
 close|1|0|missing|0|
 close|0|0|missing|1|ignored wt-close for task task of /repo on fixture: could not confirm its worktree is gone
 close|255|2||1|ignored wt-close for task task of /repo on fixture: could not confirm its worktree is gone
@@ -511,7 +548,7 @@ scenario_protocol_hint() {
 scenario_protocol_hint
 
 scenario_version_validation() {
-  begin_scenario 'version reports require one object and share null fallback behavior' || return 0
+  begin_scenario 'version reports require capabilities without synthesizing old VM versions' || return 0
   local sample reply parsed rc home="$TEST_ROOT/version-home"
   mkdir -p "$home/.local/bin"
   cat >"$home/.local/bin/wt" <<'WT'
@@ -519,34 +556,39 @@ scenario_version_validation() {
 printf '%s\n' "$VERSION_REPLY"
 WT
   chmod +x "$home/.local/bin/wt"
-  for sample in multiple garbage array missing-commit missing-protocol commit-type protocol-type fractional zero empty; do
+  for sample in multiple garbage array missing-commit missing-protocol commit-type protocol-type fractional zero empty missing-capabilities null-capabilities bad-capabilities; do
     case $sample in
       multiple) reply=$'{"commit":"abc","protocol":1}\n{"commit":"def","protocol":1}' ;;
       garbage) reply='{"commit":"abc","protocol":1}garbage' ;;
       array) reply='[{"commit":"abc","protocol":1}]' ;;
-      missing-commit) reply='{"protocol":1}' ;;
-      missing-protocol) reply='{"commit":"abc"}' ;;
-      commit-type) reply='{"commit":7,"protocol":1}' ;;
-      protocol-type) reply='{"commit":"abc","protocol":"1"}' ;;
-      fractional) reply='{"commit":"abc","protocol":1.5}' ;;
-      zero) reply='{"commit":"abc","protocol":0}' ;;
+      missing-commit) reply='{"protocol":1,"capabilities":[]}' ;;
+      missing-protocol) reply='{"commit":"abc","capabilities":[]}' ;;
+      commit-type) reply='{"commit":7,"protocol":1,"capabilities":[]}' ;;
+      protocol-type) reply='{"commit":"abc","protocol":"1","capabilities":[]}' ;;
+      fractional) reply='{"commit":"abc","protocol":1.5,"capabilities":[]}' ;;
+      zero) reply='{"commit":"abc","protocol":0,"capabilities":[]}' ;;
       empty) reply='' ;;
+      missing-capabilities) reply='{"commit":"abc","protocol":1}' ;;
+      null-capabilities) reply='{"commit":"abc","protocol":1,"capabilities":null}' ;;
+      bad-capabilities) reply='{"commit":"abc","protocol":1,"capabilities":[1]}' ;;
     esac
     rc=0
     parsed=$(wt_read_version <<<"$reply" 2>/dev/null) || rc=$?
     assert_eq "$sample version is rejected" true "$([[ $rc -ne 0 ]] && echo true || echo false)"
-    assert_eq "$sample probe version becomes null" '{"commit":null,"protocol":null}' \
-      "$(HOME="$home" VERSION_REPLY="$reply" wt_vm_version)"
+    rc=0
+    parsed=$(HOME="$home" VERSION_REPLY="$reply" wt_vm_version 2>/dev/null) || rc=$?
+    assert_eq "$sample probe fails" true "$([[ $rc -ne 0 && -z $parsed ]] && echo true || echo false)"
+    rc=0
     parsed=$(
       # shellcheck source=lib/workgrove/remote.sh
       source "$REPO/lib/workgrove/remote.sh"
       vm_wt() { printf '%s\n' "$reply"; }
       host_version fixture
-    )
-    assert_eq "$sample update version becomes null" '{"commit":null,"protocol":null}' "$parsed"
+    ) 2>/dev/null || rc=$?
+    assert_eq "$sample update version fails" true "$([[ $rc -ne 0 && -z $parsed ]] && echo true || echo false)"
   done
-  assert_eq 'valid extra fields are normalized' '{"commit":"abc","protocol":1}' \
-    "$(wt_read_version <<<'{"extra":true,"protocol":1,"commit":"abc"}')"
+  assert_eq 'valid extra fields are normalized' '{"commit":"abc","protocol":1,"capabilities":[]}' \
+    "$(wt_read_version <<<'{"extra":true,"protocol":1,"commit":"abc","capabilities":[]}')"
   reply='{"commit":"abc","protocol":1,"capabilities":["show-facts","future"]}'
   assert_eq 'capability arrays survive validation' "$reply" "$(wt_read_version <<<"$reply")"
   assert_eq 'capabilities survive the VM probe' "$reply" \

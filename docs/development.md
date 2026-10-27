@@ -333,7 +333,7 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   It checks remote forwarding and command-table extension with scratch fixtures and no real SSH calls.
 - **`bash test/named-outputs-smoke.sh`** checks output variables whose names match internal locals, including arrays and forwarded outputs.
 - **`bash test/lib-smoke.sh`** checks the shared functions in `lib/workgrove/common.sh` and the scenario filter.
-  It checks versioned task results, malformed records, duplicate records, and the text fallback.
+  It checks versioned task results, malformed records, duplicate records, and rejection of missing records or required facts.
   It checks host aliases, path rules, task names, identity output, and SSH config parsing with a scratch home.
   Fixed cmux responses cover row lists across windows, failure policies, checked validation, command wrappers, and lookup by title, repo, and host.
   It pins the exact `tmux_cmd` output for task, `shared`, and `reinit` forms.
@@ -343,7 +343,7 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   It checks real VM `new`, `show`, and `path` commands.
   It also checks these cases:
   - remote task preflight and model forwarding
-  - an older VM's option refusal
+  - rejection of missing or incomplete VM result records
   - a row failure after worktree creation
   - an SSH disconnect after creation but before the Mac receives the result
   - that a brief, agent, and model survive an interrupted `.wt-setup`
