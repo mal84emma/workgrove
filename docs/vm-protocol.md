@@ -359,6 +359,10 @@ It normalizes the row document independently of window enumeration and cannot re
 Both bare arrays and `workspaces` objects retain their current validation and tests.
 Issue #116 can retain those shape tests.
 
+| Unmarked input | Group decision and reason | How to check | Removal step |
+|---|---|---|---|
+| `lib/workgrove/cmux.sh`: `cmux_rows_load`, bare row arrays | Outside A. Row shape normalization cannot replace failed window enumeration. | Run the row shape and window failure tests in `test/lib-smoke.sh`. | Keep both row shapes and their tests. |
+
 Group B covers older installed VM commands and result records.
 The doctor-record marker belongs here because installed VM code supplies that record.
 The model-option marker belongs here even though it moved to `common.sh`.
