@@ -35,8 +35,10 @@
 # What a green run does NOT exercise:
 #   - real ssh: scenario 10 uses a fake SSH server, and scenario 9 asserts only the paths that return before
 #     remote_sh
-#   - cmux itself (a stub answers for it), tmux, the `wt task`/`wt driver` pickers, `wt pr`, `wt sync`,
-#     `wt update`, and VS Code (`wt open` runs a stub `code`)
+#   - cmux itself (the shared fake answers for it), tmux, and VS Code (`wt open` runs a stub `code`)
+#
+# Command coverage: test/wt-smoke.sh covers `wt diff`, `wt sync`, `wt pr`, `wt repos`, and `wt driver`.
+# test/task-smoke.sh and test/remote-new-smoke.sh cover `wt task`. test/update-smoke.sh covers `wt update`.
 #
 # Scenario 8 uses a uname shim to check Mac row handling on every platform.
 # Each scenario must make an assertion. The suite prints its derived assertion total and fails on any failure.
@@ -448,8 +450,12 @@ WT_EXTRA=""        # machine-wide agent args for model precedence checks
 wt_run() {
   WT_RC=0
   prepare_cmux
+  local variable cmux_unset=()
+  while IFS= read -r variable; do
+    case $variable in CMUX_*) cmux_unset+=(-u "$variable") ;; esac
+  done < <(compgen -e)
   WT_OUT="$(cd "${WT_CWD:-$TEST_ROOT}" \
-    && env -u CMUX_SSH_ATTEMPT_ID -u CMUX_SOCKET_PATH -u CMUX_WORKSPACE_ID -u CMUX_TUI_SOCKET -u CMUX_TUI_TERMINAL_ID -u CMUX_TUI_SESSION_ID \
+    && env "${cmux_unset[@]}" \
            -u WT_AGENT -u WT_AGENT_ARGS -u WT_HOST \
            -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT \
            HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" \
@@ -1174,7 +1180,8 @@ scenario_squash_merge() {
   fixture_git "$r" commit -q -m lines
   e="$(add_origin "$r")"
   # Use the safety module's function to check whether git merges hunk by hunk.
-  if "$WT_BASH" -c "$(sed -n '/^git_merges_trees()/,/^}/p' "$REPO/lib/workgrove/safety.sh"); git_merges_trees" 2>/dev/null; then hunks=yes; fi
+  # shellcheck disable=SC2016  # The child shell expands $1.
+  if "$BASH" -c 'source "$1"; git_merges_trees' _ "$REPO/lib/workgrove/safety.sh" 2>/dev/null; then hunks=yes; fi
 
   # Every worktree first: `wt new` fetches its base. So all of the landing below must come after the last
   # `wt new`, for origin/main to be stale when wt is asked. That is the shape that this scenario is about.
@@ -1525,6 +1532,225 @@ STUB
   end_scenario
 }
 
+# Scenario 8b shares the guarded Git fixtures and the cmux contract with scenario 8.
+scenario_commands() {
+  begin_scenario "$1" || return 0
+  local REPOS_DIR="$TEST_ROOT/command repos" mac_bin="$TEST_ROOT/command-bin"
+  local r editor task merge_task conflict origin name before base_sha merge_tip conflict_tip
+  local saved_bash="$WT_BASH" tool missing_bin="$TEST_ROOT/no-gh"
+  local WT_PATH_PREFIX=''
+  local LC_ALL=C
+  export LC_ALL
+  local GH_LOG="$TEST_ROOT/gh-args" GH_CWD_LOG="$TEST_ROOT/gh-cwd"
+  export GH_LOG GH_CWD_LOG
+  export GIT_ALLOW_PROTOCOL=file
+  mkdir -p "$REPOS_DIR" "$mac_bin" "$missing_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  local PATH="$mac_bin:$PATH"
+  r=$(new_repo 'command repo')
+  name=${r##*/}
+  editor=$(add_origin "$r")
+  task="$r/.worktrees/rebase"
+  merge_task="$r/.worktrees/merge"
+  conflict="$r/.worktrees/conflict"
+  stub_cmux alive
+  assert_wt_ok 'create rebase fixture' new rebase --no-workspace -r "$r"
+  assert_wt_ok 'create merge fixture' new merge --no-workspace -r "$r"
+  assert_wt_ok 'create conflict fixture' new conflict --no-workspace -r "$r"
+  fixture_commit "$task" task.txt 'task change'
+  before=$(fixture_git "$task" rev-parse HEAD)
+  fixture_commit "$merge_task" merge.txt 'merge change'
+  merge_tip=$(fixture_git "$merge_task" rev-parse HEAD)
+  fixture_commit "$conflict" README 'task version'
+  conflict_tip=$(fixture_git "$conflict" rev-parse HEAD)
+  editor_commit "$editor" README 'upstream version'
+  base_sha=$(fixture_git "$editor" rev-parse HEAD)
+
+  printf 'uncommitted\n' >"$task/dirty"
+  assert_wt_fails 1 'worktree has uncommitted changes; commit or stash first' sync rebase -r "$r"
+  assert_eq 'dirty sync keeps HEAD' "$before" "$(fixture_git "$task" rev-parse HEAD)"
+  assert_grep 'dirty sync keeps uncommitted files' "$task/dirty" uncommitted
+  rm "$task/dirty"
+  # Discard the dirty call's fetch, so the successful sync must fetch for itself.
+  fixture_git "$r" update-ref refs/remotes/origin/main HEAD
+  assert_wt_ok 'sync rebases onto the fetched base' sync rebase -r "$r"
+  assert_has 'rebase reports the base' "$WT_OUT" 'synced rebase onto origin/main'
+  assert_eq 'rebase fetches origin/main' "$base_sha" "$(fixture_git "$r" rev-parse origin/main)"
+  assert_eq 'rebase puts the task commit directly on the base' "$base_sha" "$(fixture_git "$task" rev-parse HEAD^)"
+  assert_grep 'rebase preserves task changes' "$task/task.txt" 'task change'
+  assert_grep 'rebase includes upstream changes' "$task/README" 'upstream version'
+
+  assert_wt_ok 'sync --merge merges the base' sync merge --merge -r "$r"
+  assert_has 'merge reports the base' "$WT_OUT" 'synced merge onto origin/main'
+  assert_eq 'merge keeps the task as its first parent' "$merge_tip" "$(fixture_git "$merge_task" rev-parse HEAD^1)"
+  assert_eq 'merge takes the base as its second parent' "$base_sha" "$(fixture_git "$merge_task" rev-parse HEAD^2)"
+  assert_grep 'merge preserves task changes' "$merge_task/merge.txt" 'merge change'
+  assert_grep 'merge includes upstream changes' "$merge_task/README" 'upstream version'
+
+  assert_wt_fails 1 'CONFLICT (content): Merge conflict in README' sync conflict -r "$r"
+  assert_lacks 'conflict does not report a completed sync' "$WT_OUT" 'synced conflict onto'
+  assert_eq 'conflict leaves an unmerged file' 'UU README' "$(fixture_git "$conflict" status --porcelain)"
+  assert_eq 'conflict preserves the original branch tip' "$conflict_tip" "$(fixture_git "$r" rev-parse wt/conflict)"
+  assert_dir 'conflict leaves the rebase in progress' "$(fixture_git "$conflict" rev-parse --git-path rebase-merge)"
+  fixture_git "$conflict" rebase --abort
+
+  # Record each argument separately, so spaces cannot hide a quoting error.
+  cat >"$FAKE_BIN/gh" <<'GH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$GH_LOG"
+pwd -P >"$GH_CWD_LOG"
+# A push must finish before gh starts.
+git show-ref --verify --quiet refs/remotes/origin/wt/rebase || exit 65
+GH
+  chmod +x "$FAKE_BIN/gh"
+  origin=$(fixture_git "$r" remote get-url --push origin)
+  assert_eq 'pr uses the scratch origin path' "$TEST_ROOT/origins/$name.git" "$origin"
+  [[ $origin == "$TEST_ROOT/origins/$name.git" ]] || exit 1
+  guard_scratch_root "$origin"
+  assert_eq 'pr origin is bare' true "$(fixture_git "$origin" rev-parse --is-bare-repository)"
+  [[ $(fixture_git "$origin" rev-parse --is-bare-repository) == true ]] || exit 1
+  assert_eq 'pr resolves the fake gh' "$FAKE_BIN/gh" "$(PATH="$FAKE_BIN:$PATH" command -v gh)"
+  [[ $(PATH="$FAKE_BIN:$PATH" command -v gh) == "$FAKE_BIN/gh" ]] || exit 1
+  assert_wt_ok 'pr pushes and creates a pull request' pr rebase -r "$r"
+  assert_eq 'pr passes separate gh arguments' $'pr\ncreate\n--fill\n--base\nmain' "$(cat "$GH_LOG")"
+  assert_eq 'pr runs gh inside the worktree' "$task" "$(cat "$GH_CWD_LOG")"
+  assert_eq 'pr pushes the task commit' "$(fixture_git "$task" rev-parse HEAD)" "$(fixture_git "$origin" rev-parse refs/heads/wt/rebase)"
+  assert_eq 'pr sets upstream tracking' origin/wt/rebase "$(fixture_git "$task" rev-parse --abbrev-ref '@{upstream}')"
+  fixture_commit "$task" draft.txt 'draft change'
+  assert_wt_ok 'pr --draft pushes the latest commit' pr rebase --draft -r "$r"
+  assert_eq 'draft adds the gh flag' $'pr\ncreate\n--fill\n--base\nmain\n--draft' "$(cat "$GH_LOG")"
+  assert_eq 'draft pushes the latest task commit' "$(fixture_git "$task" rev-parse HEAD)" "$(fixture_git "$origin" rev-parse refs/heads/wt/rebase)"
+  before=$(fixture_git "$origin" rev-parse refs/heads/wt/rebase)
+  fixture_commit "$task" unpushed.txt 'local commit'
+  printf 'dirty\n' >"$task/dirty"
+  : >"$GH_LOG"
+  assert_wt_fails 1 'worktree has uncommitted changes; commit first' pr rebase -r "$r"
+  assert_eq 'dirty pr never invokes gh' '' "$(cat "$GH_LOG")"
+  assert_eq 'dirty pr never pushes' "$before" "$(fixture_git "$origin" rev-parse refs/heads/wt/rebase)"
+  rm "$task/dirty"
+  # Supply only the tools needed by wt, so a real gh cannot fill the missing fake's place.
+  for tool in bash dirname readlink uname git jq sed awk grep tr head rm mkdir cat cp mv sort basename find tail date cut env mktemp; do
+    ln -s "$(command -v "$tool")" "$missing_bin/$tool"
+  done
+  mv "$FAKE_BIN/gh" "$TEST_ROOT/gh.saved"
+  PATH="$missing_bin" assert_wt_fails 1 'gh not installed' pr rebase -r "$r"
+  mv "$TEST_ROOT/gh.saved" "$FAKE_BIN/gh"
+  assert_eq 'missing gh never pushes' "$before" "$(fixture_git "$origin" rev-parse refs/heads/wt/rebase)"
+  rm "$FAKE_BIN/gh"
+
+  assert_wt_ok 'repos defaults to porcelain through a pipe' repos
+  assert_eq 'default repos output' "$name"$'\t'"$r" "$WT_OUT"
+  assert_wt_ok 'repos --porcelain forces the two columns' repos --porcelain
+  assert_eq 'forced porcelain output' "$name"$'\t'"$r" "$WT_OUT"
+  assert_wt_ok 'repos looks up a name' repos "$name"
+  assert_eq 'name lookup prints only the path' "$r" "$WT_OUT"
+  assert_wt_ok 'repos accepts a path' repos "$r"
+  assert_eq 'path lookup prints only the path' "$r" "$WT_OUT"
+  assert_wt_ok 'repos --table forces the table' repos --table
+  assert_has 'table has its headings' "$WT_OUT" 'TASKS  LOCATION'
+  assert_matches 'table counts the three tasks' "$name +3 +" "$WT_OUT"
+  local table_output="$WT_OUT"
+  # Give only stdout a terminal, without an interactive shell or a real cmux row.
+  {
+    printf '#!/usr/bin/env bash\nexec python3 - %q "$@" <<%s\n' "$saved_bash" "'PY'"
+    cat <<'PTY'
+import errno
+import os
+import pty
+import subprocess
+import sys
+
+master, slave = pty.openpty()
+process = subprocess.Popen(sys.argv[1:], stdout=slave)
+os.close(slave)
+while True:
+    try:
+        chunk = os.read(master, 4096)
+    except OSError as error:
+        if error.errno != errno.EIO:
+            raise
+        break
+    if not chunk:
+        break
+    sys.stdout.buffer.write(chunk)
+os.close(master)
+sys.exit(process.wait())
+PY
+PTY
+  } >"$mac_bin/tty-bash"
+  chmod +x "$mac_bin/tty-bash"
+  WT_BASH="$mac_bin/tty-bash"
+  assert_wt_ok 'repos defaults to a table on a terminal' repos
+  assert_eq 'terminal default matches --table' "$table_output" "${WT_OUT//$'\r'/}"
+  assert_wt_ok 'repos --porcelain overrides terminal output' repos --porcelain
+  assert_eq 'terminal porcelain still has two columns' "$name"$'\t'"$r" "${WT_OUT//$'\r'/}"
+  WT_BASH="$saved_bash"
+  assert_wt_fails 1 'repo not found: missing-repo' repos missing-repo
+  local saved_repos="$REPOS_DIR"
+  REPOS_DIR="$TEST_ROOT/missing-repos"
+  assert_wt_fails 1 "repos dir not found: $REPOS_DIR" repos
+  REPOS_DIR="$saved_repos"
+
+  # Record the interpreter's environment before bin/wt loads any module.
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'env | LC_ALL=C sort | grep %q >%q\n' '^CMUX_' "$TEST_ROOT/wt-environment"
+    printf 'exec %q "$@"\n' "$saved_bash"
+  } >"$mac_bin/checked-bash"
+  chmod +x "$mac_bin/checked-bash"
+  WT_BASH="$mac_bin/checked-bash"
+  local CMUX_TEST_LEAK=sentinel
+  export CMUX_TEST_LEAK
+  stub_cmux alive
+  fake_rows >"$WT_ROWS"
+  assert_wt_ok 'diff opens the pane through the fake' diff rebase -r "$r"
+  assert_has 'diff reports the opened pane' "$WT_OUT" 'opened cmux diff pane'
+  assert_grep 'diff passes its complete arguments' "$CMUX_LOG" "diff --branch --repo $task --base origin/main --layout split --title rebase vs origin/main --focus true"
+  assert_eq 'wt inherits only fixture cmux settings' \
+    "$(printf 'CMUX_BUNDLED_CLI_PATH=%s\nCMUX_STUB_LOG=%s\nCMUX_STUB_NONCE=%s' "$WT_STUB" "$CMUX_LOG" "$FAKE_CMUX_STATE/screen-append")" \
+    "$(cat "$TEST_ROOT/wt-environment")"
+  WT_BASH="$saved_bash"
+  fake_queue diff '' 23 'diff denied by fixture'
+  assert_wt_fails 23 'failed (exit 23)' diff rebase -r "$r"
+  assert_has 'diff preserves the cmux diagnostic' "$WT_OUT" 'diff denied by fixture'
+  assert_lacks 'failed diff never reports an opened pane' "$WT_OUT" 'opened cmux diff pane'
+  assert_wt_fails 1 'show: --json and --diff cannot be combined' diff rebase --json -r "$r"
+  stub_cmux dead
+  assert_wt_fails 1 'cmux is not running' diff rebase -r "$r"
+
+  local driver_cwd="$REPOS_DIR"
+  mkdir "$TEST_ROOT/other-repos"
+  REPOS_DIR="$REPOS_DIR:$TEST_ROOT/other-repos"
+  assert_wt_fails 1 'cmux is not running; start cmux, then: wt driver' driver
+  stub_cmux alive
+  fake_rows >"$WT_ROWS"
+  : >"$FAKE_CMUX_STATE/mutate"
+  assert_wt_ok 'driver creates its row' driver
+  assert_eq 'driver reports creation' 'driver @local (created)' "$WT_OUT"
+  assert_grep 'driver passes its complete creation arguments' "$CMUX_LOG" \
+    "workspace create --name driver --description @local --cwd $driver_cwd --command claude --focus true"
+  assert_eq 'driver creates one row with the complete directory' \
+    "$(jq -cn --arg cwd "$driver_cwd" '[{title:"driver",description:"@local",current_directory:$cwd}]')" \
+    "$(jq -c '[.workspaces[] | {title,description,current_directory}]' "$WT_ROWS")"
+  stub_cmux alive
+  fake_rows "$(fake_row workspace:51 driver @local)" >"$WT_ROWS"
+  assert_wt_ok 'driver selects its existing row' driver
+  assert_eq 'driver reports selection' 'driver @local (selected)' "$WT_OUT"
+  assert_grep 'driver selects the existing row' "$CMUX_LOG" 'workspace select workspace:51'
+  assert_lacks 'driver does not create a duplicate' "$(cat "$CMUX_LOG")" 'workspace create'
+  fake_rows >"$WT_ROWS"
+  fake_queue workspace-create '' 17 'creation denied by fixture'
+  assert_wt_fails 1 'cmux workspace create failed: creation denied by fixture' driver
+  assert_lacks 'failed driver never reports creation' "$WT_OUT" '(created)'
+  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=fixture)
+  assert_wt_fails 1 'wt driver: run this on the Mac' driver
+  WT_RELAY_ENV=()
+  rm "$FAKE_CMUX_STATE/mutate"
+  stub_cmux dead
+  end_scenario
+}
+
 # Scenario 8 simulates the Mac so every platform checks its row ownership rules.
 scenario_cmux() {
   begin_scenario "$1" || return 0
@@ -1840,14 +2066,19 @@ scenario_cmux() {
   printf '{"workspaces":[]}\n' >"$WT_ROWS"
   assert_wt_ok "a successful empty row list permits removal" rm ping-denied -r "$r"
 
-  local fake="$TEST_ROOT/active-row-bin"
+  local fake="$TEST_ROOT/active-row-bin" ssh_log
+  ssh_log="$fake/calls.log"
   mkdir -p "$fake"
   cat >"$fake/ssh.fixture" <<'STUB'
 #!/bin/sh
-printf 'ssh %s\n' "$*" >>"$CMUX_STUB_LOG"
+ssh_dir=${0%/*}
+printf 'ssh %s\n' "$*" >>"$ssh_dir/calls.log"
+script=$(mktemp "$ssh_dir/stdin.XXXXXX")
+cat >"$script"
+printf '%s\n' "$script" >>"$ssh_dir/scripts.log"
 [ "${VM_AGENT_ACTIVE:-}" = 1 ] && exit 0
 if [ "${VM_AGENT_QUERY_FAIL:-}" = 1 ]; then
-  fake_ssh_run "$cmd"
+  fake_ssh_run "$cmd" <"$script"
   exit $?
 fi
 exit 99
@@ -1862,19 +2093,19 @@ STUB
   # This row has the "<repo>:<name>" title of an older wt, so these checks also show that host_rm finds it.
   fake_rows "$(fake_row "active-vm-row" "$id:active-vm" "" "smoke.invalid" "connected" "cmux-tui" "null")" >"$WT_ROWS"
   WT_PATH_PREFIX="$fake" WT_RELAY_ENV=("CMUX_STUB_AGENTS=1")
-  : >"$CMUX_LOG"
+  : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "another agent is running" -H smoke.invalid rm active-vm --force -r "$r"
-  assert_lacks "a Mac removal refuses an active VM row before SSH" "$(cat "$CMUX_LOG")" "ssh "
+  assert_lacks "a Mac removal refuses an active VM row before SSH" "$(cat "$ssh_log")" "ssh "
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_ACTIVE=1")
-  : >"$CMUX_LOG"
+  : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
-  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$CMUX_LOG")" "bash -s --"
-  assert_lacks "an older VM wt cannot remove the active task" "$(cat "$CMUX_LOG")" "rm active-vm"
+  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$(tail -n 1 "$fake/scripts.log")")" "tmux_agent ()"
+  assert_lacks "an older VM wt cannot remove the active task" "$(cat "$ssh_log")" "rm active-vm"
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_QUERY_FAIL=1")
-  : >"$CMUX_LOG"
+  : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "cannot check the agent in tmux session" -H smoke.invalid rm active-vm -r "$r"
   assert_has "the remote probe reports its socket error" "$WT_OUT" "Operation not permitted"
-  assert_lacks "a failed remote probe cannot request removal" "$(cat "$CMUX_LOG")" "rm active-vm"
+  assert_lacks "a failed remote probe cannot request removal" "$(cat "$ssh_log")" "rm active-vm"
   # A VM row of another repo's task with the same name is not this task's row, so host_rm does not check its
   # agent. The refusal below comes from the VM's tmux session, not from that row.
   fake_rows "$(fake_row "other-vm-row" "active-vm" "@smoke.invalid · other-repo" "smoke.invalid" "connected" "cmux-tui" "null")" \
