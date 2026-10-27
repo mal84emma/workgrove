@@ -439,8 +439,8 @@ def document_links(path):
 
 def check_layout(root):
     errors = []
-    readme = (root / "README.md").read_text()
-    section = readme.split("## Layout\n", 1)[1].split("\n## ", 1)[0]
+    development = (root / "docs/development.md").read_text()
+    section = development.split("## Layout\n", 1)[1].split("\n## ", 1)[0]
     tree = section.split("```", 2)[1].splitlines()
     stack = []
     listed = set()
@@ -458,9 +458,9 @@ def check_layout(root):
             listed.add(path)
     tracked = set(subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")) - {""}
     for path in sorted(tracked - listed):
-        errors.append(diagnostic("README.md", 1, f"Layout missing tracked file: {path}"))
+        errors.append(diagnostic("docs/development.md", 1, f"Layout missing tracked file: {path}"))
     for path in sorted(listed - tracked):
-        errors.append(diagnostic("README.md", 1, f"Layout lists untracked file: {path}"))
+        errors.append(diagnostic("docs/development.md", 1, f"Layout lists untracked file: {path}"))
     return errors
 
 

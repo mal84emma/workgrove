@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check the README tree, compatibility markers, citations, and local documentation links.
+# Check the development tree, compatibility markers, citations, and local documentation links.
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
 # shellcheck source=test/lib.sh
@@ -12,7 +12,7 @@ check_docs() {
 }
 
 scenario_layout() {
-  begin_scenario 'README Layout matches tracked files' || return 0
+  begin_scenario 'development Layout matches tracked files' || return 0
   check_docs layout
   end_scenario
 }

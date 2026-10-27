@@ -112,7 +112,7 @@ Apply the guide to the prose that you write or edit in these files:
 - Do not change a command, flag, argument, quote, or line order in a code block.
   In a `bash` block, you may rewrite a `#` comment, but keep its facts.
 - Keep program output, error text, and config samples exact.
-- Change the Layout tree in `README.md` only to match the files in the repository.
+- Change the Layout tree in `docs/development.md` only to match the files in the repository.
 - Keep quoted error messages and quotations from other documents exact.
 - Keep the quoted trigger phrases in skill descriptions and in the README's skills table exact.
 
