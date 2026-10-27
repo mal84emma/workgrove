@@ -1,9 +1,9 @@
-"""Check tracked Layout files, required citations, and local documentation links."""
+"""Check tracked Layout files, compatibility markers, citations, and local documentation links."""
 
 import argparse
 import ast
-from collections import Counter
 from bisect import bisect_right
+from collections import Counter
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path

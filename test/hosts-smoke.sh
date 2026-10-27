@@ -196,6 +196,7 @@ scenario_enhanced_reports() {
 }
 scenario_enhanced_reports
 
+# shellcheck disable=SC2031  # run_stubbed_probe changes REPO only inside its subshell.
 scenario_vm_compatibility() {
   begin_scenario 'installed VM capabilities identify legacy and unavailable hosts' || return 0
   local json command output
