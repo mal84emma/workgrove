@@ -500,8 +500,14 @@ Main pushes and pull-request merge checks use separate cancellation groups.
 The workflow makes these checks:
 
 - On `ubuntu-24.04`, `shellcheck -x` checks `bin/*`, `lib/workgrove/*.sh`, `lib/workgrove/vm/*.sh`,
-  `install.sh`, `test/*.sh`, `test/fakes/cmux`, and `test/fakes/*.sh`. The job downloads ShellCheck 0.11.0 from its official release
+  `install.sh`, `test/*.sh`, `test/fakes/cmux`, `test/fakes/*.sh`, `home/.claude/statusline-command.sh`,
+  `test/fakes/pgrep`, and `test/fakes/tmux`. The job downloads ShellCheck 0.11.0 from its official release
   and verifies the archive's SHA-256 checksum.
+- On `ubuntu-24.04`, Ruff 0.14.0 checks `lib/` and `test/` for undefined names, unused code, and syntax errors.
+  The job downloads Ruff from its official release and verifies the archive's SHA-256 checksum.
+- A separate `ubuntu-24.04` job uses `actions/setup-python` to put Python 3.9 first on `PATH`.
+  It checks the interpreter version, then runs every smoke suite through `test/run.sh`.
+  This includes Python tests, documentation checks, and shell suites that call Python through `wt`.
 - The suites in `test/` run in parallel on `macos-latest`, `ubuntu-22.04`, and `ubuntu-24.04`.
   Each scenario must make at least one assertion.
   - On macOS, Homebrew's bash is first on `PATH`. `install-smoke.sh` runs `install.sh` with
@@ -513,11 +519,13 @@ The workflow makes these checks:
   `GIT_ALLOW_PROTOCOL=file` limits git in the suites to local repositories.
 
 To make the same checks on the Mac, install bash, jq and shellcheck first. `Brewfile` installs all three.
+Install Ruff 0.14.0 with `python3 -m pip install ruff==0.14.0`.
 Then run these commands in bash from the repository root:
 
 ```bash
 export PATH="$(brew --prefix)/bin:$PATH"
-shellcheck -x bin/* lib/workgrove/*.sh lib/workgrove/vm/*.sh install.sh test/*.sh
+shellcheck -x bin/* lib/workgrove/*.sh lib/workgrove/vm/*.sh install.sh test/*.sh test/fakes/cmux test/fakes/*.sh home/.claude/statusline-command.sh test/fakes/pgrep test/fakes/tmux
+ruff check --select F,E9 lib test
 GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash test/run.sh
 ```
 
