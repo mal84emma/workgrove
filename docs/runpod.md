@@ -129,7 +129,7 @@ Paths, host aliases, identities, and private operational captures are omitted.
 | Claude task completion | Passed after the usage limit reset. Claude read the uploaded input, produced the exact requested file, and ran the Python assertion successfully. |
 | Claude status and task separation | Running and Idle status and the completion notification reached the correct row. Both tasks retained their inputs, tracked files, and history. |
 | Agent sandboxing | Blocked. Codex 0.163.0 could not create its sandbox namespaces; a no-op sandbox probe failed. |
-| Actual stop/start and endpoint refresh | See the [2026-10-22 results](#restart-on-2026-10-22); endpoint changes and refresh remain unverified. |
+| Actual stop/start and endpoint refresh | See the [2026-10-22 results](#restart-on-2026-10-22) and the [2026-10-27 results](#restarts-on-2026-10-27). The supplier refreshed a changed endpoint, and restore-only repaired both restarts. |
 
 Codex required the supported `--no-daemon` launch option because its control socket rejected the volume's directory permissions.
 That option preserved sandbox policy; individual approvals ran the acceptance commands outside the failed sandbox.
@@ -154,6 +154,47 @@ A real stop/start on 2026-10-22 gave the following results for a Pod with a port
 
 The SSH alias kept working; no endpoint change or refresh was tested.
 The tasks were created after the restart, so recovery of a task running before the stop remains unverified.
+
+### Restarts on 2026-10-27
+
+Two stop/start cycles of the same Pod ran the checklist in [#142](https://github.com/mal84emma/workgrove/issues/142).
+Before the first stop, the Mac and the host ran workgrove `9194fd8`.
+Two tasks, one with Claude and one with Codex, each had a committed and an uncommitted file, and both agents were running.
+The supplier's start command wrote a regular `~/.gitconfig` in the new home folder each time.
+Paths, aliases, machine names, and identities are omitted.
+
+| Check | First restart | Second restart |
+|---|---|---|
+| SSH endpoint | The port changed. The alias, address, and host key alias stayed the same. SSH worked without a host key prompt. | The port changed again, with the same result. |
+| Doctor without `--root` | It reported `profile-missing` and `remote-wt-missing`, with the recovery hint on stderr. Discovery reported `found` with the correct root. | The same. |
+| Machine record | `same_machine` was `false` because the machine name changed. Restore recorded the new name. | The same. |
+| Task creation before restore | `new` refused with the recovery hint. | Not repeated. |
+| Doctor with `--root` | It reported `compatibility-links-missing` and `remote-wt-missing`, with no conflict code and no warning. | The same. |
+| Restore-only | It passed in about 5 seconds, without a download or a package installation. It backed up `~/.gitconfig` and printed the summary. | An agent ran it. Restore removed `~/.gitconfig`, because the newest backup was identical, and made no new backup. |
+| Doctor after restore | It reported ready, with no issues or warnings. | The same. |
+| Second restore-only | It passed and made no new backup. | The same. |
+| Interactive `PATH` | `command -v wt` printed the `wt` under the root. | The same. |
+| Git and `gh` sign-ins | Both worked without a new sign-in. The summary reported both agent sign-in files as present. | The same. |
+| Tasks from before the stop | Both tasks kept their commit, their untracked file, and the file contents. `show` listed both files. | The same. |
+| Plain `attach` | It refused because the agent was gone, and it named `--restart-agent`. | The same. |
+| `attach --restart-agent` | Both agents started without a sign-in and completed one turn. Each row showed Running and then Idle, and no notification appeared twice. | The same. |
+| New task | The first line of `new` was `created <task>`, and the agent replied. | The same. |
+| `wt update` | It refused to run unattended. An interactive run moved the host to `fd22b07`. One Git config generation remained, and doctor reported ready. | An interactive run moved the host to `a68f230`, with the same results. |
+
+No tmux session or agent survived either stop.
+Claude resumed its earlier conversation.
+Codex started a new session and ran the task's original brief again; `--restart-agent` does not promise Codex conversation resume.
+
+After the second start, a new agent received only a task brief that said the host had restarted.
+It found the root with doctor, checked the six conditions of the [portable restore policy](../home/.claude/TASKS.md#portable-restore-only), and ran restore-only.
+It reported the root, the restore summary, the backup line, and the doctor result.
+It ran no full setup, `--restart-agent`, or sign-in.
+Because `same_machine` was `false`, the agent used the restart statement in its brief to satisfy condition 4.
+
+The first restore copied a `~/.gitconfig` that was identical to a backup from 2026-10-22.
+That older backup had no `.workgrove-backup.json` record, and deduplication reads only folders with a record.
+The second restart added no backup.
+During the second restart, the Mac ran `9194fd8` and the host ran `fd22b07`, both with protocol 1.
 
 ### Sandbox compatibility check
 
@@ -217,7 +258,7 @@ That alternative changes the execution location; it does not validate Codex isol
 ### Optional lifecycle validation
 
 The 2026-10-22 restart verified persistent file retention and environment repair through full setup.
-Endpoint changes and refresh remain unverified.
-Recovery of a task running before the stop with `wt -H <host> attach --restart-agent -r <repo> <name>` remains unverified.
-Restore-only after a start command writes `~/.gitconfig` still requires the live check in [#132](https://github.com/mal84emma/workgrove/issues/132).
+The [2026-10-27 restarts](#restarts-on-2026-10-27) verified a changed endpoint, restore-only after a start command writes `~/.gitconfig`, and `--restart-agent` recovery.
+They cover the live check in [#132](https://github.com/mal84emma/workgrove/issues/132).
+A replaced Pod on the same volume remains unverified.
 Further lifecycle validation requires separate authorization and a bounded compute budget.
