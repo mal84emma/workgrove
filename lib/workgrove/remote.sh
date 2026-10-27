@@ -1,11 +1,5 @@
 # shellcheck shell=bash
 # Reads globals: CMUX_ROW_EXISTING, HOME, WG_LIB_DIR, WT_PROTOCOL.
-# Requires cmux.sh: check_row_removal, close_row, cmux_ok, cmux_row_field, cmux_row_open_ssh.
-# Requires common.sh: die, hook_safe_path, host_recovery_hint, row_title, shell_join, tmux_cmd, usage, vm_result, vm_run_line,
-#   vm_ssh, vm_tmux, vm_wt, vm_wt_failure, warn, wt_session, wt_version.
-# Requires version.sh: wt_read_version.
-# Requires options.sh: wt_opt_args, wt_opts, wt_spec.
-# Requires task.sh: cmux_require, need_model, open_code, row_tag, tmux_agent, valid_agent, wt_register_tmpfile.
 # ---------------------------------------------------------------- wt -H <host> …
 remote_sh_raw() { vm_ssh "$1" "$2"; }
 remote_sh() {

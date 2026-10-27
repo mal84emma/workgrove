@@ -2312,14 +2312,11 @@ scenario_shared_helpers() {
   else
     assert_eq "bin/wt under bash $sys_major prints its help" "exit 0" "exit $rc"
   fi
-  # The three loaders differ only in their handling of a source failure. Stop the comparison at that line.
-  local c
+  # The two loaders differ only in their handling of a source failure. Stop the comparison at that line.
   a="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/wt")"
   b="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/cmux-hook")"
-  c="$(sed -n '/^# Load lib\/workgrove\/common.sh/,/^if ! source/p' "$REPO/bin/agent-notify")"
   assert_has "bin/wt has a loader that follows links" "$a" 'wg_hops -lt 32'
   assert_eq "bin/cmux-hook loads the library the same way" "$a" "$b"
-  assert_eq "bin/agent-notify loads the library the same way" "$a" "$c"
   local fake="$TEST_ROOT/tmux-cmd-bin" line
   mkdir -p "$fake"
   cat >"$fake/tmux" <<'STUB'

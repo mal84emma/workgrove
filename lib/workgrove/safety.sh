@@ -1,7 +1,5 @@
 # shellcheck shell=bash
 # Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WG_VERSION_ROOT, WT_BASE_FETCHES, WT_DIRNAME, WT_MERGE_TREE, WT_META, WT_TMPFILES.
-# Requires common.sh: have, warn.
-# Requires task.sh: meta_require, wt_register_tmpfile.
 file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shasum, Linux sha256sum)
   local h=""
   if have shasum; then h=$(shasum -a 256 "$1" 2>/dev/null) || h=""

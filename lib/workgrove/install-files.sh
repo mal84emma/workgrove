@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# Reads globals: INSTALL_TMP, TMPFILES.
 # These helpers use install.sh's stash function and TMPFILES cleanup list.
 
 # Create a tracked temporary file beside the destination.

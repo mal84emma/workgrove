@@ -168,39 +168,15 @@ fi
 case $wg_lib in /*) WG_LIB_DIR=${wg_lib%/*} ;; *) WG_LIB_DIR=$PWD/${wg_lib%/*} ;; esac
 unset wg_lib
 WG_PREFIX=wt
-# shellcheck source=lib/workgrove/safety.sh
-if ! source "$WG_LIB_DIR/safety.sh" 2>/dev/null; then
-  printf 'wt: cannot load %s/safety.sh; reinstall workgrove or check the link to bin/wt\n' "$WG_LIB_DIR" >&2
-  exit 1
-fi
-# shellcheck source=lib/workgrove/remote.sh
-if ! source "$WG_LIB_DIR/remote.sh" 2>/dev/null; then
-  printf 'wt: cannot load %s/remote.sh; reinstall workgrove or check the link to bin/wt\n' "$WG_LIB_DIR" >&2
-  exit 1
-fi
-# shellcheck source=lib/workgrove/recovery.sh
-if ! source "$WG_LIB_DIR/recovery.sh" 2>/dev/null; then
-  printf 'wt: cannot load %s/recovery.sh; reinstall workgrove or check the link to bin/wt\n' "$WG_LIB_DIR" >&2
-  exit 1
-fi
-# shellcheck source=lib/workgrove/hosts.sh
-if ! source "$WG_LIB_DIR/hosts.sh" 2>/dev/null; then
-  printf 'wt: cannot load %s/hosts.sh; reinstall workgrove or check the link to bin/wt\n' "$WG_LIB_DIR" >&2
-  exit 1
-fi
-# shellcheck source=lib/workgrove/picker.sh
-if ! source "$WG_LIB_DIR/picker.sh" 2>/dev/null; then
-  printf 'wt: cannot load %s/picker.sh; reinstall workgrove or check the link to bin/wt\n' "$WG_LIB_DIR" >&2
-  exit 1
-fi
-
-# shellcheck source=lib/workgrove/setup.sh
-if ! source "$WG_LIB_DIR/setup.sh" 2>/dev/null; then
-  printf 'wt: cannot load remote setup support; reinstall workgrove\n' >&2
-  exit 1
-fi
-# shellcheck source=lib/workgrove/doctor.sh
-source "$WG_LIB_DIR/doctor.sh"
+for wg_module in safety remote recovery hosts picker setup doctor; do
+  # ShellCheck checks each module directly; this source path depends on the loop variable.
+  # shellcheck source=/dev/null
+  if ! source "$WG_LIB_DIR/$wg_module.sh" 2>/dev/null; then
+    printf 'wt: cannot load %s/%s.sh; reinstall workgrove or check the link to bin/wt\n' "$WG_LIB_DIR" "$wg_module" >&2
+    exit 1
+  fi
+done
+unset wg_module
 
 usage() { wt_usage; }
 

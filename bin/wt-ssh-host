@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Register flat SSH connection fragments without a cloud API.
+# The scripts in bin/ need bash 5 or later (README, "Requirements").
+# When /bin/bash 3.2 starts this script, use the first Homebrew candidate with version 5 or later.
+# WORKGROVE_REEXEC prevents a loop if the candidate changes after the version check.
+# This block must use bash 3.2 syntax.
 if ((BASH_VERSINFO[0] < 5)) && [[ -z ${WORKGROVE_REEXEC:-} ]]; then
   for bash5 in /opt/homebrew/bin/bash /usr/local/bin/bash; do
     if [[ -x $bash5 ]] && "$bash5" -c '((BASH_VERSINFO[0] >= 5))' >/dev/null 2>&1; then

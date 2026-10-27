@@ -15,6 +15,44 @@ trap lib_cleanup EXIT
 # shellcheck source=test/fakes/rows.sh
 source "$REPO/test/fakes/rows.sh"
 
+scenario_module_loading() {
+  begin_scenario 'missing and broken wt modules share one diagnostic' || return 0
+  local tree="$TEST_ROOT/module-tree" module mode rc
+  mkdir -p "$tree/bin" "$tree/home"
+  cp "$REPO/bin/wt" "$tree/bin/wt"
+  cp -R "$REPO/lib" "$tree/lib"
+  for module in safety remote recovery hosts picker setup doctor; do
+    for mode in missing broken; do
+      if [[ $mode == missing ]]; then rm "$tree/lib/workgrove/$module.sh"
+      else printf 'return 1\n' >"$tree/lib/workgrove/$module.sh"; fi
+      rc=0
+      env -i PATH="$PATH" HOME="$tree/home" "$BASH" "$tree/bin/wt" help \
+        >"$tree/out" 2>"$tree/err" || rc=$?
+      assert_eq "$mode $module exits 1" 1 "$rc"
+      assert_eq "$mode $module emits no stdout" '' "$(cat "$tree/out")"
+      assert_eq "$mode $module names its file and repair" \
+        "wt: cannot load $tree/bin/../lib/workgrove/$module.sh; reinstall workgrove or check the link to bin/wt" \
+        "$(cat "$tree/err")"
+      cp "$REPO/lib/workgrove/$module.sh" "$tree/lib/workgrove/$module.sh"
+    done
+  done
+  end_scenario
+}
+scenario_module_loading
+
+scenario_module_headers() {
+  begin_scenario 'module headers retain globals without unchecked Requires lists' || return 0
+  local module
+  for module in "$REPO"/lib/workgrove/*.sh; do
+    assert_grep "${module##*/} documents its globals" "$module" '# Reads globals:'
+    if grep -q '^# Requires' "$module"; then
+      fail "${module##*/} has an unchecked Requires list"
+    else pass; fi
+  done
+  end_scenario
+}
+scenario_module_headers
+
 scenario_fake_ssh() {
   begin_scenario 'shared fake SSH shell selection and command execution' || return 0
   local fixture="$TEST_ROOT/fake-ssh" tool selected out rc

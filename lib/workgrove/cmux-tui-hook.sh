@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Reads globals: HOME, TMUX, TMUX_PANE, WT_CMUX_TUI_HOOK, XDG_DATA_HOME.
 # lib/workgrove/cmux-tui-hook.sh — the agent hook of cmux-tui, run with the current row's identity.
 #
 # On a VM, cmux 0.65 shows an agent's state in its VM row only through cmux-tui. cmux-tui installs agent
