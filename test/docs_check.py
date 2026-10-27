@@ -559,19 +559,51 @@ VARIABLE_NAME = r"(?:WG|WT)_[A-Z0-9_]+"
 def shell_variable_reads(text):
     """Find expansions, arithmetic names, and variable-existence tests in shell sources.
 
-    Keep quoted payloads because remote scripts also read variables when executed.
+    Scan shell command payloads, remote command strings, and script assignments as deferred source.
     Ignore comments, assignment names, record labels, and heredoc delimiters.
     """
     tokens = re.compile(r"('([^']*)'|\"(?:\\.|[^\"\\])*\"|\$\{[^}]*\}|\\.)|(?<![^\s;|&()])#[^\n]*")
+    delimiters = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.|(?<![^\s;|&()])#[^\n]*|[()]")
+
+    def mask_substitutions(value):
+        parts = []
+        cursor = 0
+        while match := re.search(r"\$\((?!\()", value[cursor:]):
+            start = cursor + match.start()
+            depth = 1
+            end = None
+            for delimiter in delimiters.finditer(value, start + 2):
+                if delimiter[0] == "(":
+                    depth += 1
+                elif delimiter[0] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end = delimiter.start()
+                        break
+            if end is None:
+                break
+            parts.extend((value[cursor:start + 2], mask(value[start + 2:end]), ")"))
+            cursor = end + 1
+        return "".join(parts) + value[cursor:]
+
     def mask(source):
         def token(match):
             value = match[0]
             if not match[1] or value.startswith("\\"):
                 return blank(value)
             if value.startswith("'"):
-                return "'" + mask(value[1:-1]) + "'"
-            return re.sub(r"\\.", lambda escaped: blank(escaped[0]), value)
-        return tokens.sub(token, source)
+                prefix = source[:match.start()]
+                shell_command = re.search(r"\b(?:sh|bash|zsh|dash|ksh)\s+(?:-\w+\s+)*-[a-zA-Z]*c\s*$", prefix)
+                remote_command = re.search(r"(?:^|[;&|\n])\s*(?:\S*/)?(?:ssh|vm_ssh|remote_sh(?:_raw)?)\b[^;\n]*$", prefix)
+                script_assignment = re.search(r"\b(?:bootstrap|script|source|command|line)\+?=\s*$", prefix)
+                if shell_command or remote_command or script_assignment:
+                    return "'" + mask(value[1:-1]) + "'"
+                if re.fullmatch(VARIABLE_NAME, value[1:-1]):
+                    return value
+                return blank(value)
+            value = re.sub(r"\\.", lambda escaped: blank(escaped[0]), value)
+            return value
+        return mask_substitutions(tokens.sub(token, source))
 
     source = mask(text)
     expansion = re.compile(r"\$(?:\{[!#]?)?(" + VARIABLE_NAME + r")\b")

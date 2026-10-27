@@ -141,6 +141,19 @@ class DocsCheckTests(unittest.TestCase):
         self.assertEqual([(3, "WG_LIVE"), (4, "WT_HASH_DATA")],
                          list(docs_check.shell_variable_reads(source)))
 
+    def test_shell_literal_strings_and_substitution_comments_are_hidden(self):
+        self.variable_fixture()
+        self.write("bin/tool", "#!/bin/sh\nprintf '%s\\n' '$WT_LITERAL'\n"
+                   'echo "$(\n# $WT_COMMENT\nprintf ready\n)"\n'
+                   'echo "$(\n# $WT_COMMENT\nprintf "%s" "$WG_PUBLIC"\n)"\n'
+                   "sh -c '# $WT_DEFERRED_COMMENT\necho \"$WT_INTERNAL\"'\n")
+        self.git("add", ".")
+        self.assertEqual([], docs_check.check_variables(self.root))
+        path = self.root / "README.md"
+        path.write_text(path.read_text().replace("`WG_PUBLIC`", "`WG_REMOVED`"))
+        self.assertEqual(["bin/tool:9: undocumented variable read: WG_PUBLIC"],
+                         docs_check.check_variables(self.root))
+
     def test_shell_variable_forms_and_comments(self):
         source = ('# $WT_COMMENT ${WG_COMMENT} ((WT_COMMENT))\n'
                   'WG_ASSIGNED=1 # $WT_INLINE\n'
