@@ -89,6 +89,12 @@ fake_rows() {
     --argjson rows "$(printf '%s\n' "$@" | jq -sc '.')" '$template[0] | .workspaces=$rows'
 }
 
+# Supply identities in the recorded SSH creation response.
+fake_ssh_response() {
+  jq --arg id "$1" --arg host "$2" '.workspace_id=$id | .remote.destination=$host' \
+    "${3:-$FAKE_CMUX_FIXTURES/ssh.json}"
+}
+
 fake_windows() {
   jq -cn --slurpfile template "$FAKE_CMUX_FIXTURES/windows.json" \
     --argjson ids "$(printf '%s\n' "$@" | jq -Rsc 'split("\n") | map(select(length > 0))')" \

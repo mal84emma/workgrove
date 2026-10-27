@@ -256,7 +256,6 @@ ROW_SEP=' · '
 # An empty host selects local rows. Other hosts require an SSH row with a matching destination or description.
 # task_row accepts both current titles and the <repo>:<name> titles from older wt versions, regardless of their descriptions.
 # An empty repo ID matches a row with no repo.
-# new_row finds a created row when cmux ssh prints no ref. It excludes known IDs and descriptions with a repo.
 # unclaimed_row finds descriptions that wt does not write. wt rm checks these rows for agents because users can edit descriptions.
 # WT_COMPAT: Remove when no row retains a repository-prefixed title.
 # shellcheck disable=SC2016
@@ -266,8 +265,6 @@ ROW_JQ='
     else ((.remote.enabled // false) and ((.remote.destination // "") == $h or (desc($sep)[0] // "") == "@" + $h)) end;
   def task_row($t; $r; $h; $sep): on_host($h; $sep)
     and ((.title == $t and (desc($sep)[1:] | join($sep)) == $r) or ($r != "" and .title == $r + ":" + $t));
-  def new_row($t; $h; $ids; $sep): .title == $t and on_host($h; $sep) and (desc($sep) | length < 2)
-    and (.id as $i | all($ids[]; . != $i));
   def unclaimed_row($t; $h; $sep): .title == $t and on_host($h; $sep)
     and ((.description | if type == "string" then . else "" end) | test("^@[^ ]+(" + $sep + "[A-Za-z0-9-]+)?$") | not);
 '
@@ -365,23 +362,23 @@ cmux_row_create_ssh() {
   done
   [[ ${CMUX_ROWS_FULL:-0} == 1 ]] || { cmux_error "cannot create an SSH row without a complete row list"; return 1; }
   ssh_host_check "$host" || { cmux_error "SSH host validation failed for $host"; return 1; }
-  before=$(printf '%s' "$CMUX_ROWS_JSON" | jq -r '.workspaces[].id') \
+  before=$(printf '%s' "$CMUX_ROWS_JSON" | jq -c '[.workspaces[].id | ascii_downcase]') \
     || { cmux_error "cannot read existing cmux row IDs"; return 1; }
   # Focused native SSH creation can replace the requested title with a generated name.
   # Establish the row's identity before selecting it.
-  out=$(cmux_call ssh "$host" --name "$title" --no-focus "${args[@]}" --command "$command" 2>&1) || {
+  out=$(cmux_call ssh "$host" --name "$title" --no-focus "${args[@]}" --command "$command" --json --id-format uuids 2>&1) || {
     cmux_error "cmux ssh failed: $out"; return 1;
   }
-  ref=$(printf '%s' "$out" | cmux_ref)
-  if [[ -z $ref ]]; then
-    # Measured: the row list lags about one second behind creation without a workspace:N ref.
-    # Use the hook's single lookup, so both callers report a missing row after the same wait.
-    wg_sleep
-    if cmux_rows_load checked; then
-      ref=$(printf '%s' "$CMUX_ROWS_JSON" | jq -r --arg t "$title" --arg h "$host" --arg before "$before" --arg sep "$ROW_SEP" "$ROW_JQ"'
-        first(.workspaces[] | select(new_row($t; $h; $before | split("\n"); $sep)) | .id // empty) // empty' 2>/dev/null)
-    fi
-  fi
+  # Measured on 0.65.1: JSON alone returns refs. Explicit UUID formatting identifies the created row.
+  # Refuse ambiguous output, another host, and identities present before creation.
+  ref=$(printf '%s' "$out" | jq -ers --arg h "$host" --argjson before "$before" '
+    select(length == 1) | .[0] | select(type == "object")
+    | select(.remote.enabled == true and .remote.destination == $h)
+    | .workspace_id as $id
+    | select($id | type == "string" and test("^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$"))
+    | select(.window_id != $id and .surface_id != $id)
+    | select($before | index($id | ascii_downcase) == null)
+    | $id' 2>/dev/null) || ref=''
   [[ -n $ref ]] || {
     cmux_error "cmux reported no row for $title on $host: $out; if a new row $title with no repo on its second line is open, close it"
     return 1;

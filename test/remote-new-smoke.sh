@@ -47,7 +47,7 @@ prepare_cmux() {
   mkdir -p "$FAKE_CMUX_STATE/fail" "$FAKE_CMUX_STATE/queue"
   fake_windows CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC >"$FAKE_CMUX_STATE/windows.json"
   before=$(fake_rows)
-  printf 'workspace:123\n' >"$FAKE_CMUX_STATE/ssh.json"
+  fake_ssh_response 00000000-0000-4000-8000-000000000123 fakevm >"$FAKE_CMUX_STATE/ssh.json"
   case $CMUX_MODE in
     down) fake_failure ping 1 ;;
     select-fail) fake_failure workspace-select 1 ;;
@@ -70,7 +70,8 @@ prepare_cmux() {
   case $CMUX_MODE in
     no-ref*)
       mkdir -p "$FAKE_CMUX_STATE/after/ssh/rows"
-      printf 'OK\n' >"$FAKE_CMUX_STATE/ssh.json"
+      fake_ssh_response 00000000-0000-4000-8000-000000000123 fakevm \
+        | jq 'del(.workspace_id) | .workspace_ref="workspace:123"' >"$FAKE_CMUX_STATE/ssh.json"
       case $CMUX_MODE in
         no-ref-late) after=$(fake_rows) ;;
         no-ref-own) after=$(fake_rows "$(fake_row user-row task '' fakevm)" "$(fake_row new-row task '' fakevm)") ;;
@@ -377,7 +378,7 @@ TMUX
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude 'opus[1m]'
   check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'row: task @fakevm · repo'* ]] && echo yes)" 'healthy remote creation failed'
-  check "$(grep -qF -- 'ssh fakevm --name task --no-focus ' "$TEST_ROOT/cmux.log" && grep -qxF -- 'workspace-action --workspace workspace:123 --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && echo yes)" 'new row did not get the task name as its title and the host and repo as its description'
+  check "$(grep -qF -- 'ssh fakevm --name task --no-focus ' "$TEST_ROOT/cmux.log" && grep -qxF -- 'workspace-action --workspace 00000000-0000-4000-8000-000000000123 --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && echo yes)" 'new row did not get the task name as its title and the host and repo as its description'
   check "$(if ! grep -q '^workspace select ' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'new task creation selected its row'
   check "$([[ $(grep -xcF -- '-m' "$TEST_ROOT/remote-new.args") -eq 1 && $(grep -xcF -- 'opus[1m]' "$TEST_ROOT/remote-new.args") -eq 1 ]] && echo yes)" 'remote model flag or value was not forwarded intact'
 
@@ -386,7 +387,7 @@ TMUX
   : >"$TEST_ROOT/cmux.log"
   invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
   check "$([[ $WT_RC -eq 0 ]] && grep -qF -- 'ssh fakevm --name task --no-focus ' "$TEST_ROOT/cmux.log" && echo yes)" 'replacement row was created focused'
-  check "$(awk '/^workspace-action .*set-description / {tag=NR} /^workspace select workspace:123$/ {if (tag && tag<NR) selected=1} END {if (selected) print "yes"}' "$TEST_ROOT/cmux.log")" 'replacement row was selected before its identity was established'
+  check "$(awk '/^workspace-action .*set-description / {tag=NR} /^workspace select 00000000-0000-4000-8000-000000000123$/ {if (tag && tag<NR) selected=1} END {if (selected) print "yes"}' "$TEST_ROOT/cmux.log")" 'replacement row was selected before its identity was established'
   CMUX_MODE=select-fail
   : >"$TEST_ROOT/cmux.log"
   invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
@@ -457,34 +458,21 @@ TMUX
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude
   check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'row: task @fakevm · repo'* ]] && grep -qF -- 'ssh fakevm --name task ' "$TEST_ROOT/cmux.log" && echo yes)" 'a same-named task of another repo blocked the row'
-  check "$(grep -qxF -- 'workspace-action --workspace workspace:123 --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the new row did not get its own description'
+  check "$(grep -qxF -- 'workspace-action --workspace 00000000-0000-4000-8000-000000000123 --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the new row did not get its own description'
   # attach does not take the other repo's row either.
   : >"$TEST_ROOT/cmux.log"
   invoke_wt -H fakevm attach -r "$TEST_ROOT/remote/repo" task
   check "$([[ $WT_RC -eq 0 && "$WT_OUT" == *'row: task @fakevm · repo'* && "$WT_OUT" != *'already open'* ]] && grep -qF -- 'ssh fakevm --name task ' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'attach took the row of a same-named task in another repo'
   rm "$TEST_ROOT/remote-new"
 
-  # When the create prints no workspace ref, wt describes the row that the create added, not the other repo's row.
-  CMUX_MODE=no-ref
-  : >"$TEST_ROOT/cmux.log"
-  run_wt wt-demo claude
-  check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to a row that the create did not add'
-  rm -f "$TEST_ROOT/remote-new"
-
-  # An older row with the task's title and no repo, such as the user's own `cmux ssh` row, is not the new one.
-  CMUX_MODE=no-ref-own
-  : >"$TEST_ROOT/cmux.log"
-  run_wt wt-demo claude
-  check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'user-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to an older row with the same title'
-  rm -f "$TEST_ROOT/remote-new"
-
-  # A row of another repo that appeared during the create is not in the list from before it. Its description
-  # names its repo, so it is still not the new one.
-  CMUX_MODE=no-ref-race
-  : >"$TEST_ROOT/cmux.log"
-  run_wt wt-demo claude
-  check "$([[ $WT_RC -eq 0 ]] && grep -qxF -- 'workspace-action --workspace new-row --action set-description --description @fakevm · repo' "$TEST_ROOT/cmux.log" && ! grep -qF -- 'other-row' "$TEST_ROOT/cmux.log" && echo yes)" 'the description went to a row of another repo that appeared during the create'
-  rm -f "$TEST_ROOT/remote-new"
+  # A missing UUID must not trigger discovery, even when another matching row appears.
+  for CMUX_MODE in no-ref no-ref-own no-ref-race no-ref-late; do
+    : >"$TEST_ROOT/cmux.log"
+    run_wt wt-demo claude
+    check "$([[ $WT_RC -eq 1 && "$WT_OUT" == *'cmux reported no row'* ]] && ! grep -Eq '^(workspace-action|workspace select|workspace close)' "$TEST_ROOT/cmux.log" && echo yes)" "$CMUX_MODE acted on an unidentified row"
+    check "$(awk '/^ssh / {created=1; next} created && /^workspace list / {n++} END {if (!n) print "yes"}' "$TEST_ROOT/cmux.log")" "$CMUX_MODE used row discovery instead of the creation response"
+    rm -f "$TEST_ROOT/remote-new"
+  done
 
   # With no list from before the create, any row could look new. So wt does not guess, and writes no description.
   CMUX_MODE=no-ref-blind
@@ -502,19 +490,12 @@ TMUX
   check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'not creating a row on a lookup that failed'* ]] && ! grep -q '^ssh ' "$TEST_ROOT/cmux.log" && echo yes)" 'attach created a row after one window failed'
   rm "$TEST_ROOT/remote-new"
 
-  # A missing ref gets one lookup after creation, even when the new row remains absent.
-  CMUX_MODE=no-ref-late
-  : >"$TEST_ROOT/cmux.log"
-  run_wt wt-demo claude
-  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'cmux reported no row'* && $(awk '/^ssh / {created=1; next} created && /^workspace list / {n++} END {print n+0}' "$TEST_ROOT/cmux.log") -eq 1 ]] && echo yes)" 'a missing ref did not use exactly one fallback lookup'
-  rm "$TEST_ROOT/remote-new"
-
   # The description holds the repo, so a new row without it would be found by no later lookup. wt closes the
   # row and fails, and the recovery advice applies to the task as it is.
   CMUX_MODE=tag-fail
   : >"$TEST_ROOT/cmux.log"
   run_wt wt-demo claude
-  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'so it was closed'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && grep -qxF -- 'workspace close workspace:123 --force' "$TEST_ROOT/cmux.log" && echo yes)" 'a new row without its description was left open'
+  check "$([[ $WT_RC -ne 0 && "$WT_OUT" == *'so it was closed'* && "$WT_OUT" == *'wt -H fakevm attach -r'* ]] && grep -qxF -- 'workspace close 00000000-0000-4000-8000-000000000123 --force' "$TEST_ROOT/cmux.log" && echo yes)" 'a new row without its description was left open'
   rm "$TEST_ROOT/remote-new"
   # A new shell row also needs its description before a later lookup can identify it.
   : >"$TEST_ROOT/cmux.log"

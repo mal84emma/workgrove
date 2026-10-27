@@ -116,7 +116,11 @@ case "$1 ${2:-}" in
   'send --workspace'|'send-key --workspace')
     [[ $# == 4 ]] || unexpected_command "$@"
     key=$1; file=$1.json ;;
-  'ssh '*) key=ssh; file=ssh.json ;;
+  'ssh '*)
+    key=ssh; file=ssh.json; ssh_uuids=0
+    if (($# >= 5)) && [[ ${*: -3:1} == --json && ${*: -2:1} == --id-format && ${*: -1} == uuids ]]; then
+      ssh_uuids=1
+    fi ;;
   'diff --branch')
     [[ $# == 12 && $3 == --repo && -n $4 && $5 == --base && -n $6 && $7 == --layout && $8 == split && $9 == --title && ${11} == --focus && ${12} == true ]] || unexpected_command "$@"
     key='diff'; file=diff.txt ;;
@@ -155,7 +159,7 @@ if [[ -n $state && -f $state/mutate ]]; then
   source "$HERE/rows.sh"
   case $key in
     ssh|workspace-create)
-      # Keep stable UUIDs in row lists and return cmux's workspace ref from creation.
+      # Local creation keeps its reference. Explicit SSH formatting returns the UUID.
       allocate_row_identity
       host='' title='<title>' description='' cwd=''
       if [[ $key == ssh ]]; then host=$2; fi
@@ -179,7 +183,9 @@ if [[ -n $state && -f $state/mutate ]]; then
         update_rows "$document" --argjson row "$row" '.workspaces += [$row]'
       fi
       refresh_windows
-      printf '%s\n' "$ref"
+      if [[ $key == ssh && $ssh_uuids == 1 ]]; then
+        fake_ssh_response "$id" "$host" "$fixtures/ssh.json"
+      else printf '%s\n' "$ref"; fi
       apply_effects
       exit 0 ;;
     workspace-close)
@@ -220,7 +226,13 @@ case "$key" in
     printf '%s' "$title|$body" >"$state/last-content"
     tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl" ;;
   ping|diff|workspace-close|workspace-select|workspace-action|send|send-key|dismiss-notification) ;;
-  ssh|workspace-create) printf 'workspace:99\n' ;;
+  ssh)
+    if ((ssh_uuids)); then
+      # shellcheck source=test/fakes/rows.sh
+      source "$HERE/rows.sh"
+      fake_ssh_response 00000000-0000-4000-8000-000000000099 "$2" "$fixtures/ssh.json"
+    else printf 'workspace:99\n'; fi ;;
+  workspace-create) printf 'workspace:99\n' ;;
   read-screen) exit 1 ;;
   *) unexpected_command "$@" ;;
 esac

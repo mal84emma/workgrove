@@ -1,1 +1,3 @@
 Redacted cmux contract responses. All free text and identities use placeholders.
+ssh.json contains only measured SSH creation identity fields.
+Its separate capture used --json --id-format uuids and doctor-sanitize.jq.

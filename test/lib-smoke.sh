@@ -188,6 +188,74 @@ scenario_cmux_require() {
 }
 scenario_cmux_require
 
+scenario_ssh_creation_identity() {
+  begin_scenario 'SSH creation validates its UUID before any row action' || return 0
+  local -x HOME="$TEST_ROOT/ssh-identity-home"
+  local -x FAKE_CMUX_STATE WG_POLL_INTERVAL=0
+  local CMUX_RUN=(env CMUX_QUIET=1 "$REPO/test/fakes/cmux") CMUX_ROWS_FULL=1 CMUX_ROWS_JSON CMUX_ERROR
+  local id=ABCDEFAB-1234-4567-89AB-ABCDEFABCDEF old=BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB
+  local mode response rc args=() calls
+  mkdir -p "$HOME"
+  for mode in valid no-focus missing invalid type wrong-host disabled array multiple diagnostic preexisting case-fold window surface tag-fail cleanup-fail select-fail ssh-fail; do
+    FAKE_CMUX_STATE="$TEST_ROOT/ssh-identity-$mode"
+    fake_cmux_init "$FAKE_CMUX_STATE"
+    CMUX_ROWS_JSON=$(fake_rows "$(fake_row "$old" task '' test-vm)")
+    response=$(fake_ssh_response "$id" test-vm)
+    args=(); rc=0; CMUX_ERROR=''
+    case $mode in
+      valid) response=$(jq '.window_id="DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD"
+        | .surface_id="CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC" | .workspace_ref="workspace:99"' <<<"$response") ;;
+      no-focus) args=(--no-focus) ;;
+      missing) response=$(jq 'del(.workspace_id) | .workspace_ref="workspace:99"' <<<"$response") ;;
+      invalid) response=$(jq '.workspace_id="workspace:99"' <<<"$response") ;;
+      type) response=$(jq '.workspace_id=123' <<<"$response") ;;
+      wrong-host) response=$(jq '.remote.destination="other-vm"' <<<"$response") ;;
+      disabled) response=$(jq '.remote.enabled=false' <<<"$response") ;;
+      array) response="[$response]" ;;
+      multiple) response+=$'\n'"$response" ;;
+      diagnostic) response="Warning: workspace:99"$'\n'"$response" ;;
+      preexisting) response=$(fake_ssh_response "$old" test-vm) ;;
+      case-fold) CMUX_ROWS_JSON=$(fake_rows "$(fake_row "${id,,}" task '' test-vm)") ;;
+      window) response=$(jq '.window_id=.workspace_id' <<<"$response") ;;
+      surface) response=$(jq '.surface_id=.workspace_id' <<<"$response") ;;
+      tag-fail) fake_failure workspace-action 1 ;;
+      cleanup-fail) fake_failure workspace-action 1; fake_failure workspace-close 1 'close refused' ;;
+      select-fail) fake_failure workspace-select 1 ;;
+    esac
+    if [[ $mode == ssh-fail ]]; then fake_queue ssh "$response" 7 'creation failed'
+    else fake_queue ssh "$response"; fi
+    cmux_row_create_ssh test-vm task '@test-vm · repo' true "${args[@]}" || rc=$?
+    calls=$(cat "$FAKE_CMUX_STATE/calls.log")
+    case $mode in
+      valid|no-focus)
+        assert_eq "$mode accepts the recorded UUID response" 0 "$rc"
+        assert_grep "$mode tags the UUID" "$FAKE_CMUX_STATE/calls.log" "workspace-action --workspace $id --action set-description --description @test-vm · repo"
+        if [[ $mode == valid ]]; then
+          assert_grep 'requested focus follows tagging' "$FAKE_CMUX_STATE/calls.log" "workspace select $id"
+        else assert_eq 'unfocused creation sends no selection' false "$([[ $calls == *'workspace select'* ]] && echo true || echo false)"; fi ;;
+      tag-fail|cleanup-fail)
+        assert_eq "$mode reports setup failure" 1 "$rc"
+        assert_grep "$mode closes only the validated UUID" "$FAKE_CMUX_STATE/calls.log" "workspace close $id --force"
+        assert_eq "$mode sends no selection" false "$([[ $calls == *'workspace select'* ]] && echo true || echo false)"
+        if [[ $mode == tag-fail ]]; then assert_eq 'tag failure reports cleanup' true "$([[ $CMUX_ERROR == *'so it was closed'* ]] && echo true || echo false)"
+        else assert_eq 'cleanup refusal remains visible' true "$([[ $CMUX_ERROR == *'and closing it failed'* ]] && echo true || echo false)"; fi ;;
+      select-fail)
+        assert_eq 'selection failure remains a failure' 1 "$rc"
+        assert_eq 'selection failure retains the identified row' false "$([[ $calls == *'workspace close'* ]] && echo true || echo false)" ;;
+      *)
+        assert_eq "$mode refuses the creation response" 1 "$rc"
+        if grep -Eq '^(workspace-action|workspace select|workspace close)' "$FAKE_CMUX_STATE/calls.log"; then
+          fail "$mode acted on an unvalidated identity"
+        else pass; fi ;;
+    esac
+    assert_grep "$mode creates unfocused" "$FAKE_CMUX_STATE/calls.log" 'ssh test-vm --name task --no-focus '
+    assert_grep "$mode requests explicit JSON UUIDs" "$FAKE_CMUX_STATE/calls.log" '--json --id-format uuids'
+    assert_eq "$mode performs no discovery lookup" false "$([[ $calls == *'workspace list'* ]] && echo true || echo false)"
+  done
+  end_scenario
+}
+scenario_ssh_creation_identity
+
 scenario_results() {
   begin_scenario 'versioned wt results' || return 0
   record=$(WG_MACHINE_RESULT=1 wt_result new created task '/repos/two words' wt-two-words-task)

@@ -122,6 +122,7 @@ workgrove/
 │   │       ├── notifications.json
 │   │       ├── rows.json
 │   │       ├── rows_by_window.json
+│   │       ├── ssh.json
 │   │       ├── top.json
 │   │       ├── version.txt
 │   │       └── windows.json
