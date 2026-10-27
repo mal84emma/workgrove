@@ -223,7 +223,7 @@ host_repos() {
 
 wt_update_record() {
   jq -cn --arg stage "$1" --arg side "$2" --argjson version "$3" \
-    '$version + {event:"wt_update",stage:$stage,side:$side}'
+    '$version | {commit,protocol} + {event:"wt_update",stage:$stage,side:$side}'
 }
 
 host_version() {

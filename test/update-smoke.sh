@@ -89,6 +89,8 @@ scenario_update() {
   output=$(bash "$TEST_ROOT/clone/bin/wt" update)
   json=$(records <<<"$output")
   assert_eq 'local update reports both stages' true "$(jq -r --arg commit "$expected" 'map(.stage) == ["before","after"] and all(.[]; .side == "local" and .commit == $commit and .protocol == 1)' <<<"$json")"
+  assert_eq 'update records retain their existing keys' true \
+    "$(jq -r 'all(.[]; keys == ["commit","event","protocol","side","stage"])' <<<"$json")"
   assert_eq 'existing up-to-date line remains' true "$([[ $output == *'Already up to date.'* ]] && echo true || echo false)"
   assert_eq 'scratch installer runs' true "$([[ $output == *'installer stub'* ]] && echo true || echo false)"
   local flag
