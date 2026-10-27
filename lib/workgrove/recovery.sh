@@ -1,12 +1,5 @@
 # shellcheck shell=bash
 # Reads globals: RANDOM, WG_LIB_DIR.
-# Requires cmux.sh: close_row, cmux_row_field, cmux_screen, cmux_select, row_label,
-#   row_remote_field, row_shell_prompt, send_tmux_line.
-# Requires common.sh: die, row_title, shell_join, tmux_cmd, usage, vm_result, vm_run_line,
-#   vm_tmux, vm_wt_failure, warn, wg_sleep.
-# Requires options.sh: wt_opts, wt_spec.
-# Requires remote.sh: agent_on_vm, remote_row, remote_sh, remote_sh_raw.
-# Requires task.sh: cmux_require, row_tag.
 
 vm_session_detached() { # vm_session_detached <host> <session> — 0 only when the VM has that tmux session and lists no
                         # client on it. One ssh call; any failure, ssh's own included, counts as "not proven"

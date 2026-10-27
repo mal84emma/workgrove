@@ -2,10 +2,9 @@
 # Reads globals: BASHPID, BASH_SOURCE, DOCTOR_FAILED, HOME, TMUX, WG_EXIT_HANDLERS, WG_EXIT_PID, WG_MACHINE_RESULT, WG_POLL_INTERVAL,
 #   VM_SSH_CHECK_RUN, VM_SSH_OPTIONS, VM_SSH_RUN, VM_WT_CAPTURE_FAILURE, VM_WT_RECOVERY_HINT, WG_COMMON_LOADED, WG_PREFIX, WG_VERSION_ROOT,
 #   WT_PROTOCOL, WT_TMPFILES.
-# Requires bin/cmux-hook: log for the close policy; doctor.sh: doctor_result for the doctor policy.
 # Loads cmux.sh, task.sh, options.sh, and version.sh.
 # lib/workgrove/common.sh — shell functions that more than one script in bin/ needs.
-# bin/wt, bin/cmux-hook and bin/agent-notify source this file after they hand off to bash 5.
+# bin/wt and bin/cmux-hook source this file after they hand off to bash 5.
 # This file needs bash 5. Bash reads a sourced file one command at a time, so an older bash returns at
 # the next line before it parses the rest, and its source fails cleanly.
 # After the version check, this file loads the cmux adapter and task core, and defines shared functions.

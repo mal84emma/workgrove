@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# Reads globals: TMPDIR, WG_LIB_DIR.
 # Prepare hosts through ordinary SSH without requiring a remote wt executable.
 host_setup() {
   local host=$1; shift

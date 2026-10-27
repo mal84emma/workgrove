@@ -1,7 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: HOME, OS, R.
 # Updates globals: SUMMARY_ACTIONS, SUMMARY_SKIPS, TMPFILES.
-# Requires json_merge from install-files.sh.
 # Install the native notification rule without replacing the user's other automation rules.
 hook_cmux_automation() {
   [[ $OS == Darwin ]] || return 0

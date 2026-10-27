@@ -1,7 +1,5 @@
 # shellcheck shell=bash
 # Reads globals: TMPDIR, WG_HOST_PROBE_TIMEOUT, WG_LIB_DIR, VM_SSH_OPTIONS.
-# Requires common.sh: valid_host. Requires task.sh: wt_register_tmpfile.
-# Requires version.sh: wt_read_version.
 # Send public probes inline so missing remote installation links cannot hide prerequisites.
 host_probe_source() {
   cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/probe-host.sh" "$WG_LIB_DIR/vm/python-runtime.sh"

@@ -1,6 +1,5 @@
 # shellcheck shell=bash
 # Reads globals: WG_LIB_DIR, WG_VERSION_ROOT, WG_CMUX_SUPPORTED, WG_MACHINE_RESULT, WT_PROTOCOL, HOME, WT_HOST, WT_REPOS_DIR.
-# Requires common.sh, task.sh, cmux.sh, options.sh, and remote.sh from bin/wt.
 
 # Keep checking after a failure so one run reports every repair.
 doctor_result() {

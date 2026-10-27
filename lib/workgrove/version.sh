@@ -1,4 +1,5 @@
 # shellcheck shell=sh
+# Reads globals: HOME.
 # The Mac sends these functions before VM probes so older installations use the same validation.
 wt_read_version() {
   jq -esc '

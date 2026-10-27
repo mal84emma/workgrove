@@ -11,6 +11,25 @@ SCRATCH_BASE=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 source "$REPO/test/lib.sh"
 trap lib_cleanup EXIT
 
+scenario_handoff_copies() {
+  begin_scenario 'bash 5 handoffs and their comments match' || return 0
+  local file expected block comments count=0
+  expected=$(awk '/^if \(\(BASH_VERSINFO/ {copy=1} copy {print} /^unset WORKGROVE_REEXEC$/ {exit}' "$REPO/bin/wt")
+  comments=$(awk '/^# The scripts in bin\// {copy=1} /^if \(\(BASH_VERSINFO/ {exit} copy {print}' "$REPO/bin/wt")
+  assert_eq 'the reference handoff has an end marker' 'unset WORKGROVE_REEXEC' "${expected##*$'\n'}"
+  for file in "$REPO"/bin/*; do
+    grep -q BASH_VERSINFO "$file" || continue
+    count=$((count + 1))
+    block=$(awk '/^if \(\(BASH_VERSINFO/ {copy=1} copy {print} /^unset WORKGROVE_REEXEC$/ {exit}' "$file")
+    assert_eq "${file##*/} has the same handoff" "$expected" "$block"
+    block=$(awk '/^# The scripts in bin\// {copy=1} /^if \(\(BASH_VERSINFO/ {exit} copy {print}' "$file")
+    assert_eq "${file##*/} has the same handoff comments" "$comments" "$block"
+  done
+  assert_eq 'all six handoffs are compared' 6 "$count"
+  end_scenario
+}
+scenario_handoff_copies
+
 BASH5=$BASH
 SCRIPTS=(wt azml-ssh-host wt-ssh-host github-guard cmux-hook agent-notify)
 mkdir -p "$TEST_ROOT/home" "$TEST_ROOT/copies" "$TEST_ROOT/lib/workgrove" "$TEST_ROOT/nolib/bin"
@@ -23,7 +42,7 @@ done
 # A copy loads the libraries from ../lib, as the scripts in bin/ do. So copies/ needs lib/ beside it.
 cp "$REPO"/lib/workgrove/*.sh "$REPO"/lib/workgrove/*.py "$TEST_ROOT/lib/workgrove/"
 cp -R "$REPO/lib/workgrove/vm" "$TEST_ROOT/lib/workgrove/"
-# These copies have no ../lib, so they test what each script does when it cannot load the library.
+# These copies have no ../lib, so they test each script without the library.
 for script in wt wt-ssh-host cmux-hook agent-notify; do
   cp "$REPO/bin/$script" "$TEST_ROOT/nolib/bin/$script"
 done
@@ -84,7 +103,9 @@ scenario_missing_library() {
     rc=0
     args=()
     [[ $script == wt || $script == wt-ssh-host ]] && args=(help)
-    exec 3<<<'{}'
+    if [[ $script == agent-notify ]]; then
+      exec 3<<<'{"hook_event_name":"UserPromptSubmit","session_id":"no-library"}'
+    else exec 3<<<'{}'; fi
     env -i PATH="$PATH" HOME="$TEST_ROOT/home" XDG_STATE_HOME="$TEST_ROOT/home/.local/state" \
       "$BASH5" "$TEST_ROOT/nolib/bin/$script" "${args[@]}" > "$TEST_ROOT/out" 2> "$TEST_ROOT/err" <&3 || rc=$?
     remaining=$(cat <&3)
@@ -101,7 +122,8 @@ scenario_missing_library() {
         assert_eq "$script drains its payload with no library" '' "$remaining"
       fi
       if [[ $script == agent-notify ]]; then
-        assert_grep 'agent-notify says that it cannot load the library' "$TEST_ROOT/err" 'cannot load'
+        assert_eq 'agent-notify works without the library' '' "$(cat "$TEST_ROOT/err")"
+        assert_regular "$TEST_ROOT/home" '.local/state/claude-start-times/no-library'
       fi
     fi
   done
@@ -136,7 +158,7 @@ scenario_linked_library() {
   assert_grep 'cmux-hook loads the library through the links' "$FAKE_CMUX_STATE/calls.log" 'list-windows'
   out=$(cd "$TEST_ROOT/home" && printf '{}\n' | env -i PATH="$PATH" HOME="$TEST_ROOT/home" \
     XDG_STATE_HOME="$TEST_ROOT/home/.local/state" "$TEST_ROOT/links/bin/agent-notify" 2>&1) || true
-  assert_eq 'agent-notify loads the library through the links' '' "$out"
+  assert_eq 'agent-notify runs through the links' '' "$out"
   end_scenario
 }
 scenario_linked_library

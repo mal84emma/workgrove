@@ -1,6 +1,5 @@
 # shellcheck shell=bash
 # Reads globals: HOME.
-# Requires no functions from other modules.
 # shellcheck disable=SC2153
 # ---------------------------------------------------------------- wt task
 task_exit() { # the launcher row closes on exit, so give the user time to read a message first

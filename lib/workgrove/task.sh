@@ -2,10 +2,6 @@
 # Reads globals: BASHPID, CMUX_ERROR, CMUX_SSH_ATTEMPT_ID, CODEX_SANDBOX, HOME, PWD, REPO, REPOS_PATH,
 #   ROW_SEP, WG_TASK_LOADED, WT_AGENT, WT_DIRNAME, WT_HOST, WT_REMOTE_ROOT, WT_REPOS_DIR,
 #   WT_TMPFILES, WT_TMPFILES_PID.
-# Requires cmux.sh: cmux_notify, cmux_ok, cmux_row_field, row_label.
-# Requires common.sh: die, have, hook_safe_path, on_exit, repo_id, row_title, shell_join,
-#   valid_host, valid_name, warn, wt_result, wt_session.
-# Requires safety.sh: branch_landed.
 # Keep pending cleanup paths and the cleanup registration when another module loads this file again.
 if [[ ${WG_TASK_LOADED:-0} == 1 ]]; then return 0; fi
 

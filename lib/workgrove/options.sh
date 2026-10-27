@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# Reads globals: WT_COMMAND, WT_COMMANDS, WT_HELP_COMMAND, WT_REMOTE_SPEC, WT_SPEC, WT_SUMMARY.
 # WT_COMMANDS fields: name, comma-separated aliases, remote mode, summary, options, remote option override.
 # Remote modes are local, forward, forward with -r, or a host_* function.
 # Option specs start with a positional key or a ! policy that preserves existing error messages.

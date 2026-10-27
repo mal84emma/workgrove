@@ -127,7 +127,7 @@ workgrove/
 │   └── wt-ssh-host            register a supplied SSH fragment without a cloud API
 ├── lib/
 │   └── workgrove/
-│       ├── common.sh          shared helpers that bin/wt, cmux-hook and agent-notify load
+│       ├── common.sh          shared helpers that bin/wt and cmux-hook load
 │       ├── task.sh            repository context, sidecars, task identity, and cleanup
 │       ├── options.sh         wt command table, option parser, and command help
 │       ├── automation.sh      installer support for the native notification rule
