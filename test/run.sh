@@ -79,8 +79,11 @@ queue_task() {
   # Estimates in seconds come from JOBS=4 task times. Add new long tasks here after measuring them.
   case ${suite##*/}:$id in
     remote-new-smoke.sh:scenario_preflight_recovery) priority=60 ;;
+    wt-smoke.sh:scenario_connected_attach) priority=55 ;;
+    install-smoke.sh:) priority=45 ;;
+    native-relay-smoke.sh:) priority=40 ;;
     wt-smoke.sh:scenario_cmux) priority=35 ;;
-    install-smoke.sh:) priority=30 ;;
+    doctor-smoke.sh:) priority=30 ;;
     wt-smoke.sh:scenario_squash_merge) priority=25 ;;
     github-guard-smoke.sh:) priority=20 ;;
     portable-smoke.sh:*) priority=15 ;;

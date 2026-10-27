@@ -553,7 +553,7 @@ The runner preserves custom Git selections and uses the original Git if resoluti
 Set `ONLY` to select scenario names with a shell glob pattern. The filter matches substrings too.
 For example, `ONLY='11.*' bash test/wt-smoke.sh` runs scenario 11.
 For a filtered runner invocation, select one suite: `ONLY='11.*' bash test/run.sh test/wt-smoke.sh`.
-For the split Python suites, `ONLY` matches `module.Class.test_method` with the same substring glob rule.
+For the split Python suites, `ONLY` matches `module.Class.test_method` with Python `fnmatch` patterns and implicit surrounding `*` characters.
 For example, `ONLY='PortableTests.test_restore*' bash test/run.sh test/portable-smoke.sh` selects restore tests.
 A filter that matches no scenario or Python test exits nonzero.
 Direct suite invocations remain serial.
