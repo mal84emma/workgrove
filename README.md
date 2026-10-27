@@ -132,6 +132,7 @@ workgrove/
 │       ├── options.sh         wt command table, option parser, and command help
 │       ├── automation.sh      installer support for the native notification rule
 │       ├── install-files.sh   installer file replacement and JSON merge helpers
+│       ├── agent-config-policy.json shared agent settings edits for both installers
 │       ├── doctor.sh          Mac and VM contract checks and fixture recording
 │       ├── doctor-sanitize.jq redacts recorded cmux responses
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
@@ -397,7 +398,7 @@ The summary includes both flags because the existing copy cannot remember the re
 | Class | Files | Behavior |
 |---|---|---|
 | Symlinks | `~/.zshenv`, `~/.gitignore_global`, `AGENTS.md`, `CLAUDE.md`, the skills, `bin/*`, and every opt-in file you asked for. `cmux.json` and the three Ghostty files are among them (Mac only, under `--with-cmux-config`). | Edits, including an agent's, land in the repo, so `git diff` is the review. |
-| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | `install.sh` creates them from the versioned `.base` files, minus the keys that this machine cannot use or did not ask for (listed below). The apps write local state into them. So a normal run keeps what is there, and only `install.sh --refresh-config` replaces them. A refresh preserves foreign hook commands and their group settings in the JSON files. |
+| Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Both installers create them from the versioned `.base` files with the shared policy below. The apps write local state into them. A classic install keeps existing copies unless you specify `--refresh-config`. Portable setup preserves personal settings and merges hooks on every full setup. Both hook merges preserve foreign commands and their group settings. |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides. The linked files source or include them, but `~/.zshrc.local` only when `~/.zshrc` is one of the linked files. |
 
 A foreign hook command is an existing command string absent from the new `.base` file.
@@ -412,15 +413,26 @@ This release changes bare `agent-notify` commands to `~/.local/bin/agent-notify`
 A refresh keeps the old bare commands alongside the new commands.
 After you check the backup, remove the old bare commands from both JSON files to prevent duplicate notifications.
 
-The machine-local copies leave out these keys:
+Both installers read [the agent configuration policy](lib/workgrove/agent-config-policy.json).
+The ordered `settings` rows define deletions and values for new Claude copies.
+The `codex_remote` row defines the Codex edits for classic VMs and portable hosts.
+An empty `env` object is removed after the edits.
 
-- Voice and Keychain credential keys on VMs.
-- `statusLine` without `--with-statusline`.
-- `voice`, `theme`, and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`.
-- `tui` on the Mac without `--with-claude-ui`. VMs use `"tui": "fullscreen"` by default.
+| Policy | Mac | Classic VM | Portable host | Reason |
+|---|---|---|---|---|
+| Claude `voice` and `voiceEnabled` | The base `voiceEnabled` remains. `voice` requires UI opt-in. | Both keys are removed. | Both keys are removed. | Remote hosts do not use local voice input. |
+| Claude `theme`, `voice`, and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` | They require `--with-claude-ui`. | They require `--with-claude-ui`; voice is always removed. | They are removed from new copies. | These personal preferences require consent. Portable setup has no UI opt-in. |
+| Claude `statusLine` | It requires `--with-statusline`. | It requires `--with-statusline`. | It is removed from new copies. | Portable setup does not install the status line script. |
+| Claude `tui` | It requires `--with-claude-ui`. | It is `fullscreen`. | It defaults to `fullscreen`; existing personal values remain. | Remote agents use tmux task rows. |
+| Claude `prefersReducedMotion` | The base value remains. | It is `true`. | It is `true` in new copies. | Both remote layouts need steady tmux task rows. |
+| Codex credentials and animations | The base file remains unchanged. | The Keychain setting is removed; terminal user interface (TUI) animations are disabled. | The same edits apply to new copies. | Remote hosts lack the Mac Keychain and need steady task rows. |
+| Existing copies | A normal run keeps them. Refresh replaces settings and merges hooks. | The Mac rule applies. | Full setup merges hooks and supplies missing `tui`. It preserves other settings and Codex trust data. | Portable setup preserves selected personal configuration, including migrated files. |
+| Hook merge | Refresh puts base groups first, then foreign groups. | The Mac rule applies. | Every full setup uses the same rule. Restore-only leaves agent files unchanged. | Base commands use current matchers. Foreign commands retain their group settings. |
 
-VM copies also set Claude's `prefersReducedMotion` and disable the animations of the Codex TUI (terminal user
-interface) to keep tmux task rows steady. Mac copies leave both animations enabled.
+Classic opt-in flags remain sticky across refreshes.
+Portable setup has no equivalent opt-in flags.
+The hook comparison uses command strings across the complete document, including commands in different events.
+When a portable update replaces an old base group, its commands use the new base matchers and options.
 
 ### What a run does
 
@@ -1223,14 +1235,14 @@ These rules apply:
 
 - You edit on the Mac. VMs pull.
 - `wt update` is `git pull --ff-only` plus `install.sh`. So it refuses to run over local edits,
-  and it never touches the three machine-local copies.
-- A config refresh is always explicit and always backed up.
+  and classic installations keep the three machine-local copies. Portable updates merge hooks and preserve personal settings.
+- A classic config refresh is always explicit and always backed up.
 - Per-machine files stay out of this edit, commit, and pull cycle.
 
 | Change | Mac | VM |
 |---|---|---|
 | Edit `AGENTS.md`, a skill, `wt` | Skills apply at once. `AGENTS.md` applies at the next session. Commit. | `wt -H <vm> update` |
-| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. It rewrites `~/.codex/config.toml` from the `.base` file and drops Codex's hook trust hashes and folder trust. The refresh keeps existing cmux-tui hooks. On the VM, run `cmux-tui agent hook status claude codex`. If a provider shows `absent`, run `cmux-tui agent hook install claude codex`. Re-trust the hooks in `/hooks`, then restart the agent with `wt -H <vm> attach --restart-agent -r <repo> <name>` from the Mac. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
+| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. Portable hosts merge hooks and preserve existing settings and trust data. Classic VMs rewrite `~/.codex/config.toml` from the `.base` file and drop Codex's hook trust hashes and folder trust. The refresh keeps existing cmux-tui hooks. On the VM, run `cmux-tui agent hook status claude codex`. If a provider shows `absent`, run `cmux-tui agent hook install claude codex`. Re-trust the hooks in `/hooks`, then restart the agent with `wt -H <vm> attach --restart-agent -r <repo> <name>` from the Mac. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
 | Update cmux, or repair local Codex state tracking | Back up the live (machine-local) `config.toml` and `hooks.json`. Run `cmux hooks codex install --yes`. Check that one turn returns to `idle`. | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit. | `wt -H <vm> update` |
 | Change `cmux.json` or the Ghostty config | The change applies after cmux reloads its config or relaunches (see Hotkeys and configuration). A Ghostty config change applies after `cmux reload-config`. Commit. | n/a |

@@ -261,6 +261,9 @@ Keep API keys and SSH keys in their existing owning stores.
 
 Full installation merges workgrove's hook commands into the actual selected agent configuration directories.
 It preserves foreign hooks and existing Codex settings and trust data.
+Base hook groups come first; foreign commands retain their group settings.
+Both installers use [the shared agent configuration policy](../README.md#file-classes).
+New portable copies reduce Claude motion and disable Codex animations to keep tmux task rows steady.
 Claude defaults to `"tui": "fullscreen"` when the selected settings omit `tui`.
 An existing personal `tui` value remains unchanged.
 `--refresh-config` repeats this merge for a portable profile; it does not replace existing agent settings.

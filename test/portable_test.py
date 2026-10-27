@@ -1329,6 +1329,103 @@ sys.exit(module["main"]())
         self.assertTrue(self.profile()["tmux"])
         self.assertEqual(self.profile()["agent_args"]["codex"], ["--no-alt-screen"])
 
+    def classic_config(self, platform="Linux", *flags):
+        home = self.base / "classic-home"
+        if not home.exists():
+            home.mkdir(mode=0o700)
+            (home / ".gitconfig.local").write_text('[user]\n name = Test User\n email = test@example.invalid\n')
+        source = self.base / "classic-source"
+        if not source.exists():
+            shutil.copytree(self.source, source, symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        env = dict(self.env, HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
+                   GIT_CONFIG_GLOBAL=str(home / ".gitconfig"), FORCE_OS=platform, WT_HOST="test-host")
+        result = subprocess.run([os.environ.get("INSTALL_BASH") or str(self.tools / "bash"),
+                                 str(source / "install.sh"), *flags], env=env, stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return home
+
+    def assert_config_parity(self, classic):
+        for agent, filename in (("claude", "settings.json"), ("codex", "hooks.json"), ("codex", "config.toml")):
+            with self.subTest(filename=filename):
+                expected = (classic / ("." + agent) / filename).read_text()
+                actual = (Path(self.profile()["agent_roots"][agent]) / filename).read_text()
+                if filename.endswith(".json"):
+                    self.assertEqual(json.loads(actual), json.loads(expected))
+                else:
+                    self.assertEqual(actual, expected)
+
+    def test_agent_policy_linux_parity(self):
+        with patch.dict(os.environ, INSTALL_BASH=""):
+            classic = self.classic_config()
+        self.install()
+        self.assert_config_parity(classic)
+        settings = json.loads((self.home / ".claude/settings.json").read_text())
+        self.assertIs(settings["prefersReducedMotion"], True)
+
+    def test_agent_policy_toml_without_final_newline(self):
+        path = self.source / "home/.codex/config.base.toml"
+        path.write_text(path.read_text().rstrip("\n"))
+        self.git("add", str(path))
+        self.git("commit", "-qm", "Change synthetic base newline")
+        classic = self.classic_config()
+        self.install()
+        self.assert_config_parity(classic)
+
+    def test_agent_policy_row_changes_both_installers(self):
+        path = self.source / "lib/workgrove/agent-config-policy.json"
+        policy = json.loads(path.read_text())
+        row = next(row for row in policy["settings"] if row.get("set", {}).get("prefersReducedMotion") is True)
+        row["set"]["prefersReducedMotion"] = False
+        path.write_text(json.dumps(policy))
+        self.git("add", str(path))
+        self.git("commit", "-qm", "Change synthetic policy row")
+        classic = self.classic_config()
+        self.install()
+        self.assert_config_parity(classic)
+        for home in (classic, self.home):
+            self.assertIs(json.loads((home / ".claude/settings.json").read_text())["prefersReducedMotion"], False)
+
+    def test_agent_policy_mac_keeps_current_result_and_sticky_opt_ins(self):
+        base = json.loads((self.source / "home/.claude/settings.base.json").read_text())
+        classic = self.classic_config("Darwin")
+        expected = dict(base)
+        for key in ("tui", "voice", "theme", "statusLine", "env"):
+            expected.pop(key, None)
+        self.assertEqual(json.loads((classic / ".claude/settings.json").read_text()), expected)
+        for name in ("config.toml", "hooks.json"):
+            template = "config.base.toml" if name.endswith("toml") else "hooks.base.json"
+            self.assertEqual((classic / ".codex" / name).read_bytes(),
+                             (self.source / "home/.codex" / template).read_bytes())
+        self.classic_config("Darwin", "--refresh-config", "--with-claude-ui", "--with-statusline")
+        self.classic_config("Darwin", "--refresh-config")
+        self.assertEqual(json.loads((classic / ".claude/settings.json").read_text()), base)
+
+    def test_agent_policy_hook_merge_parity(self):
+        classic = self.classic_config()
+        self.install()
+        for agent, filename, template in (("claude", "settings.json", "home/.claude/settings.base.json"),
+                                          ("codex", "hooks.json", "home/.codex/hooks.base.json")):
+            base = json.loads((self.source / template).read_text())
+            command = base["hooks"]["Stop"][0]["hooks"][0]["command"]
+            groups = {"Stop": [{"matcher": "personal", "timeout": 42, "hooks": [
+                {"type": "command", "command": "echo foreign"},
+                {"type": "command", "command": command, "timeout": 99}]}],
+                "CustomEvent": [{"hooks": [{"type": "command", "command": "echo custom"}]}],
+                "OtherEvent": [{"hooks": [{"type": "command", "command": command}]}]}
+            for home in (classic, self.home):
+                path = home / ("." + agent) / filename
+                data = json.loads(path.read_text())
+                data["hooks"] = groups
+                path.write_text(json.dumps(data))
+        self.classic_config("Linux", "--refresh-config")
+        self.install()
+        self.assert_config_parity(classic)
+        before = [(self.home / name).read_bytes() for name in (".claude/settings.json", ".codex/hooks.json")]
+        self.install()
+        self.assertEqual(before, [(self.home / name).read_bytes()
+                                  for name in (".claude/settings.json", ".codex/hooks.json")])
+
     def test_fullscreen_default_preserves_personal_ui_settings(self):
         self.install()
         path = Path(self.profile()["agent_roots"]["claude"]) / "settings.json"

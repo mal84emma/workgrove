@@ -409,34 +409,26 @@ copy_config() {
   install_temp "$dst"
   local tmp=$INSTALL_TMP
   if [[ $kind == claude ]]; then
-    local filter='.'
-    if [[ $OS != Darwin ]]; then
-      filter="$filter | del(.voice, .voiceEnabled) | .prefersReducedMotion = true"
-    fi
-    # UI taste, not machinery: the hooks and permissions around these keys stay on every machine. The env var
-    # is in this list for the same reason as the three keys: it turns mouse clicks off in the Claude Code TUI.
-    # If the list left the env var out, a stranger who never asked for the author's UI would find their mouse
-    # dead. Nothing in the run's output would name the key.
-    # This del() adds to the line above; it does not replace it. A del() is a no-op for a key that another
-    # del() already removed, and for a nested path that is not there. So .voice goes on a VM either way, and
-    # the two tests stay independent.
-    if ! claude_ui_opted_in; then
-      filter="$filter | del(.tui, .voice, .theme, .env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS)"
-    fi
-    if [[ $OS != Darwin ]]; then
-      filter="$filter | .tui = \"fullscreen\""
-    fi
-    if ! opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh; then
-      filter="$filter | del(.statusLine)"                 # the script it names is opt-in: a command pointing at a
-    fi                                                    # file that was never installed breaks the status line
-    # Today .env holds exactly that one key, so the del above can empty it. In that case, drop the object
-    # instead of writing an `"env": {}` that no run ever meant to put there.
-    filter="$filter | if (.env | length) == 0 then del(.env) else . end"
-    jq "$filter" "$src" >"$tmp" || { rm -f "$tmp"; die "jq failed on $1"; }
+    local ui=false statusline=false platform=remote
+    if claude_ui_opted_in; then ui=true; fi
+    if opted_in "$WITH_STATUSLINE" .claude/statusline-command.sh; then statusline=true; fi
+    if [[ $OS == Darwin ]]; then platform=mac; fi
+    # Apply the ordered policy rows before removing an empty environment object.
+    # shellcheck disable=SC2016  # jq expands these variables.
+    jq --slurpfile policy "$R/lib/workgrove/agent-config-policy.json" \
+      --arg platform "$platform" --argjson ui "$ui" --argjson statusline "$statusline" '
+      reduce ($policy[0].settings[]
+        | select(.platform == "all" or .platform == $platform)
+        | select(.when == "always" or (.when == "without_ui" and ($ui | not))
+            or (.when == "without_statusline" and ($statusline | not)))) as $row (.;
+          delpaths($row.delete // []) + ($row.set // {}))
+      | if (.env | length) == 0 then del(.env) else . end
+    ' "$src" >"$tmp" || { rm -f "$tmp"; die "jq failed on $1"; }
   elif [[ $kind == codex && $OS != Darwin ]]; then
-    grep -v '^cli_auth_credentials_store' "$src" >"$tmp" || { rm -f "$tmp"; die "failed to filter $1"; }
-    # The base keeps animations on for the Mac; only a VM's tmux rows need a still spinner.
-    printf '\n[tui]\nanimations = false\n' >>"$tmp"
+    local prefix
+    prefix=$(jq -r '.codex_remote.remove_prefix' "$R/lib/workgrove/agent-config-policy.json")
+    grep -v "^$prefix" "$src" >"$tmp" || { rm -f "$tmp"; die "failed to filter $1"; }
+    jq -jr '.codex_remote.append' "$R/lib/workgrove/agent-config-policy.json" >>"$tmp"
   else
     cp "$src" "$tmp"
   fi
