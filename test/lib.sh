@@ -232,6 +232,45 @@ lib_summary() {
   fi
 }
 
+# Register scenarios before fixtures, then run the selected functions with their names.
+lib_scenario_selection() {
+  LIB_SCENARIO_ID='' LIB_LIST_SCENARIOS=0
+  LIB_SCENARIO_IDS=() LIB_SCENARIO_NAMES=()
+  case ${1:-} in
+    --list-scenarios) [[ $# == 1 ]] || return 2; LIB_LIST_SCENARIOS=1 ;;
+    --scenario) [[ $# == 2 && -n $2 ]] || return 2; LIB_SCENARIO_ID=$2 ;;
+    '') [[ $# == 0 ]] || return 2 ;;
+    *) printf 'usage: %s [--list-scenarios | --scenario <id>]\n' "${0##*/}" >&2; return 2 ;;
+  esac
+}
+
+lib_register_scenario() {
+  [[ -z $LIB_SCENARIO_ID || $1 == "$LIB_SCENARIO_ID" ]] || return 0
+  scenario_matches "$2" || return 0
+  LIB_SCENARIO_IDS+=("$1") LIB_SCENARIO_NAMES+=("$2")
+}
+
+lib_scenario_discovery() {
+  if ((${#LIB_SCENARIO_IDS[@]} == 0)); then
+    echo "FAIL: no scenarios matched scenario=${LIB_SCENARIO_ID:-any} ONLY=${ONLY:-}" >&2
+    return 1
+  fi
+  if ((LIB_LIST_SCENARIOS)); then
+    local index
+    for ((index=0; index<${#LIB_SCENARIO_IDS[@]}; index++)); do
+      printf '%s\t%s\n' "${LIB_SCENARIO_IDS[$index]}" "${LIB_SCENARIO_NAMES[$index]}"
+    done
+    exit 0
+  fi
+}
+
+lib_run_scenarios() {
+  local index
+  for ((index=0; index<${#LIB_SCENARIO_IDS[@]}; index++)); do
+    "${LIB_SCENARIO_IDS[$index]}" "${LIB_SCENARIO_NAMES[$index]}"
+  done
+}
+
 # Write a fake ssh that uses the remote login shell before it starts each command.
 # An optional fixture receives cmd and host. It can call fake_ssh_run or exit before the command runs.
 make_fake_ssh() {

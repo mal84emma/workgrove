@@ -61,28 +61,9 @@ REPO="$(cd "$SOURCE_DIR/.." && pwd -P)"
 # shellcheck source=test/wt-scenarios.sh
 . "$REPO/test/wt-scenarios.sh"
 
-WT_SCENARIO_ID=''
-WT_LIST_SCENARIOS=0
-case ${1:-} in
-  --list-scenarios) [[ $# -eq 1 ]] || exit 2; WT_LIST_SCENARIOS=1 ;;
-  --scenario) [[ $# -eq 2 && -n $2 ]] || exit 2; WT_SCENARIO_ID=$2 ;;
-  '') [[ $# -eq 0 ]] || exit 2 ;;
-  *) echo 'usage: wt-smoke.sh [--list-scenarios | --scenario <id>]' >&2; exit 2 ;;
-esac
-
-wt_select_scenario() {
-  [[ -z $WT_SCENARIO_ID || $1 == "$WT_SCENARIO_ID" ]] || return 0
-  scenario_matches "$2" || return 0
-  WT_SELECTED_SCENARIOS=$((WT_SELECTED_SCENARIOS + 1))
-  if [[ $WT_LIST_SCENARIOS == 1 ]]; then printf '%s\t%s\n' "$1" "$2"; fi
-}
-WT_SELECTED_SCENARIOS=0
-wt_scenarios wt_select_scenario
-if [[ $WT_SELECTED_SCENARIOS -eq 0 ]]; then
-  echo "FAIL: no scenarios matched scenario=${WT_SCENARIO_ID:-any} ONLY=${ONLY:-}" >&2
-  exit 1
-fi
-[[ $WT_LIST_SCENARIOS == 0 ]] || exit 0
+lib_scenario_selection "$@"
+wt_scenarios lib_register_scenario
+lib_scenario_discovery
 OS="$(uname -s)"
 WT="$REPO/bin/wt"
 KEEP_LABEL="scratch repos"           # lib_cleanup's name for what KEEP=1 leaves behind
@@ -2594,19 +2575,12 @@ scenario_cleanup_guard() {
 
 # ---------------------------------------------------------------------------- main
 
-wt_run_scenario() {
-  [[ -z $WT_SCENARIO_ID || $1 == "$WT_SCENARIO_ID" ]] || return 0
-  local function=$1
-  shift
-  "$function" "$@"
-}
-
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
 main() {
   echo "wt smoke test: repo $REPO, scratch root $TEST_ROOT"
   echo "  this suite under bash ${BASH_VERSION}; bin/wt under $WT_BASH" \
        "($("$WT_BASH" -c 'echo "$BASH_VERSION"'))"
-  wt_scenarios wt_run_scenario
+  lib_run_scenarios
   lib_summary
 }
 

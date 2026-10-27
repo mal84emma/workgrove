@@ -406,6 +406,33 @@ class OperationPolicyTests(unittest.TestCase):
 
 
 class PortableTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.template_scratch = tempfile.TemporaryDirectory(prefix="portable-template-", dir=os.environ.get("TEST_ROOT"))
+        cls.addClassCleanup(cls.template_scratch.cleanup)
+        cls.template = Path(cls.template_scratch.name) / "workgrove"
+        cls.template.mkdir()
+        for name in ("bin", "lib", "home"):
+            shutil.copytree(REPO / name, cls.template / name, symlinks=True)
+        shutil.copy2(REPO / "install.sh", cls.template / "install.sh")
+        environment = dict(HOME=cls.template_scratch.name, PATH=os.environ["PATH"],
+                           GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                           GIT_AUTHOR_NAME="Test User", GIT_AUTHOR_EMAIL="test@example.invalid",
+                           GIT_COMMITTER_NAME="Test User", GIT_COMMITTER_EMAIL="test@example.invalid")
+        # Pack the fixture once so each copy and installation check visits fewer Git object files.
+        for args in (("init", "-q"), ("add", "."), ("commit", "-qm", "Create synthetic public installation"),
+                     ("repack", "-ad"), ("prune-packed",)):
+            subprocess.run(["git", *args], cwd=cls.template, env=environment, check=True, capture_output=True)
+        cls.template_revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=cls.template, env=environment, text=True).strip()
+        # Fresh CLI processes can reuse standard-library bytecode without writing into the installation.
+        cls.bytecode = Path(os.environ.get("WORKGROVE_TEST_BYTECODE", Path(cls.template_scratch.name) / "bytecode"))
+        if "WORKGROVE_TEST_BYTECODE" not in os.environ:
+            subprocess.run([sys.executable, "-X", "pycache_prefix=" + str(cls.bytecode), "-c",
+                            "import runpy,sys; runpy.run_path(sys.argv[1], run_name='fixture')",
+                            str(cls.template / "lib/workgrove/portable.py")],
+                           env=environment, check=True, capture_output=True)
+
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="portable-", dir=os.environ.get("TEST_ROOT"))
         self.addCleanup(self.scratch.cleanup)
@@ -415,10 +442,8 @@ class PortableTests(unittest.TestCase):
         self.root = self.base / "durable"
         self.root.mkdir(mode=0o700)
         self.source = self.root / "workgrove"
-        self.source.mkdir()
-        for name in ("bin", "lib", "home"):
-            shutil.copytree(REPO / name, self.source / name, symlinks=True)
-        shutil.copy2(REPO / "install.sh", self.source / "install.sh")
+        # Each test needs its own durable root, source files, and Git history.
+        shutil.copytree(self.template, self.source, symlinks=True)
         self.tools = self.base / "tools"
         self.tools.mkdir()
         for command in ("python3", "bash", "git", "jq", "sh", "uname", "id", "ps"):
@@ -429,6 +454,7 @@ class PortableTests(unittest.TestCase):
             tool.write_text("#!/bin/sh\nexit 0\n")
             tool.chmod(0o700)
         self.env = dict(HOME=str(self.home), PATH=str(self.tools) + ":/usr/bin:/bin", GIT_CONFIG_NOSYSTEM="1",
+                        PYTHONPYCACHEPREFIX=str(self.bytecode),
                         GIT_CONFIG_GLOBAL=str(self.home / ".gitconfig"), GIT_ALLOW_PROTOCOL="file",
                         GIT_AUTHOR_NAME="Test User", GIT_AUTHOR_EMAIL="test@example.invalid",
                         GIT_COMMITTER_NAME="Test User", GIT_COMMITTER_EMAIL="test@example.invalid")
@@ -436,10 +462,7 @@ class PortableTests(unittest.TestCase):
                                                str(self.home / "ignore") + '\n[credential]\n helper = !echo ' + CANARY + '\n')
         (self.home / ".gitconfig.local").write_text('[user]\n name = Test User\n email = test@example.invalid\n')
         (self.home / "ignore").write_text("private-example\n")
-        self.git("init", "-q")
-        self.git("add", ".")
-        self.git("commit", "-qm", "Create synthetic public installation")
-        self.revision = self.git("rev-parse", "HEAD").stdout.strip()
+        self.revision = self.template_revision
         self.script = self.source / "lib/workgrove/portable.py"
 
     def git(self, *args):

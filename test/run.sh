@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run suites and intact wt scenarios with one worker limit and separate logs.
+# Run suites and discovered scenarios with one worker limit and separate logs.
 set -euo pipefail
 if ((BASH_VERSINFO[0] < 5)); then
   echo 'test/run.sh needs bash 5 or later on PATH' >&2
@@ -74,11 +74,34 @@ trap runner_cleanup EXIT
 trap 'INTERRUPTED=1; exit 130' INT
 trap 'INTERRUPTED=1; exit 143' TERM
 
+# Nested runners share the parent's cache. Isolated Python processes still ignore this environment setting.
+if [[ -z ${WORKGROVE_TEST_BYTECODE:-} ]]; then
+  if python3 -I -X "pycache_prefix=$RUN_ROOT/bytecode" -c \
+      'import argparse, contextvars, hashlib, json, pathlib, runpy, shlex, subprocess, unittest.mock, urllib.parse, uuid' \
+      >"$RUN_ROOT/bytecode.log" 2>&1; then
+    export WORKGROVE_TEST_BYTECODE=$RUN_ROOT/bytecode
+  fi
+fi
+if [[ -n ${WORKGROVE_TEST_BYTECODE:-} ]]; then
+  export PYTHONPYCACHEPREFIX=$WORKGROVE_TEST_BYTECODE
+fi
+
 queue_task() {
-  local suite=$1 id=$2 name=$3 suite_index=$4 priority=1
-  # Start the expensive groups early so shorter tasks can fill the remaining slots.
+  local suite=$1 id=$2 name=$3 suite_index=$4 priority=5
+  # Estimates in seconds come from JOBS=4 task times. Add new long tasks here after measuring them.
   case ${suite##*/}:$id in
-    wt-smoke.sh:scenario_cmux|wt-smoke.sh:scenario_squash_merge|github-guard-smoke.sh:|install-smoke.sh:) priority=0 ;;
+    remote-new-smoke.sh:scenario_preflight_recovery) priority=60 ;;
+    wt-smoke.sh:scenario_connected_attach) priority=55 ;;
+    install-smoke.sh:) priority=45 ;;
+    native-relay-smoke.sh:) priority=40 ;;
+    wt-smoke.sh:scenario_cmux) priority=35 ;;
+    doctor-smoke.sh:) priority=30 ;;
+    wt-smoke.sh:scenario_squash_merge) priority=25 ;;
+    github-guard-smoke.sh:) priority=20 ;;
+    portable-smoke.sh:*) priority=15 ;;
+    ssh-host-smoke.sh:*|wt-smoke.sh:scenario_self_rm_vm|remote-new-smoke.sh:scenario_result_versions) priority=12 ;;
+    wt-smoke.sh:*|remote-new-smoke.sh:*|hosts-smoke.sh:|update-smoke.sh:) priority=8 ;;
+    capacity-smoke.sh:*|docs-smoke.sh:) priority=1 ;;
   esac
   TASK_SUITES+=("$suite") TASK_IDS+=("$id") TASK_NAMES+=("$name")
   TASK_PRIORITIES+=("$priority") TASK_SUITE_INDEX+=("$suite_index")
@@ -87,13 +110,15 @@ queue_task() {
 for suite in "${SUITES[@]}"; do
   index=${#SUITE_PATHS[@]}
   SUITE_PATHS+=("$suite") SUITE_STARTS+=(0) SUITE_ENDS+=(0)
-  if [[ $suite -ef $REPO/test/wt-smoke.sh ]]; then
+  if [[ $suite -ef $REPO/test/wt-smoke.sh || $suite -ef $REPO/test/remote-new-smoke.sh ||
+        $suite -ef $REPO/test/portable-smoke.sh || $suite -ef $REPO/test/ssh-host-smoke.sh ||
+        $suite -ef $REPO/test/capacity-smoke.sh ]]; then
     if ! "$BASH" "$suite" --list-scenarios >"$RUN_ROOT/discovery.log"; then
-      echo 'wt scenario discovery failed' >&2
+      printf 'scenario discovery failed: %s\n' "${suite##*/}" >&2
       exit 1
     fi
     while IFS=$'\t' read -r id name; do
-      [[ -n $id && -n $name ]] || { echo 'invalid wt scenario registration' >&2; exit 1; }
+      [[ -n $id && -n $name ]] || { echo 'invalid scenario registration' >&2; exit 1; }
       queue_task "$suite" "$id" "$name" "$index"
     done <"$RUN_ROOT/discovery.log"
   else
@@ -102,10 +127,14 @@ for suite in "${SUITES[@]}"; do
 done
 TOTAL=${#TASK_SUITES[@]}
 ((TOTAL > 0)) || { echo 'no test tasks selected' >&2; exit 1; }
-for priority in 0 1; do
-  for ((index=0; index<TOTAL; index++)); do
-    if [[ ${TASK_PRIORITIES[$index]} == "$priority" ]]; then ORDER+=("$index"); fi
+# Stable insertion keeps equal estimates in discovery order.
+for ((index=0; index<TOTAL; index++)); do
+  position=${#ORDER[@]}
+  while ((position > 0 && TASK_PRIORITIES[index] > TASK_PRIORITIES[ORDER[position-1]])); do
+    ORDER[position]=${ORDER[position-1]}
+    position=$((position - 1))
   done
+  ORDER[position]=$index
 done
 # Limit very large decimal values without overflowing shell arithmetic.
 if ((${#JOBS} > 6)); then LIMIT=$TOTAL; elif ((JOBS > TOTAL)); then LIMIT=$TOTAL; else LIMIT=$JOBS; fi
