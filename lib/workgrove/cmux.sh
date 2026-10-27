@@ -195,18 +195,21 @@ cmux_rows_load() {
   shift
   (($# == 0)) || runner=("$@")
   CMUX_ROWS_JSON='' CMUX_ROWS_FULL=1
-  # WT_COMPAT: Remove support for missing --json list-windows when every cmux provides it.
   windows=$("${runner[@]}" --json list-windows 2>/dev/null) || {
+    rc=$?
     CMUX_ROWS_FULL=0
+    if [[ $policy == skip ]]; then CMUX_ROWS_JSON='{"workspaces":[]}'; return 0; fi
     [[ $policy != checked ]] || { cmux_error "cannot list cmux windows"; return 1; }
-    [[ $policy != stop ]] || windows=''
+    CMUX_ERROR="cannot list cmux rows (exit $rc)"
+    return "$rc"
   }
   if ! windows=$(printf '%s' "$windows" | jq -ec '
     if type == "array" and all(.[]; .id | type == "string" and test("^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$"))
     then . else error("invalid cmux window list") end' 2>/dev/null); then
     CMUX_ROWS_FULL=0
-    [[ $policy != checked ]] || { cmux_error "cannot list cmux windows"; return 1; }
-    windows='[]'
+    if [[ $policy == skip ]]; then CMUX_ROWS_JSON='{"workspaces":[]}'; return 0; fi
+    cmux_error "cannot list cmux windows"
+    return 1
   fi
   mapfile -t window_ids < <(printf '%s' "$windows" | jq -r '.[].id')
   for window in "${window_ids[@]}"; do

@@ -99,7 +99,7 @@ wt_result() {
   [[ ${WG_MACHINE_RESULT:-} =~ ^[1-9][0-9]*$ ]] || return 0
   local facts=${7-}
   [[ -n $facts ]] || facts='{}'
-  # WT_COMPAT: Keep version 1 emission until no Mac requests protocol 1.
+  # WT_COMPAT: Remove version 1 emission after the first Mac release that requests protocol 2.
   printf 'WT_RESULT\t'
   jq -cn --arg command "$1" --arg status "$2" --arg name "$3" --arg repo "$4" \
     --arg session "${5:-}" --arg state "${6:-}" --argjson facts "$facts" \
@@ -114,7 +114,7 @@ wt_version() (
   if [[ -e $WG_VERSION_ROOT/.git ]]; then
     commit=$(git -C "$WG_VERSION_ROOT" rev-parse --short HEAD 2>/dev/null) || commit=unknown
   fi
-  jq -cn --arg commit "$commit" --argjson protocol "$WT_PROTOCOL" '{commit:$commit,protocol:$protocol}'
+  jq -cn --arg commit "$commit" --argjson protocol "$WT_PROTOCOL" '{commit:$commit,protocol:$protocol,capabilities:["result-records","show-facts","path-field","model-option","agent-probe","doctor-records"]}'
 )
 
 # Unknown scalar keys are kept. Doctor also accepts a checks array. New fields are additive.

@@ -365,7 +365,7 @@ ln -s "$CMUX_LOG" "$FAKE_CMUX_STATE/calls.log"
 prepare_cmux() {
   local assignment row key
   local CMUX_STUB_FAIL_PING=0 CMUX_STUB_AGENTS=0 CMUX_STUB_CALLER=other-row CMUX_STUB_BUSY_ROWS=''
-  local CMUX_STUB_FAIL_TOP=0 CMUX_STUB_BAD_TOP=0 CMUX_STUB_FAIL_WINDOWS=0 CMUX_STUB_BAD_WINDOWS=0
+  local CMUX_STUB_FAIL_TOP=0 CMUX_STUB_BAD_TOP=0
   local CMUX_STUB_FAIL_LIST='' CMUX_STUB_EMPTY_LIST='' CMUX_STUB_FAIL_CLOSE=0
   local CMUX_STUB_DIFF_STATUS=0
   for assignment in "${WT_RELAY_ENV[@]}"; do local "$assignment"; done
@@ -382,8 +382,6 @@ prepare_cmux() {
   done
   if [[ $CMUX_STUB_FAIL_TOP == 1 ]]; then fake_failure top 1; fi
   if [[ $CMUX_STUB_BAD_TOP == 1 ]]; then printf '{"coding_agents":[{}]}' >"$FAKE_CMUX_STATE/top.json"; fi
-  if [[ $CMUX_STUB_FAIL_WINDOWS == 1 ]]; then fake_failure list-windows 1; fi
-  if [[ $CMUX_STUB_BAD_WINDOWS == 1 ]]; then fake_queue list-windows 'unrecognized window output'; fi
   if [[ -n $CMUX_STUB_FAIL_LIST ]]; then
     key=workspace-list
     [[ $CMUX_STUB_FAIL_LIST == all ]] || key+=--$CMUX_STUB_FAIL_LIST
@@ -1820,7 +1818,7 @@ scenario_cmux() {
   done
 
   local failure
-  for failure in denied invalid missing null no-id remote windows bad-windows partial empty scalar; do
+  for failure in denied invalid missing null no-id remote partial empty scalar; do
     stub_cmux alive
     assert_wt_ok "$failure row-list test worktree" new "list-$failure" --no-workspace -r "$r"
     printf '{"workspaces":[]}\n' >"$WT_ROWS"
@@ -1831,8 +1829,6 @@ scenario_cmux() {
       null) printf '{"workspaces":null}\n' >"$WT_ROWS" ;;
       no-id) printf '{"workspaces":[{"title":"list-no-id","description":"@local · %s"}]}\n' "$id" >"$WT_ROWS" ;;
       remote) printf '{"workspaces":[{"id":"bad-row","title":"list-remote","remote":{"enabled":"unknown"}}]}\n' >"$WT_ROWS" ;;
-      windows) WT_RELAY_ENV=("CMUX_STUB_FAIL_WINDOWS=1") ;;
-      bad-windows) WT_RELAY_ENV=("CMUX_STUB_BAD_WINDOWS=1") ;;
       partial|empty|scalar)
         stub_windows "$w1" "$w2"
         if [[ "$failure" == partial ]]; then WT_RELAY_ENV=("CMUX_STUB_FAIL_LIST=$w2")
@@ -1919,12 +1915,6 @@ STUB
   assert_gone "row-close failure reports an already removed worktree" "$r/.worktrees/close-failed"
   WT_RELAY_ENV=()
 
-  # A cmux that cannot be enumerated must keep the single-window behavior, and must not lose the lookup
-  # altogether. Such a cmux has no list-windows, or prints output that is not a window list. The stub_cmux
-  # call below resets the stub to such a cmux.
-  stub_cmux alive
-  fake_rows "$(fake_row "workspace:1" "onewin" "@local · $id" | jq -c --arg directory "$REPOS_DIR" '.current_directory=$directory')" >"$WT_ROWS"
-  assert_wt_fails 1 "row 'onewin @local · $id' already belongs to" new onewin --no-workspace -r "$r"
   stub_cmux dead
   end_scenario
 }
