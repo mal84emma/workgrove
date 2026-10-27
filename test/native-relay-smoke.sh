@@ -94,7 +94,6 @@ scenario_native_identity
 
 scenario_reattachment() {
   begin_scenario 'reattachment replaces the previous transport and repeated requests survive content suppression' || return 0
-  cmux_bin() { printf '%s' "$TEST_ROOT/bin/cmux"; }
   warn() { printf '%s\n' "$*" >&2; }
   export RELAY_STATE="$TEST_ROOT/session-env" RELAY_REQUESTS="$FAKE_CMUX_STATE/notify.requests.jsonl" RELAY_DELIVERED="$FAKE_CMUX_STATE/notify.delivered.jsonl"
   mkdir -p "$RELAY_STATE"

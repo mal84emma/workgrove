@@ -25,7 +25,7 @@ wt_branch() { printf 'wt/%s' "$1"; }
 # shellcheck source=test/fakes/rows.sh
 source "$REPO/test/fakes/rows.sh"
 fake_cmux_init "$TEST_ROOT/cmux-state"
-cmux_bin() { printf '%s/test/fakes/cmux' "$REPO"; }
+CMUX_BUNDLED_CLI_PATH="$REPO/test/fakes/cmux"
 
 git init -q -b main "$TEST_ROOT/project"
 git -C "$TEST_ROOT/project" -c user.name=Test -c user.email=test@example.com commit -qm initial --allow-empty

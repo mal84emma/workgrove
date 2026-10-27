@@ -1026,26 +1026,36 @@ scenario_row_validation
 
 scenario_row_lookup() {
   begin_scenario 'cmux row lookup by title, repository and host' || return 0
-  ROW_LOOKUP="[$ROW_TWO,{\"id\":\"other-repo\",\"title\":\"task\",\"description\":\"@local · other\"},$ROW_ONE,\
-{\"id\":\"legacy\",\"title\":\"repo:old-task\"},\
-{\"id\":\"description-host\",\"title\":\"task\",\"description\":\"@other-vm · repo\",\"remote\":{\"enabled\":true,\"destination\":\"user@other-vm\"}},\
-{\"id\":\"disabled-remote\",\"title\":\"local-task\",\"description\":\"@test-vm · repo\",\"remote\":{\"enabled\":false,\"destination\":\"test-vm\"}},\
-{\"id\":\"no-repo\",\"title\":\"driver\"}]"
-  assert_eq 'a local lookup ignores remote and other repository rows' row-one "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id)"
-  assert_eq 'an object list finds the remote row' row-two "$(printf '{\"workspaces\":%s}' "$ROW_LOOKUP" | cmux_find_row task repo id test-vm)"
-  assert_eq 'a lookup can return another field' '@local · repo' "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo description)"
-  assert_eq 'an older title still matches' legacy "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row old-task repo id)"
-  assert_eq 'the description can identify the host' description-host "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id other-vm)"
-  assert_eq 'a row with remote disabled is local' disabled-remote "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row local-task repo id)"
-  assert_eq 'a row can have no repository' no-repo "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row driver '' id)"
-  assert_eq 'a missing field prints an empty string' '' "$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo current_directory)"
+  local FAKE_CMUX_STATE
+  fake_cmux_init "$TEST_ROOT/lookup-state"
+  local one=00000000-0000-4000-8000-000000000101 two=00000000-0000-4000-8000-000000000102
+  local other=00000000-0000-4000-8000-000000000103 legacy=00000000-0000-4000-8000-000000000104
+  local host=00000000-0000-4000-8000-000000000105 disabled=00000000-0000-4000-8000-000000000106
+  local driver=00000000-0000-4000-8000-000000000107 later=00000000-0000-4000-8000-000000000108
+  local row_one row_later rows rc out
+  row_one=$(fake_row "$one" task '@local · repo' | jq -c 'del(.current_directory)')
+  row_later=$(fake_row "$later" task '@local · repo')
+  rows=$(fake_rows "$(fake_row "$two" task '@test-vm · repo' test-vm)" \
+    "$(fake_row "$other" task '@local · other')" "$row_one" \
+    "$(fake_row "$legacy" repo:old-task '' | jq -c 'del(.description)')" \
+    "$(fake_row "$host" task '@other-vm · repo' user@other-vm)" \
+    "$(fake_row "$disabled" local-task '@test-vm · repo' | jq -c '.remote.destination="test-vm"')" \
+    "$(fake_row "$driver" driver '' | jq -c 'del(.description)')")
+  assert_eq 'the bare-array compatibility case ignores remote and other repository rows' "$one" "$(jq '.workspaces' <<<"$rows" | cmux_find_row task repo id)"
+  assert_eq 'an object list finds the remote row' "$two" "$(cmux_find_row task repo id test-vm <<<"$rows")"
+  assert_eq 'a lookup can return another field' '@local · repo' "$(cmux_find_row task repo description <<<"$rows")"
+  assert_eq 'an older title still matches' "$legacy" "$(cmux_find_row old-task repo id <<<"$rows")"
+  assert_eq 'the description can identify the host' "$host" "$(cmux_find_row task repo id other-vm <<<"$rows")"
+  assert_eq 'a row with remote disabled is local' "$disabled" "$(cmux_find_row local-task repo id <<<"$rows")"
+  assert_eq 'a row can have no repository' "$driver" "$(cmux_find_row driver '' id <<<"$rows")"
+  assert_eq 'a missing field prints an empty string' '' "$(cmux_find_row task repo current_directory <<<"$rows")"
   rc=0
-  out=$(printf '%s' "$ROW_LOOKUP" | cmux_find_row task repo id missing-vm) || rc=$?
+  out=$(cmux_find_row task repo id missing-vm <<<"$rows") || rc=$?
   assert_eq 'a missing host prints nothing' '' "$out"
   assert_eq 'a missing host returns a failure' 4 "$rc"
-  assert_result 'a remote description alone cannot enable a remote row' no cmux_find_row local-task repo id test-vm <<<"$ROW_LOOKUP"
-  assert_result 'another repository does not match' no cmux_find_row task absent id <<<"$ROW_LOOKUP"
-  assert_eq 'the first matching row wins' row-one "$(printf '[%s,{"id":"later-row","title":"task","description":"@local · repo"}]' "$ROW_ONE" | cmux_find_row task repo id)"
+  assert_result 'a remote description alone cannot enable a remote row' no cmux_find_row local-task repo id test-vm <<<"$rows"
+  assert_result 'another repository does not match' no cmux_find_row task absent id <<<"$rows"
+  assert_eq 'the first matching row wins' "$one" "$(fake_rows "$row_one" "$row_later" | cmux_find_row task repo id)"
   end_scenario
 }
 scenario_row_lookup
