@@ -992,6 +992,7 @@ This table lists configuration variables, test overrides, and repository setting
 | `WT_AGENT` | `claude`. Selects the default agent for new tasks. |
 | `WT_AGENT_ARGS` | Empty. Adds shell-split agent arguments. |
 | `WT_MACHINE` | Unset. The highest accepted record version enables versioned results for supported commands. The Mac sets it for VM requests. |
+| `WG_DEBUG` | Unset. `1` adds tracebacks for unexpected errors in `portable.py`, including calls through `install.sh`. Set it in the host process environment. `wt -H <host> setup` does not forward the Mac's value. Expected refusals keep their usual output. |
 | `WT_CMUX_TUI_HOOK` | Internal helper path for the hook wrapper. `wt run` sets it from `CMUX_TUI_HOOK` or the cmux-tui data folder. |
 | `WT_CLOSE_WAIT_SECONDS` | `22`. Sets the wait for older VM rows to close during self-removal. |
 | `WT_STATUS_LEASE_SECONDS` | Retired with the TCP status paths. Current code ignores it. |
