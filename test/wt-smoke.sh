@@ -1193,6 +1193,7 @@ scenario_squash_merge() {
   fixture_git "$r" commit -q -m lines
   e="$(add_origin "$r")"
   # Use the safety module's function to check whether git merges hunk by hunk.
+  # shellcheck disable=SC2016  # The child shell expands $1.
   if "$BASH" -c 'source "$1"; git_merges_trees' _ "$REPO/lib/workgrove/safety.sh" 2>/dev/null; then hunks=yes; fi
 
   # Every worktree first: `wt new` fetches its base. So all of the landing below must come after the last
