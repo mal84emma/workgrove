@@ -91,7 +91,8 @@ git -C "$W" tag v1                                                          # a 
 printf 'Two nits inline.\n' >"$W/notes.md"
 printf 'Adds the label prop.\n' >"$TEST_ROOT/pr-body.md"                 # a temp dir, where agents write
 ln -s "$REPO/README.md" "$W/linked.md"                                      # in the repo, pointing out of it
-OUTSIDE="$REPO/README.md"   # a real file outside both the session's repository and any temp dir; only stat'ed
+# This system file is outside the repository and temporary folders. The suite only checks its metadata.
+OUTSIDE=/etc/hosts
 
 CWD=$W      # the session's directory, as the payload's cwd field reports it
 

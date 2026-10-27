@@ -1193,7 +1193,7 @@ scenario_squash_merge() {
   fixture_git "$r" commit -q -m lines
   e="$(add_origin "$r")"
   # Use the safety module's function to check whether git merges hunk by hunk.
-  if "$WT_BASH" -c "$(sed -n '/^git_merges_trees()/,/^}/p' "$REPO/lib/workgrove/safety.sh"); git_merges_trees" 2>/dev/null; then hunks=yes; fi
+  if "$BASH" -c 'source "$1"; git_merges_trees' _ "$REPO/lib/workgrove/safety.sh" 2>/dev/null; then hunks=yes; fi
 
   # Every worktree first: `wt new` fetches its base. So all of the landing below must come after the last
   # `wt new`, for origin/main to be stale when wt is asked. That is the shape that this scenario is about.
@@ -1859,14 +1859,19 @@ scenario_cmux() {
   printf '{"workspaces":[]}\n' >"$WT_ROWS"
   assert_wt_ok "a successful empty row list permits removal" rm ping-denied -r "$r"
 
-  local fake="$TEST_ROOT/active-row-bin"
+  local fake="$TEST_ROOT/active-row-bin" ssh_log
+  ssh_log="$fake/calls.log"
   mkdir -p "$fake"
   cat >"$fake/ssh.fixture" <<'STUB'
 #!/bin/sh
-printf 'ssh %s\n' "$*" >>"$CMUX_STUB_LOG"
+ssh_dir=${0%/*}
+printf 'ssh %s\n' "$*" >>"$ssh_dir/calls.log"
+script=$(mktemp "$ssh_dir/stdin.XXXXXX")
+cat >"$script"
+printf '%s\n' "$script" >>"$ssh_dir/scripts.log"
 [ "${VM_AGENT_ACTIVE:-}" = 1 ] && exit 0
 if [ "${VM_AGENT_QUERY_FAIL:-}" = 1 ]; then
-  fake_ssh_run "$cmd"
+  fake_ssh_run "$cmd" <"$script"
   exit $?
 fi
 exit 99
@@ -1881,19 +1886,19 @@ STUB
   # This row has the "<repo>:<name>" title of an older wt, so these checks also show that host_rm finds it.
   fake_rows "$(fake_row "active-vm-row" "$id:active-vm" "" "smoke.invalid" "connected" "cmux-tui" "null")" >"$WT_ROWS"
   WT_PATH_PREFIX="$fake" WT_RELAY_ENV=("CMUX_STUB_AGENTS=1")
-  : >"$CMUX_LOG"
+  : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "another agent is running" -H smoke.invalid rm active-vm --force -r "$r"
-  assert_lacks "a Mac removal refuses an active VM row before SSH" "$(cat "$CMUX_LOG")" "ssh "
+  assert_lacks "a Mac removal refuses an active VM row before SSH" "$(cat "$ssh_log")" "ssh "
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_ACTIVE=1")
-  : >"$CMUX_LOG"
+  : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
-  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$CMUX_LOG")" "bash -s --"
-  assert_lacks "an older VM wt cannot remove the active task" "$(cat "$CMUX_LOG")" "rm active-vm"
+  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$(tail -n 1 "$fake/scripts.log")")" "tmux_agent ()"
+  assert_lacks "an older VM wt cannot remove the active task" "$(cat "$ssh_log")" "rm active-vm"
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_QUERY_FAIL=1")
-  : >"$CMUX_LOG"
+  : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "cannot check the agent in tmux session" -H smoke.invalid rm active-vm -r "$r"
   assert_has "the remote probe reports its socket error" "$WT_OUT" "Operation not permitted"
-  assert_lacks "a failed remote probe cannot request removal" "$(cat "$CMUX_LOG")" "rm active-vm"
+  assert_lacks "a failed remote probe cannot request removal" "$(cat "$ssh_log")" "rm active-vm"
   # A VM row of another repo's task with the same name is not this task's row, so host_rm does not check its
   # agent. The refusal below comes from the VM's tmux session, not from that row.
   fake_rows "$(fake_row "other-vm-row" "active-vm" "@smoke.invalid · other-repo" "smoke.invalid" "connected" "cmux-tui" "null")" \
