@@ -835,15 +835,7 @@ scenario_list_show_path() {
   assert_eq 'show reads the started marker' true "$(wt_read_result "$WT_OUT" show | jq -r .started)"
   local facts_bin="$TEST_ROOT/show-facts-bin"
   mkdir -p "$facts_bin"
-  cat >"$facts_bin/tmux" <<'TMUX'
-#!/bin/sh
-case "$1" in
-  has-session) exit 0 ;;
-  list-panes) echo /dev/pts/3 ;;
-  list-clients) echo 'attached client' ;;
-esac
-TMUX
-  printf '#!/bin/sh\nexit 0\n' >"$facts_bin/pgrep"
+  cp "$REPO/test/fakes/tmux" "$REPO/test/fakes/pgrep" "$facts_bin/"
   chmod +x "$facts_bin/"*
   WT_PATH_PREFIX="$facts_bin"
   WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=test WT_HOST=fakevm)
@@ -1992,7 +1984,8 @@ STUB
   fixture_commit "$TEST_ROOT/vm/project" README 'a scratch VM repo'
   fixture_git "$TEST_ROOT/vm/project" worktree add -qb wt/task "$TEST_ROOT/vm/project/.worktrees/task"
   printf '#!/bin/sh\necho Linux\n' >"$TEST_ROOT/vm-bin/uname"
-  printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/vm-bin/pgrep"
+  cp "$REPO/test/fakes/pgrep" "$TEST_ROOT/vm-bin/pgrep"
+  cp "$REPO/test/fakes/tmux" "$TEST_ROOT/vm-bin/show-tmux"
   chmod +x "$TEST_ROOT/vm-bin/"*
   cat >"$SCRATCH_HOME/.local/bin/wt" <<'STUB'
 #!/usr/bin/env bash
@@ -2010,7 +2003,7 @@ while IFS= read -r line; do
     record=${line#*$'\t'}
     if [[ $REMOTE_WT_FORMAT == machine ]]; then
       record=$(jq -c 'del(.agent,.attached,.started,.path)' <<<"$record")
-    else
+    elif [[ $REMOTE_WT_FORMAT == facts ]]; then
       record=$(jq -c '.state="changed wording"' <<<"$record")
     fi
     line=WT_RESULT$'\t'$record
@@ -2030,6 +2023,7 @@ STUB
   cat >"$fake/tmux" <<'STUB'
 #!/bin/sh
 if [ "${FAKE_SHOW_PROBE:-}" = 1 ]; then
+  if [ -n "${FAKE_TMUX_PROBE:-}" ]; then exec "$FAKE_VM_BIN/show-tmux" "$@"; fi
   case "$1" in
     has-session) exit 0 ;;
     list-panes) echo /dev/pts/123 ;;
@@ -2076,6 +2070,34 @@ STUB
   : >"$TEST_ROOT/remote-log"
   stub_cmux alive
   fake_rows "$(fake_row "remote-row" "task" "@fakevm · project" "fakevm" "connected" "cmux-tui" "null")" >"$WT_ROWS"
+  REMOTE_WT_FORMAT=raw
+  local probe clients expected_state expected_agent expected_attached result calls expected_client_calls
+  for probe in running idle missing no-server denied panes empty invalid pgrep; do
+    for clients in attached detached error; do
+      WT_RELAY_ENV=("FAKE_TMUX_PROBE=$probe" "FAKE_TMUX_CLIENTS=$clients" "FAKE_TMUX_LOG=$TEST_ROOT/show-tmux.log")
+      : >"$TEST_ROOT/show-tmux.log"
+      assert_wt_ok "$probe/$clients machine show on the fake VM" -H fakevm show task -r /vm/repos/project
+      expected_agent=false expected_attached=false expected_state='shell only' expected_client_calls=1
+      case $probe in
+        running) expected_agent=true expected_state='agent running' ;;
+        missing|no-server) expected_state=none expected_client_calls=0 ;;
+      esac
+      if [[ $expected_state != none ]]; then
+        if [[ $clients == attached && $probe != denied ]]; then expected_attached=true
+        else expected_state+=', detached'; fi
+      fi
+      result=$(wt_read_result "$WT_OUT" show)
+      assert_eq "$probe/$clients display agrees with the agent and attachment facts" \
+        "$expected_state|$expected_agent|$expected_attached|false" \
+        "$(jq -r '[.state,.agent,.attached,.started] | map(tostring) | join("|")' <<<"$result")"
+      assert_has "$probe/$clients keeps the human session text" "$WT_OUT" "($expected_state)"
+      calls=$(cat "$TEST_ROOT/show-tmux.log")
+      assert_eq "$probe/$clients checks the session once" 1 "$(grep -c '^has-session ' <<<"$calls")"
+      assert_eq "$probe/$clients queries clients only for a possible session" "$expected_client_calls" \
+        "$(grep -c '^list-clients ' <<<"$calls" || true)"
+    done
+  done
+  WT_RELAY_ENV=() REMOTE_WT_FORMAT=text
   # A connected client is replaced only after fresh screen proof.
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "an already connected row is selected" -H fakevm attach task -r /vm/repos/project
