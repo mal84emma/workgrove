@@ -122,6 +122,7 @@ LINKS=(
   'home/.zshenv|.zshenv|'
   'home/.gitignore_global|.gitignore_global|'
   'home/.claude/AGENTS.md|.claude/AGENTS.md|'
+  'home/.claude/TASKS.md|.claude/TASKS.md|'
   'home/.claude/CLAUDE.md|.claude/CLAUDE.md|'
   'home/.oh-my-zsh/custom/themes/workgrove.zsh-theme|ZC_REL/themes/workgrove.zsh-theme|WITH_ZSHRC'
   'home/.config/ghostty/config|.config/ghostty/config|WITH_CMUX_CONFIG'
@@ -589,6 +590,7 @@ link_skills() {
     link "home/.agents/skills/$n" ".claude/skills/$n"
   done
   link home/.claude/AGENTS.md .codex/AGENTS.md
+  link home/.claude/TASKS.md .codex/TASKS.md
 }
 
 # link_cmux_config: cmux runs only on the Mac. Its UI settings stay a link, so changes show in `git diff`.
@@ -628,10 +630,10 @@ install_sf_mono() {
 # retired_src <home-relative dst>: print the repo-relative path that the linking steps above point that
 # destination at. our_link's tail test needs this path to recognize a link made before this clone moved.
 # Seven of the ten directories mirror the repo's own layout, so for them the source is home/<dst>. This
-# function used to infer that source for all of them. So once the clone had moved, the three exceptions below
+# function used to infer that source for all of them. So once the clone had moved, the exceptions below
 # could never be retired: their source is not their destination, so the tail never matched. A renamed skill or
 # script then outlived its rename on exactly the machines that this function exists for.
-# ~/.oh-my-zsh/custom/themes is a sixth exception whenever ZSH_CUSTOM moves the DESTINATION, because the source
+# ~/.oh-my-zsh/custom/themes is another exception whenever ZSH_CUSTOM moves the DESTINATION, because the source
 # under home/ does not move with it.
 retired_src() {
   local rel="$1"
@@ -643,6 +645,7 @@ retired_src() {
     .local/bin/*)     echo "bin/${rel#.local/bin/}" ;;                       # install_bins
     .claude/skills/*) echo "home/.agents/skills/${rel#.claude/skills/}" ;;   # link_skills, the Claude copy
     .codex/AGENTS.md) echo "home/.claude/AGENTS.md" ;;                       # link_skills, the shared file
+    .codex/TASKS.md)  echo "home/.claude/TASKS.md" ;;                        # link_skills, the shared reference
     *)                echo "home/$rel" ;;
   esac
 }

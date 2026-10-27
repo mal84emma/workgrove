@@ -1041,6 +1041,8 @@ def compatibility(profile):
                           (item, Path.home() / ".agents/skills" / item.name, True),
                           (item, Path(profile["agent_roots"]["claude"]) / "skills" / item.name, False)))
     for agent, default in (("claude", ".claude"), ("codex", ".codex")):
+        links.append((source / "home/.claude/TASKS.md",
+                      Path(profile["agent_roots"][agent]) / "TASKS.md", False))
         if profile["persist_agents"]:
             links.append((Path(profile["agent_roots"][agent]), Path.home() / default, True))
     links.append((profile_path(root), Path.home() / ".config/workgrove/profile.json", True))
@@ -1212,6 +1214,8 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
 def require_agent_roots(profile):
     for agent, value in profile["agent_roots"].items():
         target = Path(value)
+        # Check the root before its reference link to preserve permission diagnostics.
+        private_path(target)
         if profile["persist_agents"]:
             require(target.is_dir(), "persistent-agent-configuration-missing")
         elif target != canonical(Path.home() / ("." + agent)) and Path(profile["root"]) not in target.parents:

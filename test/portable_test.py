@@ -335,6 +335,23 @@ class PortableTests(unittest.TestCase):
     def profile(self):
         return json.loads((self.root / ".config/workgrove/profile.json").read_text())
 
+    def test_reference_links_follow_agent_roots_and_restore_missing_links(self):
+        claude = self.root / "personal-agents/claude"
+        codex = self.root / "personal-agents/codex"
+        self.env.update(CLAUDE_CONFIG_DIR=str(claude), CODEX_HOME=str(codex))
+        self.install("--persist-agents")
+        reference = self.source / "home/.claude/TASKS.md"
+        for directory in (claude, codex):
+            self.assertEqual((directory / "TASKS.md").resolve(), reference)
+            self.assertIn("(TASKS.md#", (directory / "AGENTS.md").read_text())
+            (directory / "TASKS.md").unlink()
+        report = json.loads(self.command("doctor", "--json", ok=False).stdout)
+        self.assertIn("compatibility-links-missing", report["issues"])
+        self.command("restore", "--host", "test-host", "--root", str(self.root))
+        for directory in (claude, codex):
+            self.assertEqual((directory / "TASKS.md").resolve(), reference)
+        self.assertTrue(json.loads(self.command("doctor", "--json").stdout)["ready"])
+
     def test_restore_requires_explicit_matching_host_before_home_changes(self):
         self.install("--persist-agents")
         shutil.rmtree(self.home)
@@ -1239,6 +1256,9 @@ sys.exit(module["main"]())
         self.command("restore", "--host", "test-host", "--root", str(self.root), env=env)
         self.assertEqual((self.home / ".local/bin/wt").readlink(), self.source / "bin/wt")
         self.assertTrue((self.home / ".tmux.conf").is_symlink())
+        for agent in ("claude", "codex"):
+            self.assertEqual((self.home / ("." + agent) / "TASKS.md").resolve(),
+                             self.source / "home/.claude/TASKS.md")
         self.assertEqual(task.read_text(), CANARY)
         result = self.command("doctor", "--root", str(self.root), "--json", env=env, ok=False)
         self.assertIn("missing-prerequisites", json.loads(result.stdout)["issues"])
