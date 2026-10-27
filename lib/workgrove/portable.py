@@ -1308,6 +1308,8 @@ def install_files(profile, restoring=False, instruction_copies=None, restore_fil
         text = read(source / "home/.codex/config.base.toml")
         edits = policy["codex_remote"]
         text = "".join(line for line in text.splitlines(keepends=True) if not line.startswith(edits["remove_prefix"]))
+        if text and not text.endswith("\n"):
+            text += "\n"
         write(path, text + edits["append"])
 
 

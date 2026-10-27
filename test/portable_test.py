@@ -1362,6 +1362,15 @@ sys.exit(module["main"]())
         settings = json.loads((self.home / ".claude/settings.json").read_text())
         self.assertIs(settings["prefersReducedMotion"], True)
 
+    def test_agent_policy_toml_without_final_newline(self):
+        path = self.source / "home/.codex/config.base.toml"
+        path.write_text(path.read_text().rstrip("\n"))
+        self.git("add", str(path))
+        self.git("commit", "-qm", "Change synthetic base newline")
+        classic = self.classic_config()
+        self.install()
+        self.assert_config_parity(classic)
+
     def test_agent_policy_row_changes_both_installers(self):
         path = self.source / "lib/workgrove/agent-config-policy.json"
         policy = json.loads(path.read_text())
