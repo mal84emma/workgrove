@@ -34,6 +34,7 @@ scenario_regressions() {
   end_scenario
 }
 scenario_regressions
+check_docs compatibility
 scenario_layout
 scenario_citations
 scenario_links

@@ -1,6 +1,8 @@
 """Check tracked Layout files, required citations, and local documentation links."""
 
 import argparse
+import ast
+from collections import Counter
 from bisect import bisect_right
 from html import unescape
 from html.parser import HTMLParser
@@ -504,8 +506,56 @@ def check_links(root):
     return errors
 
 
+def compatibility_markers(path):
+    """Identify each tracked marker by its containing function or module variable."""
+    lines = path.read_text().splitlines()
+    if path.suffix == ".py":
+        functions = [node for node in ast.walk(ast.parse("\n".join(lines)))
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        for index, line in enumerate(lines, 1):
+            if "WT_COMPAT" in line:
+                owners = [node for node in functions if node.lineno <= index <= node.end_lineno]
+                yield index, max(owners, key=lambda node: node.lineno).name if owners else "<module>"
+        return
+    definition = re.compile(r"^([A-Za-z_][A-Za-z_0-9]*)(?:\(\)\s*[({]|=)")
+    owner = "<module>"
+    for index, line in enumerate(lines):
+        match = definition.match(line)
+        if match:
+            owner = match[1]
+        if "WT_COMPAT" not in line:
+            continue
+        following = index + 1
+        while following < len(lines) and (not lines[following].strip() or lines[following].startswith("#")):
+            following += 1
+        match = definition.match(lines[following]) if following < len(lines) else None
+        yield index + 1, match[1] if match else owner
+
+
+def check_compatibility(root):
+    errors = []
+    inventory = "docs/vm-protocol.md"
+    text = (root / inventory).read_text()
+    section = text.split("## Compatibility inventory\n", 1)[-1].split("\n## ", 1)[0]
+    listed = Counter(re.findall(r"^\| `([^`]+)` \| `([^`]+)` \|", section, re.M))
+    actual = Counter()
+    paths = subprocess.check_output(["git", "ls-files", "-z", "--", "bin", "lib", "install.sh"], cwd=root)
+    for name in paths.decode().split("\0"):
+        if not name:
+            continue
+        for line, owner in compatibility_markers(root / name):
+            key = (name, owner)
+            actual[key] += 1
+            if actual[key] > listed[key]:
+                errors.append(diagnostic(name, line, f"WT_COMPAT marker missing from inventory: {owner}"))
+    for (name, owner), count in (listed - actual).items():
+        errors.append(diagnostic(inventory, 1, f"inventory has {count} entry with no code marker: {name} {owner}"))
+    return errors
+
+
 def main():
-    checks = {"layout": check_layout, "citations": check_citations, "links": check_links}
+    checks = {"layout": check_layout, "citations": check_citations, "links": check_links,
+              "compatibility": check_compatibility}
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("check", choices=checks)

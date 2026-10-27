@@ -49,19 +49,25 @@ The reader also accepts older sidecars that store these records as newline-joine
 `wt version` returns one JSON object. `wt -H <host> version` returns the VM's object.
 `commit` is the short repository commit, or `unknown` when the installation has no `.git`.
 `protocol` is the highest supported task result version, currently the integer `1`.
+`capabilities` is an array of strings that names supported VM behavior.
+The [compatibility inventory](vm-protocol.md#compatibility-inventory) defines the current capability names and the removal check.
 Both commands accept no arguments.
 
-`wt hosts --json` adds two flat fields to each host object:
+`wt hosts --json` adds three flat fields to each host object:
 
 | Field | Type | Meaning |
 |---|---|---|
 | `wt_commit` | String or null | The VM's reported commit, or null when unavailable. |
 | `wt_protocol` | Integer or null | The VM's reported protocol number, or null when unavailable. |
+| `wt_capabilities` | Array of strings | The VM's reported capabilities, or an empty array when absent, malformed, or unavailable. |
 
 An older VM without `wt version` can still have available hardware information.
 Its version fields are null. An unreachable VM also has null version fields.
 Version readers require exactly one JSON object with both correctly typed fields.
-Malformed reports produce null values for both fields.
+Malformed required fields produce null commit and protocol values.
+An absent or malformed capability list does not invalidate correctly typed commit and protocol fields.
+Readers retain string capability arrays, including unknown names, and ignore other extra fields.
+Older Macs retain only `commit` and `protocol`, so additional keys do not prevent validation.
 The Mac supplies the same validator to both VM probes.
 
 ## Read update records

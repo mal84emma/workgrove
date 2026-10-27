@@ -121,7 +121,7 @@ def confirm_volume_trust(request):
 
 def confirm_volume_request(args):
     lines = read(Path(args.request_file)).splitlines()
-    # WT_COMPAT: Remove untagged requests when all VMs send the trust-request record.
+    # WT_COMPAT: Remove untagged requests when all selected revisions emit trust-request records.
     payload = next((line.split("\t", 1)[1] for line in lines if line.startswith("trust-request\t")), lines[0])
     request = json.loads(payload)
     if not confirm_volume_trust(request):
