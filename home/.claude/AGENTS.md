@@ -45,60 +45,45 @@ With:
 ## Tasks run in worktrees
 
 A **task** is one unit of work that changes code, in its own git worktree.
-Use `wt` to manage tasks; see `wt help`.
+Use `wt`; see `wt help`.
 A **row** is a cmux workspace. The **main checkout** is the repository's primary working tree.
 
-- When starting a task, feature, fix, or experiment, check whether you are inside a worktree.
-  If you are, work there. Otherwise, first run `wt new <name> -p "<brief>"`.
-- Never do task work in the main checkout unless the user explicitly requests a quick edit there.
-- Inside `.worktrees/<name>`, stay there for task work and commit on `wt/<name>`.
-  Make small commits and describe each one.
-  Never edit the main checkout or sibling worktrees, switch branches, or create nested worktrees.
-  Keep dependencies and environment settings in the worktree. Do not use the main checkout's copies.
-- These conventions provide no sandbox or Claude worktree isolation. You must keep task work inside the worktree.
-- Split work only when the parts touch different files. Give each part its own worktree and agent session.
-- Do not code in a driver session. Start a task session for that work.
-- Remove worktrees only with `wt rm` or `wt prune`, and only when the user asks.
-- Never use `--force` or `--discard-commits` unless the user authorizes that flag in this conversation.
-- Use short kebab-case task names. Do not use `.` in a name.
-- Add `.wt-include` and `.wt-setup` only when the user asks.
+Never do task work in the main checkout unless the user explicitly requests a quick edit there.
+When starting a task, feature, fix, or experiment, check your current location.
+If you are already inside a worktree, work there.
+Otherwise, create one first unless the quick-edit exception applies.
 
-Read [task procedures](TASKS.md#task-lifecycle) before creating, displaying, checking, or removing tasks; use the linked skills.
-Read [layout and naming](TASKS.md#layout-and-naming) when choosing a base branch or locating rows, sessions, and hooks.
-Read [reporting requirements](TASKS.md#reporting) when creating or finishing tasks.
-After task creation, do not wait on or poll the new session. Report a deferred row only after attach succeeds.
+Read only the linked sections needed for your action, and follow their rules and skill links.
+
+Before task work, read [worktree rules](TASKS.md#worktree-rules).
+Inside `.worktrees/<name>`, use [worktree-work](../.agents/skills/worktree-work/SKILL.md).
+Before creating, displaying, checking, removing, or splitting tasks, read [task procedures](TASKS.md#task-lifecycle); use the linked skills.
+Before creation, read [layout and naming](TASKS.md#layout-and-naming).
+Also read layout when choosing a base branch or locating rows, sessions, or hooks.
+When creating or finishing tasks, read and follow [reporting requirements](TASKS.md#reporting).
 
 ## GitHub writes and publishing
 
 Never run `git push`, `wt pr`, `gh pr create`, or `gh issue create` without an explicit request in this conversation.
 Never create a remote repository or publish without that request. Otherwise, report the branch.
-Briefs authorize only the specific actions in the [brief exceptions](TASKS.md#github-writes-and-publishing).
-Never approve a pull request; approval stays with the user.
+Never approve a pull request. Approval stays with the user.
 
-For guarded GitHub commands, never use pipes, `&&`, `$(…)`, or a `cd … &&` prefix, or `--template`.
-Never push tags, `main`, `master`, or the default branch through the guarded form, force it, or push multiple branches.
-Read [approved command forms](TASKS.md#run-approved-github-commands) before running GitHub commands in this repository.
+Before assessing authorization, read the [brief exceptions](TASKS.md#github-writes-and-publishing).
+Before GitHub commands in this repository, read and follow [approved forms](TASKS.md#run-approved-github-commands).
 
 ## Local and remote
 
-- Run task recovery, `--reattach`, or `--restart-agent` only when the user asks.
-- Restore-only without asking requires all six [portable restore conditions](TASKS.md#portable-restore-only).
-- Leave full setup and changes to `--storage`, `--mount`, `--trust-personal-volume`, `--strict-permissions`, or the alias to the user.
-- Leave root choices for `ambiguous`, `none`, or `incomplete` discovery, and `WT_REMOTE_ROOT`-only restoration, to the user.
-- After restore, do not start or restart tasks if `persist_agents` is unset or either sign-in file is absent.
-- If doctor reports `agent-command-unavailable`, report it and stop before starting or restarting a task.
-- After any refusal, stop and ask the user. After an unknown or changed host key, stop.
-- Never accept a host key or sign in an agent or `gh` yourself.
-- Never run `az login` or `az account set`; only the user runs them.
-- Add Azure Machine Learning (Azure ML) compute instances through `azml-compute`, on the Mac only.
-- Never edit `~/.ssh/config` by hand for Azure ML. If `azml-ssh-host` reports an error, report it and stop.
-- Keep compute lifecycle and credentials with the SSH supplier.
+Read and follow these procedures before their actions:
 
-Read [remote commands](TASKS.md#local-and-remote) before sending `wt` commands from the Mac to a VM.
-Read [VM selection](TASKS.md#choose-a-vm-by-hardware) before creating a task with hardware requirements.
-Read [Azure ML registration](../.agents/skills/azml-compute/SKILL.md) when adding a compute instance with `azml-ssh-host add <instance>`.
-Read [SSH host preparation](TASKS.md#add-a-supplied-ssh-host) before registering a fragment, preparing a host, or repairing its environment.
-Read [VM recovery](TASKS.md#vm-task-recovery) before recovering tasks or restoring portable links.
+- For VM work or Mac-to-VM commands, use [remote commands](TASKS.md#local-and-remote).
+- For hardware-based task placement, use [VM selection](TASKS.md#choose-a-vm-by-hardware).
+- For SSH registration, host preparation, or environment repair, use [SSH host preparation](TASKS.md#add-a-supplied-ssh-host).
+- For task recovery or portable-link restoration, use [VM recovery](TASKS.md#vm-task-recovery).
+- For Azure Machine Learning (Azure ML) registration, use [azml-compute](../.agents/skills/azml-compute/SKILL.md) on the Mac only.
+
+Keep compute lifecycle and credentials with the SSH supplier.
+Never accept a host key, sign in an agent or `gh`, or run `az login` or `az account set`.
+Never edit `~/.ssh/config` by hand for Azure ML. If `azml-ssh-host` reports an error, report it and stop.
 
 ## Interactive commands
 
@@ -107,15 +92,12 @@ These commands belong to the user's own session on the Mac.
 
 ## Opening apps
 
-When the user requests an app launch on the Mac, use `wt open` for worktrees and `/usr/bin/open` for other files.
-When the user wants to look at a worktree's code, run `wt open`; do not print files instead.
-For status or changes, run `wt list` and `wt show <name>`; never open VS Code for this.
-In a task session, "the worktree" means this task's worktree, not the `wt` tool.
+Before requested Mac launches or worktree display, read and follow [app launch rules and results](TASKS.md#opening-apps).
+For task status or changes, read and follow [task procedures](TASKS.md#task-lifecycle); never open VS Code.
 Never request broader sandbox or network access to open an app.
-Read [app launch results](TASKS.md#opening-apps) before reporting launch success or failure; retry blocked launches with escalation.
 
 ## cmux
 
 Use `cmux` commands only to create, inspect, or close task rows.
-Do not rearrange the user's other rows or steal focus. By default, `wt new` creates rows unfocused.
-Each task worktree normally has a row that shows its branch, agent state, and notifications.
+Never rearrange the user's other rows or steal focus. By default, `wt new` creates rows unfocused.
+Each task worktree normally has a row showing its branch, agent state, and notifications.

@@ -10,8 +10,8 @@ Use this skill when you work inside a task worktree. You are inside one when bot
 - The cwd is `<repo>/.worktrees/<name>`.
 - `git rev-parse --abbrev-ref HEAD` prints `wt/<name>`.
 
-Follow the [worktree policy](../../../.claude/AGENTS.md#tasks-run-in-worktrees).
-It defines isolation, branches, commits, dependencies, and removal.
+Read and follow the [worktree rules](../../../.claude/TASKS.md#worktree-rules).
+These rules cover isolation, branches, commits, dependencies, and removal.
 Follow the [interactive command policy](../../../.claude/AGENTS.md#interactive-commands) in task sessions.
 
 ## Syncing with the base

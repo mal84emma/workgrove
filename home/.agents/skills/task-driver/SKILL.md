@@ -7,9 +7,11 @@ description: Spawn and supervise task sessions from a driver session; use when t
 
 Use this skill in the driver session to start, watch, and report tasks on this Mac or on a VM.
 
-Follow the [task policy](../../../.claude/AGENTS.md#tasks-run-in-worktrees),
+Read and follow the [task routing](../../../.claude/AGENTS.md#tasks-run-in-worktrees),
+[worktree rules](../../../.claude/TASKS.md#worktree-rules),
 [interactive command policy](../../../.claude/AGENTS.md#interactive-commands),
 and [cmux policy](../../../.claude/AGENTS.md#cmux).
+For VM tasks, read and follow [remote setup limits](../../../.claude/TASKS.md#remote-setup-limits).
 
 The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥⌘D) and starts and watches other sessions. Its cwd (current working directory) is the first existing folder in `$WT_REPOS_DIR`. That folder is not a repo, so every `wt new` needs `-r <repo>`.
 
@@ -86,7 +88,7 @@ The driver session runs in the row titled `driver` (second line `@local`, ⌃⌥
    - If a connected row shows a bare shell after a dropped connection, point the user to `--reattach`.
    - Point the user to `--restart-agent` only if attach refuses because a previously started task has no agent.
 
-6. Follow the [driver session policy](../../../.claude/AGENTS.md#tasks-run-in-worktrees).
+6. Follow the [driver session rule](../../../.claude/TASKS.md#worktree-rules).
    Use the [teardown procedure](../worktree-teardown/SKILL.md) for authorized removal.
 
 7. **First task per repo on a VM.** Tell the user to click the row once and accept the agent's trust prompt. This prompt comes once per repo, and worktrees inherit the trust. After a hook change, Codex asks once through `/hooks`.

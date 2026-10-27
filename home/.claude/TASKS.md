@@ -4,18 +4,34 @@ Read the relevant section when [the shared conventions](AGENTS.md) direct you he
 Use the linked skills for procedures that they already contain.
 Read this file on demand.
 
+## Worktree rules
+
+- Inside `.worktrees/<name>`, stay there for task work and commit on `wt/<name>`.
+  Make small commits and describe each one.
+  Never edit the main checkout or sibling worktrees, switch branches, or create nested worktrees.
+  Keep dependencies and environment settings inside the worktree. Do not use the main checkout's copies.
+  These conventions provide no sandbox or Claude worktree isolation.
+- Split work only when the parts touch different files. Give each part its own worktree and agent session.
+- Do not code in a driver session. Start a task session for that work.
+- Remove worktrees only with `wt rm` or `wt prune`, and only when the user asks.
+- Never use `--force` or `--discard-commits` unless the user authorizes that flag in this conversation.
+- Add `.wt-include` and `.wt-setup` only when the user asks.
+
 ## Task lifecycle
 
-- When starting a task, feature, fix, or experiment, choose the skill for your current location.
+- For an explicitly requested quick edit in the main checkout, use the [core exception](AGENTS.md#tasks-run-in-worktrees).
+- For other tasks, features, fixes, or experiments, choose the skill for your current location.
   If you are inside a worktree, use the [worktree-work skill](../.agents/skills/worktree-work/SKILL.md) and work there.
-  Otherwise, use the [worktree-create skill](../.agents/skills/worktree-create/SKILL.md) to create a worktree first.
+  Otherwise, use the [worktree-create skill](../.agents/skills/worktree-create/SKILL.md) to run `wt new <name> -p "<brief>"` first.
 - For several independent tasks, create one worktree per task with `wt new ... -p ...`.
   Each worktree gets its own agent session in cmux.
   Use the [task-driver skill](../.agents/skills/task-driver/SKILL.md) to drive several tasks, or VM tasks, from one session.
 - For "show me the code", "open the worktree", or "let me see it", use the [worktree-show skill](../.agents/skills/worktree-show/SKILL.md).
   Run `wt open`, which opens the worktree in VS Code.
-- For "what changed" or "how far is it", run `wt list` and `wt show <name>`.
+- For task status or changes, run `wt list` and `wt show <name>`.
+  Examples include "what changed" and "how far is it".
   Give a short summary, as the worktree-show skill describes.
+- For "what tasks are running" or "list the worktrees", run `wt list` and summarize.
 - For authorized cleanup, use the [worktree-teardown skill](../.agents/skills/worktree-teardown/SKILL.md).
   To remove your own worktree, change to the main checkout and run `wt rm` from there.
 
@@ -95,6 +111,8 @@ The approved forms are:
 
 ## Local and remote
 
+Before remote commands, read and follow [remote setup limits](#remote-setup-limits).
+
 `wt` handles local and remote work through the same subcommands:
 
 - Run them locally.
@@ -112,6 +130,7 @@ If no suitable machine is available, report that.
 
 ## Add a supplied SSH host
 
+Before host preparation or repair, read and follow [remote setup limits](#remote-setup-limits).
 Use the [ssh-host skill](../.agents/skills/ssh-host/SKILL.md) for a supplied fragment or portable host preparation.
 Use existing usable aliases without new registration.
 Keep compute lifecycle and credentials with the SSH supplier.
@@ -122,12 +141,14 @@ For restore-only without asking, follow [Portable restore-only](#portable-restor
 
 ## VM task recovery
 
+Before recovery, read and follow [remote setup limits](#remote-setup-limits).
 Run task recovery, `--reattach`, or `--restart-agent` only when the user asks.
 Use the [task-driver recovery procedure](../.agents/skills/task-driver/SKILL.md#driving-tasks-from-a-driver-session).
 Restore-only without asking is permitted only under [Portable restore-only](#portable-restore-only).
 
 ## Portable restore-only
 
+Before restoration, read and follow [remote setup limits](#remote-setup-limits).
 An agent may run restore-only without asking only when all six conditions hold:
 
 1. SSH to the alias works without an unknown-host-key or changed-host-key error.
@@ -150,6 +171,9 @@ If `persist_agents` is not set, report that and stop before starting or restarti
 If either sign-in file is absent, report that and stop before starting or restarting any task.
 The user signs in.
 
+## Remote setup limits
+
+If doctor reports `agent-command-unavailable`, report it and stop before starting or restarting a task.
 These steps stay with the user:
 
 - Full setup and any change of `--storage`, `--mount`, `--trust-personal-volume`, `--strict-permissions`, or the alias.
@@ -166,7 +190,12 @@ Never accept a host key or sign in an agent or `gh` yourself.
 
 ## Opening apps
 
-Follow the [core app launch policy](AGENTS.md#opening-apps) and the [worktree-show skill](../.agents/skills/worktree-show/SKILL.md#check-the-result-of-wt-open).
+When the user requests an app launch on the Mac, use `wt open` for worktrees and `/usr/bin/open` for other files.
+When the user wants to look at a worktree's code, run `wt open`; do not print files instead.
+For status or changes, run `wt list` and `wt show <name>`; never open VS Code for this.
+In a task session, "the worktree" means this task's worktree, not the `wt` tool.
+
+For worktree launch checks, use the [worktree-show skill](../.agents/skills/worktree-show/SKILL.md#check-the-result-of-wt-open).
 Codex's sandbox blocks app launches.
 A blocked launch can look like a missing app: `Unable to find application`, `-10661`, or `-10827`.
 Before reporting a missing app or inability to open it, rerun the same command with escalation.
