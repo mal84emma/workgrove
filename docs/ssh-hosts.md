@@ -35,7 +35,7 @@ Its final `Host *` line restores global scope for preexisting settings.
 Workgrove's existing discovery can then find that alias.
 After remote preparation, use the ordinary `wt hosts` and `wt -H <host> ...` interfaces.
 Registration alone does not install remote tools or establish remote readiness.
-See the [VM setup guide](new-vm.md) and the [integration plan](runpod-integration.md) for preparation requirements.
+For preparation, use the [portable setup procedure](remote-setup.md) or [VM setup guide](new-vm.md).
 
 Use `-F` before the subcommand to select another configuration:
 

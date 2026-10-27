@@ -6,6 +6,22 @@ Put rules that apply only to this repository in this file.
 `home/.claude/AGENTS.md` holds the working conventions for every repository.
 `install.sh` links it to `~/.claude/AGENTS.md` and `~/.codex/AGENTS.md` on each machine.
 
+## Language choices
+
+Use Python to parse and validate formats that workgrove does not own.
+These include SSH configuration, Git configuration includes, Linux control groups (cgroups), and mountinfo.
+Python's structured data and standard library support these parsers and validators.
+Use Python for probes sent to hosts without workgrove, so probes do not depend on a repository installation.
+
+Use Bash to run and coordinate `git`, `tmux`, `cmux`, and `ssh`.
+These commands already provide the operations that workgrove connects.
+Keep the current Bash orchestration and single-file portable bootstrap.
+
+Python code sent to a host travels as one file on standard input (stdin).
+It cannot import shared repository modules unless a build step bundles them.
+For this reason, `lib/workgrove/portable.py` deliberately repeats safety helpers from `lib/workgrove/ssh_host.py`.
+Keep these helpers self-contained while remote delivery has no bundling step.
+
 ## Documentation
 
 When you write or edit prose, follow [docs/documentation-style.md](docs/documentation-style.md).
