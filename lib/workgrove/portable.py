@@ -981,21 +981,43 @@ def replace_block(text, label, contents, first=False):
 
 def merge_hooks(existing, base):
     require(isinstance(existing, dict), "invalid-agent-json")
-    hooks = existing.setdefault("hooks", {})
+    hooks = existing.get("hooks", {})
     require(isinstance(hooks, dict), "invalid-agent-json")
-    for event, groups in base.get("hooks", {}).items():
-        current = hooks.setdefault(event, [])
-        require(isinstance(current, list), "invalid-agent-json")
-        for group in current:
+    commands = {hook["command"] for groups in base.get("hooks", {}).values()
+                for group in groups for hook in group["hooks"] if isinstance(hook.get("command"), str)}
+    merged = {event: [dict(group, hooks=list(group["hooks"])) for group in groups]
+              for event, groups in base.get("hooks", {}).items()}
+    for event, groups in hooks.items():
+        require(isinstance(groups, list), "invalid-agent-json")
+        for group in groups:
             require(isinstance(group, dict) and isinstance(group.get("hooks", []), list), "invalid-agent-json")
             require(all(isinstance(hook, dict) and isinstance(hook.get("command", ""), str)
                         for hook in group.get("hooks", [])), "invalid-agent-json")
-        commands = {hook.get("command") for group in current for hook in group.get("hooks", [])}
-        for group in groups:
-            missing = [hook for hook in group["hooks"] if hook["command"] not in commands]
-            if missing:
-                current.append(dict(group, hooks=missing))
+            foreign = [hook for hook in group.get("hooks", []) if hook.get("command") not in commands]
+            if foreign:
+                merged.setdefault(event, []).append(dict(group, hooks=foreign))
+    existing["hooks"] = merged
     return existing
+
+
+def agent_settings(settings, policy, existing=False):
+    for row in policy["settings"]:
+        if row["platform"] not in ("all", "remote"):
+            continue
+        if existing:
+            if row.get("default_existing"):
+                for key, value in row.get("set", {}).items():
+                    settings.setdefault(key, value)
+            continue
+        for path in row.get("delete", []):
+            parent = settings
+            for key in path[:-1]:
+                parent = parent.get(key, {})
+            parent.pop(path[-1], None)
+        settings.update(row.get("set", {}))
+    if not existing and not settings.get("env"):
+        settings.pop("env", None)
+    return settings
 
 
 def shell_environment(profile):
@@ -1269,31 +1291,24 @@ def install_files(profile, restoring=False, instruction_copies=None, restore_fil
         write(claude_instructions, replace_block(read(claude_instructions), "instructions", "@AGENTS.md"))
     if restoring:
         return
-    # Merge owned hook commands without replacing sign-ins, settings, or foreign hooks.
+    policy = json.loads(read(source / "lib/workgrove/agent-config-policy.json"))
+    # Base hook groups precede foreign groups; existing personal settings remain intact.
     for agent, filename, template in (("claude", "settings.json", "home/.claude/settings.base.json"),
                                       ("codex", "hooks.json", "home/.codex/hooks.base.json")):
         path = Path(profile["agent_roots"][agent]) / filename
         base = json.loads(read(source / template))
-        if path.exists():
-            current = json.loads(read(path))
-        elif agent == "claude":
-            current = dict(base)
-            for key in ("voice", "voiceEnabled", "theme", "statusLine"):
-                current.pop(key, None)
-            current.get("env", {}).pop("CLAUDE_CODE_DISABLE_MOUSE_CLICKS", None)
-            if not current.get("env"):
-                current.pop("env", None)
-        else:
-            current = {}
+        exists = path.exists()
+        current = json.loads(read(path)) if exists else dict(base)
         if agent == "claude":
-            current.setdefault("tui", base["tui"])
+            agent_settings(current, policy, existing=exists)
         merged = merge_hooks(current, base)
         write(path, json.dumps(merged, indent=2) + "\n")
     path = Path(profile["agent_roots"]["codex"]) / "config.toml"
     if not path.exists():
         text = read(source / "home/.codex/config.base.toml")
-        text = "\n".join(line for line in text.splitlines() if not line.startswith("cli_auth_credentials_store"))
-        write(path, text + "\n[tui]\nanimations = false\n")
+        edits = policy["codex_remote"]
+        text = "".join(line for line in text.splitlines(keepends=True) if not line.startswith(edits["remove_prefix"]))
+        write(path, text + edits["append"])
 
 
 @contextlib.contextmanager

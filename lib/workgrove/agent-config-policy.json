@@ -1,0 +1,35 @@
+{
+  "settings": [
+    {
+      "platform": "remote",
+      "when": "always",
+      "delete": [["voice"], ["voiceEnabled"]],
+      "set": {"prefersReducedMotion": true},
+      "reason": "Remote hosts use tmux task rows and do not use local voice input."
+    },
+    {
+      "platform": "all",
+      "when": "without_ui",
+      "delete": [["tui"], ["voice"], ["theme"], ["env", "CLAUDE_CODE_DISABLE_MOUSE_CLICKS"]],
+      "reason": "Personal UI preferences require classic opt-in flags. Portable hosts have no UI opt-in."
+    },
+    {
+      "platform": "remote",
+      "when": "always",
+      "set": {"tui": "fullscreen"},
+      "default_existing": true,
+      "reason": "Remote task rows use fullscreen. Portable updates fill a missing value and preserve personal values."
+    },
+    {
+      "platform": "all",
+      "when": "without_statusline",
+      "delete": [["statusLine"]],
+      "reason": "The status line needs its classic opt-in script. Portable hosts do not install that script."
+    }
+  ],
+  "codex_remote": {
+    "remove_prefix": "cli_auth_credentials_store",
+    "append": "\n[tui]\nanimations = false\n",
+    "reason": "Remote hosts lack the Mac Keychain and need steady tmux task rows."
+  }
+}

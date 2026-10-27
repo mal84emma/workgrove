@@ -132,6 +132,7 @@ workgrove/
 │       ├── options.sh         wt command table, option parser, and command help
 │       ├── automation.sh      installer support for the native notification rule
 │       ├── install-files.sh   installer file replacement and JSON merge helpers
+│       ├── agent-config-policy.json shared agent settings edits for both installers
 │       ├── doctor.sh          Mac and VM contract checks and fixture recording
 │       ├── doctor-sanitize.jq redacts recorded cmux responses
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
@@ -412,15 +413,26 @@ This release changes bare `agent-notify` commands to `~/.local/bin/agent-notify`
 A refresh keeps the old bare commands alongside the new commands.
 After you check the backup, remove the old bare commands from both JSON files to prevent duplicate notifications.
 
-The machine-local copies leave out these keys:
+Both installers read [the agent configuration policy](lib/workgrove/agent-config-policy.json).
+The ordered `settings` rows define deletions and values for new Claude copies.
+The `codex_remote` row defines the Codex edits for classic VMs and portable hosts.
+An empty `env` object is removed after the edits.
 
-- Voice and Keychain credential keys on VMs.
-- `statusLine` without `--with-statusline`.
-- `voice`, `theme`, and `env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS` without `--with-claude-ui`.
-- `tui` on the Mac without `--with-claude-ui`. VMs use `"tui": "fullscreen"` by default.
+| Policy | Mac | Classic VM | Portable host | Reason |
+|---|---|---|---|---|
+| Claude `voice` and `voiceEnabled` | The base values remain, subject to UI opt-in. | Both keys are removed. | Both keys are removed. | Remote hosts do not use local voice input. |
+| Claude `theme`, `voice`, and mouse environment key | They require `--with-claude-ui`. | They require `--with-claude-ui`; voice is always removed. | They are removed from new copies. | These personal preferences require consent. Portable setup has no UI opt-in. |
+| Claude `statusLine` | It requires `--with-statusline`. | It requires `--with-statusline`. | It is removed from new copies. | Portable setup does not install the status line script. |
+| Claude `tui` | It requires `--with-claude-ui`. | It is `fullscreen`. | It defaults to `fullscreen`; existing personal values remain. | Remote agents use tmux task rows. |
+| Claude `prefersReducedMotion` | The base value remains. | It is `true`. | It is `true` in new copies. | Both remote layouts need steady tmux task rows. |
+| Codex credentials and animations | The base file remains unchanged. | The Keychain setting is removed; TUI animations are disabled. | The same edits apply to new copies. | Remote hosts lack the Mac Keychain and need steady task rows. |
+| Existing copies | A normal run keeps them. Refresh replaces settings and merges hooks. | The Mac rule applies. | Full setup merges hooks and supplies missing `tui`. It preserves other settings and Codex trust data. | Portable setup preserves selected personal configuration, including migrated files. |
+| Hook merge | Refresh puts base groups first, then foreign groups. | The Mac rule applies. | Every full setup uses the same rule. Restore-only leaves agent files unchanged. | Base commands use current matchers. Foreign commands retain their group settings. |
 
-VM copies also set Claude's `prefersReducedMotion` and disable the animations of the Codex TUI (terminal user
-interface) to keep tmux task rows steady. Mac copies leave both animations enabled.
+Classic opt-in flags remain sticky across refreshes.
+Portable setup has no equivalent opt-in flags.
+The hook comparison uses command strings across the complete document, including commands in different events.
+When a portable update replaces an old base group, its commands use the new base matchers and options.
 
 ### What a run does
 
