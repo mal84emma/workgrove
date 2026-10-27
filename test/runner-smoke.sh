@@ -53,7 +53,18 @@ scenario_scheduling() {
     done
     check_contains 'the runner reports task time' "$RUNNER_OUT" 'task time:'
     check_contains 'the runner reports suite span' "$RUNNER_OUT" 'suite time:'
-    check_contains 'the runner reports wall time' "$RUNNER_OUT" 'total wall time:'
+    local wall_report=$RUNNER_OUT priority_order
+    cp "$TEST_ROOT/suites with spaces/worker.sh" "$TEST_ROOT/suites with spaces/install-smoke.sh"
+    cp "$TEST_ROOT/suites with spaces/worker.sh" "$TEST_ROOT/suites with spaces/github-guard-smoke.sh"
+    : >"$TEST_ROOT/events"
+    RUNNER_JOBS=1 capture_runner "$TEST_ROOT/suites with spaces/github-guard-smoke.sh" \
+      "$TEST_ROOT/suites with spaces/install-smoke.sh"
+    priority_order=$(awk '$1 == "start" {print $2}' "$TEST_ROOT/events")
+    if [[ $priority_order == $'install-smoke.sh\ngithub-guard-smoke.sh' && $RUNNER_RC == 0 ]]; then
+      check_contains 'the runner reports wall time and starts larger estimates first' "$wall_report" 'total wall time:'
+    else
+      fail "runner task priority order: $priority_order (exit $RUNNER_RC)"
+    fi
   done
   end_scenario
 }
@@ -142,7 +153,14 @@ scenario_discovery() {
   listing=$(env -u ONLY TMPDIR="$TEST_ROOT/not-created" WT_BASH=missing PATH=/nonexistent \
     "$BASH" "$REPO/test/wt-smoke.sh" --list-scenarios)
   check_contains 'the registry retains scenario 11' "$listing" $'scenario_shared_helpers\t11.'
-  assert_eq 'discovery creates no scratch directory' no "$([[ -e $TEST_ROOT/not-created ]] && echo yes || echo no)"
+  local discovery_status=0 suite
+  for suite in remote-new portable ssh-host capacity; do
+    env -u ONLY TMPDIR="$TEST_ROOT/not-created" "$BASH" "$REPO/test/$suite-smoke.sh" --list-scenarios \
+      >"$TEST_ROOT/listing" || discovery_status=1
+    [[ -s $TEST_ROOT/listing ]] || discovery_status=1
+  done
+  [[ ! -e $TEST_ROOT/not-created ]] || discovery_status=1
+  assert_eq 'split discovery lists tasks without fixtures' 0 "$discovery_status"
   listing=$(ONLY='11.*' "$BASH" "$REPO/test/wt-smoke.sh" --list-scenarios)
   assert_eq 'filtered discovery selects one ID' scenario_shared_helpers "${listing%%$'\t'*}"
   rc=0
@@ -155,7 +173,43 @@ scenario_discovery() {
   "$BASH" "$REPO/test/wt-smoke.sh" --scenario unknown >/dev/null 2>&1 || rc=$?
   assert_eq 'an unknown exact scenario fails' 1 "$rc"
   listing=$(cd "$REPO/test" && ONLY='11.*' "$BASH" wt-smoke.sh --list-scenarios)
-  assert_eq 'discovery supports a slash-free invocation' scenario_shared_helpers "${listing%%$'\t'*}"
+  local python_status=0
+  python3 -B - "$REPO/test/python-scenarios.py" "$TEST_ROOT" <<'PYTHON' || python_status=$?
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+helper, root = sys.argv[1], Path(sys.argv[2])
+module = root / "synthetic_test.py"
+events = root / "python-events"
+module.write_text("import unittest\nfrom pathlib import Path\nclass AddedTests(unittest.TestCase):\n" + "".join(
+    " def test_%02d(self):\n  with Path(%r).open('a') as stream: stream.write('%02d\\n')\n" %
+    (index, str(events), index) for index in range(17)))
+environment = dict(os.environ)
+environment.pop("ONLY", None)
+def run(*args, pattern=None):
+    env = dict(environment)
+    if pattern is not None:
+        env["ONLY"] = pattern
+    return subprocess.run([sys.executable, "-B", helper, str(module), *args], env=env,
+                          capture_output=True, text=True)
+listing = run("--list-scenarios")
+assert listing.returncode == 0, listing.stderr
+ids = [line.split("\t")[0] for line in listing.stdout.splitlines()]
+assert len(ids) > 1
+for task in ids:
+    result = run("--scenario", task)
+    assert result.returncode == 0, result.stderr
+assert sorted(events.read_text().splitlines()) == ["%02d" % index for index in range(17)]
+events.unlink()
+result = run(pattern="AddedTests.test_0[13]")
+assert result.returncode == 0, result.stderr
+assert sorted(events.read_text().splitlines()) == ["01", "03"]
+assert run("--list-scenarios", pattern="missing").returncode == 1
+assert run("--scenario", "missing").returncode == 1
+PYTHON
+  assert_eq 'slash-free discovery and exact Python partitions succeed' scenario_shared_helpers:0 "${listing%%$'\t'*}:$python_status"
   listing=$(cd "$REPO/test" && "$BASH" run.sh --help)
   check_contains 'the runner supports a slash-free invocation' "$listing" 'usage:'
   end_scenario
@@ -172,7 +226,11 @@ scenario_selection() {
   RUNNER_RC=0
   RUNNER_OUT=$(env -u ONLY "$BASH" "$REPO/test/wt-smoke.sh" --scenario scenario_guard 2>&1) || RUNNER_RC=$?
   assert_eq 'an exact scenario executes' 0 "$RUNNER_RC"
-  assert_eq 'exact selection cannot broaden to 10 or 11' 1 "$(printf '%s\n' "$RUNNER_OUT" | awk '/^ok   / {n++} END {print n+0}')"
+  local wt_count remote_count remote_rc=0
+  wt_count=$(printf '%s\n' "$RUNNER_OUT" | awk '/^ok   / {n++} END {print n+0}')
+  RUNNER_OUT=$(env -u ONLY "$BASH" "$REPO/test/remote-new-smoke.sh" --scenario scenario_nested_commands 2>&1) || remote_rc=$?
+  remote_count=$(printf '%s\n' "$RUNNER_OUT" | awk '/^ok   / {n++} END {print n+0}')
+  assert_eq 'exact wt and remote selections execute one scenario each' 1:1:0 "$wt_count:$remote_count:$remote_rc"
   end_scenario
 }
 scenario_selection

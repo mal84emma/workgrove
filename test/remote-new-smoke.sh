@@ -3,14 +3,28 @@
 set -euo pipefail
 export WG_POLL_INTERVAL=0
 
-REPO=$(cd "$(dirname "$0")/.." && pwd -P)
+SOURCE_DIR=${BASH_SOURCE[0]%/*}
+[[ $SOURCE_DIR != "${BASH_SOURCE[0]}" ]] || SOURCE_DIR=.
+REPO=$(cd "$SOURCE_DIR/.." && pwd -P)
+# shellcheck source=test/lib.sh
+# shellcheck disable=SC1091
+source "$REPO/test/lib.sh"
+lib_scenario_selection "$@"
+lib_register_scenario scenario_installation_preflight "remote creation preflight refuses the portable installation"
+lib_register_scenario scenario_preflight_version "creation consumes the VM version and preserves preflight failures"
+lib_register_scenario scenario_preflight_recovery "remote preflight and recovery"
+lib_register_scenario scenario_real_vm "the fake VM runs real new, show, and path commands"
+lib_register_scenario scenario_long_attach "every attach form accepts a long real VM report"
+lib_register_scenario scenario_result_versions "VM result compatibility for deferred tasks and open"
+lib_register_scenario scenario_prompt_order "remote briefs preserve explicit and stdin argument order"
+lib_register_scenario scenario_interrupted_setup "interrupted setup retains the brief, agent and model"
+lib_register_scenario scenario_nested_commands "machine requests do not reach setup hooks or nested commands"
+lib_register_scenario scenario_vm_failures "VM failures name the command, host, status, signal, and recovery command"
+lib_scenario_discovery
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/wt-remote-new.XXXXXX")
 TEST_ROOT=$(cd "$TEST_ROOT" && pwd -P)
 case "$TEST_ROOT" in */wt-remote-new.*) ;; *) echo "unsafe test root: $TEST_ROOT" >&2; exit 1 ;; esac
 case "$TEST_ROOT/" in "$HOME/"*) echo "test root is inside HOME" >&2; exit 1 ;; esac
-# shellcheck source=test/lib.sh
-# shellcheck disable=SC1091
-source "$REPO/test/lib.sh"
 # shellcheck disable=SC2034
 KEEP_LABEL='remote task test files'
 trap lib_cleanup EXIT
@@ -218,7 +232,7 @@ run_wt() {
 check() { if [[ "$1" ]]; then pass; else fail "$2; output: $WT_OUT"; fi; }
 
 scenario_installation_preflight() {
-  begin_scenario 'remote creation preflight refuses the portable installation' || return 0
+  begin_scenario "$1" || return 0
   local root="$TEST_ROOT/persistent" request
   mkdir -p "$root"
   git clone -q "$TEST_ROOT/remote/repo" "$root/workgrove"
@@ -238,10 +252,9 @@ scenario_installation_preflight() {
   rm -f "$TEST_ROOT/ssh.log"
   end_scenario
 }
-scenario_installation_preflight
 
 scenario_preflight_version() {
-  begin_scenario 'creation consumes the VM version and preserves preflight failures' || return 0
+  begin_scenario "$1" || return 0
   local mode expected
   CMUX_MODE=down SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
   for mode in normal newer unsupported malformed noisy; do
@@ -280,10 +293,9 @@ scenario_preflight_version() {
   rm -f "$TEST_ROOT/ssh.log"
   end_scenario
 }
-scenario_preflight_version
 
 scenario_preflight_recovery() {
-  begin_scenario 'remote preflight and recovery' || return 0
+  begin_scenario "$1" || return 0
 
   # A local cmux failure must stop creation before the first SSH command.
   CMUX_MODE=down
@@ -533,10 +545,9 @@ TMUX
   CMUX_MODE=alive
   end_scenario
 }
-scenario_preflight_recovery
 
 scenario_real_vm() {
-  begin_scenario 'the fake VM runs real new, show, and path commands' || return 0
+  begin_scenario "$1" || return 0
   CMUX_MODE=down SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
   rm -f "$TEST_ROOT/remote-new"
   invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
@@ -551,10 +562,9 @@ scenario_real_vm() {
   CMUX_MODE=alive
   end_scenario
 }
-scenario_real_vm
 
 scenario_long_attach() {
-  begin_scenario 'every attach form accepts a long real VM report' || return 0
+  begin_scenario "$1" || return 0
   local path="$TEST_ROOT/remote/repo/.worktrees/task" i subject
   CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
   rm -f "$TEST_ROOT/remote-new"
@@ -578,10 +588,9 @@ scenario_long_attach() {
   rm "$TEST_ROOT/remote-new"
   end_scenario
 }
-scenario_long_attach
 
 scenario_result_versions() {
-  begin_scenario 'VM result compatibility for deferred tasks and open' || return 0
+  begin_scenario "$1" || return 0
   local mode
   CMUX_MODE=alive SSH_MODE=ok
   for mode in text legacy facts; do
@@ -610,10 +619,9 @@ scenario_result_versions() {
   REMOTE_OUTPUT_MODE=normal
   end_scenario
 }
-scenario_result_versions
 
 scenario_prompt_order() {
-  begin_scenario 'remote briefs preserve explicit and stdin argument order' || return 0
+  begin_scenario "$1" || return 0
   local order expected args=()
   CMUX_MODE=down SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
   for order in stdin-first stdin-last repeated interleaved; do
@@ -634,10 +642,9 @@ scenario_prompt_order() {
   CMUX_MODE=alive
   end_scenario
 }
-scenario_prompt_order
 
 scenario_interrupted_setup() {
-  begin_scenario 'interrupted setup retains the brief, agent and model' || return 0
+  begin_scenario "$1" || return 0
   SCRATCH_REPO="$TEST_ROOT/local-repo"
   git init -q "$SCRATCH_REPO"
   git -C "$SCRATCH_REPO" config user.name Test
@@ -658,10 +665,9 @@ SETUP
   check "$([[ $(cat "$SCRATCH_REPO/.git/wt/task.prompt") == 'the brief' && $(jq -r .agent "$SCRATCH_REPO/.git/wt/task.json") == codex && $(jq -r .model "$SCRATCH_REPO/.git/wt/task.json") == gpt-5.3-codex ]] && echo yes)" 'interrupted setup lost brief, agent or model choice'
   end_scenario
 }
-scenario_interrupted_setup
 
 scenario_nested_commands() {
-  begin_scenario 'machine requests do not reach setup hooks or nested commands' || return 0
+  begin_scenario "$1" || return 0
   SCRATCH_REPO="$TEST_ROOT/nested-repo"
   git init -q "$SCRATCH_REPO"
   git -C "$SCRATCH_REPO" config user.name Test
@@ -686,10 +692,9 @@ SETUP
   check "$([[ $(printf '%s\n' "$WT_OUT" | grep -c $'^WT_RESULT\t') -eq 1 ]] && echo yes)" 'the parent lost its requested result'
   end_scenario
 }
-scenario_nested_commands
 
 scenario_vm_failures() {
-  begin_scenario 'VM failures name the command, host, status, signal, and recovery command' || return 0
+  begin_scenario "$1" || return 0
   local sub status
   CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
   REMOTE_FAIL_SUB=show REMOTE_FAIL_STATUS=141
@@ -774,6 +779,6 @@ scenario_vm_failures() {
   assert_eq 'successful VM commands add no diagnostic' '' "$WT_STDERR"
   end_scenario
 }
-scenario_vm_failures
 
+lib_run_scenarios
 lib_summary

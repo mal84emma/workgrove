@@ -232,6 +232,7 @@ workgrove/
 │   ├── ssh-host-smoke.sh      offline SSH fragment registration tests
 │   ├── ssh_host_test.py       synthetic registration, trust, and confidentiality fixtures
 │   ├── portable-smoke.sh      portable installation and explicit restoration
+│   ├── python-scenarios.py    discovered unittest groups and test selection
 │   ├── portable_test.py       home replacement, personal state, and shared task recovery
 │   ├── python-runtime-smoke.sh  Python isolation and shared runtime calls
 │   ├── capacity-smoke.sh      effective CPU, RAM, and GPU allocation checks
@@ -521,7 +522,13 @@ shellcheck -x bin/* lib/workgrove/*.sh lib/workgrove/vm/*.sh install.sh test/*.s
 GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash test/run.sh
 ```
 
-By default, the runner limits execution to four workers across suites and intact `wt-smoke.sh` scenarios.
+By default, the runner limits execution to four workers across suites and discovered tasks.
+It splits `wt-smoke.sh` and `remote-new-smoke.sh` into one task per scenario.
+It splits the portable, SSH registration, and capacity Python suites into groups of at most eight tests.
+Python discovery includes new tests without changes to the runner.
+The runner starts tasks with the largest estimated durations first.
+After measuring a new long task, add its duration to `queue_task` in `test/run.sh`.
+The short Python checks within `hosts-smoke.sh` and `docs-smoke.sh` stay with their shell scenarios.
 Set `JOBS=1` for a serial run or `JOBS=8` to allow more workers.
 To select suites, pass their paths: `bash test/run.sh test/wt-smoke.sh`.
 The runner prints each task's complete log, waits for all tasks, and fails if any task failed.
@@ -538,8 +545,11 @@ The runner preserves custom Git selections and uses the original Git if resoluti
 Set `ONLY` to select scenario names with a shell glob pattern. The filter matches substrings too.
 For example, `ONLY='11.*' bash test/wt-smoke.sh` runs scenario 11.
 For a filtered runner invocation, select one suite: `ONLY='11.*' bash test/run.sh test/wt-smoke.sh`.
-A filter that matches no scenario exits nonzero.
-Direct suite invocations remain serial. `wt-smoke.sh --list-scenarios` lists exact scenario IDs and names.
+For the split Python suites, `ONLY` matches `module.Class.test_method` with the same substring glob rule.
+For example, `ONLY='PortableTests.test_restore*' bash test/run.sh test/portable-smoke.sh` selects restore tests.
+A filter that matches no scenario or Python test exits nonzero.
+Direct suite invocations remain serial.
+`--list-scenarios` lists exact task IDs and names for each split suite.
 Use `bash test/wt-smoke.sh --scenario scenario_shared_helpers` to run an exact scenario.
 Set `KEEP=1` to keep scratch files for inspection.
 
