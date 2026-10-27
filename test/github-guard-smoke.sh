@@ -483,7 +483,7 @@ scenario_repository_scope() {
 scenario_repository_scope
 
 scenario_pushes() {
-  begin_scenario 'git push: any branch but the default one, never forced' || return 0
+  begin_scenario 'git push: exclude main, master, and the default branch, never forced' || return 0
   : >"$TEST_ROOT/gh.log"
   expect allow 'git push origin HEAD' 'a push to wt/label-prop in acme/widgets'
   assert_grep 'the default branch is asked of GitHub' "$TEST_ROOT/gh.log" \
@@ -507,7 +507,7 @@ scenario_pushes() {
   FAKE_GH_FAIL=1 expect deny 'git push fork HEAD:wt/label-prop' 'could not query github.com'
   FAKE_GH_FAIL=1 expect deny 'git push renamed HEAD:new-default' 'could not query github.com' # stale local HEAD cannot answer
   expect deny 'git push nulls HEAD:wt/label-prop' 'valid default branch'
-  expect deny 'git push --force origin HEAD' 'force'
+  expect deny 'git push --force origin HEAD' 'to branches other than main, master, and the default branch'
   expect deny 'git push -f origin HEAD' 'force'
   expect deny 'git push --force-with-lease origin HEAD' 'force'
   expect deny 'git push origin +HEAD:wt/label-prop' 'force'

@@ -553,9 +553,138 @@ def check_compatibility(root):
     return errors
 
 
+VARIABLE_NAME = r"(?:WG|WT)_[A-Z0-9_]+"
+
+
+def shell_variable_reads(text):
+    """Find expansions, arithmetic names, and variable-existence tests in shell sources.
+
+    Scan shell command payloads, remote command strings, and script assignments as deferred source.
+    Ignore comments, assignment names, record labels, and heredoc delimiters.
+    """
+    tokens = re.compile(r"('([^']*)'|\"(?:\\.|[^\"\\])*\"|\$\{[^}]*\}|\\.)|(?<![^\s;|&()])#[^\n]*")
+    delimiters = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.|(?<![^\s;|&()])#[^\n]*|[()]")
+
+    def mask_substitutions(value):
+        parts = []
+        cursor = 0
+        while match := re.search(r"\$\((?!\()", value[cursor:]):
+            start = cursor + match.start()
+            depth = 1
+            end = None
+            for delimiter in delimiters.finditer(value, start + 2):
+                if delimiter[0] == "(":
+                    depth += 1
+                elif delimiter[0] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end = delimiter.start()
+                        break
+            if end is None:
+                break
+            parts.extend((value[cursor:start + 2], mask(value[start + 2:end]), ")"))
+            cursor = end + 1
+        return "".join(parts) + value[cursor:]
+
+    def mask(source):
+        def token(match):
+            value = match[0]
+            if not match[1] or value.startswith("\\"):
+                return blank(value)
+            if value.startswith("'"):
+                prefix = source[:match.start()]
+                shell_command = re.search(r"\b(?:sh|bash|zsh|dash|ksh)\s+(?:-\w+\s+)*-[a-zA-Z]*c\s*$", prefix)
+                remote_command = re.search(r"(?:^|[;&|\n])\s*(?:\S*/)?(?:ssh|vm_ssh|remote_sh(?:_raw)?)\b[^;\n]*$", prefix)
+                script_assignment = re.search(r"\b(?:bootstrap|script|source|command|line)\+?=\s*$", prefix)
+                if shell_command or remote_command or script_assignment:
+                    return "'" + mask(value[1:-1]) + "'"
+                if re.fullmatch(VARIABLE_NAME, value[1:-1]):
+                    return value
+                return blank(value)
+            value = re.sub(r"\\.", lambda escaped: blank(escaped[0]), value)
+            return value
+        return mask_substitutions(tokens.sub(token, source))
+
+    source = mask(text)
+    expansion = re.compile(r"\$(?:\{[!#]?)?(" + VARIABLE_NAME + r")\b")
+    for match in expansion.finditer(source):
+        yield text.count("\n", 0, match.start(1)) + 1, match[1]
+    for arithmetic in re.finditer(r"\(\((.*?)\)\)", source, re.S):
+        for match in re.finditer(r"\b" + VARIABLE_NAME + r"\b", arithmetic[1]):
+            yield text.count("\n", 0, arithmetic.start(1) + match.start()) + 1, match[0]
+    for match in re.finditer(r"(?<!\S)-v\s+[\"']?(" + VARIABLE_NAME + r")\b", source):
+        yield text.count("\n", 0, match.start(1)) + 1, match[1]
+    for command in re.finditer(r"\btmux\s+show-environment\b[^\n;|&]*", source):
+        for match in re.finditer(r"\b" + VARIABLE_NAME + r"\b", command[0]):
+            yield text.count("\n", 0, command.start() + match.start()) + 1, match[0]
+
+
+def python_variable_reads(text):
+    """Read literal environment keys and Python names, excluding comments and unrelated strings."""
+    tree = ast.parse(text)
+    os_names = {"os"}
+    environments = set()
+    getters = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            os_names.update(alias.asname or alias.name for alias in node.names if alias.name == "os")
+        elif isinstance(node, ast.ImportFrom) and node.module == "os":
+            environments.update(alias.asname or alias.name for alias in node.names if alias.name == "environ")
+            getters.update(alias.asname or alias.name for alias in node.names if alias.name == "getenv")
+
+    def environment(node):
+        return ((isinstance(node, ast.Name) and node.id in environments)
+                or (isinstance(node, ast.Attribute) and node.attr == "environ"
+                    and isinstance(node.value, ast.Name) and node.value.id in os_names))
+
+    for node in ast.walk(tree):
+        key = None
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and re.fullmatch(VARIABLE_NAME, node.id):
+            yield node.lineno, node.id
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load) and environment(node.value):
+            key = node.slice
+        elif isinstance(node, ast.Call) and node.args:
+            function = node.func
+            if ((isinstance(function, ast.Name) and function.id in getters)
+                    or (isinstance(function, ast.Attribute) and
+                        ((function.attr == "get" and environment(function.value))
+                         or (function.attr == "getenv" and isinstance(function.value, ast.Name)
+                             and function.value.id in os_names)))):
+                key = node.args[0]
+        if isinstance(key, ast.Constant) and isinstance(key.value, str) and re.fullmatch(VARIABLE_NAME, key.value):
+            yield key.lineno, key.value
+
+
+def check_variables(root):
+    """Require each WG_* and WT_* read to have configuration or internal documentation."""
+    readme = (root / "README.md").read_text()
+    section = readme.split("### Environment variables\n", 1)[-1].split("\n### ", 1)[0].split("\n## ", 1)[0]
+    documented = set(re.findall(r"^\| `(" + VARIABLE_NAME + r")` \|", section, re.M))
+    internal = re.search(r"<!-- Internal variables begin\. -->(.*?)<!-- Internal variables end\. -->", section, re.S)
+    if internal:
+        documented.update(re.findall(r"`(" + VARIABLE_NAME + r")`", internal[1]))
+    errors = []
+    paths = subprocess.check_output(["git", "ls-files", "-z", "--", "bin", "lib"], cwd=root)
+    for name in paths.decode().split("\0"):
+        if not name:
+            continue
+        path = root / name
+        text = path.read_text()
+        if path.suffix == ".py" or re.match(r"#![^\n]*\bpython[0-9.]*\b", text):
+            reads = python_variable_reads(text)
+        elif path.suffix == ".sh" or re.match(r"#![^\n]*\b(?:ba|z|da|k)?sh\b", text):
+            reads = shell_variable_reads(text)
+        else:
+            continue
+        for line, variable in sorted(set(reads)):
+            if variable not in documented:
+                errors.append(diagnostic(name, line, f"undocumented variable read: {variable}"))
+    return errors
+
+
 def main():
     checks = {"layout": check_layout, "citations": check_citations, "links": check_links,
-              "compatibility": check_compatibility}
+              "compatibility": check_compatibility, "variables": check_variables}
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("check", choices=checks)

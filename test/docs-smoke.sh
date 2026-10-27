@@ -38,6 +38,12 @@ scenario_regressions() {
   if ((status == 0)); then pass; else fail "checker regressions (exit $status): $output"; fi
   end_scenario
 }
+scenario_variables() {
+  begin_scenario 'WG and WT variable reads have documentation' || return 0
+  check_docs variables
+  end_scenario
+}
+scenario_variables
 scenario_regressions
 scenario_compatibility
 scenario_layout

@@ -242,7 +242,7 @@ ISSUE_CREATE_FORM="approved form: gh issue create --title '…' --body '…' | -
 ISSUE_EDIT_FORM="approved form: gh issue edit <number> [--title '…'] [--body '…' | --body-file \
 <file>] [--add-label|--remove-label|--add-assignee|--remove-assignee|--add-project|--remove-project|--milestone \
 …] [--remove-milestone], on an issue this login opened"
-PUSH_FORM="approved form: git push [-u] <remote> HEAD[:<branch>], to any branch but the default one"
+PUSH_FORM="approved form: git push [-u] <remote> HEAD[:<branch>], to branches other than main, master, and the default branch"
 COMMENT_FORM="approved form: gh pr comment [<number>] --body '…' | --body-file <file> [--edit-last]"
 WT_PR_FORM='approved form: wt pr <name> [--draft], from inside this repository'
 PR_READ_FORM='gh pr view|diff|checks|list|status'
