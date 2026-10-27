@@ -36,7 +36,11 @@ cat > "$TEST_ROOT/bin/ssh" <<'SSH'
 case "$*" in
   *' path task -r /vm/repos/repo')
     if [ -n "${REMOTE_PATH_RESULT:-}" ]; then printf '%s\n' "$REMOTE_PATH_RESULT" >&2; exit 1; fi
-    [ "$REMOTE_EXISTS" = 1 ] && { echo /vm/repos/repo/.worktrees/task; exit 0; }
+    if [ "$REMOTE_EXISTS" = 1 ]; then
+      printf 'WT_RESULT\t%s\n' '{"version":1,"command":"path","status":"found","name":"task","repo":"/vm/repos/repo","session":"","state":"","path":"/vm/repos/repo/.worktrees/task"}'
+      exit 0
+    fi
+    printf 'WT_RESULT\t%s\n' '{"version":1,"command":"path","status":"missing","name":"task","repo":"/vm/repos/repo","session":"","state":""}' >&2
     echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
     exit 1 ;;
 esac
@@ -367,6 +371,11 @@ scenario_native_attach_close
 scenario_close_record_controls() {
   begin_scenario 'close checks reject field injection in unknown record strings' || return 0
   local extra out malicious
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  out=$(REMOTE_PATH_RESULT="wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" hook)
+  assert_eq 'text-only absence retains the notification' '' "$out"
+  lacks "$CMUX_LOG" 'workspace close'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'run wt -H test-vm update'
   for extra in '{"extra":"ok\u0000status\u0000missing"}' '{"extra\u0000status":"missing"}'; do
     record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
     malicious=$(WG_MACHINE_RESULT=1 wt_result path found task /vm/repos/repo '' '' "$extra")

@@ -61,11 +61,10 @@ Both commands accept no arguments.
 | `wt_protocol` | Integer or null | The VM's reported protocol number, or null when unavailable. |
 | `wt_capabilities` | Array of strings | The VM's reported capabilities, or an empty array when absent, malformed, or unavailable. |
 
-An older VM without `wt version` can still have available hardware information.
+A VM without a valid version report can still have available hardware information.
 Its version fields are null. An unreachable VM also has null version fields.
-Version readers require exactly one JSON object with both correctly typed fields.
-Malformed required fields produce null commit and protocol values.
-An absent or malformed capability list does not invalidate correctly typed commit and protocol fields.
+Version readers require exactly one JSON object with correctly typed `commit`, `protocol`, and `capabilities` fields.
+Missing or malformed required fields produce null inventory version values and an empty capability array.
 Readers retain string capability arrays, including unknown names, and ignore other extra fields.
 Older Macs retain only `commit` and `protocol`, so additional keys do not prevent validation.
 The Mac supplies the same validator to both VM probes.
@@ -85,8 +84,8 @@ These objects are separate lines among ordinary output, rather than one JSON doc
 
 Remote updates report both sides before and after the remote update succeeds.
 The VM's update can also print its own `local` records.
-Older VMs without `wt version` have null commit and protocol values.
-The Mac still runs their update command.
+An invalid initial VM version report stops the update before its update command runs.
+Valid version reports require a string capability array.
 Failed or canceled updates can stop before the `after` records.
 A final reporting failure preserves the successful update status and prints a diagnostic.
 The VM's `after` record then has null commit and protocol values.

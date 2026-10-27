@@ -357,9 +357,8 @@ exit "$rc"
 WT
   chmod +x "$HOME/.local/bin/wt"
   DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=text invoke -H test-vm doctor
-  assert_eq 'legacy text doctor passes' 0 "$STATUS"
-  DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=text TUI_CODEX_STATUS=absent invoke -H test-vm doctor
-  assert_eq 'legacy text doctor fails for a failed check' 1 "$STATUS"
+  assert_eq 'text-only doctor is rejected' 1 "$STATUS"
+  assert_grep 'text-only doctor names the update command' "$TEST_ROOT/output" 'Fix: wt -H test-vm update'
   DOCTOR_TEST_REPO=$REPO DOCTOR_OUTPUT_MODE=reword invoke -H test-vm doctor
   assert_eq 'record passes despite reworded VM check text' 0 "$STATUS"
   assert_grep 'the reworded check remains visible' "$TEST_ROOT/output" 'cmux-tui is available'
@@ -387,7 +386,7 @@ WT
   rm "$HOME/.local/bin/wt"
   cat >"$HOME/.local/bin/wt" <<'WT'
 #!/usr/bin/env bash
-if [[ $1 == version ]]; then printf '{"commit":"fixture","protocol":3}\n'
+if [[ $1 == version ]]; then printf '{"commit":"fixture","protocol":3,"capabilities":[]}\n'
 else exec bash "$DOCTOR_TEST_REPO/bin/wt" "$@"; fi
 WT
   chmod +x "$HOME/.local/bin/wt"
@@ -396,20 +395,20 @@ WT
   assert_grep 'a newer VM names the Mac repair' "$TEST_ROOT/output" 'Fix: wt update'
   cat >"$HOME/.local/bin/wt" <<'WT'
 #!/usr/bin/env bash
-if [[ $1 == version ]]; then printf '{"commit":"fixture","protocol":1}\n'
+if [[ $1 == version ]]; then printf '{"commit":"fixture","protocol":1,"capabilities":[]}\n'
 else printf 'workgrove: ready\n'; fi
 WT
   invoke -H test-vm doctor
   assert_eq 'an older portable doctor cannot certify cmux contracts' 1 "$STATUS"
-  assert_grep 'a portable-only VM needs its contract checker updated' "$TEST_ROOT/output" 'FAIL VM doctor unavailable'
+  assert_grep 'a portable-only VM needs its contract checker updated' "$TEST_ROOT/output" 'FAIL VM doctor result record missing'
   cat >"$HOME/.local/bin/wt" <<'WT'
 #!/usr/bin/env bash
-if [[ $1 == version ]]; then printf '{"commit":"fixture","protocol":1}\n'
+if [[ $1 == version ]]; then printf '{"commit":"fixture","protocol":1,"capabilities":[]}\n'
 else printf 'wt: unknown command doctor\n' >&2; exit 1; fi
 WT
   invoke -H test-vm doctor
   assert_eq 'an older VM without doctor fails' 1 "$STATUS"
-  assert_grep 'the missing VM command is named' "$TEST_ROOT/output" 'FAIL VM doctor unavailable'
+  assert_grep 'the missing VM command is named' "$TEST_ROOT/output" 'FAIL VM doctor result record missing'
   assert_grep 'the missing VM command names its repair' "$TEST_ROOT/output" 'Fix: wt -H test-vm update'
   rm "$HOME/.local/bin/wt"
   invoke -H test-vm doctor

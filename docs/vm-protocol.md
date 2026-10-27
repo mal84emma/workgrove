@@ -40,7 +40,7 @@ The VM's login shell does not parse the bootstrap's script syntax.
 | `show` | `show` with the supplied options. | The Mac forwards output and exit status. It does not parse the user's report. | `bin/wt`: `cmd_host`; `remote.sh`: `remote_wt`. |
 | `rm` or `remove` | An agent probe, then `rm` with the supplied removal options. | The Mac requires an absent or idle agent and successful removal before closing its row and stopping the session. | `remote.sh`: `agent_on_vm`, `host_rm`. |
 | `path` | `path <name> -r <repo>`. | The Mac forwards the ordinary path and exit status. | `bin/wt`: `cmd_host`; `remote.sh`: `remote_wt`. |
-| `open` | `path <name> -r <repo>` with a machine-result request. | The recorded `path` must pass `hook_safe_path`. Older records and text-only VMs use stdout as the path. | `remote.sh`: `host_open`. |
+| `open` | `path <name> -r <repo>` with a machine-result request. | The required recorded `path` must pass `hook_safe_path`. Missing records or paths stop the operation. | `remote.sh`: `host_open`. |
 | `list` or `ls` | `list`, with `--all` added when `-r` is absent. | The Mac forwards the table or requested JSON. | `remote.sh`: `host_list`. |
 | `repos` | `repos` with the supplied options. A terminal receives `--table` unless a mode was requested. | The Mac forwards repository lookup, table, or porcelain output. | `remote.sh`: `host_repos`. |
 | Contract `doctor` | `doctor`, followed by `version`. | The Mac prints checks, recognizes SSH failure, and compares the reported protocol with `WT_PROTOCOL`. Remote `--record` is unsupported. | [doctor.sh](../lib/workgrove/doctor.sh): `host_doctor`. |
@@ -64,8 +64,8 @@ Without supported Python, preflight refuses a detected portable profile; a legac
 The environment doctor returns `root_discovery` with its readiness report; the inventory probe omits it.
 Contract doctor retains its separate versioned result checks.
 
-`host_attach` uses the boolean facts when the VM supplies them.
-`state` remains display text. Older VMs use marked wording fallbacks for the values `none`, `shell only`, `shell only, detached`, `agent running`, and `agent running, detached`.
+`host_attach` requires the `agent`, `attached`, and `started` boolean facts.
+`state` remains display text and cannot replace missing facts.
 A task with no session and no started marker can start for the first time.
 A lost agent requires explicit `--restart-agent`; explicit `--reattach` sends attachment input only after a shell-prompt check.
 
@@ -195,8 +195,8 @@ These additional fields keep protocol version 1.
 It displays the VM text and keeps the Mac protocol comparison separate.
 `vm_wt_failure` reports doctor failures through `doctor_result`.
 
-For older VMs without a record, its doctor policy keeps the marked `WT_COMPAT` text checks.
-Malformed or unsupported records cannot use that fallback.
+A missing doctor record fails the check and names `wt -H <host> update`.
+Malformed records also fail the check.
 An unsupported record recommends updating the Mac.
 Older Macs continue to read the unchanged VM check lines.
 
@@ -217,19 +217,17 @@ Additive fields retain the version; a changed field meaning requires a new versi
 
 The parser returns 1 for malformed records, 2 for absent records, and 3 for unsupported versions.
 These are parser statuses, not the remote command's exit status.
-`vm_result` uses legacy identity text only when the record is absent.
-Version 1 records that omit newer facts retain marked compatibility fallbacks.
-They reject malformed or unsupported records.
+`vm_result` requires a result record and rejects malformed or unsupported records.
+Show results require all three boolean facts; successful path results require a nonempty `path`.
+The general parser keeps these fields optional for other readers that use additive protocol fields.
+Missing records or required fields name `wt -H <host> update` and stop the operation.
 The unsupported-version path prints a Mac update hint.
+The close handler requires a matching missing record and remote exit status 1.
 
-`vm_result` reads legacy `created`, `repo:`, and `session:` lines, including the parenthesized state.
-For older VMs, `host_attach` sends a compatibility script to check the started marker.
-The close handler accepts the legacy missing-worktree text only with remote exit status 1.
-
-`wt_version` in `common.sh` emits `commit` and `protocol`.
+`wt_version` in `common.sh` emits `commit`, `protocol`, and `capabilities`.
 `commit` is the short repository commit or `unknown` when no repository is available.
-`wt_read_version` in [version.sh](../lib/workgrove/version.sh) requires one object, a nonempty commit string, and a positive integer protocol.
-`host_version` and `wt_vm_version` use null fields when an older VM cannot report a valid version.
+`wt_read_version` in [version.sh](../lib/workgrove/version.sh) requires one object, a nonempty commit string, a positive integer protocol, and a string capability array.
+`host_version` and `wt_vm_version` fail when a VM cannot report a valid version.
 `host_version` treats SSH failure separately and returns failure.
 `doctor_vm` checks VM tools; `host_doctor` requires an equal Mac and VM protocol.
 
@@ -270,7 +268,7 @@ The [Security section](../README.md#every-host-that-you-open-a-cmux-ssh-row-to-i
 The close handler requires the requesting row to match the task's title, repository, and host.
 It calls `path` with machine results and captures both output streams.
 Closure requires remote status 1, record status `missing`, and matching `name` and `repo`.
-An absent legacy record permits the missing-worktree text fallback; a malformed record or SSH failure never permits closure.
+An absent, malformed, or unsupported record never permits closure. SSH failure also keeps the row.
 The handler closes the row before killing the session, so a reconnect cannot recreate that session.
 
 `event_handled` in `bin/cmux-hook` dismisses successful open and attach requests by notification ID.
@@ -322,7 +320,8 @@ Without parser arguments, it supplies the existing command summary at the `vm_wt
 With parser arguments, it combines the SSH status, parser status, and record status into the caller's message and exit status.
 A caller supplies its policy, such as `new`, `show`, `path`, or `raw`, in one call.
 Creation keeps its inspection advice and preserves status 255 after a disconnection.
-`host_version` warns and returns 1 for status 255, so a later version query can retain its fallback.
+`host_version` warns and returns 1 for status 255.
+After a successful update, a failed version query retains the documented null reporting values.
 The hook uses the same message definitions but writes failures to its log.
 
 The hook runs managed SSH registration validation and SSH under the same absolute deadline through `capped`.
@@ -338,7 +337,6 @@ For unknown or reserved signal numbers, it includes `unknown signal` and the num
 The VM's own standard error also reaches the user.
 For `vm_result` calls, a failed `show` includes the inspection command used by attach recovery.
 A failed `new` includes a `list` command to inspect possible creation before retrying.
-If the VM rejects the model option, the line also includes the existing update command.
 Status 255 keeps the existing SSH failure handling below and does not add this summary.
 
 | Status | Boundary and meaning | File and reader |
@@ -378,9 +376,10 @@ Issue #116 can retain those shape tests.
 |---|---|---|---|
 | `lib/workgrove/cmux.sh`: `cmux_rows_load`, bare row arrays | Outside A. Row shape normalization cannot replace failed window enumeration. | Run the row shape and window failure tests in `test/lib-smoke.sh`. | Keep both row shapes and their tests. |
 
-Group B covers older installed VM commands and result records.
-The doctor-record marker belongs here because installed VM code supplies that record.
-The model-option marker belongs here even though it moved to `common.sh`.
+Group B covered older installed VM commands and result records.
+Issue #120 removed its markers and fallbacks after both supported VMs reported every required capability.
+`agent_on_vm` remains intended design: the Mac supplies its checked probe immediately before removal or restart.
+The probe refuses unreadable agent state, independently of installed VM code.
 Group C covers protocol 1 emission for older Macs.
 Group D stays because a global migration cannot safely recover missing hashes, original bases, or manually changed row titles.
 Group E stays while Ubuntu 22.04 and its Git 2.34 are supported.
@@ -391,15 +390,7 @@ Setup uploads the Mac's Python source, so the installed VM version cannot measur
 |---|---|---|---|---|---|
 | `lib/workgrove/cmux.sh` | `ROW_JQ` | D | Old rows have repository-prefixed titles. | Compare open row titles with sidecar titles on each machine. | Keep. Remove the old-title match only after all old rows close. |
 | `lib/workgrove/common.sh` | `wt_result` | C | Macs request protocol 1. | Identify the first Mac release that requests protocol 2. | After that release, remove version 1 emission under the new protocol policy. |
-| `lib/workgrove/common.sh` | `vm_wt_failure` | B | VM doctor omits result records. | Run the group B command; require `doctor-records`. | In #120, remove the text doctor checks. |
-| `lib/workgrove/common.sh` | `vm_result` | B | VM new rejects the model option. | Run the group B command; require `model-option`. | In #120, remove the old-option diagnostic match. |
-| `lib/workgrove/common.sh` | `vm_result` | B | VM commands emit text without result records. | Run the group B command; require `result-records`. | In #120, remove text result decoding. |
-| `lib/workgrove/common.sh` | `vm_result` | B | VM path records omit the path field. | Run the group B command; require `path-field`. | In #120, require the recorded path. |
 | `lib/workgrove/portable.py` | `confirm_volume_request` | F | Selected revisions emit untagged trust requests. | Check selected source revisions for the `trust-request` prefix. | Keep until supported sources all tag requests; then remove untagged decoding. |
-| `lib/workgrove/recovery.sh` | `host_attach` | B | VM show omits agent and attached booleans. | Run the group B command; require `show-facts`. | In #120, remove state wording checks. |
-| `lib/workgrove/recovery.sh` | `host_attach` | B | VM show omits the started boolean. | Run the group B command; require `show-facts`. | In #120, remove the remote started-file probe. |
-| `lib/workgrove/remote.sh` | `agent_on_vm` | B | VM commands use an older agent probe. | Run the group B command; require `agent-probe`. | In #120, remove the supplied probe after preserving removal safety. |
-| `lib/workgrove/remote.sh` | `host_version` | B | VM has no usable version command. | Run the group B command; require a valid capability report. | In #120, remove the unsupported-command fallback. |
 | `lib/workgrove/safety.sh` | `changed_includes` | D | Sidecars store include paths without hashes. | Inspect `includes` in each repository's sidecars for entries without SHA-256 hashes. | Keep. Do not invent historical hashes; remove only after old tasks end. |
 | `lib/workgrove/safety.sh` | `unexplained_dirt` | D | Sidecars omit setup output. | Inspect each sidecar for a missing `setup` key. | Keep. Remove only after tasks with missing setup records end. |
 | `lib/workgrove/safety.sh` | `branch_landed` | E | Git lacks merge-tree support from 2.38. | Check supported operating systems and their Git versions. | Keep while Ubuntu 22.04 is supported. Then remove the read-tree branch. |
@@ -408,8 +399,6 @@ Setup uploads the Mac's Python source, so the installed VM version cannot measur
 | `lib/workgrove/task.sh` | `WT_META_FILTER` | D | Sidecars store includes and setup as strings. | Inspect the types of `includes` and `setup` in each sidecar. | Keep. Remove string decoding only after old tasks end. |
 | `lib/workgrove/task.sh` | `task_title` | D | Sidecars retain repository-prefixed titles. | Compare each sidecar's `title` with its repository and task name. | Keep. Remove conversion only after old tasks and rows end. |
 | `lib/workgrove/task.sh` | `wt_status` | D | Sidecars store a literal HEAD base. | Inspect each sidecar's `base` for `HEAD`. | Keep. Remove the guard with the matching removal guard in `safety.sh`. |
-| `lib/workgrove/version.sh` | `wt_read_version` | B | Older version reports omit capabilities. | Run the group B command; require a valid capability report. | In #120, require the capability array. |
-| `lib/workgrove/version.sh` | `wt_vm_version` | B | VM has no usable version command. | Run the group B command; require a valid capability report. | In #120, remove the unsupported-command fallback. |
 
 ### Measure group B
 
@@ -417,7 +406,8 @@ Setup uploads the Mac's Python source, so the installed VM version cannot measur
 `wt hosts --json` preserves this array as `wt_capabilities` on every host record.
 Missing, malformed, and unreachable reports produce an empty capability array.
 Older version readers ignore the extra key and keep validating commit and protocol.
-A new Mac accepts older reports without capabilities and retains the existing fallbacks.
+The Mac requires a capability array in valid version reports.
+Missing or malformed reports cannot certify an installed version.
 Capabilities do not increase the result protocol number.
 
 | Capability | Installed VM behavior |
@@ -429,7 +419,7 @@ Capabilities do not increase the result protocol number.
 | `agent-probe` | Task commands use the checked agent probe. |
 | `doctor-records` | Doctor emits its result record and checks array. |
 
-Run this command on the Mac to list configured VMs that still need group B:
+Group B is retired. Run this command on the Mac to identify configured VMs that do not meet its requirements:
 
 ```bash
 wt hosts --json | jq -r '.[] | select(
@@ -438,5 +428,6 @@ wt hosts --json | jq -r '.[] | select(
 ```
 
 Unavailable VMs remain in this list because their capabilities are unknown.
-No output permits #120 only after the inventory includes every VM that must remain supported.
+No output establishes coverage only when the inventory includes every supported VM.
+Aliases outside the explicitly supported VM set do not expand that set.
 The command does not measure group F's selected source revisions or group D's stored sidecars and open rows.

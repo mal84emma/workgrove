@@ -152,8 +152,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   fi
 }
 
-# WT_COMPAT: Remove when every VM uses the current agent probe.
-agent_on_vm() { # agent_on_vm <host> <session> — use the Mac's checked probe, even with an older wt on the VM.
+agent_on_vm() { # agent_on_vm <host> <session> — use the Mac's checked probe before removal or restart.
   local script
   # shellcheck disable=SC2016  # $1 belongs to the remote Bash command.
   script="$(declare -f tmux_agent)"$'\n''tmux_agent "$1"'
@@ -230,12 +229,12 @@ host_version() {
   local output rc=0
   output=$(vm_wt "$1" version) || rc=$?
   vm_wt_failure "$1" version "$rc" "" 0 || return $?
-  if [[ $rc == 0 ]] && output=$(wt_read_version <<<"$output" 2>/dev/null); then
-    printf '%s\n' "$output"
-  else
-    # WT_COMPAT: Remove the unsupported-command fallback when every VM supports wt version.
-    printf '{"commit":null,"protocol":null}\n'
-  fi
+  [[ $rc == 0 ]] || return "$rc"
+  output=$(wt_read_version <<<"$output" 2>/dev/null) || {
+    warn "invalid version report from $1; run wt -H $(shell_join "$1") update"
+    return 1
+  }
+  printf '%s\n' "$output"
 }
 
 host_update() {

@@ -482,24 +482,26 @@ The VM emits the lower of the requested version and its own version.
 Protocol 1 VMs accept every positive integer request and emit version 1.
 Readers require exactly one record with a supported version, the expected command, and string fields.
 Readers keep unknown scalar keys. New fields are additive.
-Older records can omit the boolean facts and `path`; marked compatibility fallbacks handle those records.
+Task recovery requires the `agent`, `attached`, and `started` boolean facts.
+Successful path lookups for opening VS Code require a nonempty recorded `path`.
 The shared result reader removes record lines before displaying VM output.
 A new version number means that a field changed its meaning.
 An unsupported result version stops creation or recovery and names `wt update` on the Mac.
-The object must have unique keys and scalar values, with no nested objects or arrays.
+The object must have unique keys and scalar values, except for the doctor result's structured `checks` array.
 Keys and string values must not contain control characters.
-Readers use the text format only when no record is present.
+A missing record or required field stops the operation and names `wt -H <host> update`.
 An invalid record causes creation or recovery to stop and keeps the row during a close check.
 
-`wt version` and `wt -H <vm> version` print JSON with `commit` and `protocol` fields.
+`wt version` and `wt -H <vm> version` print JSON with `commit`, `protocol`, and `capabilities` fields.
 The commit is the short repository commit, or `unknown` for a seeded copy without `.git`.
 Host probes and creation preflight checks call the VM's `wt version`.
-`wt hosts --json` includes the VM's `wt_commit` and `wt_protocol`, or null when unavailable.
+`wt hosts --json` includes the VM's `wt_commit`, `wt_protocol`, and `wt_capabilities`.
+Invalid or unavailable reports produce null version fields and an empty capability array.
 
 Updates print JSON records before and after the pull, alongside their existing output.
 Each record has `event: "wt_update"`, `stage`, `side`, `commit`, and `protocol`.
 Local updates use side `local`; remote updates report sides `Mac` and `VM`.
-Stages are `before` and `after`. Older VMs without `wt version` have null values.
+Stages are `before` and `after`. An invalid initial VM version report stops the update.
 A failed update can stop before the `after` records.
 A failed final version query reports null VM values and preserves the successful update status.
 See [the JSON contracts](docs/wt-json.md) for details.
@@ -508,7 +510,7 @@ The close check also requires exit status `1`, status `missing`, and the request
 A failed worktree listing cannot produce a missing record.
 
 The environment request avoids an unsupported flag and requires no creation retry.
-VMs without result records ignore the request and supply the text fallback.
+Supported VMs must provide result records when requested.
 Older Macs that send `WT_MACHINE=1` continue to receive protocol 1 records.
 Macs that send no request continue to receive ordinary output.
 An ordinary `wt path` therefore still prints only its path.
