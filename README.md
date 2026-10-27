@@ -1012,9 +1012,20 @@ approve. For a rule that must hold, use what the documentation points to instead
 
 ### `github-guard` lets agents work on pull requests and issues
 
-[`bin/github-guard`](bin/github-guard) is a `PreToolUse` hook. It sees every Bash command before the
-permission lists do, and it decides the same way on every machine.
+[`bin/github-guard`](bin/github-guard) checks Bash commands through `PreToolUse` in Claude and Codex.
+Claude runs it before the permission lists. Codex 0.164.0 supports its deny response before shell execution.
+Codex requires hook review and trust through `/hooks` before this hook runs.
+The setup instructions use the upstream Codex installer without a pinned version.
+This support check applies to 0.164.0; other versions need their own verification.
+The guard uses the same policy for both providers.
 An array defines the approved API writes. The guard generates its API help and command pattern from the array and checker forms.
+
+**Codex decisions.** `github-guard --codex` returns denials and exits with status 0.
+For permitted commands, it returns no output and exits with status 0.
+Codex then applies its own sandbox and approval controls.
+This avoids an unsupported bare `allow` response in 0.164.0.
+Claude still receives its existing `allow` and `deny` responses.
+See the [Codex hooks reference](https://learn.chatgpt.com/docs/hooks) for the current interface.
 
 **Why a hook replaced the deny rules.** The lists used to deny `Bash(gh api *)`, `Bash(git push *)`,
 `Bash(gh pr create *)` and `Bash(wt pr *)` outright. That also blocked reading a pull request's review
@@ -1048,7 +1059,8 @@ names the approved form, so an agent rewrites the command instead of waiting for
 request is one of the denied actions, because an approval from your login counts toward branch protection.
 
 Exception: the guard does not decide closing, reopening, deleting or transferring an issue. It leaves these
-actions to the permission lists, so they show a prompt.
+actions to the provider's permission controls. Claude shows a prompt or uses its auto mode classifier.
+Codex applies its own sandbox and approvals.
 
 **What it requires of a command.**
 
@@ -1068,19 +1080,28 @@ actions to the permission lists, so they show a prompt.
 - It answers only a command that *starts* with one of the commands that it governs. It looks only at the
   start because that is the only place where it can find one without a shell parser. A later `git push`
   could be a line of a commit message. So `npm test && git push --force origin main` and `env git push …` go
-  to the permission lists, which no longer deny them. Outside auto mode, they prompt. In auto mode, they go
-  to the auto mode classifier.
+  to the provider's permission controls. Claude's lists no longer deny them.
+  Outside auto mode, Claude prompts. In auto mode, Claude uses its classifier.
+  Codex applies its own sandbox and approvals.
 - **Warning:** On a machine whose `settings.json` still allows `Bash(git *)`, these commands run, including
   `npm test && git push --force origin main`.
 - It does not check a thread resolution against the repository, because a thread id does not say which
   repository the thread belongs to.
-- It reads `GH_REPO` and `GH_HOST` from the environment that Claude Code runs hooks with. So it would not
+- It reads `GH_REPO` and `GH_HOST` from the environment that the provider runs hooks with. So it would not
   see a value that is set only inside the Bash tool's own shell.
 - On a machine with Git's `push.followTags=true`, an approved branch push can still send annotated tags with
   it. The guard does not inspect that setting.
 - The default-branch check fails closed when `gh` cannot reach GitHub, even if Git credentials would permit
   a push. The denial suggests that you check `gh` authentication and network access. The guard does not
   make a second connection request.
+- Codex reports shell tools, including nested code-mode `exec_command` calls, as `Bash` with `tool_input.command`.
+  Later `write_stdin` input to an existing process receives no new `PreToolUse` check.
+  The Bash matcher does not cover file tools, MCP tools, hosted tools, or specialized paths that skip hooks.
+- Codex 0.164.0 omits `exec_command.workdir` from the hook input.
+  The guard checks the hook's `cwd`, which can differ from the command's working directory.
+- Disabled or untrusted hooks do not run. Codex hook errors, timeouts, and malformed responses can leave the command running.
+  Missing dependencies or invalid input make this guard give no answer in either provider.
+  The GitHub write restrictions still apply when the hook gives no answer or does not run.
 - An agent can still write whatever the machine's `gh` login and Git credentials allow. The guard catches
   the ordinary spellings of a force push or of a push to the default branch. Branch protection on GitHub
   and a token scoped to the repositories that you work on are the controls that hold.
@@ -1092,8 +1113,8 @@ Three files connect events to scripts:
 - `settings.base.json` connects six Claude events (`UserPromptSubmit`, `PermissionRequest`, `Notification`,
   `Stop`, `StopFailure`, `SessionEnd`) to `agent-notify`. It also connects `PreToolUse` on every Bash
   command to `github-guard`.
-- `hooks.base.json` connects Codex's prompt, permission, completion, interruption and session-end events to
-  scripts.
+- `hooks.base.json` connects Codex's five lifecycle events to `agent-notify`.
+  It also connects `PreToolUse` on Bash commands to `github-guard --codex`.
 - `~/.cmuxterm/automations.json` connects `notification.created` events to `cmux-hook --event` through the `wt-native-relay` rule.
 
 These scripts are symlinks into this repository's `bin/`, and they run as you. So `wt update` is a

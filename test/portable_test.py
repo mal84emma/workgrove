@@ -1436,6 +1436,9 @@ sys.exit(module["main"]())
                 {"type": "command", "command": command, "timeout": 99}]}],
                 "CustomEvent": [{"hooks": [{"type": "command", "command": "echo custom"}]}],
                 "OtherEvent": [{"hooks": [{"type": "command", "command": command}]}]}
+            groups["PreToolUse"] = [{"matcher": "foreign-tool", "timeout": 42, "hooks": [
+                base["hooks"]["PreToolUse"][0]["hooks"][0],
+                {"type": "command", "command": "foreign-policy"}]}]
             for home in (classic, self.home):
                 path = home / ("." + agent) / filename
                 data = json.loads(path.read_text())
@@ -1444,6 +1447,13 @@ sys.exit(module["main"]())
         self.classic_config("Linux", "--refresh-config")
         self.install()
         self.assert_config_parity(classic)
+        for agent, filename in (("claude", "settings.json"), ("codex", "hooks.json")):
+            actual = json.loads((self.home / ("." + agent) / filename).read_text())
+            template = "settings.base.json" if agent == "claude" else "hooks.base.json"
+            base = json.loads((self.source / "home" / ("." + agent) / template).read_text())
+            self.assertEqual(actual["hooks"]["PreToolUse"], base["hooks"]["PreToolUse"] + [
+                {"matcher": "foreign-tool", "timeout": 42, "hooks": [
+                    {"type": "command", "command": "foreign-policy"}]}])
         before = [(self.home / name).read_bytes() for name in (".claude/settings.json", ".codex/hooks.json")]
         self.install()
         self.assertEqual(before, [(self.home / name).read_bytes()

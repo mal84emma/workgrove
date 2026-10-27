@@ -3,9 +3,9 @@
 #   bash test/github-guard-smoke.sh                       (KEEP=1 leaves the scratch repo behind)
 #   GUARD_BASH=/bin/bash bash test/github-guard-smoke.sh  (/bin/bash 3.2 starts the guard, which moves to bash 5)
 #
-# The guard runs before every Bash command that an agent sends. Bash(gh api *), Bash(git push *),
-# Bash(gh pr create *) and Bash(wt pr *) left the deny list. Since then, the guard is the only thing that
-# denies any of them. So this suite asserts both directions. First, everything that the guard approves is
+# The guard checks Bash hook payloads from both providers. Claude's deny list no longer contains
+# Bash(gh api *), Bash(git push *), Bash(gh pr create *) or Bash(wt pr *).
+# This suite asserts both directions. First, everything that the guard approves is
 # in fact a read, or a listed kind of write to this repository's pull requests or issues. Second, a command
 # that only mentions one of those four commands gets no answer.
 # `gh` is a stub: `gh api <endpoint>` answers from fixtures through the guard's own --jq filter, so the
@@ -26,6 +26,7 @@ source "$REPO/test/lib.sh"
 KEEP_LABEL='guard test files'
 trap lib_cleanup EXIT
 GUARD=${GUARD:-$REPO/bin/github-guard}   # overridable, so a mutated copy can be run against the same cases
+GUARD_ARGS=()
 
 # The user's own git config (url.<base>.insteadOf) could rewrite a github.com URL that the guard reads.
 export GIT_CONFIG_GLOBAL="$TEST_ROOT/gitconfig" GIT_CONFIG_NOSYSTEM=1
@@ -34,6 +35,9 @@ unset GH_REPO GH_HOST   # the guard reads both, so the runner's own values would
 mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/home" "$TEST_ROOT/api" "$TEST_ROOT/elsewhere"
 cat >"$TEST_ROOT/bin/gh" <<'GH'
 #!/usr/bin/env bash
+if [[ -n ${EXECUTION_MARKER:-} && ${1:-} == pr && ${2:-} == review ]]; then
+  printf 'gh write reached\n' >>"$EXECUTION_MARKER"
+fi
 printf '%s\n' "$*" >>"$GH_LOG"
 [[ ${FAKE_GH_FAIL:-} == 1 ]] && { echo 'HTTP 401: Bad credentials' >&2; exit 1; }
 [[ ${1:-} == api ]] || exit 3
@@ -105,7 +109,7 @@ guard_payload() {
   out=$(env HOME="$TEST_ROOT/home" PATH="$TEST_ROOT/bin:$PATH" TEST_ROOT="$TEST_ROOT" \
           GH_LOG="$TEST_ROOT/gh.log" FAKE_GH_FAIL="${FAKE_GH_FAIL:-}" \
           GH_REPO="${GH_REPO:-}" GH_HOST="${GH_HOST:-}" \
-          "${GUARD_BASH:-bash}" "$GUARD" <<<"$1") || rc=$?
+          "${GUARD_BASH:-bash}" "$GUARD" "${GUARD_ARGS[@]}" <<<"$1") || rc=$?
   printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' >"$TEST_ROOT/reason" \
     2>/dev/null || : >"$TEST_ROOT/reason"
   if [[ $rc -ne 0 ]]; then echo "exit$rc"; return 0; fi
@@ -585,6 +589,95 @@ scenario_settings() {
   end_scenario
 }
 scenario_settings
+
+scenario_codex() {
+  begin_scenario 'Codex receives denials and leaves permissions to its own controls' || return 0
+  GUARD_ARGS=(--codex)
+  local cmd payload
+  for cmd in \
+    'gh api repos/{owner}/{repo}/pulls/5/comments' \
+    'gh pr view 5 --comments' \
+    'gh issue list' \
+    'git push -u origin HEAD:wt/label-prop' \
+    'wt pr label-prop --draft' \
+    'gh pr create --title x --body y' \
+    'gh issue create --title x --body y' \
+    'gh pr comment 5 --body x' \
+    'gh issue comment 12 --body x' \
+    'gh pr review 5 --comment --body x' \
+    'gh pr review 5 --request-changes --body x' \
+    'gh issue edit 12 --title x' \
+    'gh api -X POST repos/acme/widgets/issues/5/comments -f body=x' \
+    'gh api -X PATCH repos/acme/widgets/issues/comments/9 -f body=x' \
+    "gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: \"x\"}) { thread { id } } }'"; do
+    expect none "$cmd"
+  done
+  expect deny 'git push origin HEAD:main' 'main'
+  expect deny 'git push origin HEAD:master' 'master'
+  expect deny 'git push origin HEAD:trunk' 'default branch'
+  expect deny 'git push --force origin HEAD'
+  expect deny 'gh api -X DELETE repos/acme/widgets/issues/1' 'not an approved write'
+  expect deny 'gh pr review 5 --approve' 'approval'
+  expect deny 'gh pr comment 5 --body x -R evil/repo' 'not approved'
+  expect deny 'gh api user && echo x' 'one simple command'
+  expect deny "gh pr comment 5 --body-file $OUTSIDE" 'not a regular file'
+  FAKE_GH_FAIL=1 expect deny 'git push origin HEAD' 'could not query github.com'
+  expect none 'printf hello'
+  expect none 'env git push origin main'
+  expect none 'gh issue close 12'
+  # Malformed payloads keep the guard's existing no-answer behavior.
+  for payload in '' '{' 'null' '[]' '{}' \
+    '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}' \
+    '{"hook_event_name":"PreToolUse","tool_input":{"command":"git push origin main"}}' \
+    '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{}}' \
+    '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":42}}' \
+    '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":null}}' \
+    '{"hook_event_name":"PreToolUse","tool_name":"apply_patch","tool_input":{"command":"git push origin main"}}' \
+    '{"hook_event_name":"PreToolUse","tool_name":"exec_command","tool_input":{"cmd":"git push origin main"}}' \
+    '{"hook_event_name":"PreToolUse","tool_name":"write_stdin","tool_input":{"command":"git push origin main"}}' \
+    '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"git push origin main"}}'; do
+    assert_eq "Codex ignores payload $payload" none "$(guard_payload "$payload")"
+  done
+  GUARD_ARGS=()
+  end_scenario
+}
+scenario_codex
+
+scenario_codex_subprocess() {
+  begin_scenario 'a synthetic Codex dispatcher never executes a rejected git or gh write' || return 0
+  local real_git cmd decision marker
+  real_git=$(command -v git)
+  marker="$TEST_ROOT/execution-marker"
+  cat >"$TEST_ROOT/bin/git" <<'GIT'
+#!/usr/bin/env bash
+if [[ ${1:-} == push ]]; then
+  printf 'git write reached\n' >>"$EXECUTION_MARKER"
+  exit 0
+fi
+exec "$REAL_GIT" "$@"
+GIT
+  chmod +x "$TEST_ROOT/bin/git"
+  GUARD_ARGS=(--codex)
+  # This dispatcher simulates the documented deny contract; it is not Codex runtime acceptance.
+  for cmd in 'git push origin HEAD:main' 'gh pr review 5 --approve'; do
+    decision=$(REAL_GIT="$real_git" EXECUTION_MARKER="$marker" guard "$cmd")
+    assert_eq "$cmd is denied before dispatch" deny "$decision"
+    if [[ $decision != deny ]]; then
+      env REAL_GIT="$real_git" EXECUTION_MARKER="$marker" PATH="$TEST_ROOT/bin:$PATH" bash -c "$cmd"
+    fi
+    assert_eq "$cmd never reaches its subprocess" absent "$([[ -e $marker ]] && echo present || echo absent)"
+  done
+  # A control proves the stub can observe execution without contacting GitHub.
+  env EXECUTION_MARKER="$marker" "$TEST_ROOT/bin/git" push origin HEAD:main
+  assert_eq 'the harmless git stub records execution' 'git write reached' "$(cat "$marker")"
+  rm "$marker"
+  env EXECUTION_MARKER="$marker" GH_LOG="$TEST_ROOT/gh.log" "$TEST_ROOT/bin/gh" pr review 5 --approve || :
+  assert_eq 'the harmless gh stub records execution' 'gh write reached' "$(cat "$marker")"
+  rm "$TEST_ROOT/bin/git" "$marker"
+  GUARD_ARGS=()
+  end_scenario
+}
+scenario_codex_subprocess
 
 # Add one row to a copy. No checker, help string, or command pattern changes accompany it.
 scenario_new_api_form() {

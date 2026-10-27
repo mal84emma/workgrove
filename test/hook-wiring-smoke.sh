@@ -37,12 +37,31 @@ def check_provider(name, hooks):
     return events
 
 
+def check_guard(name, hooks):
+    expected = ('^Bash$', '~/.local/bin/github-guard --codex') if name.startswith('.codex/') else (
+        'Bash', '~/.local/bin/github-guard')
+    guards = [(event, group.get('matcher'), hook) for event, groups in hooks.items()
+              for group in groups for hook in group['hooks']
+              if 'github-guard' in hook.get('command', '')]
+    assert guards == [('PreToolUse', expected[0], {
+        'type': 'command', 'command': expected[1], 'timeout': 30})], (name, guards)
+
+
 wired = set()
 providers = {}
 for name in unsupported:
     hooks = json.loads((repo / 'home' / name).read_text())['hooks']
     providers[name] = hooks
     wired.update(check_provider(name, hooks))
+    check_guard(name, hooks)
+    missing = copy.deepcopy(hooks)
+    del missing['PreToolUse']
+    try:
+        check_guard(name, missing)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError(f'{name}: deleting the guard still passes')
 assert wired == handled, f'agent-notify events without hooks: {handled - wired}'
 # A shared event must remain required in each provider independently.
 shared = set.intersection(*(handled - excluded for excluded in unsupported.values()))
@@ -58,4 +77,5 @@ for name, hooks in providers.items():
         raise AssertionError(f'{name}: deleting {event} still passes')
 print('PASS: each provider uses the explicit helper path and matches agent-notify events')
 print('PASS: deleting any shared event from either provider fails the cross-check')
+print('PASS: each provider wires one synchronous Bash guard independently of notification events')
 PY

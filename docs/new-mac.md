@@ -122,7 +122,7 @@ lines need your attention:
 
 - `az login`: skip it unless you installed azure-cli. See [azml-compute.md](azml-compute.md).
 - `claude auth login`: log in through the browser. Then `claude auth status` must report `loggedIn` true.
-- `codex`: type `/hooks`, then review and trust the five portable hook events. Run one test turn, then exit. Step 3 of
+- `codex`: type `/hooks`, then review and trust the six portable hook events. Run one test turn, then exit. Step 3 of
   [Then, by hand](#then-by-hand) checks this test turn.
 
 ```bash
@@ -136,7 +136,7 @@ gh auth login --web --git-protocol https
 az login          # Azure: skip unless you installed azure-cli; see docs/azml-compute.md
 claude auth login # browser login; claude auth status must report loggedIn true
 codex login
-codex             # /hooks -> review and trust the five portable hook events, run one test turn, then exit
+codex             # /hooks -> review and trust the six portable hook events, run one test turn, then exit
 ```
 
 `cmux hooks codex install --yes` merges cmux's generated Codex lifecycle handlers into `~/.codex/hooks.json`,

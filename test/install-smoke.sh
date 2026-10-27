@@ -1861,6 +1861,8 @@ scenario_refresh_foreign_hooks() {
             {matcher: "mixed", hooks: [.hooks.Stop[0].hooks[0], {type: "command", command: "mixed-helper"}]},
             {matcher: "different-base-matcher", hooks: [.hooks.Stop[0].hooks[0]]}]
         | .hooks.ForeignEvent = [{matcher: "new-event", hooks: [{type: "command", command: "event-helper"}]}]
+        | .hooks.PreToolUse = [{matcher: "foreign-tool", timeout: 42, hooks: [
+            .hooks.PreToolUse[0].hooks[0], {type: "command", command: "foreign-policy"}]}]
       ' "$base" >"$h/$rel.json"
       cp "$h/$rel.json" "$h/${rel##*/}.before"
     done
@@ -1873,6 +1875,8 @@ scenario_refresh_foreign_hooks() {
             {matcher: "foreign-only", hooks: [{type: "command", command: "foreign-helper", timeout: 7}]},
             {matcher: "mixed", hooks: [{type: "command", command: "mixed-helper"}]}])
           and .hooks.ForeignEvent == [{matcher: "new-event", hooks: [{type: "command", command: "event-helper"}]}]
+          and .hooks.PreToolUse == ($base[0].hooks.PreToolUse + [
+            {matcher: "foreign-tool", timeout: 42, hooks: [{type: "command", command: "foreign-policy"}]}])
           and (has("localSetting") | not)
         ' "$h/$rel.json" >/dev/null; then pass; else fail "$platform: refreshed $rel hooks differ"; fi
         before="$(backup_dir "$h")/$rel.json"
@@ -1924,7 +1928,8 @@ scenario_refresh_hook_upgrade() {
           base="$REPO/home/$rel.base.json"
           if jq -e --slurpfile base "$base" --slurpfile old "$h/${rel##*/}.old" '
             .hooks == (reduce ($old[0].hooks | to_entries[]) as $event ($base[0].hooks;
-              .[$event.key] += [$event.value[] | select(any(.hooks[]; .command != "~/.local/bin/github-guard"))]))
+              .[$event.key] += [$event.value[] | select(any(.hooks[];
+                .command != "~/.local/bin/github-guard" and .command != "~/.local/bin/github-guard --codex"))]))
           ' "$h/$rel.json" >/dev/null; then
             pass
           else
