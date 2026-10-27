@@ -153,4 +153,39 @@ test_relay_env() {
 }
 test_relay_env
 
+test_session_outputs() {
+  local REPO="$TEST_ROOT/project" name output status
+  local PATH="$TEST_ROOT/session-bin:$PATH"
+  begin_scenario 'session outputs can use internal local names' || return 0
+  mkdir -p "$TEST_ROOT/session-bin"
+  cp "${BASH_SOURCE[0]%/*}/fakes/tmux" "${BASH_SOURCE[0]%/*}/fakes/pgrep" "$TEST_ROOT/session-bin/"
+  chmod +x "$TEST_ROOT/session-bin/"*
+  for name in s clients rc present; do
+    status=0
+    output=$(local -A "$name"; session_state task "$name"; local -n session_values=$name
+      printf '%s|%s|%s' "${session_values["state"]}" "${session_values["agent"]}" "${session_values["attached"]}") || status=$?
+    assert_eq "$name session output succeeds" 0 "$status"
+    assert_eq "$name receives the session display and facts" 'agent running|true|true' "$output"
+  done
+  end_scenario
+}
+test_session_outputs
+
+test_agent_outputs() {
+  local name output status
+  local PATH="$TEST_ROOT/agent-bin:$PATH"
+  begin_scenario 'agent outputs can use internal local names' || return 0
+  mkdir -p "$TEST_ROOT/agent-bin"
+  cp "$REPO/test/fakes/tmux" "$REPO/test/fakes/pgrep" "$TEST_ROOT/agent-bin/"
+  chmod +x "$TEST_ROOT/agent-bin/"*
+  for name in err panes t rc; do
+    status=0
+    output=$(local "$name=unchanged"; tmux_agent task-session "$name"; printf '%s' "${!name}") || status=$?
+    assert_eq "$name agent output succeeds" 0 "$status"
+    assert_eq "$name receives the session existence fact" true "$output"
+  done
+  end_scenario
+}
+test_agent_outputs
+
 lib_summary

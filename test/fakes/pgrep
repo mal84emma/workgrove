@@ -1,0 +1,7 @@
+#!/bin/sh
+# Supply the process status for the fake VM's pane.
+case "${FAKE_TMUX_PROBE:-running}" in
+  idle) exit 1 ;;
+  pgrep) exit 2 ;;
+  *) exit 0 ;;
+esac

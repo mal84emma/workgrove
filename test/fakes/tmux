@@ -1,0 +1,26 @@
+#!/bin/sh
+# Supply the session, pane, and client answers for the fake VM.
+[ -z "${FAKE_TMUX_LOG:-}" ] || printf '%s\n' "$*" >>"$FAKE_TMUX_LOG"
+case "$1" in
+  has-session)
+    case "${FAKE_TMUX_PROBE:-running}" in
+      missing) printf "can't find session: %s\n" "$3" >&2; exit 1 ;;
+      no-server) echo 'no server running on /tmp/fake-tmux' >&2; exit 1 ;;
+      denied) echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1 ;;
+    esac ;;
+  list-panes)
+    case "${FAKE_TMUX_PROBE:-running}" in
+      panes) echo 'cannot read panes' >&2; exit 1 ;;
+      empty) ;;
+      invalid) echo /dev/not-a-tty ;;
+      *) echo /dev/pts/3 ;;
+    esac ;;
+  list-clients)
+    case "${FAKE_TMUX_PROBE:-running}" in missing|no-server|denied) exit 1 ;; esac
+    case "${FAKE_TMUX_CLIENTS:-attached}" in
+      attached) echo 'attached client' ;;
+      detached) ;;
+      error) exit 1 ;;
+    esac ;;
+  *) exit 1 ;;
+esac
