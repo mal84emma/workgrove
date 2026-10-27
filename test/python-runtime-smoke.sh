@@ -29,12 +29,13 @@ scenario_isolation() {
   local rc=0
   (
     cd "$TEST_ROOT/login"
-    PYTHONPATH="$TEST_ROOT/modules" PYTHONWARNINGS=error /bin/sh -c '
+    PYTHONPATH="$TEST_ROOT/modules" PYTHONWARNINGS=error PYTHONPYCACHEPREFIX="$TEST_ROOT/ignored-cache" /bin/sh -c '
       . "$1"
       wg_run_python - "a value" "" <<'"'"'PYTHON'"'"'
 import json, sys
 assert sys.flags.isolated == 1
 assert sys.dont_write_bytecode
+assert sys.pycache_prefix is None
 assert sys.argv[1:] == ["a value", ""]
 assert "error" not in sys.warnoptions
 print(json.dumps("isolated"))

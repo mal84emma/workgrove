@@ -74,6 +74,18 @@ trap runner_cleanup EXIT
 trap 'INTERRUPTED=1; exit 130' INT
 trap 'INTERRUPTED=1; exit 143' TERM
 
+# Nested runners share the parent's cache. Isolated Python processes still ignore this environment setting.
+if [[ -z ${WORKGROVE_TEST_BYTECODE:-} ]]; then
+  if python3 -I -X "pycache_prefix=$RUN_ROOT/bytecode" -c \
+      'import argparse, contextvars, hashlib, json, pathlib, runpy, shlex, subprocess, unittest.mock, urllib.parse, uuid' \
+      >"$RUN_ROOT/bytecode.log" 2>&1; then
+    export WORKGROVE_TEST_BYTECODE=$RUN_ROOT/bytecode
+  fi
+fi
+if [[ -n ${WORKGROVE_TEST_BYTECODE:-} ]]; then
+  export PYTHONPYCACHEPREFIX=$WORKGROVE_TEST_BYTECODE
+fi
+
 queue_task() {
   local suite=$1 id=$2 name=$3 suite_index=$4 priority=5
   # Estimates in seconds come from JOBS=4 task times. Add new long tasks here after measuring them.

@@ -177,17 +177,25 @@ scenario_discovery() {
   python3 -B - "$REPO/test/python-scenarios.py" "$TEST_ROOT" <<'PYTHON' || python_status=$?
 import os
 from pathlib import Path
+import py_compile
 import subprocess
 import sys
 
 helper, root = sys.argv[1], Path(sys.argv[2])
 module = root / "synthetic_test.py"
 events = root / "python-events"
-module.write_text("import unittest\nfrom pathlib import Path\nclass AddedTests(unittest.TestCase):\n" + "".join(
-    " def test_%02d(self):\n  with Path(%r).open('a') as stream: stream.write('%02d\\n')\n" %
+processes = root / "python-processes"
+module.write_text("import os, sys, unittest\nfrom pathlib import Path\nSOURCE_MARKER = 'original'\n" +
+                 "cache = os.environ.get('WORKGROVE_TEST_BYTECODE')\n" +
+                 "assert not cache or (sys.pycache_prefix == cache and Path(cache).is_dir())\n" +
+                 "def record_process():\n with Path(%r).open('a') as stream: stream.write(str(os.getpid()) + ' ' + SOURCE_MARKER + '\\n')\n" % str(processes) +
+                 "class AddedTests(unittest.TestCase):\n" + "".join(
+    " def test_%02d(self):\n  record_process()\n  with Path(%r).open('a') as stream: stream.write('%02d\\n')\n" %
     (index, str(events), index) for index in range(17)))
 environment = dict(os.environ)
 environment.pop("ONLY", None)
+if "WORKGROVE_TEST_BYTECODE" not in environment:
+    environment["PYTHONPYCACHEPREFIX"] = str(root / "python-bytecode")
 def run(*args, pattern=None):
     env = dict(environment)
     if pattern is not None:
@@ -202,10 +210,22 @@ for task in ids:
     result = run("--scenario", task)
     assert result.returncode == 0, result.stderr
 assert sorted(events.read_text().splitlines()) == ["%02d" % index for index in range(17)]
+records = [line.split() for line in processes.read_text().splitlines()]
+assert len({pid for pid, marker in records}) == len(ids)
+assert all(marker == "original" for pid, marker in records)
+bytecode = subprocess.check_output([sys.executable, "-B", "-c",
+                                   "import importlib.util,sys; print(importlib.util.cache_from_source(sys.argv[1]))",
+                                   str(module)], env=environment, text=True).strip()
+py_compile.compile(str(module), cfile=bytecode, doraise=True)
+module.write_text(module.read_text().replace("SOURCE_MARKER = 'original'", "SOURCE_MARKER = 'changed source'"))
 events.unlink()
+processes.unlink()
 result = run(pattern="AddedTests.test_0[13]")
 assert result.returncode == 0, result.stderr
 assert sorted(events.read_text().splitlines()) == ["01", "03"]
+changed = [line.split(maxsplit=1) for line in processes.read_text().splitlines()]
+assert len(changed) == 2 and all(marker == "changed source" for pid, marker in changed)
+assert not ({pid for pid, marker in records} & {pid for pid, marker in changed})
 assert run("--list-scenarios", pattern="missing").returncode == 1
 assert run("--scenario", "missing").returncode == 1
 PYTHON

@@ -550,6 +550,10 @@ On the Mac, the runner resolves Apple's Git launcher once when `/usr/bin/git` is
 A temporary shell wrapper preserves Git's helper and template paths.
 The runner preserves custom Git selections and uses the original Git if resolution or version checks fail.
 
+The runner shares a temporary standard-library bytecode cache across Python test processes.
+Each process still starts separately. Isolated Python invocations ignore the cache environment setting.
+Portable tests pack their source template's Git objects once and keep a separate source copy and durable root for each test.
+
 Set `ONLY` to select scenario names with a shell glob pattern. The filter matches substrings too.
 For example, `ONLY='11.*' bash test/wt-smoke.sh` runs scenario 11.
 For a filtered runner invocation, select one suite: `ONLY='11.*' bash test/run.sh test/wt-smoke.sh`.
