@@ -219,8 +219,8 @@ case "$key" in
     if [[ -f $state/notify-dedupe && -f $state/last-content && $(cat "$state/last-content") == "$title|$body" ]]; then exit 0; fi
     printf '%s' "$title|$body" >"$state/last-content"
     tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl" ;;
-  ping|diff|workspace-close|workspace-select|workspace-action|send|send-key|clear-notifications|dismiss-notification|reconnect) ;;
-  ssh|new-workspace|workspace-create) printf 'workspace:99\n' ;;
+  ping|diff|workspace-close|workspace-select|workspace-action|send|send-key|dismiss-notification) ;;
+  ssh|workspace-create) printf 'workspace:99\n' ;;
   read-screen) exit 1 ;;
   *) unexpected_command "$@" ;;
 esac

@@ -163,9 +163,11 @@ assert_eq 'remote model keeps colon' family:model "${parsed[model]}"
 assert_eq 'remote positional boundary survives' --name "${parsed[name]}"
 # A future valued rm flag must reach the VM with its value intact.
 WT_COMMANDS=${WT_COMMANDS/'--keep-branch:keep:=1'/'--note:note:a note;--keep-branch:keep:=1'}
-cmux_require() { :; }
+# shellcheck source=test/fakes/rows.sh
+source "$REPO/test/fakes/rows.sh"
+fake_cmux_init "$TEST_ROOT/cmux-state"
+CMUX_BUNDLED_CLI_PATH="$REPO/test/fakes/cmux"
 agent_on_vm() { return 1; }
-cmux_row_field() { :; }
 vm_tmux() { :; }
 remote_wt() { printf '%s\n' "$@" >"$TEST_ROOT/forwarded"; }
 host_rm example.invalid task --repo='repo name' --note='a value' --keep-branch
