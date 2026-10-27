@@ -372,19 +372,22 @@ class DocsCheckTests(unittest.TestCase):
         self.assertEqual([], self.links('[web](https://example.com/missing#missing)\n<a href="mailto:test@example.com">mail</a>\n'))
 
     def test_layout_requires_every_tracked_file(self):
-        self.write("README.md", "## Layout\n\n```\nrepo/\n├── README.md\n```\n")
+        self.write("README.md", "## Layout\n\nSee [Layout](docs/development.md#layout).\n")
+        self.write("docs/development.md", "## Layout\n\n```\nrepo/\n├── README.md\n"
+                   "└── docs/\n    └── development.md\n```\n")
         self.git("init", "-q")
-        self.git("add", "README.md")
+        self.git("add", "README.md", "docs/development.md")
         self.assertEqual([], docs_check.check_layout(self.root))
         self.write("new.txt", "")
         self.git("add", "new.txt")
-        self.assertEqual(["README.md:1: Layout missing tracked file: new.txt"], docs_check.check_layout(self.root))
+        self.assertEqual(["docs/development.md:1: Layout missing tracked file: new.txt"], docs_check.check_layout(self.root))
 
     def test_layout_rejects_nonexistent_entry(self):
-        self.write("README.md", "## Layout\n\n```\nrepo/\n├── README.md\n└── missing.md\n```\n")
+        self.write("docs/development.md", "## Layout\n\n```\nrepo/\n├── README.md\n"
+                   "├── missing.md\n└── docs/\n    └── development.md\n```\n")
         self.git("init", "-q")
-        self.git("add", "README.md")
-        self.assertEqual(["README.md:1: Layout lists untracked file: missing.md"], docs_check.check_layout(self.root))
+        self.git("add", "README.md", "docs/development.md")
+        self.assertEqual(["docs/development.md:1: Layout lists untracked file: missing.md"], docs_check.check_layout(self.root))
 
     def test_citation_checks_require_matching_output(self):
         self.write("docs/documentation-style.md", "### Check a change\n\n   grep -n '^# Required$' README.md\n")
