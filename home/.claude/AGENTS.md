@@ -1,9 +1,7 @@
 # Working conventions for coding agents
 
-Coding agents follow these conventions. They apply in these places:
-
-- Every repository in any folder that `$WT_REPOS_DIR` lists. The default folder is `~/Documents/Repositories` on the Mac and the home folder on a VM, unless `~/.zshenv.local` says otherwise.
-- Every terminal inside cmux, on the Mac and on every VM.
+These conventions apply to every cmux terminal on the Mac and VMs, and every repository under `$WT_REPOS_DIR`.
+Unless `~/.zshenv.local` overrides it, the repository folder defaults to `~/Documents/Repositories` on the Mac and the home folder on VMs.
 
 ## Writing
 
@@ -46,242 +44,60 @@ With:
 
 ## Tasks run in worktrees
 
-A **task** is one unit of work that changes code. Each task lives in its own git worktree. Use the `wt` command to create and manage worktrees (see `wt help`).
+A **task** is one unit of work that changes code, in its own git worktree.
+Use `wt`; see `wt help`.
+A **row** is a cmux workspace. The **main checkout** is the repository's primary working tree.
 
-Never do task work directly in a repository's main checkout unless the user explicitly asks for a quick edit there.
+Never do task work in the main checkout unless the user explicitly requests a quick edit there.
+When starting a task, feature, fix, or experiment, check your current location.
+If you are already inside a worktree, work there.
+Otherwise, create one first unless the quick-edit exception applies.
 
-### What to do in each situation
+Read only the linked sections needed for your action, and follow their rules and skill links.
 
-- **You start work that the user describes as a task, feature, fix, or experiment.**
-  - If you are already inside a worktree, work there.
-  - Otherwise, create a worktree first: `wt new <name> -p "<brief>"`.
-  - See the `worktree-create` skill.
-- **Several independent things at once.**
-  - Create one worktree per thing. Start each one with `wt new ... -p ...`, so that each worktree gets its own agent session in cmux.
-  - Split work only when the parts will not touch the same files.
-  - To drive several tasks, or tasks on a VM, from one session, see the `task-driver` skill.
-- **You are inside a worktree** (your current working directory, or cwd, is under `.worktrees/<name>`).
-  - Stay inside the worktree for task work.
-  - Commit on its `wt/<name>` branch.
-  - Never edit the main checkout or sibling worktrees.
-  - Do not switch branches or create nested worktrees.
-  - Make small commits and describe each one.
-  - Keep dependencies and environment settings inside the worktree. Do not use the main checkout's copies.
-  - When you are asked to remove your own worktree, change to the main checkout and run `wt rm` from there, as the `worktree-teardown` skill describes.
-  - See the `worktree-work` skill.
-- **The user wants to look at the code** ("show me the code", "open the worktree", "let me see it").
-  - Run `wt open`, which opens the worktree in VS Code.
-  - Do not print files instead.
-- **The user wants status or changes** ("what changed", "how far is it").
-  - Run `wt list` and `wt show <name>`, and give a short summary.
-  - Never open VS Code for this.
-  - In a task session, "the worktree" means this task's worktree, not the `wt` tool.
-  - See the `worktree-show` skill.
-- **You finish or clean up.**
-  - Report the branch.
-  - Remove worktrees only through `wt rm` / `wt prune`, and only when the user asks.
-  - Never use `--force` or `--discard-commits` unless the user says so in this conversation.
-  - See the `worktree-teardown` skill.
+Before task work, read [worktree rules](TASKS.md#worktree-rules).
+Inside `.worktrees/<name>`, use [worktree-work](../.agents/skills/worktree-work/SKILL.md).
+Before creating, displaying, checking, removing, or splitting tasks, read [task procedures](TASKS.md#task-lifecycle); use the linked skills.
+Before creation, read [layout and naming](TASKS.md#layout-and-naming).
+Also read layout when choosing a base branch or locating rows, sessions, or hooks.
+When creating or finishing tasks, read and follow [reporting requirements](TASKS.md#reporting).
 
-### Worktrees are not a sandbox
+## GitHub writes and publishing
 
-These rules are conventions, not a sandbox. A session that starts with its cwd inside `.worktrees/<name>` does not get Claude's own worktree isolation. You are responsible for staying inside the worktree.
-
-### GitHub writes and publishing
-
-Never do these actions unless the user explicitly asked for that action in this conversation:
-
-- `git push`
-- `wt pr`
-- `gh pr create`
-- `gh issue create`
-- Create a remote repository.
-- Publish.
-
-Instead, report the branch.
-
-Some briefs count as asking for GitHub writes:
-
-- A brief to work on an open pull request (address its review, fix its CI) counts as asking for these actions:
-  - Push to that pull request's branch.
-  - Reply to its review comments.
-  - Edit your own review comments on it.
-  - Resolve its review comments.
-- A brief to review a pull request counts as asking to post the review.
-- A brief to work on an issue counts as asking to comment on the issue. It also counts as asking to edit the issue and your comments on it, but only where this login wrote them. "This login" is the account that `gh` is logged in as.
-
-Each of these briefs counts as asking only for the actions listed with it, and nothing more.
-
+Never run `git push`, `wt pr`, `gh pr create`, or `gh issue create` without an explicit request in this conversation.
+Never create a remote repository or publish without that request. Otherwise, report the branch.
 Never approve a pull request. Approval stays with the user.
 
-### Run approved GitHub commands
-
-Claude's `github-guard` hook approves the forms below without a prompt, in this repository only. The hook denies other GitHub writes with a reason that names the approved form. Read that reason and retry.
-
-Write each command so that the hook can approve it:
-
-- Run each one as its own command, with no pipe, `&&`, `$(…)` or `cd … &&` in front.
-- To filter output, use `--jq '<expr>'`.
-- To pass long text, use `--body-file <file in the repo or a temp dir>`.
-- Quote an endpoint that contains `?` or `&`.
-
-The approved forms are:
-
-- **Read:**
-  - `gh api <endpoint>`
-  - `gh api graphql -f query='…'`
-  - `gh pr view|diff|checks|list|status`
-  - `gh issue view|list|status`
-- **Push:** `git push [-u] origin HEAD[:<branch>]`
-  - The form also accepts a local branch by name instead of `HEAD`, but never a tag.
-  - The hook always denies `main`, `master`, and the default branch.
-  - The form is never forced, and it never pushes more than one branch.
-- **Open a pull request or an issue:**
-  - `gh pr create --title '…' --body '…'` (or `--fill`)
-  - `wt pr <name>`
-  - `gh issue create --title '…' --body '…' [--label …]`
-  - Do not use `--template`. Read the repository's template and pass the filled-in text.
-- **Comment and review:**
-  - `gh pr comment <n> --body '…'` or `gh issue comment <n> --body '…'`. Add `--edit-last` to fix your latest comment.
-  - `gh pr review <n> --comment|--request-changes --body '…'`
-  - Through `gh api -X POST repos/{owner}/{repo}/pulls/<n>/…`:
-    - To reply: `comments/<id>/replies -f body=…`
-    - For one inline comment: `comments -f body= -f commit_id= -f path= -F line=`
-    - For a review with inline comments: `reviews -f event=COMMENT -f body=… -f 'comments[][path]=…' -F 'comments[][line]=…' -f 'comments[][body]=…'`
-- **Edit your own:**
-  - On an issue that this login opened: `gh issue edit <n> --title|--body|--add-label …`
-  - `gh api -X PATCH repos/{owner}/{repo}/pulls/comments/<id>` or `…/issues/comments/<id>`, with `-f body=…`
-  - The hook does not approve closing or reopening an issue. Those commands still ask for approval.
-- **Resolve:**
-  - `gh api graphql -F threadId=<id> -f query='mutation($threadId: ID!) { resolveReviewThread(input: {threadId: $threadId}) { thread { isResolved } } }'`
-  - Thread ids come from a `reviewThreads` query.
-
-## Layout and naming
-
-- **Worktrees:** `<repo>/.worktrees/<name>` (git-ignored globally).
-- **Branches:** `wt/<name>`.
-- **Base branch:** the default branch of the repository, unless you pass `--head` or `-b <ref>` to `wt new`. To find this base, `wt` uses `origin/HEAD`. It falls back to `origin/main` or `origin/master`, then a local `main`/`master`, then the current branch.
-- **Names:** short kebab-case slugs that describe the task. Do not use `.` in a name.
-- **Rows:** each task has a cmux row titled `<name>`. The second line of the row reads `@<host> · <repo>`, for example `@local · workgrove`.
-- **tmux sessions:** on a VM, each task also has a tmux session `wt-<repo>-<name>`.
-- **Lookup:** `wt show <name>` reports the row and the tmux session.
-- **Per-repo hooks:** `.wt-include` lists the ignored files to copy in. `.wt-setup` runs in each new worktree.
+Before assessing authorization, read the [brief exceptions](TASKS.md#github-writes-and-publishing).
+Before GitHub commands in this repository, read and follow [approved forms](TASKS.md#run-approved-github-commands).
 
 ## Local and remote
 
-`wt` handles the difference between local and remote work. The same subcommands work in three ways:
+Read and follow these procedures before their actions:
 
-- They run locally.
-- They run inside a VM session.
-- You send them from the Mac to a VM as `wt -H <vm> <sub> …`. In this form, `show`, `rm`, `path`, `open`, and `attach` need `-r <repo>`.
+- For VM work or Mac-to-VM commands, use [remote commands](TASKS.md#local-and-remote).
+- For hardware-based task placement, use [VM selection](TASKS.md#choose-a-vm-by-hardware).
+- For SSH registration, host preparation, or environment repair, use [SSH host preparation](TASKS.md#add-a-supplied-ssh-host).
+- For task recovery or portable-link restoration, use [VM recovery](TASKS.md#vm-task-recovery).
+- For Azure Machine Learning (Azure ML) registration, use [azml-compute](../.agents/skills/azml-compute/SKILL.md) on the Mac only.
 
-The second line of every row starts with `@local` or `@<host>`, so the sidebar always shows where a session runs.
-
-### Choose a VM by hardware
-
-When you are asked to choose a VM by hardware requirements, do these steps before you create the task:
-
-1. Get a fresh inventory with `wt hosts --json`.
-2. Use that inventory and the `task-driver` skill to select an SSH-reachable match.
-3. If no suitable machine is available, report that.
-
-### Add an Azure ML compute instance
-
-On the Mac only, use the `azml-compute` skill (`azml-ssh-host add <instance>`) to add an Azure Machine Learning (Azure ML) compute instance to ssh. Never edit `~/.ssh/config` by hand for this.
-
-Only the user runs `az login` and `az account set`. Do not run them yourself. When the `azml-ssh-host` helper gives an error, report the error and stop.
-
-### Add a supplied SSH host
-
-Use the [ssh-host skill](../.agents/skills/ssh-host/SKILL.md) for a supplied fragment or portable host preparation.
-Existing usable aliases need no new registration.
 Keep compute lifecycle and credentials with the SSH supplier.
-Confirm the persistent root, storage policy, public revision, and personal identity before full preparation.
-Run `wt -H <host> doctor --json` before deciding whether setup repair is needed.
-Use the existing VM attachment procedure after explicit environment repair.
-For restore-only without asking, follow the [portable restore policy](#portable-restore-only).
+Never accept a host key, sign in an agent or `gh`, or run `az login` or `az account set`.
+Never edit `~/.ssh/config` by hand for Azure ML. If `azml-ssh-host` reports an error, report it and stop.
 
-### Per-repo setup
+## Interactive commands
 
-Add `.wt-include` and `.wt-setup` only when the user asks.
-
-### Driver sessions
-
-Do not do a task's coding in the driver session. Start a task session for that work.
-Use the [task-driver procedure](../.agents/skills/task-driver/SKILL.md) to prepare and launch VM tasks.
-
-### VM task recovery
-
-Run task recovery, `--reattach`, or `--restart-agent` only when the user asks.
-Restore-only without asking is permitted only under the [portable restore policy](#portable-restore-only).
-
-### Portable restore-only
-
-An agent may run restore-only without asking only when all six conditions hold:
-
-1. SSH to the alias works without an unknown-host-key or changed-host-key error.
-2. `wt -H <host> doctor --json`, without `--root`, reports `issues` exactly equal to `["profile-missing","remote-wt-missing"]`.
-3. The root comes from `root_discovery` with status `found`, or from the user for this alias in this session.
-   If both sources exist and differ, stop.
-4. `root_discovery.same_machine` is `true`, or the user said in this session that this host restarted.
-   Otherwise, ask whether the host restarted.
-   Name the alias and the root in that one question.
-5. `wt -H <host> doctor --root <root> --json` reports no issue outside this allowlist:
-   `compatibility-links-missing`, `remote-wt-missing`, and `environment-incomplete`.
-   Any other code needs the user, including `missing-prerequisites`, conflict codes, and the warning `agent-command-unavailable`.
-   Report `agent-command-unavailable` and stop before starting or restarting a task.
-6. Run exactly `wt -H <host> setup --root <root> --restore-only`, with no other option.
-   Restore ignores options such as `--git-identity` and `--persist-agents`.
-
-After restore, run `wt -H <host> doctor --json` again.
-Report the root, the restore summary, every backup line, and the doctor result to the user.
-If `persist_agents` is not set, report that and stop before starting or restarting any task.
-If either sign-in file is absent, report that and stop before starting or restarting any task.
-The user signs in.
-
-These steps stay with the user:
-
-- Full setup and any change of `--storage`, `--mount`, `--trust-personal-volume`, `--strict-permissions`, or the alias.
-- `--reattach` and `--restart-agent`.
-- Signing in an agent or `gh`.
-- Accepting a host key.
-- Choosing a root when discovery reports `ambiguous`, `none`, or `incomplete`.
-- Restoring a host whose root comes only from a `WT_REMOTE_ROOT` export.
-  There, doctor finds the profile without naming the root.
-
-After any refusal, stop and ask the user.
-After an unknown or changed host key, stop.
-Never accept a host key or sign in an agent or `gh` yourself.
-
-### Interactive commands
-
-Never run interactive `wt attach`, `wt task` or `wt driver` from a task session. These commands belong to the user's own session on the Mac.
+Never run interactive `wt attach`, `wt task`, or `wt driver` from a task session.
+These commands belong to the user's own session on the Mac.
 
 ## Opening apps
 
-When the user asks you to open something on the Mac, use these commands:
-
-- For a worktree, use `wt open`.
-- For any other file, use `/usr/bin/open`.
-
-Codex's sandbox blocks app launches. A blocked launch reads like a missing app (`Unable to find application`, `-10661`, `-10827`). Before you say that the app is missing or that you cannot open it, rerun the same command with escalation. Never ask for broader sandbox or network access to open an app.
-
-The exit status of `wt open` means different things on the Mac and on a VM:
-
-- A Mac-local `wt open` that exits 0 reports a launch.
-- A VM-side `wt open` that exits 0 reports only that cmux on the Mac accepted the request. So describe the result as "requested", not as a launch. Only if no window appears, run the manual command that `wt open` prints.
+Before requested Mac launches or worktree display, read and follow [app launch rules and results](TASKS.md#opening-apps).
+For task status or changes, read and follow [task procedures](TASKS.md#task-lifecycle); never open VS Code.
+Never request broader sandbox or network access to open an app.
 
 ## cmux
 
-Each task worktree normally has a cmux row that shows its branch, agent state, and notifications.
-
-- Use `cmux` commands only to create, inspect, or close task rows.
-- Do not rearrange the user's other rows.
-- Never steal focus. By default, `wt new` creates rows unfocused.
-
-## Reporting
-
-- When you create tasks, list them. For each task, give the name, row title, branch, path, and the brief that you gave it. For a task on a VM, also give the tmux session.
-- After task creation, do not wait on or poll the new session.
-- For deferred creation, report the row only after attach succeeds.
-- When you finish a task, summarize the changes, commits, tests run, and anything left undone. Then stop.
+Use `cmux` commands only to create, inspect, or close task rows.
+Never rearrange the user's other rows or steal focus. By default, `wt new` creates rows unfocused.
+Each task worktree normally has a row showing its branch, agent state, and notifications.

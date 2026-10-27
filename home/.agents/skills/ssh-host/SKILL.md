@@ -13,7 +13,7 @@ Read [SSH registration](../../../../docs/ssh-hosts.md) when an outer alias is mi
 Read [portable setup](../../../../docs/remote-setup.md) before installing or restoring a profile.
 For Runpod storage and restart notes, read [the Runpod guide](../../../../docs/runpod.md).
 
-1. Establish the authorized scope: registration, full preparation, or recovery under the [portable restore policy](../../../.claude/AGENTS.md#portable-restore-only).
+1. Establish the authorized scope: registration, full preparation, or recovery under the [portable restore policy](../../../.claude/TASKS.md#portable-restore-only).
    Obtain the chosen alias and any supplied fragment path from the user or existing SSH configuration.
    Use an already usable alias directly; do not create a second provider registry.
 2. When registration is requested, run `wt-ssh-host add <host> --fragment <path>`.
@@ -33,8 +33,8 @@ For Runpod storage and restart notes, read [the Runpod guide](../../../../docs/r
    Unknown allocation cannot satisfy hardware requirements.
 6. Create or recover tasks only within the user's authorized scope.
    Use the task-driver skill for the ordinary remote task interface and hardware selection.
-   Follow the [recovery policy](../../../.claude/AGENTS.md#vm-task-recovery) before attach recovery or either explicit recovery flag.
+   Follow the [recovery policy](../../../.claude/TASKS.md#vm-task-recovery) before attach recovery or either explicit recovery flag.
 
 After a host restart, refresh SSH through its supplier and follow the shared VM recovery procedure.
-When doctor identifies lost setup, follow the [portable restore policy](../../../.claude/AGENTS.md#portable-restore-only).
+When doctor identifies lost setup, follow the [portable restore policy](../../../.claude/TASKS.md#portable-restore-only).
 Missing task files require storage investigation; never create a replacement task as automatic recovery.

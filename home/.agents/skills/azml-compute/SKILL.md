@@ -14,7 +14,7 @@ Tool: `azml-ssh-host` (see `azml-ssh-host help`). The helper does these things:
 3. It writes one marked block into `~/.ssh/config`.
 4. It verifies the login.
 
-Follow the [Azure ML policy](../../../.claude/AGENTS.md#add-an-azure-ml-compute-instance).
+Follow the [Azure ML policy](../../../.claude/AGENTS.md#local-and-remote).
 For background, see [Azure ML setup](../../../../docs/azml-compute.md).
 
 ## Commands

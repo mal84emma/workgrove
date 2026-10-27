@@ -386,8 +386,10 @@ assert_machinery() {
   assert_link "$h" .zshenv home/.zshenv
   assert_link "$h" .gitignore_global home/.gitignore_global
   assert_link "$h" .claude/AGENTS.md home/.claude/AGENTS.md
+  assert_link "$h" .claude/TASKS.md home/.claude/TASKS.md
   assert_link "$h" .claude/CLAUDE.md home/.claude/CLAUDE.md
   assert_link "$h" .codex/AGENTS.md home/.claude/AGENTS.md
+  assert_link "$h" .codex/TASKS.md home/.claude/TASKS.md
   for d in "$REPO"/bin/*; do
     b="$(basename "$d")"
     assert_link "$h" ".local/bin/$b" "bin/$b"

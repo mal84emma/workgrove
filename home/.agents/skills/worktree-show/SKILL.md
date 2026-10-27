@@ -5,17 +5,17 @@ description: Show the user a task worktree — open its code in VS Code, or repo
 
 # Show worktrees to the user
 
-Use this skill to show a task worktree to the user. Find the user's intent first. Then run one command.
+Use this skill to show a task worktree to the user. Find the user's intent first. Then run the commands below.
 
 ## Choose the command
 
 | The user says | Run | Then |
 |---|---|---|
 | "show me the code", "show me the worktree (code)", "open the worktree", "let me see it", "open VS Code" | `wt open` | If the exit code is 0, report `opened in VS Code` locally, or `requested VS Code on the Mac` from a VM. Otherwise, see [Check the result of `wt open`](#check-the-result-of-wt-open). |
-| "what changed", "how far is it", "status of <task>" | `wt show <name>` | Summarize in a few sentences. |
+| "what changed", "how far is it", "status of <task>" | `wt list` and `wt show <name>` | Summarize in a few sentences. |
 | "what tasks are running", "list the worktrees" | `wt list` | Summarize. |
 
-Follow the [display and status policy](../../../.claude/AGENTS.md#what-to-do-in-each-situation).
+Follow the [display and status policy](../../../.claude/TASKS.md#task-lifecycle).
 
 ## Commands
 
@@ -33,7 +33,7 @@ wt -H <vm> show -r <repo> <name>
 
 ## Check the result of `wt open`
 
-Follow the [app launch policy](../../../.claude/AGENTS.md#opening-apps) for escalation and success reporting.
+Read and follow the [app launch policy](../../../.claude/TASKS.md#opening-apps) for escalation and success reporting.
 
 On the Mac, `wt open` prints `opened in VS Code` only when `code` succeeds.
 A nonzero exit means that no window opened.

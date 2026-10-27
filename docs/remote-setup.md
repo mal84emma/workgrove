@@ -450,7 +450,7 @@ External agent roots appear only as `<claude-root>` and `<codex-root>`.
 The summary also confirms the `~/.gitconfig` link to the saved Git config.
 It never prints sign-in contents.
 
-Agents follow the six conditions in the [portable restore policy](../home/.claude/AGENTS.md#portable-restore-only) before restoring without asking.
+Agents follow the six conditions in the [portable restore policy](../home/.claude/TASKS.md#portable-restore-only) before restoring without asking.
 That policy defines the checks, user-only steps, refusal rules, and required report.
 The user handles SSH host keys, sign-ins, full setup, alias changes, and task recovery flags.
 

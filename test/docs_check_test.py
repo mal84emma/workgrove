@@ -40,6 +40,13 @@ class DocsCheckTests(unittest.TestCase):
     def test_dead_relative_link_reports_source_line(self):
         self.assertEqual(["README.md:2: dead link: docs/missing.md"], self.links("Text.\n[go](docs/missing.md)\n"))
 
+    def test_shared_reference_links_are_checked(self):
+        self.write("home/.claude/TASKS.md", "[restore](#portable-restore-only)\n")
+        self.assertEqual(["home/.claude/TASKS.md:1: missing anchor: #portable-restore-only"],
+                         docs_check.check_links(self.root))
+        self.write("home/.claude/TASKS.md", "[restore](#portable-restore-only)\n## Portable restore-only\n")
+        self.assertEqual([], docs_check.check_links(self.root))
+
     def test_dead_anchor(self):
         self.assertEqual(["README.md:1: missing anchor: #missing"], self.links("[go](#missing)\n"))
 

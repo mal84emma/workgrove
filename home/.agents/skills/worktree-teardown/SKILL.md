@@ -6,7 +6,7 @@ description: Safely remove task worktrees and their branches, and clean up finis
 # Tear down worktrees
 
 Use this skill to remove task worktrees and their branches.
-Follow the [removal policy](../../../.claude/AGENTS.md#tasks-run-in-worktrees)
+Read and follow the [removal rules](../../../.claude/TASKS.md#worktree-rules)
 and the [GitHub write policy](../../../.claude/AGENTS.md#github-writes-and-publishing).
 
 ## Check for a live agent first
