@@ -949,7 +949,9 @@ sys.exit(module["main"]())
     def test_personal_volume_requires_explicit_acceptance_before_private_writes(self):
         self.root.chmod(0o777)
         result = self.volume_install(ok=False)
-        request = json.loads(result.stderr.splitlines()[0])
+        tag, payload = result.stderr.splitlines()[0].split("\t", 1)
+        self.assertEqual(tag, "trust-request")
+        request = json.loads(payload)
         self.assertEqual(request, {"error": "personal-volume-trust-required", "root": str(self.root), "mount": str(self.root)})
         self.assertIn("--trust-personal-volume", result.stderr)
         self.assertFalse((self.root / ".config").exists())
@@ -1146,6 +1148,19 @@ sys.exit(module["main"]())
             self.assertIn("[y/N]", outgoing.getvalue())
         with patch.object(portable.sys, "stdin", io.StringIO("yes\n")), patch.object(portable.sys, "stderr", io.StringIO()):
             self.assertFalse(portable.confirm_volume_trust(request))
+
+    def test_confirmation_reads_tagged_requests_and_legacy_json(self):
+        request = {"error": "personal-volume-trust-required", "root": "/example/root", "mount": "/example"}
+        path = self.base / "request"
+        for prefix in ("", "diagnostic before the record\ntrust-request\t"):
+            with self.subTest(prefix=prefix):
+                path.write_text(prefix + json.dumps(request, separators=(",", ":")) + "\nother diagnostic\n")
+                output = io.StringIO()
+                with patch.object(portable, "confirm_volume_trust", return_value=True) as confirm, \
+                        patch.object(sys, "stdout", output):
+                    self.assertEqual(portable.confirm_volume_request(Namespace(request_file=str(path))), 0)
+                confirm.assert_called_once_with(request)
+                self.assertEqual(output.getvalue(), "/example/root\n/example\n")
 
     def test_persistent_identity_exclusions_tools_and_sticky_preferences(self):
         self.install("--persist-agents", "--with-tmux-conf", "--codex-args-json", '["--no-alt-screen"]')
@@ -2781,10 +2796,26 @@ sys.exit(subprocess.run(["/bin/sh", "-c", sys.argv[-1]], env=environment, check=
         self.assertNotIn("runpod ", log)
 
     def test_remote_volume_prompt_and_explicit_flag_use_the_same_acceptance(self):
+        self.remote_volume_prompt(tagged=True)
+
+    def test_remote_volume_prompt_accepts_legacy_json_without_spacing_dependency(self):
+        self.remote_volume_prompt(tagged=False)
+
+    def test_legacy_volume_prompt_does_not_run_jq(self):
+        self.remote_volume_prompt(tagged=False, unavailable_jq=True)
+
+    def remote_volume_prompt(self, tagged, unavailable_jq=False):
         environment = self.transport()
+        jq_marker = self.base / "unexpected-jq"
+        if unavailable_jq:
+            jq = Path(environment["PATH"].split(":")[0]) / "jq"
+            jq.write_text("#!/bin/sh\nprintf called >" + shlex.quote(str(jq_marker)) + "\nexit 127\n")
+            jq.chmod(0o700)
         marker = self.base / "accepted"
         ssh = Path(environment["PATH"].split(":")[0]) / "ssh"
-        request = json.dumps({"error": "personal-volume-trust-required", "root": str(self.root), "mount": str(self.root)})
+        request = ("trust-request\t" if tagged else "") + json.dumps(
+            {"error": "personal-volume-trust-required", "root": str(self.root), "mount": str(self.root)},
+            separators=None if unavailable_jq else (",", ":"))
         ssh.write_text(f'''#!{sys.executable}
 import pathlib,sys
 sys.stdin.read()
@@ -2835,6 +2866,32 @@ sys.exit(1)
             marker.unlink(missing_ok=True)
         self.remote(environment, *arguments[:-1], "--trust-personal-volume", "--")
         self.assertTrue(marker.exists())
+        self.assertFalse(jq_marker.exists())
+
+    def test_hosts_and_environment_doctor_ignore_login_json_module(self):
+        self.install("--persist-agents")
+        environment = self.transport()
+        config = Path(environment["HOME"]) / ".ssh/config"
+        config.parent.mkdir()
+        config.write_text("Host test-host\n")
+        ssh = Path(environment["PATH"].split(":")[0]) / "ssh"
+        ssh.write_text(ssh.read_text().replace(
+            'env=environment, check=False', 'env=environment, cwd=environment["HOME"], check=False'))
+        marker = self.base / "login-module-imported"
+        (self.home / "json.py").write_text(
+            "from pathlib import Path\nPath(" + repr(str(marker)) + ").touch()\n"
+            "raise RuntimeError('login json imported')\n")
+        for arguments in (("hosts", "--json"), ("-H", "test-host", "doctor", "--environment")):
+            with self.subTest(arguments=arguments):
+                marker.unlink(missing_ok=True)
+                result = subprocess.run([str(self.tools / "bash"), str(REPO / "bin/wt"), *arguments],
+                                        env=environment, capture_output=True, text=True, timeout=30)
+                self.assertFalse(marker.exists(), result.stdout + result.stderr)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if arguments[0] == "hosts":
+                    self.assertTrue(json.loads(result.stdout)[0]["workgrove_ready"])
+                else:
+                    self.assertIn("native relay", result.stdout)
 
     def test_vm_and_container_restart_share_task_recovery_and_row_identity(self):
         self.install("--persist-agents")
@@ -2911,6 +2968,7 @@ sys.exit(1)
         result = subprocess.run([str(self.tools / "git"), "-C", str(source), "rev-parse", "--abbrev-ref", "@{u}"],
                                 env=self.env, text=True, capture_output=True, check=True)
         self.assertTrue(result.stdout.strip().startswith("origin/"))
+        self.assertEqual(execute.call_args.args[1][:3], [sys.executable, "-I", "-B"])
         self.assertIn(str(source / "lib/workgrove/portable.py"), execute.call_args.args[1])
         self.assertTrue(any(command[0] == "checkout" and self.revision in command for command in calls))
 

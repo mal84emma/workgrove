@@ -7,12 +7,12 @@ host_probe_source() {
   cat "$WG_LIB_DIR/version.sh" "$WG_LIB_DIR/vm/probe-host.sh" "$WG_LIB_DIR/vm/python-runtime.sh"
   cat <<'WG_PROBE_HEADER'
 if wg_select_python; then
-"$wg_python" -B - <<'WG_CAPACITY_SOURCE'
+wg_run_python - <<'WG_CAPACITY_SOURCE'
 WG_PROBE_HEADER
   cat "$WG_LIB_DIR/vm/capacity.py"
   cat <<'WG_PROBE_MIDDLE'
 WG_CAPACITY_SOURCE
-"$wg_python" -B - doctor --probe <<'WG_READINESS_SOURCE'
+wg_run_python - doctor --probe <<'WG_READINESS_SOURCE'
 WG_PROBE_MIDDLE
   cat "$WG_LIB_DIR/portable.py"
   cat <<'WG_PROBE_END'
