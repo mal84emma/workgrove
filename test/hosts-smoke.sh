@@ -50,7 +50,7 @@ if [[ "$PROBE_MODE" == actual ]]; then
 fi
 cat >/dev/null
 case "$host" in
-  alpha) printf 'wt_version\t{"commit":"abc1234","protocol":1}\ncpu\t16\nmem_kib\t33554432\ngpu_status\tok\ngpu\t0\tNVIDIA A100\t40960\ngpu\t1\tNVIDIA A100\t40960\n' ;;
+  alpha) printf 'wt_version\t{"commit":"abc1234","protocol":1,"capabilities":[]}\ncpu\t16\nmem_kib\t33554432\ngpu_status\tok\ngpu\t0\tNVIDIA A100\t40960\ngpu\t1\tNVIDIA A100\t40960\n' ;;
   beta) printf 'cpu\t4\nmem_kib\t8388608\ngpu_status\tunknown\n' ;;
   down) echo 'Permission denied (publickey).' >&2; exit 255 ;;
   broken) printf 'wt_version\t{"commit":"abc","protocol":"1"}\ncpu\tnot-a-number\nmem_kib\t\ngpu_status\tok\ngpu\tbad-index\tbroken\tunknown\n' ;;
@@ -156,7 +156,7 @@ scenario_records
 scenario_hardware_probe() {
   begin_scenario 'execute the real probe script with fake hardware commands' || return 0
   mkdir -p "$TEST_ROOT/home/.local/bin"
-  printf '#!/bin/sh\nprintf '\''{"commit":"seeded","protocol":1}\\n'\''\n' >"$TEST_ROOT/home/.local/bin/wt"
+  printf '#!/bin/sh\nprintf '\''{"commit":"seeded","protocol":1,"capabilities":[]}\\n'\''\n' >"$TEST_ROOT/home/.local/bin/wt"
   chmod +x "$TEST_ROOT/home/.local/bin/wt"
   PROBE_MODE=actual
   cat >"$TEST_ROOT/home/.ssh/config" <<'CONFIG'
@@ -209,8 +209,8 @@ scenario_vm_compatibility() {
   json=$(run_wt hosts --json)
   assert_eq 'the current VM retains show facts through the uploaded version probe' true \
     "$(jq -r '.[0].wt_capabilities | index("show-facts") != null' <<<"$json")"
-  assert_eq 'older VM commit and protocol remain available' true \
-    "$(jq -r '.[1] | .wt_commit == "legacy" and .wt_protocol == 1 and .wt_capabilities == []' <<<"$json")"
+  assert_eq 'VM reports without capabilities cannot certify a version' true \
+    "$(jq -r '.[1] | .wt_commit == null and .wt_protocol == null and .wt_capabilities == []' <<<"$json")"
   command=$(python3 - "$REPO/docs/vm-protocol.md" <<'PYTHON'
 import pathlib, sys
 text = pathlib.Path(sys.argv[1]).read_text().split("### Measure group B", 1)[1]

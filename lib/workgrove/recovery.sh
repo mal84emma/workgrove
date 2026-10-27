@@ -62,16 +62,7 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   if [[ $rc != 0 && $rc != 255 && -n $out ]]; then printf '%s\n' "$out" >&2; fi
   vm_wt_failure "$host" show "$rc" "" "$result_rc" "${result[status]-}" "$name" "$repo" || return $?
   session=${result[session]} path=${result[repo]} state=${result[state]-}
-  agent=${result[agent]-} attached=${result[attached]-} started=${result[started]-}
-  # WT_COMPAT: Keep wording checks for VMs that omit the boolean fields.
-  if [[ -z $agent ]]; then
-    agent=false
-    case $state in "agent running"|"agent running, detached") agent=true ;; esac
-  fi
-  if [[ -z $attached ]]; then
-    attached=true
-    [[ $state != *detached && $state != none ]] || attached=false
-  fi
+  agent=${result[agent]} attached=${result[attached]} started=${result[started]}
   title=$(row_title "$name")
   id=$(cmux_row_field "$title" "$path" id "$host" checked) || die "cannot list cmux rows; not creating a row on a lookup that failed"
   if [[ $reattach -eq 1 ]]; then
@@ -106,16 +97,9 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   fi
   if [[ $agent == false && $attached == false && -z $id ]]; then
     local never_started=false session_rc=0
-    if [[ -n $started ]]; then
-      if [[ $started == false ]]; then
-        vm_tmux "$host" has-session "$session" >/dev/null 2>&1 || session_rc=$?
-        [[ $session_rc != 1 ]] || never_started=true
-      fi
-    # WT_COMPAT: Older VMs do not report whether the task has started.
-    elif [[ $state == none ]]; then
-      remote_sh "$host" "sh -s -- $(shell_join "$path" "$name" "$session")" <<'WT_STARTED' && never_started=true
-test ! -e "$1/.git/wt/$2.started" && ! tmux has-session -t "=$3" 2>/dev/null
-WT_STARTED
+    if [[ $started == false ]]; then
+      vm_tmux "$host" has-session "$session" >/dev/null 2>&1 || session_rc=$?
+      [[ $session_rc != 1 ]] || never_started=true
     fi
     if [[ $never_started == true ]]; then
       remote_row "$host" "$session" "$title" "$path" "$(vm_run_line "$name" "$path")" --no-focus

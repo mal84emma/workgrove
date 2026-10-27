@@ -15,7 +15,7 @@ lib_register_scenario scenario_preflight_version "creation consumes the VM versi
 lib_register_scenario scenario_preflight_recovery "remote preflight and recovery"
 lib_register_scenario scenario_real_vm "the fake VM runs real new, show, and path commands"
 lib_register_scenario scenario_long_attach "every attach form accepts a long real VM report"
-lib_register_scenario scenario_result_versions "VM result compatibility for deferred tasks and open"
+lib_register_scenario scenario_result_versions "VM result requirements for deferred tasks and open"
 lib_register_scenario scenario_prompt_order "remote briefs preserve explicit and stdin argument order"
 lib_register_scenario scenario_interrupted_setup "interrupted setup retains the brief, agent and model"
 lib_register_scenario scenario_nested_commands "machine requests do not reach setup hooks or nested commands"
@@ -124,17 +124,12 @@ if [[ ${REMOTE_FAIL_SUB:-} == "$1" ]]; then
 fi
 if [[ $1 == version ]]; then
   case ${REMOTE_VERSION_MODE:-} in
-    newer) printf '{"commit":"fixture","protocol":3}\n'; exit 0 ;;
+    newer) printf '{"commit":"fixture","protocol":3,"capabilities":[]}\n'; exit 0 ;;
     unsupported) exit 1 ;;
     malformed) printf '{broken\n'; exit 0 ;;
   esac
 fi
 if [[ $1 == new ]]; then
-  if [[ $REMOTE_OUTPUT_MODE == old ]]; then
-    for arg do
-      case $arg in -m|--model) echo "wt: new: unknown option $arg" >&2; exit 1 ;; esac
-    done
-  fi
   echo create >>"$REMOTE_NEW_MARKER.calls"
   printf '%s\n' "$@" >"$REMOTE_NEW_MARKER.args"
 fi
@@ -143,7 +138,7 @@ if [[ $1 == new ]]; then : >"$REMOTE_NEW_MARKER"; fi
 case $REMOTE_OUTPUT_MODE in
   bad) echo 'created ???' ;;
   malformed) printf '%s\n' "$output" | sed $'s/^WT_RESULT\t.*/WT_RESULT\t{broken/' ;;
-  old|text) printf '%s\n' "$output" | sed $'/^WT_RESULT\t/d' ;;
+  text) printf '%s\n' "$output" | sed $'/^WT_RESULT\t/d' ;;
   legacy|facts)
     while IFS= read -r line; do
       if [[ $line == WT_RESULT$'\t'* ]]; then
@@ -399,13 +394,6 @@ TMUX
   CMUX_MODE=alive REMOTE_OUTPUT_MODE=normal
   rm "$TEST_ROOT/remote-new"
 
-  # An old VM parser rejects the -m option before it makes a task, and the Mac names the update command.
-  REMOTE_OUTPUT_MODE=old
-  run_wt wt-demo claude fable
-  check "$([[ $WT_RC -ne 0 && ! -e "$TEST_ROOT/remote-new" && "$WT_OUT" == *'wt -H fakevm update'* ]] && echo yes)" 'old remote wt did not give a safe update path'
-  run_wt wt-demo claude
-  check "$([[ $WT_RC -eq 0 && -e "$TEST_ROOT/remote-new" ]] && echo yes)" 'old remote fake rejected a task without -m'
-  rm "$TEST_ROOT/remote-new"
   REMOTE_OUTPUT_MODE=normal
 
   for mode in machine malformed; do
@@ -596,8 +584,22 @@ scenario_result_versions() {
   for mode in text legacy facts; do
     REMOTE_OUTPUT_MODE=$mode
     invoke_wt -H fakevm new task -r wt-demo --no-workspace
-    assert_eq "$mode creation succeeds" 0 "$WT_RC"
+    if [[ $mode == text ]]; then
+      assert_eq 'text-only creation fails after one creation attempt' 1 "$WT_RC"
+      check "$([[ $WT_OUT == *'wt -H fakevm update'* ]] && echo yes)" 'missing creation record omitted update advice'
+    else assert_eq "$mode creation succeeds" 0 "$WT_RC"; fi
     check "$([[ $WT_OUT != *WT_RESULT* ]] && echo yes)" "$mode exposed a result record"
+    if [[ $mode != facts ]]; then
+      : >"$TEST_ROOT/cmux.log"
+      invoke_wt -H fakevm attach task -r "$TEST_ROOT/remote/repo"
+      assert_eq "$mode missing facts cannot start a task" 1 "$WT_RC"
+      check "$(if ! grep -q '^ssh ' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'missing facts opened a row'
+      invoke_wt -H fakevm open task -r "$TEST_ROOT/remote/repo"
+      assert_eq "$mode missing path cannot open an editor" 1 "$WT_RC"
+      check "$([[ $WT_OUT == *'wt -H fakevm update'* ]] && echo yes)" 'missing path omitted update advice'
+      rm "$TEST_ROOT/remote-new"
+      continue
+    fi
     : >"$TEST_ROOT/ssh.log"
     invoke_wt -H fakevm attach task -r "$TEST_ROOT/remote/repo"
     assert_eq "$mode starts a deferred task" 0 "$WT_RC"
@@ -712,12 +714,6 @@ scenario_vm_failures() {
   assert_eq 'silent new failure reports one stderr line with inspection advice' \
     'wt new on fakevm exited 141 (SIGPIPE); the worktree may exist; inspect with: wt -H fakevm list -r wt-demo before retrying' "$WT_STDERR"
   check "$(if ! grep -q '^ssh ' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'failed creation opened a row'
-
-  REMOTE_FAIL_STATUS=1 REMOTE_FAIL_STDERR='wt: new: unknown option -m'
-  invoke_wt -H fakevm new task -r wt-demo -a claude -m opus
-  check "$(grep -xF 'wt new on fakevm exited 1; the worktree may exist; inspect with: wt -H fakevm list -r wt-demo before retrying; update with: wt -H fakevm update' <<<"$WT_STDERR" >/dev/null && echo yes)" 'model compatibility failure omitted its update command from the summary'
-  assert_eq 'model compatibility advice appears once' 1 \
-    "$(grep -cF 'wt -H fakevm update' <<<"$WT_STDERR")"
 
   REMOTE_FAIL_SUB=show REMOTE_FAIL_STATUS=42 REMOTE_FAIL_STDERR='VM diagnostic: unchanged'
   invoke_wt -H fakevm attach task -r '/repos/two words'

@@ -75,7 +75,7 @@ class HostRecordsTests(unittest.TestCase):
                                                     "capabilities": capabilities})
             record = self.record(report)
             self.assertEqual(record["wt_capabilities"], [])
-            self.assertEqual(record["wt_protocol"], 1)
+            self.assertIsNone(record["wt_protocol"])
 
     def test_legacy_and_unavailable_capabilities_are_empty(self):
         for report, host, status in (("wt_version\t{\"commit\":\"abc\",\"protocol\":1}", "test-host", "0"),

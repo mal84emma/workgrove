@@ -467,7 +467,7 @@ wt_run() {
            REMOTE_LOG="$TEST_ROOT/remote-log" \
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
            REMOTE_WT_SESSION="${REMOTE_WT_SESSION:-wt-project-task}" \
-           REMOTE_WT_FORMAT="${REMOTE_WT_FORMAT:-text}" WT_MACHINE="${WT_MACHINE:-}" \
+           REMOTE_WT_FORMAT="${REMOTE_WT_FORMAT:-raw}" WT_MACHINE="${WT_MACHINE:-}" \
            REMOTE_TMUX="$TEST_ROOT/remote-tmux" REMOTE_TMUX_QUEUE="$TEST_ROOT/remote-tmux-queue" \
            REMOTE_TMUX_CLIENT_QUEUE="$TEST_ROOT/remote-tmux-client-queue" \
            REMOTE_TMUX_LATE_RECONNECT="$TEST_ROOT/remote-tmux-late-reconnect" \
@@ -2424,11 +2424,8 @@ done
 output=$(PATH="$FAKE_VM_BIN:$PATH" CMUX_SSH_ATTEMPT_ID=1 FAKE_SHOW_PROBE=1 WT_MACHINE=1 "$FAKE_VM_WT" "${args[@]}")
 while IFS= read -r line; do
   if [[ $line == WT_RESULT$'\t'* ]]; then
-    [[ $REMOTE_WT_FORMAT != text ]] || continue
     record=${line#*$'\t'}
-    if [[ $REMOTE_WT_FORMAT == machine ]]; then
-      record=$(jq -c 'del(.agent,.attached,.started,.path)' <<<"$record")
-    elif [[ $REMOTE_WT_FORMAT == facts ]]; then
+    if [[ $REMOTE_WT_FORMAT == facts ]]; then
       record=$(jq -c '.state="changed wording"' <<<"$record")
     fi
     line=WT_RESULT$'\t'$record
@@ -2522,7 +2519,7 @@ STUB
         "$(grep -c '^list-clients ' <<<"$calls" || true)"
     done
   done
-  WT_RELAY_ENV=() REMOTE_WT_FORMAT=text
+  WT_RELAY_ENV=() REMOTE_WT_FORMAT=raw
   # A connected client is replaced only after fresh screen proof.
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "an already connected row is selected" -H fakevm attach task -r /vm/repos/project
@@ -2593,12 +2590,12 @@ STUB
   REMOTE_WT_SESSION=""
 
   local format
-  for format in text machine facts; do
+  for format in raw facts; do
     REMOTE_WT_FORMAT=$format
     assert_wt_ok "$format show preserves connected client replacement" -H fakevm attach task -r /vm/repos/project
     assert_has "$format show keeps the replacement recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
   done
-  REMOTE_WT_FORMAT=text
+  REMOTE_WT_FORMAT=raw
 
   # A row that never dropped needs the same fresh prompt and detached-session proof before any send.
   printf 'agent running, detached\n' >"$TEST_ROOT/remote-wt-state"
@@ -2611,14 +2608,14 @@ STUB
   assert_eq "the detached session got one return" 1 "$(grep -c '^send-key --workspace remote-row enter$' "$CMUX_LOG" || true)"
   assert_has "the detached report was verified again" "$(cat "$TEST_ROOT/remote-log")" 'tmux has-session -t =wt-project-task'
 
-  for format in machine facts; do
+  for format in raw facts; do
     REMOTE_WT_FORMAT=$format
     : >"$CMUX_LOG"
     assert_wt_ok "$format detached session is re-attached" -H fakevm attach task -r /vm/repos/project
     assert_eq "$format detached session gets one tmux command" 1 "$(tmux_sends)"
     assert_has "$format detached session reports reattachment" "$WT_OUT" '(re-attached)'
   done
-  REMOTE_WT_FORMAT=text
+  REMOTE_WT_FORMAT=raw
 
   # A shell-shaped screen cannot prove that a native row has finished reconnecting.
   local remote_state

@@ -203,7 +203,7 @@ vm_ssh() {
 
 # Without parser arguments, report the remote command failure at the capture boundary.
 # With parser arguments, apply caller policy: <parse> <record status> <name> <repo>.
-# Doctor uses hint for legacy stdout and reports checks through doctor_result.
+# Doctor reports checks through doctor_result.
 vm_wt_failure() {
   local host=$1 sub=$2 rc=$3 hint=${4:-} signal='' detail=''
   if (($# >= 5)); then
@@ -221,12 +221,7 @@ vm_wt_failure() {
           0)
             [[ $status == PASS && $rc == 0 ]] || DOCTOR_FAILED=1
             return 0 ;;
-          2)
-            # WT_COMPAT: Remove text checks when every VM emits doctor result records.
-            if [[ $rc == 0 ]] && ! grep -Eq '^(PASS|FAIL|WARN) cmux-tui CLI$' <<<"$hint"; then rc=1; fi
-            [[ $rc != 0 ]] || return 0
-            DOCTOR_FAILED=1
-            if grep -Eq '^(FAIL|WARN) ' <<<"$hint"; then return 0; fi ;;
+          2) check='VM doctor result record missing' ;;
           3)
             vm_wt_failure "$host" protocol 0 '' 3 || true
             repair='wt update' ;;
@@ -243,6 +238,7 @@ vm_wt_failure() {
         return 0
       else
         message='could not confirm its worktree is gone'
+        if [[ $parse == 2 && $rc != 255 ]]; then message+="; run wt -H $(shell_join "$host") update"; fi
       fi
     elif [[ $sub == protocol ]]; then
       from=''
@@ -266,13 +262,9 @@ vm_wt_failure() {
     if [[ -z $message ]]; then
       case $parse in
         3) message="unsupported result protocol$from; run wt update on the Mac" ;;
-        2)
-          case $sub in
-            new) message="$host did not report created/repo/session" ;;
-            show) message="$host reported no session for $name (try: wt -H $host show $name -r $(shell_join "$repo"))" ;;
-          esac ;;
+        2) message="missing result record from $host; run wt -H $(shell_join "$host") update" ;;
       esac
-      [[ -n $message ]] || message="unexpected output from $host"
+      [[ -n $message ]] || message="unexpected output from $host; run wt -H $(shell_join "$host") update"
       [[ $sub != new ]] || message+="; the worktree may exist; inspect with: $hint before retrying"
     fi
     case $sub in
@@ -371,10 +363,7 @@ vm_result() {
       __hint="the worktree may exist; inspect with: wt -H $__host list"
       [[ -z $__repo ]] || __hint+=" -r $(shell_join "$__repo")"
       __hint+=' before retrying'
-      # WT_COMPAT: Remove when every VM accepts the model option.
-      case $__stdout$'\n'$__stderr in
-        *'new: unknown option -m'*|*'new: unknown option --model'*) __hint+="; update with: wt -H $__host update" ;;
-      esac ;;
+      ;;
     show) __hint="try: wt -H $__host show $(shell_join "$__name" -r "$__repo")" ;;
   esac
   __raw=$__stdout$'\n'$__stderr
@@ -390,40 +379,20 @@ vm_result() {
         [[ ${__vm_record["repo"]} == "$__repo" ]] || return 1
         return 0
       fi ;;
-    2)
-      # WT_COMPAT: Remove text decoding when every VM emits protocol 1 records.
-      case $__sub in
-        new|show)
-          __vm_record["repo"]=$(sed -n 's/^ *repo: *//p' <<<"$__visible" | sed -n '1p')
-          __value=$(sed -n 's/^ *session: *//p' <<<"$__visible" | sed -n '1p')
-          __vm_record["session"]=${__value%% *}
-          if [[ $__sub == new ]]; then
-            __vm_record["name"]=$(sed -n 's/^created //p' <<<"$__visible" | sed -n '1p')
-            __vm_record["status"]=created
-          else
-            __vm_record["name"]=$__name __vm_record["status"]=found
-            __value=${__value#*(}; __vm_record["state"]=${__value%)}
-          fi ;;
-        path)
-          __vm_record["name"]=$__name __vm_record["repo"]=$__repo
-          if [[ $__vm_rc == 1 && $__raw == *"no worktree named '$__name' in $__repo"* ]]; then
-            __vm_record["status"]=missing
-          elif [[ $__vm_rc == 0 ]]; then
-            __vm_record["status"]=found __vm_record["path"]=$__visible
-          else return 2; fi
-          return 0 ;;
-        *) return 2 ;;
-      esac ;;
     *) return "$__parse" ;;
   esac
   case $__sub in
     new|show)
       [[ -n ${__vm_record["name"]} && -n ${__vm_record["repo"]} && -n ${__vm_record["session"]} ]] || return 2
       valid_name "${__vm_record["name"]}" &&
-        [[ ${__vm_record["session"]} == "$(wt_session "${__vm_record["name"]}" "${__vm_record["repo"]}")" ]] || return 1 ;;
+        [[ ${__vm_record["session"]} == "$(wt_session "${__vm_record["name"]}" "${__vm_record["repo"]}")" ]] || return 1
+      if [[ $__sub == show ]]; then
+        for __value in agent attached started; do
+          [[ -v __vm_record[$__value] ]] || return 1
+        done
+      fi ;;
     path)
-      # WT_COMPAT: Protocol 1 originally sent the path only in display text.
-      [[ -v __vm_record["path"] ]] || __vm_record["path"]=$__visible ;;
+      [[ -n ${__vm_record["path"]-} ]] || return 1 ;;
   esac
   return 0
 }
