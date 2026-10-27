@@ -520,7 +520,7 @@ The workflow makes these checks:
   `GIT_ALLOW_PROTOCOL=file` limits git in the suites to local repositories.
 
 To make the same checks on the Mac, install bash, jq and shellcheck first. `Brewfile` installs all three.
-Install Ruff 0.14.0 with `python3 -m pip install ruff==0.14.0`.
+Install [Ruff 0.14.0](https://github.com/astral-sh/ruff/releases/tag/0.14.0) and put its `ruff` executable on `PATH`.
 Then run these commands in bash from the repository root:
 
 ```bash
