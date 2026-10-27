@@ -277,6 +277,127 @@ class RootDiscoveryTests(unittest.TestCase):
                         self.assertNotIn(root, hint)
 
 
+class OperationPolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(dir=os.environ.get("TEST_ROOT"))
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name).resolve()
+
+    def test_reinstall_requires_source(self):
+        result = subprocess.run([sys.executable, "-B", str(REPO / "lib/workgrove/portable.py"), "reinstall"],
+                                env=dict(os.environ, WG_DEBUG=""), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "workgrove: source-required\n")
+
+    def test_debug_reports_internal_errors_only_when_enabled(self):
+        for error_type in (OSError, ValueError, RuntimeError, UnicodeError, TypeError, AttributeError):
+            for debug in (None, "", "0", "1"):
+                environment = dict(os.environ)
+                environment.pop("WG_DEBUG", None)
+                if debug is not None:
+                    environment["WG_DEBUG"] = debug
+                with self.subTest(error=error_type.__name__, debug=debug), \
+                        patch.dict(os.environ, environment, clear=True), \
+                        patch.object(sys, "argv", ["portable.py", "doctor"]), \
+                        patch.object(portable, "readiness", side_effect=error_type("synthetic internal error")), \
+                        patch("sys.stdout", io.StringIO()) as output, patch("sys.stderr", io.StringIO()) as errors:
+                    self.assertEqual(portable.main(), 1)
+                    self.assertEqual(output.getvalue(), "")
+                    diagnostic = "workgrove: portable-operation-failed\n"
+                    if debug == "1":
+                        self.assertTrue(errors.getvalue().startswith("Traceback (most recent call last):\n"))
+                        self.assertIn(error_type.__name__ + ": synthetic internal error\n", errors.getvalue())
+                        self.assertTrue(errors.getvalue().endswith(diagnostic))
+                    else:
+                        self.assertEqual(errors.getvalue(), diagnostic)
+
+    def test_debug_keeps_refusals_unchanged(self):
+        with patch.dict(os.environ, WG_DEBUG="1"), patch.object(sys, "argv", ["portable.py", "doctor"]), \
+                patch.object(portable, "readiness", side_effect=portable.Refusal("synthetic-refusal", "~/.gitconfig")), \
+                patch("sys.stdout", io.StringIO()) as output, patch("sys.stderr", io.StringIO()) as errors:
+            self.assertEqual(portable.main(), 1)
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(errors.getvalue(), "workgrove: synthetic-refusal: ~/.gitconfig\n")
+
+    def profile(self, policy, mount, trusted=False):
+        path = portable.profile_path(self.root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
+        return dict(root=str(self.root), source=str(self.root / "workgrove"), storage=policy,
+                    mount=mount, trust_personal_volume=trusted)
+
+    def test_storage_policy_at_each_call_site(self):
+        linked = self.root / "mount-link"
+        linked.symlink_to(self.root, target_is_directory=True)
+        cases = ((None, [], None, None),
+                 (None, ["--storage", "os-disk"], "os-disk", None),
+                 (None, ["--storage", "volume"], "volume", str(self.root)),
+                 (None, ["--storage", "volume", "--mount", str(linked)], "volume", str(self.root)),
+                 ("os-disk", [], "os-disk", None),
+                 ("volume", [], "volume", str(self.root)),
+                 ("volume", ["--mount", str(linked)], "volume", str(self.root)),
+                 ("os-disk", ["--storage", "volume"], "volume", None),
+                 ("volume", ["--storage", "os-disk"], "os-disk", str(self.root)))
+        for mode in ("install", "bootstrap"):
+            for saved, flags, policy, mount in cases:
+                previous = self.profile(saved, str(self.root) if saved == "volume" else None) if saved else None
+                if previous is None:
+                    portable.profile_path(self.root).unlink(missing_ok=True)
+                with self.subTest(mode=mode, saved=saved, flags=flags), \
+                        patch.object(portable, "load_profile", return_value=previous), \
+                        patch.object(portable, "mounted", return_value=True), \
+                        patch.object(portable, "storage", side_effect=portable.Refusal("storage-observed")) as storage, \
+                        patch.object(sys, "argv", ["portable.py", mode, "--root", str(self.root), *flags]), \
+                        patch("sys.stderr", io.StringIO()) as errors:
+                    old_mask = os.umask(0o077)
+                    try:
+                        self.assertEqual(portable.main(), 1)
+                    finally:
+                        os.umask(old_mask)
+                    self.assertEqual(errors.getvalue(), "workgrove: storage-observed\n")
+                    storage.assert_called_once_with(self.root, policy, mount)
+
+    def test_restore_mode_refusals_at_each_entry_point(self):
+        for mode in ("restore", "install", "bootstrap", "reinstall"):
+            for saved in (None, False, True):
+                previous = self.profile("volume", str(self.root), saved) if saved is not None else None
+                if previous is None:
+                    portable.profile_path(self.root).unlink(missing_ok=True)
+                cases = (([], "restore-storage-policy-conflict"),) if saved is None else (
+                    (["--storage", "os-disk"], "restore-storage-policy-conflict"),
+                    (["--mount", str(self.root / "other")], "restore-storage-policy-conflict"),
+                    (["--strict-permissions"] if saved else ["--trust-personal-volume"],
+                     "restore-cannot-change-volume-trust"))
+                for flags, code in cases:
+                    if mode == "reinstall" and previous is None:
+                        continue
+                    arguments = ["portable.py", mode, "--root", str(self.root), *flags]
+                    if mode != "restore":
+                        arguments.append("--restore-only")
+                    if mode == "reinstall":
+                        arguments.extend(("--source", str(self.root / "workgrove")))
+                    with self.subTest(mode=mode, saved=saved, flags=flags), \
+                            patch.object(portable, "load_profile", return_value=previous), \
+                            patch.object(portable, "storage") as storage, \
+                            patch.object(sys, "argv", arguments), patch("sys.stderr", io.StringIO()) as errors:
+                        old_mask = os.umask(0o077)
+                        try:
+                            self.assertEqual(portable.main(), 1)
+                        finally:
+                            os.umask(old_mask)
+                        self.assertEqual(errors.getvalue(), "workgrove: " + code + "\n")
+                        storage.assert_not_called()
+
+    def test_explicit_restore_mode_does_not_depend_on_function_name(self):
+        def renamed(args):
+            self.fail("Restore must require a saved profile")
+        args = Namespace(root=str(self.root), storage=None, mount=None)
+        operation = portable.configured_permissions(restoring=True)(renamed)
+        with self.assertRaisesRegex(portable.Refusal, "^restore-storage-policy-conflict$"):
+            operation(args)
+
+
 class PortableTests(unittest.TestCase):
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="portable-", dir=os.environ.get("TEST_ROOT"))
