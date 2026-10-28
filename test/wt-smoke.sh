@@ -3672,7 +3672,17 @@ SHIM
   assert_wt_ok 'underscores remain removable' rm my_task -r "$r"
   assert_wt_ok 'create a legacy task without metadata' new no-sidecar --no-workspace -r "$r" -b main
   rm "$r/.git/wt/no-sidecar.json"
-  assert_wt_ok 'verified sidecar absence retains legacy removal' rm no-sidecar -r "$r"
+  if [[ $OS == Darwin ]]; then
+    assert_wt_ok 'verified sidecar absence retains legacy removal' rm no-sidecar -r "$r"
+  else
+    # Missing legacy metadata cannot establish VM row absence.
+    assert_wt_fails 1 'session cleanup is pending' rm no-sidecar -r "$r"
+    assert_gone 'legacy VM removal completes Git cleanup' "$r/.worktrees/no-sidecar"
+    assert_eq 'unknown VM row remains pending' close_requested "$(jq -r .stage "$r/.git/wt/teardown/no-sidecar.json")"
+    # This fixture controller knows that no row or tmux session was created.
+    assert_wt_ok 'observed absence completes legacy VM cleanup' rm no-sidecar -r "$r" --observe-only --row-closed
+  fi
+  assert_eq 'legacy removal finishes with a complete receipt' complete "$(jq -r .stage "$r/.git/wt/teardown/no-sidecar.json")"
   end_scenario
 }
 
