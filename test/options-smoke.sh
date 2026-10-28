@@ -172,7 +172,7 @@ vm_tmux() { :; }
 remote_wt() { printf '%s\n' "$@" >"$TEST_ROOT/forwarded"; }
 host_rm example.invalid task --repo='repo name' --note='a value' --keep-branch
 mapfile -t forwarded <"$TEST_ROOT/forwarded"
-assert_eq 'rm forwards complete argv' $'example.invalid\nrm\n--repo\nrepo name\n--note\na value\n--keep-branch\ntask' "$(printf '%s\n' "${forwarded[@]}")"
+assert_eq 'rm forwards complete argv' $'example.invalid\nrm\n--repo\nrepo name\n--note\na value\n--keep-branch\ntask\n--row-closed' "$(printf '%s\n' "${forwarded[@]}")"
 end_scenario
 
 begin_scenario 'one table row and one function make a command dispatchable'

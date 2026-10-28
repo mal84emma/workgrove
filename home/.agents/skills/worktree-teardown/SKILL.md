@@ -61,7 +61,8 @@ The sandbox can block the cmux and tmux sockets even after you change directorie
 `wt rm` verifies local ownership through cmux process attribution and operating-system process ancestry.
 Inherited cmux caller variables do not prove ownership.
 Unknown ownership keeps the worktree and reports the uncertainty.
-New local Codex launches use `--no-daemon` to keep their runtime in the task process tree.
+New Codex task launches use `--no-daemon` to keep their runtime in the task process tree.
+A generation-bound launcher record must also match the live process and target row or session.
 Older shared-server sessions can require a task-owned restart before teardown.
 Never replace their caller variables with guessed row identifiers.
 
@@ -90,7 +91,8 @@ If the session stays active after that wait, the cleanup is incomplete.
 The `removed` message confirms only worktree removal.
 In this case, report its warning and cleanup receipt.
 The command returns a failure status when the hook does not finish cleanup.
-Retry from the same session or inspect the named row and tmux session from the Mac.
+Retry with `wt -H <vm> rm -r <repo> <name>` from the Mac.
+The controller confirms row absence and reconciles only the recorded session identity.
 Do not close another running agent during recovery.
 
 ## Safety contract (enforced by `wt rm`, exit code 3 on refusal)

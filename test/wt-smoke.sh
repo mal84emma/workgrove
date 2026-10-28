@@ -429,6 +429,15 @@ AGENT
 chmod +x "$FAKE_BIN/claude"
 cp "$FAKE_BIN/claude" "$FAKE_BIN/codex"
 
+fake_owned_runtime() {
+  local repo=$1 name=$2 row=$3 start
+  start=$(LC_ALL=C ps -p "$$" -o lstart=)
+  jq --argjson pid "$$" --arg start "$start" --arg row "$row" '
+    .runtime={provider:"codex",mode:"no-daemon",launcher_pid:$pid,launcher_start:$start,row:$row,generation:.generation}' \
+    "$repo/.git/wt/$name.json" >"$repo/.git/wt/$name.bound"
+  mv "$repo/.git/wt/$name.bound" "$repo/.git/wt/$name.json"
+}
+
 # ---------------------------------------------------------------------------- running bin/wt
 
 # wt_run <args…>: the only place that invokes bin/wt. It sets WT_OUT (stdout and stderr together, because
@@ -604,7 +613,7 @@ scenario_new_and_sidecar() {
 
 scenario_task_model() {
   begin_scenario "$1" || return 0
-  local codex_owned=(); [[ $OS != Darwin ]] || codex_owned=(--no-daemon)
+  local codex_owned=(--no-daemon)
   local r sidecar
   r="$(new_repo model)"
   sidecar="$r/.git/wt/chosen.json"
@@ -1418,7 +1427,7 @@ scenario_teardown_destinations() {
   assert_wt_fails 3 'cannot be compared' rm legacy -r "$r"
   fixture_git "$r" config wt.landingRef origin/main
   fixture_git "$r" branch origin/main main
-  assert_wt_fails 3 'comparison ref' rm legacy -r "$r"
+  assert_wt_fails 3 'cannot be compared' rm legacy -r "$r"
   fixture_git "$r" branch -D origin/main >/dev/null
   assert_wt_ok 'an explicit landing ref still requires content proof' rm legacy -r "$r"
   assert_eq 'receipt records validated content' content "$(jq -r .proof "$r/.git/wt/teardown/legacy.json")"
@@ -1687,6 +1696,7 @@ scenario_self_rm_vm() {
   assert_wt_ok "wt new unmarked native task" new unmarked --no-workspace -r "$r"
   assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
   assert_wt_ok "wt new tmux-denied" new tmux-denied --no-workspace -r "$r"
+  assert_wt_ok 'create a callback receiver fixture' new callback --no-workspace -r "$r"
   for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
     assert_wt_ok "$probe tmux status test worktree" new "status-$probe" --no-workspace -r "$r"
   done
@@ -1696,6 +1706,9 @@ scenario_self_rm_vm() {
 #!/bin/sh
 printf '%s\n' "$*" >>"$SELF_TMUX_LOG"
 case "$1" in has-session)
+  if [ -f "$SELF_TMUX_LOG.closed" ] && grep -qxF -- "${3#=}" "$SELF_TMUX_LOG.closed"; then
+    echo "can't find session: $3" >&2; exit 1
+  fi
   case "${SELF_TMUX_PROBE:-}" in
     denied) echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1 ;;
     missing) echo "can't find session: $3" >&2; exit 1 ;;
@@ -1711,12 +1724,20 @@ show-environment)
     pgrep|idle) echo /dev/pts/123; exit 0 ;;
   esac
   rm -f "$SELF_TMUX_LOG.pgrep-owner"
-  if [ "$3" = "=$SELF_TMUX_SESSION" ]; then
+  if [ "$4" = "=$SELF_TMUX_SESSION" ]; then
     printf '%s\n' "$SELF_TMUX_OWNER_PID" >"$SELF_TMUX_LOG.pgrep-owner"
     echo /dev/pts/123
   elif [ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ]; then echo /dev/pts/123; fi ;; display-message)
   if [ "${SELF_TMUX_FAIL:-}" = 1 ]; then echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1; fi
-  case "$*" in *pane_pid*) printf '%s\n' "$SELF_TMUX_OWNER_PID" ;; *) printf '%s\n' "$SELF_TMUX_SESSION" ;; esac ;;
+  case "$*" in
+    *pane_pid*|*'#{pid}'*) printf '%s\n' "$SELF_TMUX_OWNER_PID" ;;
+    *session_id*) printf '%s\n' "${SELF_TMUX_INSTANCE:-\$101}" ;;
+    *session_created*) echo 12345 ;;
+    *socket_path*) echo /tmp/fake ;;
+    *) printf '%s\n' "$SELF_TMUX_SESSION" ;;
+  esac ;;
+kill-session) printf '%s\n' "$SELF_TMUX_SESSION" >>"$SELF_TMUX_LOG.closed" ;;
+
 esac
 STUB
   cat >"$fake/pgrep" <<'STUB'
@@ -1731,6 +1752,15 @@ fi
 if [ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ]; then echo 99999999; exit 0; fi
 exit 1
 STUB
+  local real_ps
+  real_ps=$(command -v ps)
+  {
+    printf '#!/bin/sh\n'
+    # shellcheck disable=SC2016  # The fake process probe expands these variables.
+    printf 'if [ "$1" = -t ]; then echo "$SELF_TMUX_OWNER_PID"; exit 0; fi\n'
+    printf 'exec %q "$@"\n' "$real_ps"
+  } >"$fake/ps"
+  chmod +x "$fake/ps"
   chmod +x "$fake/tmux" "$fake/pgrep"
   stub_cmux alive
   WT_PATH_PREFIX="$fake" WT_CWD="$r"
@@ -1772,7 +1802,7 @@ STUB
   assert_wt_fails 1 'another agent is running in this tmux session' rm self -r "$r"
   assert_dir 'a second agent in the caller session keeps its worktree' "$r/.worktrees/self"
   unset 'WT_RELAY_ENV[${#WT_RELAY_ENV[@]}-1]'
-  assert_wt_ok "VM self-removal" rm self -r "$r"
+  assert_wt_fails 1 "unverified" rm self -r "$r"
   assert_gone "self-removal removed the worktree" "$r/.worktrees/self"
   assert_branch "$r" wt/self no
   assert_has "VM ends its own tmux session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
@@ -1802,10 +1832,10 @@ STUB
   assert_wt_fails 1 "this row predates native teardown" rm sandboxed -r "$r"
   assert_dir "an older native row kept its worktree" "$r/.worktrees/sandboxed"
   WT_RELAY_ENV[${#WT_RELAY_ENV[@]}-1]="SELF_TMUX_NATIVE=1"
-  assert_wt_ok "native VM self-removal needs no TCP relay" rm sandboxed -r "$r"
+  assert_wt_fails 1 "unverified" rm sandboxed -r "$r"
   assert_gone "native VM self-removal removed its worktree" "$r/.worktrees/sandboxed"
   assert_branch "$r" wt/sandboxed no
-  assert_has "native VM ends its own terminal through tmux" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session -t =wt-$(basename "$r")-sandboxed"
+  assert_has "native VM ends its own terminal through tmux" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session -t \$101"
   assert_lacks "native VM needs no Mac hook" "$(cat "$CMUX_LOG")" "--title wt-close"
 
   for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
@@ -1813,7 +1843,10 @@ STUB
                   "SELF_TMUX_SESSION=other-session" "SELF_TMUX_PROBE=$probe" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
     : >"$TEST_ROOT/self-tmux.log"
     case "$probe" in
-      missing|no-server|no-socket|idle)
+      idle)
+        assert_wt_fails 1 'cleanup is pending' rm "status-$probe" -r "$r"
+        assert_gone 'idle session cleanup keeps a pending receipt after Git removal' "$r/.worktrees/status-$probe" ;;
+      missing|no-server|no-socket)
         assert_wt_ok "$probe tmux status permits removal" rm "status-$probe" -r "$r"
         assert_gone "$probe tmux status removed the worktree" "$r/.worktrees/status-$probe"
         assert_branch "$r" "wt/status-$probe" no ;;
@@ -1825,6 +1858,41 @@ STUB
         assert_lacks "$probe tmux status did not stop the session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session" ;;
     esac
   done
+  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
+  : >"$TEST_ROOT/self-tmux.log"
+  assert_wt_fails 1 'cleanup is pending' rm self -r "$r"
+  assert_lacks 'outside-session retry does not kill a session by its reused name' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
+  assert_wt_ok 'Mac absence acknowledgment completes native cleanup' rm self --row-closed -r "$r"
+  local legacy_session
+  legacy_session="wt-$(basename "$r")-unmarked"
+  printf '%s\n' "$legacy_session" >>"$TEST_ROOT/self-tmux.log.closed"
+  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$legacy_session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
+  assert_wt_ok 'Mac absence acknowledgment completes legacy cleanup without its old relay' rm unmarked --row-closed -r "$r"
+  assert_eq 'legacy receipt becomes complete' complete "$(jq -r .stage "$r/.git/wt/teardown/unmarked.json")"
+  local replacement
+  replacement="wt-$(basename "$r")-sandboxed"
+  grep -vxF "$replacement" "$TEST_ROOT/self-tmux.log.closed" >"$TEST_ROOT/remaining-sessions" || true
+  mv "$TEST_ROOT/remaining-sessions" "$TEST_ROOT/self-tmux.log.closed"
+  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$replacement" "SELF_TMUX_INSTANCE=\$202" "SELF_TMUX_PROBE=idle" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
+  : >"$TEST_ROOT/self-tmux.log"
+  assert_wt_fails 1 'identity changed' rm sandboxed --row-closed -r "$r"
+  assert_lacks 'replacement idle session survives receipt recovery' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
+  local callback_session
+  callback_session="wt-$(basename "$r")-callback"
+  {
+    printf '#!/bin/sh\n'
+    printf 'exec env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_LOCK_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed -r %s\n' \
+      "$(shell_join "$WT_BASH")" "$(shell_join "$WT")" "$(shell_join "$r")"
+  } >"$FAKE_CMUX_STATE/notify-callback"
+  chmod +x "$FAKE_CMUX_STATE/notify-callback"
+  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0"
+    "SELF_TMUX_SESSION=$callback_session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_NATIVE=0"
+    "CMUX_TUI_SOCKET=/tmp/native" "CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "WT_CLOSE_WAIT_SECONDS=0")
+  ln -s "$CMUX_ALIVE" "$fake/cmux-tui"
+  assert_wt_fails 1 'unverified' rm callback -r "$r"
+  assert_eq 'an independent callback acquires the released lock and finishes the recorded live session' complete \
+    "$(jq -r .stage "$r/.git/wt/teardown/callback.json")"
+  rm "$FAKE_CMUX_STATE/notify-callback" "$fake/cmux-tui"
   WT_RELAY_ENV=() WT_PATH_PREFIX="" WT_CWD=""
   end_scenario
 }
@@ -2314,6 +2382,7 @@ scenario_cmux() {
     assert_dir "an unknown $agent status shape kept the worktree" "$r/.worktrees/self-$agent"
     WT_RELAY_ENV=("CMUX_STUB_CALLER=own-$agent" "CMUX_STUB_AGENTS=1")
     : >"$CMUX_LOG"
+    [[ $agent != codex ]] || fake_owned_runtime "$r" "self-$agent" "own-$agent"
     assert_wt_ok "$agent self-removal from the main checkout" rm "self-$agent" -r "$r"
     assert_has "$agent self-close bypassed cmux confirmation" "$(cat "$CMUX_LOG")" "workspace close own-$agent --force"
     assert_gone "$agent removed its own worktree" "$r/.worktrees/self-$agent"
@@ -2467,6 +2536,9 @@ scenario_codex_caller_context() {
   # Independent process attribution proves ownership despite stale caller hints.
   WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_OWNER_ROW=requester-row" "CMUX_STUB_AGENTS=1" "CMUX_WORKSPACE_ID=seed-row")
   : >"$CMUX_LOG"
+  assert_wt_fails 1 'task-owned Codex launch' rm requester -r "$r"
+  assert_dir 'shared-server ancestry alone does not grant self ownership' "$r/.worktrees/requester"
+  fake_owned_runtime "$r" requester requester-row
   assert_wt_ok 'correct caller identity permits normal self-removal' rm requester -r "$r"
   assert_has 'only verified self-close skips confirmation' "$(cat "$CMUX_LOG")" 'workspace close requester-row --force'
   assert_gone 'corrected fixture removes its worktree' "$r/.worktrees/requester"
@@ -2503,6 +2575,10 @@ scenario_close_confirmation_failure() {
   WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_AGENTS=0")
   assert_wt_ok 'retry completes only pending row cleanup' rm late -r "$r"
   assert_eq 'receipt records complete cleanup' complete "$(jq -r .stage "$r/.git/wt/teardown/late.json")"
+  jq '.stage="close_requested"' "$r/.git/wt/teardown/late.json" >"$r/.git/wt/teardown/late.observed"
+  mv "$r/.git/wt/teardown/late.observed" "$r/.git/wt/teardown/late.json"
+  assert_wt_ok 'creation reconciles an already-absent local self-closure' new late --no-workspace -r "$r"
+  assert_dir 'name reuse creates a new generation' "$r/.worktrees/late"
   WT_RELAY_ENV=()
   end_scenario
 }
@@ -2668,6 +2744,137 @@ scenario_codex_owned_launch() {
   WT_RELAY_ENV=(FAKE_AGENT_STATUS=42)
   assert_wt_fails 42 'codex exited with status 42' run owned -r "$r"
   WT_RELAY_ENV=() WT_EXTRA=''
+  end_scenario
+}
+
+scenario_teardown_review_git() {
+  begin_scenario "$1" || return 0
+  local r e shim real_git mac="$TEST_ROOT/review-git-bin" WT_PATH_PREFIX=''
+  export GIT_ALLOW_PROTOCOL=file
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac; stub_cmux dead
+  r=$(new_repo self-alias)
+  assert_wt_ok 'create unpublished alias fixture' new unique --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/unique" unique.txt unpublished
+  fixture_git "$r" symbolic-ref refs/heads/landing-alias refs/heads/wt/unique
+  fixture_git "$r" config wt.landingRef refs/heads/landing-alias
+  assert_wt_fails 3 'cannot be compared' rm unique -r "$r"
+  assert_branch "$r" wt/unique yes
+  fixture_git "$r" config wt.landingRef 'wt/unique^0'
+  assert_wt_fails 3 'cannot be compared' rm unique -r "$r"
+  assert_dir 'self aliases and expressions preserve unpublished work' "$r/.worktrees/unique"
+
+  r=$(new_repo slash-remote); e=$(add_origin "$r")
+  fixture_git "$r" remote rename origin team/upstream
+  fixture_git "$r" remote set-head team/upstream main
+  assert_wt_ok 'create task on slash-bearing remote' new stale --no-workspace -r "$r"
+  assert_meta "$r" stale landing_remote team/upstream
+  fixture_commit "$r/.worktrees/stale" landed.txt work
+  fixture_git "$r" push -q -u team/upstream wt/stale
+  land_squash "$e" wt/stale squash
+  fixture_git "$r" fetch -q team/upstream
+  fixture_git "$e" revert --no-edit HEAD >/dev/null
+  fixture_git "$e" push -q origin main
+  assert_wt_fails 3 'not merged' rm stale -r "$r"
+  assert_has 'slash-bearing remote refreshes before accepting cached success' "$WT_OUT" 'fetching team/upstream/main from team/upstream'
+  fixture_git "$r" remote add team "$TEST_ROOT/origins/$(basename "$r").git"
+  assert_wt_fails 3 'not merged' rm stale -r "$r"
+  jq 'del(.metadata_version,.landing_remote)' "$r/.git/wt/stale.json" >"$r/.git/wt/stale.legacy"
+  mv "$r/.git/wt/stale.legacy" "$r/.git/wt/stale.json"
+  assert_wt_fails 3 'cannot be compared' rm stale -r "$r"
+  fixture_git "$r" config wt.landingRemote team/upstream
+  assert_wt_fails 3 'not merged' rm stale -r "$r"
+  assert_dir 'all remote variants preserve reverted work' "$r/.worktrees/stale"
+
+  r=$(new_repo include-enumeration)
+  printf '.env\n' >"$r/.wt-include"
+  fixture_git "$r" add .wt-include; fixture_git "$r" commit -q -m include
+  printf '.env\n' >>"$r/.git/info/exclude"
+  assert_wt_ok 'create private-file fault fixture' new private --no-workspace -r "$r"
+  printf 'private bytes\n' >"$r/.worktrees/private/.env"
+  real_git=$(command -v git); shim="$TEST_ROOT/include-fault-bin"; mkdir -p "$shim"
+  cat >"$shim/git" <<'GIT'
+#!/usr/bin/env bash
+case "$*" in
+  *'ls-files --others --ignored --exclude-standard -z'*)
+    n=$(cat "$INCLUDE_FAULT_COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$INCLUDE_FAULT_COUNT"
+    if [[ $n == "$INCLUDE_FAULT_AT" ]]; then
+      printf 'private bytes\n' >"$INCLUDE_FAULT_PATH"
+      exit 128
+    fi ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+GIT
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX="$shim:$mac"
+  WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git" "INCLUDE_FAULT_COUNT=$TEST_ROOT/include-count" "INCLUDE_FAULT_AT=1" "INCLUDE_FAULT_PATH=$r/.worktrees/private/.env")
+  assert_wt_fails 3 'cannot enumerate included private files' rm private -r "$r"
+  assert_eq 'failed enumeration preserves private bytes' 'private bytes' "$(cat "$r/.worktrees/private/.env")"
+  rm "$r/.worktrees/private/.env" "$TEST_ROOT/include-count"
+  WT_RELAY_ENV[2]='INCLUDE_FAULT_AT=3'
+  assert_wt_fails 1 'cannot enumerate included private files' rm private -r "$r"
+  assert_eq 'deletion-boundary failure preserves private bytes' 'private bytes' "$(cat "$r/.worktrees/private/.env")"
+  assert_branch "$r" wt/private yes
+  WT_RELAY_ENV=() WT_PATH_PREFIX=$mac
+  r=$(new_repo unusual-private-names)
+  printf 'private*\n' >"$r/.wt-include"
+  fixture_git "$r" add .wt-include; fixture_git "$r" commit -q -m include
+  printf 'private*\n' >>"$r/.git/info/exclude"
+  assert_wt_ok 'create private-name fixture' new names --no-workspace -r "$r"
+  local private_name
+  private_name="private:$(printf '%064d' 0)"
+  printf 'private bytes\n' >"$r/.worktrees/names/$private_name"
+  assert_wt_fails 3 'edited or created inside' rm names -r "$r"
+  assert_eq 'a hash-shaped filename is never mistaken for a hash record' 'private bytes' "$(cat "$r/.worktrees/names/$private_name")"
+  rm "$r/.worktrees/names/$private_name"
+  private_name=$'private\nkey'
+  printf 'private bytes\n' >"$r/.worktrees/names/$private_name"
+  assert_wt_fails 3 'cannot enumerate included private files' rm names -r "$r"
+  assert_eq 'unsupported filename encoding keeps private data' 'private bytes' "$(cat "$r/.worktrees/names/$private_name")"
+  WT_RELAY_ENV=() WT_PATH_PREFIX=''
+  end_scenario
+}
+
+scenario_teardown_review_ownership() {
+  begin_scenario "$1" || return 0
+  local result
+  result=$(
+    # These process identities model separate clients sharing the older client's server.
+    ps() {
+      if [[ $1 == -t ]]; then
+        case $2 in pts/124) echo 99999999 ;; *) echo 100 ;; esac
+        return 0
+      fi
+      case ${4:-} in
+        command=) [[ $2 != 110 ]] && echo claude || echo 'codex app-server' ;;
+        comm=) echo "${REVIEW_PROVIDER:-codex}" ;;
+        *) case $2 in 90) echo 80 ;; 100) echo 90 ;; 110) echo 100 ;; 120) echo 110 ;; 99999999) echo 1 ;; *) echo 120 ;; esac ;;
+      esac
+    }
+    cmux_call() {
+      jq -cn --argjson caller "$BASHPID" '{coding_agents:[{resources:{pids:[100,110],process_count:2}}],windows:[{workspaces:[{id:"old-row",resources:{pids:[90,100,110,120,$caller],process_count:5}}]}]}'
+    }
+    local CMUX_ERROR='' WT_TEARDOWN_JSON='' rc=0
+    row_agent old-row || rc=$?
+    printf 'shared rc=%s error=%s\n' "$rc" "$CMUX_ERROR"
+    tmux() {
+      case "$*" in *'list-panes -s '*) printf '/dev/pts/123\n/dev/pts/124\n' ;; *) echo /dev/pts/123 ;; esac
+    }
+    pgrep() {
+      case "$*" in *pts/124*) [[ ${REVIEW_EXTRA_AGENT:-1} == 1 ]] || return 1; echo 99999999 ;; *) echo 100 ;; esac
+    }
+    REVIEW_PROVIDER=claude
+    rc=0; tmux_self_ownership target || rc=$?
+    printf 'other-window agent rc=%s\n' "$rc"
+    REVIEW_EXTRA_AGENT=0
+    rc=0; tmux_self_ownership target || rc=$?
+    printf 'other-window command rc=%s\n' "$rc"
+  )
+  assert_has 'shared-server ancestry cannot grant self ownership' "$result" 'shared rc=1'
+  assert_has 'the refusal identifies missing task-owned context' "$result" 'task-owned Codex launch'
+  assert_has 'another agent in another window prevents session shutdown' "$result" 'other-window agent rc=1'
+  assert_has 'an independent command in another window prevents session shutdown' "$result" 'other-window command rc=1'
   end_scenario
 }
 

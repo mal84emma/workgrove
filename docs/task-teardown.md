@@ -23,7 +23,7 @@ An approval denial leaves the task intact.
 
 The sidecar's `base` remains the creation comparison ref.
 PR retargeting does not rewrite it.
-New tasks also record creation objects, a generation, and inherited landing-root provenance.
+New tasks use metadata version 3 and record creation objects, a generation, and inherited landing-root provenance.
 A generation identifies one instance of a task name.
 Parent removal does not edit dependent sidecars.
 
@@ -34,6 +34,11 @@ Saved local roots support local-only repositories.
 Remote discovery uses creation provenance, the configured upstream remote, or the repository's sole remote.
 It queries that remote's advertised symbolic `HEAD`, then fetches the selected branch explicitly.
 This supports non-GitHub remotes and renamed default branches without assuming `origin/main`.
+Canonical resolution rejects symbolic aliases of the task branch and mutable revision expressions.
+Full remote names can contain slashes.
+
+Overlapping remote names require version-3 provenance or explicit `wt.landingRemote` Git configuration.
+Older metadata remains unchanged and uses only unambiguous remote mappings.
 Ambiguous or unavailable destinations keep the task.
 An explicit landing ref still requires preservation proof.
 
@@ -63,14 +68,19 @@ Status never fetches and cannot authorize deletion by itself.
 
 ## Verify the requesting session
 
-Local Codex launches require CLI support for `--no-daemon`.
+Codex task launches on the Mac and VMs require command-line interface (CLI) support for `--no-daemon`.
 This mode keeps the runtime beneath the task's foreground process instead of reusing another terminal's shared server.
 Workgrove preserves model, brief, profile arguments, sandbox settings, and approval settings.
 It refuses explicit remote-server arguments for this local task mode.
 Unsupported launch options and provider failures return nonzero statuses.
 
 When launch context names a cmux row, its process sample must contain the launching `wt run` process.
-Per-invocation environment overrides carry that validated row context into Codex commands.
+A generation-bound record saves the validated owner, launcher process identifier (PID), process start identity, provider, and runtime mode.
+Self-removal must verify this record against the live launcher and its process ancestry.
+
+A foreground client above a shared server cannot supply that proof by ancestry alone.
+Per-invocation environment overrides carry validated Mac row context into Codex commands.
+VM relay context remains dynamic and is not frozen by these overrides.
 No global configuration changes are required.
 
 During removal, cmux process attribution identifies the agents in the target row.
@@ -86,16 +96,25 @@ Workgrove never stops a shared Codex daemon as a teardown workaround.
 VM self-removal pins the caller pane and verifies its process ancestry and exclusive agent ownership before accepting the named session.
 Native terminal exit and legacy Mac-hook cleanup retain their existing transport paths.
 The legacy path returns failure when the hook does not finish cleanup.
+Receipts bind the tmux session ID, creation time, socket, server PID, and server start identity.
+Recovery rejects replacement sessions even when their names match.
+
+Exclusive ownership covers every window and pane, including independent commands.
 These fixtures do not establish real provider cancellation or terminal shutdown.
 
 ## Recover incomplete cleanup
 
 A per-task operating-system lock prevents cooperating removal commands from deleting the same generation concurrently.
-A finite child command holds the lock; process exit releases it, including interrupted self-closure.
+A finite child command holds the lock through Git cleanup.
+The command releases it before an independent session-cleanup callback runs.
+Later receipt writes acquire the lock and reject a different generation.
+Process exit also releases the lock, including interrupted self-closure.
+
 The private `<name>.lock` file remains beside the receipt and can serve later generations.
 Before deletion, workgrove writes a private receipt under `<repo>/.git/wt/teardown/<name>.json`.
 Atomic replacement and filesystem synchronization preserve each recorded stage.
 The receipt records object identities and component progress, without copying private file contents or task briefs.
+
 Only the most recent receipt for each task name is retained.
 A completed receipt can be replaced when another generation finishes.
 
@@ -113,7 +132,23 @@ A surviving caller reports failure when row closure fails.
 Repeat the original `wt rm` command to resume pending cleanup after the worktree registration is gone.
 Recovery rechecks row identity and running-agent ownership before closing anything.
 A completed receipt makes another retry harmless.
-Pending cleanup blocks reuse of the task name.
+Creation can reconcile already-absent local rows without closing anything.
+The Mac can reconcile an absent VM row and session before retrying a requested task name.
+Otherwise, pending cleanup blocks reuse of the task name.
+
+Mac-controlled removal defers session cleanup until it confirms row closure.
+The controller then acknowledges row absence to the VM, which validates and stops only the recorded session and its original process owners.
+Legacy hooks use the same acknowledgment after closing their authenticated requesting row.
+They require the VM's `teardown-receipts` capability before closing it.
+A failed acknowledgment remains pending and can be retried from the Mac.
+
+The controller flags are narrow cleanup operations:
+
+- `--defer-close` completes Git cleanup while leaving session cleanup to the Mac.
+- `--row-closed` acknowledges independently observed Mac row absence and validates the recorded VM session.
+- `--observe-only` reconciles verified absence without deleting Git work or closing sessions.
+
+These flags never waive work-preservation checks or authorize another running agent's closure.
 
 A lock does not exclude arbitrary editors or external Git writers.
 The deletion-boundary checks narrow that race but cannot atomically exclude uncooperative filesystem changes.

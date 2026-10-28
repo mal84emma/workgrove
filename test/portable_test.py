@@ -844,12 +844,17 @@ class PortableTests(unittest.TestCase):
         tmux = self.tools / "tmux"
         tmux.write_text("#!/bin/sh\necho 'no server running on /tmp/synthetic-tmux' >&2\nexit 1\n")
         for command in ("show", "path", "rm"):
-            options = ["--keep-branch"] if command == "rm" else []
+            options = ["--keep-branch", "--defer-close"] if command == "rm" else []
             result = subprocess.run([str(self.tools / "bash"), str(self.source / "bin/wt"),
                                      command, "accidental", "-r", str(self.source), *options],
                                     cwd=self.root, env=dict(self.env, CMUX_SSH_ATTEMPT_ID="test"),
                                     capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
+        completed = subprocess.run([str(self.tools / "bash"), str(self.source / "bin/wt"), "rm", "accidental",
+                                    "-r", str(self.source), "--keep-branch", "--row-closed"],
+                                   cwd=self.root, env=dict(self.env, CMUX_SSH_ATTEMPT_ID="test"),
+                                   capture_output=True, text=True, timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertFalse(task.exists())
         report = json.loads(self.command("doctor", "--json", ok=False).stdout)
         self.assertIn("installation-changed-run-full-setup", report["issues"])
@@ -3277,7 +3282,7 @@ sys.exit(1)
                         "--no-workspace", "-p", "Saved brief.")
             tool = self.tools / agent
             capture = self.base / (agent + "-arguments.json")
-            tool.write_text(f'#!{sys.executable}\nimport json, pathlib, sys\npathlib.Path({str(capture)!r}).write_text(json.dumps(sys.argv[1:]))\n')
+            tool.write_text(f'#!{sys.executable}\nimport json, pathlib, sys\nif "--help" in sys.argv: print("--no-daemon"); sys.exit(0)\npathlib.Path({str(capture)!r}).write_text(json.dumps(sys.argv[1:]))\n')
             tool.chmod(0o700)
             result = subprocess.run([str(self.tools / "bash"), str(self.home / ".local/bin/wt"), "run", "agent-" + agent,
                                      "-r", str(project)], env=dict(self.env, CMUX_SSH_ATTEMPT_ID="fixture"),

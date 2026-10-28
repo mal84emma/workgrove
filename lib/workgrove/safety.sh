@@ -13,15 +13,16 @@ file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shas
 }
 
 include_match() { # include_match <path relative to a checkout> — 0 when .wt-include covers it
-  local f="$1" inc="$REPO/.wt-include" pat
+  local f="$1" inc="$REPO/.wt-include" pat contents
   [[ -f "$inc" ]] || return 1
+  contents=$(cat "$inc") || return 2
   while IFS= read -r pat || [[ -n "$pat" ]]; do
     pat="${pat%%#*}"; pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
     [[ -z "$pat" ]] && continue
     pat="${pat#/}"; pat="${pat%/}"
     # shellcheck disable=SC2053
     if [[ "$f" == $pat || "$f" == $pat/* || "$(basename "$f")" == $pat ]]; then return 0; fi
-  done < "$inc"
+  done <<<"$contents"
   return 1
 }
 
@@ -42,9 +43,22 @@ copy_includes() { # copy gitignored files listed in .wt-include into the new wor
 worktree_includes() { # worktree_includes <path> — ignored files inside the worktree that .wt-include covers
   local p="$1" f                          # today, whether or not they existed when the worktree was created
   [[ -f "$REPO/.wt-include" ]] || return 0
-  git -C "$p" ls-files --others --ignored --exclude-standard -z 2>/dev/null | while IFS= read -r -d '' f; do
-    if [[ "$f" != "$WT_DIRNAME/"* ]] && include_match "$f"; then printf '%s\n' "$f"; fi
-  done
+  local listing match_error=0
+  listing=$(mktemp "${TMPDIR:-/tmp}/wt-includes.XXXXXX") || return 1
+  wt_register_tmpfile "$listing"
+  if ! git -C "$p" ls-files --others --ignored --exclude-standard -z >"$listing" 2>/dev/null; then
+    rm -f "$listing"; return 1
+  fi
+  while IFS= read -r -d '' f; do
+    if [[ $f == *$'\n'* ]]; then match_error=1; break; fi
+    if [[ "$f" != "$WT_DIRNAME/"* ]]; then
+      local match_rc=0
+      include_match "$f" || match_rc=$?
+      case $match_rc in 0) printf '%s\n' "$f" ;; 1) ;; *) match_error=1; break ;; esac
+    fi
+  done <"$listing"
+  rm -f "$listing"
+  [[ $match_error == 0 ]]
 }
 
 changed_includes() { # changed_includes <name> <path> -> ignored files that removing the worktree would destroy
@@ -55,12 +69,18 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
   #   in no snapshot, and `worktree remove --force` deletes it without a warning.
   local n="$1" p="$2" f h e seen="" list
   meta_require "$n"
-  list=$(printf '%s\n%s\n' "${WT_META[includes]-}" "$(worktree_includes "$p")")
+  local current
+  current=$(worktree_includes "$p") || return 1
+  list=$(while IFS= read -r e; do [[ -z $e ]] || printf 'R:%s\n' "$e"; done <<<"${WT_META[includes]-}"
+         while IFS= read -r e; do [[ -z $e ]] || printf 'F:%s\n' "$e"; done <<<"$current")
   while IFS= read -r e; do
     [[ -n "$e" ]] || continue
-    f="${e%:*}"; h="${e##*:}"
+    if [[ $e == F:* ]]; then f=${e#F:}; h=''
+    else
+    e=${e#R:}; f="${e%:*}"; h="${e##*:}"
     # WT_COMPAT: Remove when every sidecar records hashes for included files.
     [[ "$h" =~ ^[0-9a-f]{64}$ ]] || { f="$e"; h=""; }   # metadata from an older wt: plain names, no hash
+    fi
     case "$seen" in *"|$f|"*) continue ;; esac          # recorded and still matching: judge it once
     seen="$seen|$f|"
     [[ -e "$p/$f" ]] || continue
@@ -79,11 +99,16 @@ porcelain_paths() { # porcelain_paths <checkout> — one path per line for every
   # exact string. A rename or copy emits its source as a second record. The loop reads that record and drops
   # it: the destination is the dirty path, and the source no longer exists to hash.
   local p="$1" rec f
-  git -C "$p" status --porcelain -z 2>/dev/null | while IFS= read -r -d '' rec; do
+  local listing
+  listing=$(mktemp "${TMPDIR:-/tmp}/wt-status.XXXXXX") || return 1
+  wt_register_tmpfile "$listing"
+  if ! git -C "$p" status --porcelain -z >"$listing" 2>/dev/null; then rm -f "$listing"; return 1; fi
+  while IFS= read -r -d '' rec; do
     f="${rec:3}"
     case "${rec:0:2}" in R*|C*) IFS= read -r -d '' _src || true ;; esac
     if [[ -n "$f" ]]; then printf '%s\n' "$f"; fi
-  done
+  done <"$listing"
+  rm -f "$listing"
 }
 
 setup_dirt() { # setup_dirt <worktree path> — what .wt-setup left in git's way, as "<path>:<sha256>" lines.
@@ -109,14 +134,17 @@ unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-s
   meta_require "$n"
   # WT_COMPAT: Remove the missing setup key default when every sidecar records setup output.
   recorded=${WT_META[setup]-}
-  [[ -n "$recorded" ]] || { porcelain_paths "$p"; return 0; }
-  porcelain_paths "$p" | while IFS= read -r f; do
+  local listing
+  listing=$(porcelain_paths "$p") || return 1
+  [[ -n "$recorded" ]] || { printf '%s' "$listing"; return 0; }
+  while IFS= read -r f; do
+    [[ -n $f ]] || continue
     h=$(file_hash "$p/$f"); explained=0
     while IFS= read -r e; do
       if [[ -n "$e" && "${e%:*}" == "$f" && "${e##*:}" == "$h" ]]; then explained=1; break; fi
     done <<<"$recorded"
     if [[ $explained -eq 0 ]]; then printf '%s\n' "$f"; fi
-  done
+  done <<<"$listing"
 }
 
 branch_pushed() { # branch_pushed <branch> — 0 only when the remote still has every commit of that branch.
@@ -217,27 +245,67 @@ branch_landed() { # branch_landed <branch> <base> <reason output>
   return 1
 }
 
+comparison_ref() { # Resolve a persistent ref or a pinned object. Revision expressions are not destinations.
+  local -n __resolved=$3
+  local __input=$1 __branch=$2 __symbol
+  __resolved=''
+  [[ $__input != HEAD ]] || return 1
+  comparison_unambiguous "$__input" || return 1
+  __symbol=$(git -C "$REPO" rev-parse --symbolic-full-name "$__input" 2>/dev/null) || __symbol=''
+  if [[ $__symbol == refs/* && $__symbol != *$'\n'* ]]; then
+    [[ $__symbol != "refs/heads/$__branch" ]] || return 1
+    __resolved=$__symbol
+  elif [[ $__input =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+    __resolved=$(git -C "$REPO" rev-parse --verify "$__input^{commit}" 2>/dev/null) || return 1
+  else
+    local __candidate __remote_owner=''
+    case $__input in refs/remotes/*) __candidate=$__input ;; refs/*) return 1 ;; */*) __candidate="refs/remotes/$__input" ;; *) return 1 ;; esac
+    git -C "$REPO" check-ref-format "$__candidate" >/dev/null 2>&1 || return 1
+    comparison_remote "$__candidate" __remote_owner || return 1
+    __resolved=$__candidate
+  fi
+}
+
+comparison_remote() { # Return 2 for local refs and 1 for an unknown or ambiguous remote mapping.
+  local -n __owner=$2
+  local __full=$1 __candidate __explicit __matches=()
+  __owner=''
+  [[ $__full == refs/remotes/* ]] || return 2
+  while IFS= read -r __candidate; do
+    [[ $__full != "refs/remotes/$__candidate/"* ]] || __matches+=("$__candidate")
+  done <<<"$(git -C "$REPO" remote)"
+  __explicit=$(git -C "$REPO" config --get wt.landingRemote 2>/dev/null || true)
+  if [[ -z $__explicit && ${WT_META[metadata_version]:-0} == 3 ]]; then __explicit=${WT_META[landing_remote]-}; fi
+  if [[ -n $__explicit ]]; then
+    for __candidate in "${__matches[@]}"; do
+      if [[ $__candidate == "$__explicit" ]]; then __owner=$__candidate; return 0; fi
+    done
+  fi
+  ((${#__matches[@]} == 1)) || return 1
+  __owner=${__matches[0]}
+}
+
 declare -A WT_BASE_FETCHES=()
-fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as origin/main. Returns:
-               # 0 when it refreshed the base; 1 when the fetch failed (now, or earlier this run);
-               # 2 when the base is not a remote's branch and there was nothing to do;
-               # 3 when the base was already refreshed this run.
-  # Refresh remote content before accepting cached success. A failed fetch cannot authorize removal.
-  # Local branches need no network operation. Cache each refresh until the deletion-boundary check.
-  local base="${1#refs/remotes/}" remote
-  [[ "$base" == */* ]] || return 2
-  remote="${base%%/*}"
-  git -C "$REPO" remote 2>/dev/null | grep -xF "$remote" >/dev/null || return 2
-  case "${WT_BASE_FETCHES[$base]:-}" in
-    ok) return 3 ;;
-    failed) return 1 ;;
-  esac
+fetch_base() { # Refresh the canonical remote ref. Return 2 for local evidence and 3 for an already refreshed ref.
+  local base=$1 full='' remote='' rc=0 branch
+  comparison_ref "$base" '' full || return 1
+  comparison_remote "$full" remote || rc=$?
+  [[ $rc != 2 ]] || return 2
+  [[ $rc == 0 ]] || return 1
+  case "${WT_BASE_FETCHES[$full]:-}" in ok) return 3 ;; failed) return 1 ;; esac
+  branch=${full#refs/remotes/"$remote"/}
   warn "fetching $base from $remote to verify current landing content"
   if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}" \
-       git -C "$REPO" fetch -q --no-tags "$remote" "+refs/heads/${base#*/}:refs/remotes/$base" >/dev/null 2>&1; then
-    WT_BASE_FETCHES[$base]=ok; return 0
+      git -C "$REPO" fetch -q --no-tags "$remote" "+refs/heads/$branch:$full" >/dev/null 2>&1; then
+    WT_BASE_FETCHES[$full]=ok; return 0
   fi
-  WT_BASE_FETCHES[$base]=failed; return 1
+  WT_BASE_FETCHES[$full]=failed; return 1
+}
+
+forget_base() {
+  local full=''
+  comparison_ref "$1" '' full || return 1
+  WT_BASE_FETCHES[$full]=''
 }
 
 comparison_unambiguous() {
@@ -257,15 +325,16 @@ comparison_base() { # comparison_base <branch> <creation base> <output>
   [[ $__saved != HEAD && $__saved != "$__branch" && $__saved != "refs/heads/$__branch" ]] || return 1
   __configured=$(git -C "$REPO" config --get wt.landingRef 2>/dev/null || true)
   if [[ -n $__configured ]]; then __effective=$__configured
-  elif [[ ${4:-} != landing ]] && git -C "$REPO" rev-parse -q --verify "$__saved^{commit}" >/dev/null 2>&1; then return 0
+  elif [[ ${4:-} != landing ]] && git -C "$REPO" rev-parse -q --verify "$__saved^{commit}" >/dev/null 2>&1; then comparison_ref "$__effective" "$__branch" __canonical; return
   else
     if [[ -n ${WT_META[landing_ref]-} && -z ${WT_META[landing_remote]-} ]]; then
       __effective=${WT_META[landing_ref]}
       [[ $__effective != "$__branch" && $__effective != HEAD ]] || return 1
-      git -C "$REPO" rev-parse -q --verify "$__effective^{commit}" >/dev/null 2>&1
+      comparison_ref "$__effective" "$__branch" __canonical
       return
     fi
-    __remote=${WT_META[landing_remote]-}
+    __remote=''
+    [[ ${WT_META[metadata_version]:-0} != 3 ]] || __remote=${WT_META[landing_remote]-}
     [[ -n $__remote ]] || __remote=$(git -C "$REPO" config "branch.$__branch.remote" 2>/dev/null || true)
     if [[ -z $__remote ]]; then
       __remotes=$(git -C "$REPO" remote)
@@ -275,7 +344,8 @@ comparison_base() { # comparison_base <branch> <creation base> <output>
     [[ $__remote != . ]] || return 1
     if [[ ${4:-} == cached ]]; then
       __effective=$(git -C "$REPO" symbolic-ref -q --short "refs/remotes/$__remote/HEAD" 2>/dev/null) || return 1
-      return 0
+      comparison_ref "$__effective" "$__branch" __canonical
+      return
     fi
     __advertised=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}" \
       git -C "$REPO" ls-remote --symref "$__remote" HEAD 2>/dev/null) || return 1
@@ -283,8 +353,7 @@ comparison_base() { # comparison_base <branch> <creation base> <output>
     [[ -n $__head && $__head != *$'\n'* ]] || return 1
     __effective="$__remote/$__head"
   fi
-  [[ $__effective != HEAD && $__effective != "$__branch" && $__effective != "refs/heads/$__branch" ]] || return 1
-  return 0
+  comparison_ref "$__effective" "$__branch" __canonical
 }
 
 rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array> [discard commits]
@@ -298,8 +367,15 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
   local __n="$1" __p="$2" __b="$3" __base="$4" __dirty __ahead=0 __merged=0 __base_ok=0 __head_ref __f __why="" __rc __landed_reason
   meta_require "$__n"
   __reasons=()
-  __dirty=$(unexplained_dirt "$__n" "$__p" | wc -l | tr -d ' ')
-  [[ "$__dirty" -gt 0 ]] && __reasons+=("$__dirty uncommitted change(s)")
+  local __dirty_paths=''
+  if [[ -d $__p ]]; then
+    if __dirty_paths=$(unexplained_dirt "$__n" "$__p"); then
+      if [[ -n $__dirty_paths ]]; then
+        __dirty=$(printf '%s\n' "$__dirty_paths" | wc -l | tr -d ' ')
+        __reasons+=("$__dirty uncommitted change(s)")
+      fi
+    else __reasons+=("cannot enumerate working files"); fi
+  fi
   # WT_COMPAT: Remove the literal HEAD refusal when every sidecar records a canonical creation base.
   WT_RM_BASE=$__base WT_RM_PROOF=''
   if [[ -d $__p ]] && ! git -C "$__p" status --porcelain -z >/dev/null 2>&1; then
@@ -359,8 +435,15 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
       __reasons+=("HEAD is detached at $(git -C "$__p" rev-parse --short HEAD 2>/dev/null || echo '?') (bisect, or a detached checkout), not on $__b")
     elif [[ "$__head_ref" != "$__b" ]]; then __reasons+=("HEAD is on $__head_ref, not $__b"); fi
   fi
-  while IFS= read -r __f; do
-    if [[ -n "$__f" ]]; then __reasons+=("$__f was edited or created inside the worktree (.wt-include, not in git)"); fi
-  done <<<"$(changed_includes "$__n" "$__p")"
+  local __includes=''
+  if [[ -d $__p ]]; then
+    if ! __includes=$(changed_includes "$__n" "$__p"); then
+      __reasons+=("cannot enumerate included private files")
+    else
+      while IFS= read -r __f; do
+        if [[ -n $__f ]]; then __reasons+=("$__f was edited or created inside the worktree (.wt-include, not in git)"); fi
+      done <<<"$__includes"
+    fi
+  fi
   return 0
 }

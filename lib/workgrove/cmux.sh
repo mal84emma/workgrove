@@ -155,7 +155,8 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
       path_within "$__dir" "${6:-}" || path_within "$(physical_dir "$__dir")" "$__root" || continue
     fi
     [[ $__kind != found || -n "$__rm_row" ]] || __rm_row=$__id
-    row_agent "$__id" || return
+    local __task_path=${6:-}
+    row_agent "$__id" "${__task_path##*/}" || return
     case $__kind/$ROW_AGENT in
       found/self|unclaimed/self) __self_row=$__id ;;
       found/busy) cmux_error "another agent is running in cmux row $__id; kept the worktree"; return 1 ;;
@@ -179,6 +180,30 @@ process_descends() { # process_descends <pid> <ancestor>; unreadable ancestry ne
   return 1
 }
 
+codex_owned_launch() { # Validate the task-owned launcher independently of inherited caller hints.
+  local task=$1 row=$2 root=$3 record generation binding launcher start current agent=''
+  [[ -n $task && -n ${REPO:-} ]] || return 1
+  if [[ -f $(wt_meta "$task") ]]; then
+    record=$(cat "$(wt_meta "$task")") || return 1
+  elif [[ -n ${WT_TEARDOWN_JSON:-} ]]; then
+    record=$WT_TEARDOWN_JSON
+    [[ $(jq -r .name <<<"$record") == "$task" && $(jq -r .repo <<<"$record") == "$REPO" ]] || return 1
+  else return 1; fi
+  agent=$(jq -r '.agent // ""' <<<"$record") || return 1
+  generation=$(jq -r '.generation // ""' <<<"$record") || return 1
+  binding=$(jq -c '.runtime // {}' <<<"$record") || return 1
+  jq -e --arg row "$row" --arg generation "$generation" '
+    .provider == "codex" and .mode == "no-daemon" and .row == $row and .generation == $generation
+    and ($generation | length > 0) and (.launcher_pid | type == "number" and . > 1)
+    and (.launcher_start | type == "string" and length > 0)' <<<"$binding" >/dev/null || return 1
+  [[ $agent == codex ]] || return 1
+  launcher=$(jq -r .launcher_pid <<<"$binding"); start=$(jq -r .launcher_start <<<"$binding")
+  current=$(LC_ALL=C ps -p "$launcher" -o lstart= 2>/dev/null) || return 1
+  [[ $start == "$current" ]] || return 1
+  if [[ ${4:-} != observer ]]; then process_descends "$BASHPID" "$launcher" || return 1; fi
+  process_descends "$root" "$launcher"
+}
+
 row_agent() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's own row, "busy" when an agent
   # runs in the row, else "idle". A failed check returns a diagnostic in CMUX_ERROR.
   local state
@@ -193,7 +218,9 @@ row_agent() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's o
     and all(.resources.pids[]; type == "number" and . > 1 and floor == .))' >/dev/null 2>&1 \
     || { cmux_error "cannot verify agent process data; kept the worktree"; return 1; }
   ROW_AGENT=busy
-  local pids row_pids root='' pid command
+  local pids row_pids root='' pid command provider declared_agent=''
+  if [[ -n ${2:-} && -f $(wt_meta "$2") ]]; then declared_agent=$(jq -r .agent "$(wt_meta "$2")");
+  elif [[ -n ${WT_TEARDOWN_JSON:-} ]]; then declared_agent=$(jq -r .agent <<<"$WT_TEARDOWN_JSON"); fi
   # cmux caller fields echo environment hints. Use attributed PIDs and OS ancestry instead.
   printf '%s' "$state" | jq -e --arg id "$1" '
     [.windows[].workspaces[] | select(.id == $id)] as $rows
@@ -224,6 +251,14 @@ row_agent() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's o
   if [[ -z $root ]]; then
     cmux_error "agent session ownership is unverified in cmux row $1; kept the worktree. Shared-server sessions need a task-owned restart with wt run"
     return 1
+  fi
+  provider=$(ps -p "$root" -o comm= 2>/dev/null) || return 1
+  provider=${provider##*/}
+  if [[ $declared_agent == codex || ${provider,,} == codex* ]]; then
+    codex_owned_launch "${2:-}" "$1" "$root" || {
+      cmux_error "cannot verify task-owned Codex launch in row $1; legacy shared-server ancestry is insufficient; kept the worktree"
+      return 1
+    }
   fi
   while IFS= read -r pid; do
     process_descends "$pid" "$root" || return 0

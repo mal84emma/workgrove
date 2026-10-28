@@ -38,6 +38,9 @@
 #                                                             When rm runs in the task's own VM tmux session, it asks
 #                                                             the Mac to close the task's row and to stop that session
 #                                                             after removal
+#                                                             --defer-close leaves session cleanup to the Mac controller.
+#                                                             --row-closed acknowledges its verified row closure.
+#                                                             --observe-only verifies completed cleanup without deleting or closing anything.
 #   wt prune [--dry-run] [-r PATH]                           remove worktrees whose branch is merged (by ancestry or
 #                                                             as a squash) and whose tree is clean
 #   wt repos [<name>] [--porcelain|--table]                   list every git repo in $WT_REPOS_DIR.
@@ -214,8 +217,10 @@ cmd_new() {
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (kept by wt rm --keep-branch, or by a removal git would not call merged, or left behind by a worktree deleted outside wt); inspect it (git -C $REPO log $b), then delete it (git -C $REPO branch -D $b) or pick another name"
   if [[ -f $REPO/.git/wt/teardown/$name.json ]]; then
-    [[ $(jq -r .stage "$REPO/.git/wt/teardown/$name.json") == complete ]] \
-      || die "cleanup remains pending for $name; retry wt rm $name before reusing this name"
+    if [[ $(jq -r .stage "$REPO/.git/wt/teardown/$name.json") != complete ]]; then
+      (cmd_rm "$name" -r "$REPO" --observe-only) >/dev/null 2>&1 \
+        || die "cleanup remains pending for $name; retry wt rm $name before reusing this name"
+    fi
   fi
   check_identity "$name"
   if [[ $workspace -eq 1 ]] && is_remote; then   # the row request needs the host; fail before anything exists
@@ -255,10 +260,10 @@ cmd_new() {
   # If the SSH channel closes during a hook, attach --restart-agent must still know what to run.
   mkdir -p "$REPO/.git/wt"
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; fi
-  meta_set "$name" "base=$base" "metadata_version:=2" "creation_commit=$(git -C "$REPO" rev-parse "$base^{commit}")" \
+  meta_set "$name" "base=$base" "metadata_version:=3" "creation_commit=$(git -C "$REPO" rev-parse "$base^{commit}")" \
     "generation=$(printf '%s\n' "$BASHPID-$RANDOM-$(date -u +%s)" | git hash-object --stdin)" "created=$(date -u +%FT%TZ)" "agent=$agent" "model=$model" \
     "title=$(row_title "$name")" "session=$(wt_session "$name" "$REPO")" \
-    "includes:=[]" "setup:=[]"
+    "workspace=$workspace" "includes:=[]" "setup:=[]"
   local landing_ref="$base" landing_remote='' parent_name
   local -A parent_meta=()
   case $base in
@@ -267,13 +272,14 @@ cmd_new() {
       meta_load "$parent_name" parent_meta || true
       landing_ref=${parent_meta[landing_ref]:-${parent_meta[base]-}}
       case $landing_ref in wt/*|refs/heads/wt/*) landing_ref='' ;; esac
-      landing_remote=${parent_meta[landing_remote]-}
+      if [[ ${parent_meta[metadata_version]:-0} == 3 ]]; then landing_remote=${parent_meta[landing_remote]-}; fi
       ;;
-    refs/remotes/*) landing_remote=${base#refs/remotes/}; landing_remote=${landing_remote%%/*} ;;
-    */*) if git -C "$REPO" remote | grep -xF "${base%%/*}" >/dev/null; then landing_remote=${base%%/*}; fi ;;
+
   esac
-  if [[ -z $landing_remote && $landing_ref == */* ]] && git -C "$REPO" remote | grep -xF "${landing_ref%%/*}" >/dev/null; then
-    landing_remote=${landing_ref%%/*}
+  meta_set "$name" "landing_remote=$landing_remote"
+  local creation_ref='' resolved_remote=''
+  if comparison_ref "$landing_ref" '' creation_ref && comparison_remote "$creation_ref" resolved_remote; then
+    landing_remote=$resolved_remote
   fi
   # Reload this task after reading its parent. Preserve every existing metadata field.
   meta_set "$name" "landing_ref=$landing_ref" "landing_remote=$landing_remote" "parent_generation=${parent_meta[generation]-}"
@@ -350,29 +356,48 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
   elif [[ -n "$brief" ]]; then
     args=(-- "$brief")                           # Codex always restarts from the brief
   fi
-  if [[ $agent == codex ]] && ! is_remote; then
+  if [[ $agent == codex ]]; then
     "$agent" --help 2>/dev/null | grep -- '--no-daemon' >/dev/null \
       || die 'Codex lacks --no-daemon; update Codex before launching a local task'
     local owned_mode=0
     for f in "${extra[@]}"; do
       case $f in
-        --remote|--remote=*) die 'local task Codex requires a task-owned runtime; --remote is unsupported' ;;
+        --remote|--remote=*) die 'task Codex requires a task-owned runtime; --remote is unsupported' ;;
         --no-daemon) owned_mode=1 ;;
       esac
     done
     [[ $owned_mode == 1 ]] || extra+=(--no-daemon)
-    if [[ -n ${CMUX_WORKSPACE_ID:-} ]]; then
-      local launch_state launch_pid=$BASHPID
+    local launch_state launch_pid=$BASHPID launch_owner=''
+    if ! is_remote && [[ -n ${CMUX_WORKSPACE_ID:-} ]]; then
       launch_state=$(cmux_call top --workspace "$CMUX_WORKSPACE_ID" --json) || die 'cannot validate Codex launch row'
       printf '%s' "$launch_state" | jq -e --arg id "$CMUX_WORKSPACE_ID" --argjson pid "$launch_pid" '
         any(.windows[].workspaces[]; .id == $id and (.resources.pids | index($pid)) != null)' >/dev/null \
         || die 'Codex launch row does not contain this wt run process; reopen the task row'
+      launch_owner=$CMUX_WORKSPACE_ID
+    elif is_remote && [[ -n ${TMUX:-} && ${TMUX_PANE:-} =~ ^%[0-9]+$ ]]; then
+      local launch_session pane_pid
+      launch_session=$(tmux display-message -p -t "$TMUX_PANE" '#S') || die 'cannot identify the launch session'
+      [[ $launch_session == "$(wt_session "$name" "$REPO")" ]] || die 'wrong task session for Codex launch'
+      pane_pid=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_pid}') || die 'cannot identify the launch pane'
+      process_descends "$launch_pid" "$pane_pid" || die 'cannot verify the launch pane'
+      launch_owner="tmux:$launch_session"
     fi
+    if [[ -n $launch_owner ]]; then
+      local launcher_start generation runtime
+      launcher_start=$(LC_ALL=C ps -p "$launch_pid" -o lstart=) || die 'cannot identify the task launcher'
+      generation=${WT_META[generation]-}
+      [[ -n $generation ]] || generation=$(printf '%s\n' "$launch_pid-$RANDOM-$(date +%s)" | git hash-object --stdin)
+      runtime=$(jq -cn --argjson pid "$launch_pid" --arg start "$launcher_start" --arg row "$launch_owner" --arg generation "$generation" \
+        '{provider:"codex",mode:"no-daemon",launcher_pid:$pid,launcher_start:$start,row:$row,generation:$generation}')
+      meta_set "$name" "generation=$generation" "runtime:=$runtime"
+    fi
+    if ! is_remote; then
     for f in CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_SOCKET_PATH; do
       if [[ -n ${!f:-} ]]; then
         extra+=(-c "shell_environment_policy.set.$f=$(printf '%s' "${!f}" | jq -Rs .)")
       fi
     done
+    fi
   fi
   : > "$(wt_started "$name")"
   # cmux 0.65 shows a VM agent's state through the cmux-tui hooks. Give them this row's terminal at each hook.
@@ -563,7 +588,7 @@ cmd_pr() {
 }
 
 cmd_rm() {
-  local discard_commits=0
+  local discard_commits=0 defer_close=0 row_closed=0 observe_only=0
   local name="" force=0 keep=0 repo="" self_remote=0 host="" session="" title="" native=0
   local -A opts=()
   wt_opts "$(wt_spec rm)" opts "$@"
@@ -571,6 +596,7 @@ cmd_rm() {
   force=${opts[force]-$force}
   keep=${opts[keep]-$keep}
   discard_commits=${opts[discard_commits]-$discard_commits}
+  defer_close=${opts[defer_close]:-0} row_closed=${opts[row_closed]:-0} observe_only=${opts[observe_only]:-0}
   repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "rm: worktree name required"
   resolve_repo "$repo"; local path branch
@@ -590,6 +616,7 @@ cmd_rm() {
       teardown_finish; return
     fi
   fi
+  [[ $observe_only == 0 && $row_closed == 0 ]] || die 'no pending cleanup receipt for this absent task'
   require_wt "$name" path branch "rm"
   teardown_preflight "$path"
   local verified_head verified_base='' proof='' generation
@@ -623,7 +650,7 @@ cmd_rm() {
       pane_pid=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_pid}') || die 'cannot identify tmux pane process'
       process_descends "$BASHPID" "$pane_pid" || die 'cannot verify caller tmux ownership; kept the worktree'
       local ownership_rc=0
-      tmux_self_ownership "$session" || ownership_rc=$?
+      tmux_self_ownership "$session" "$name" || ownership_rc=$?
       case $ownership_rc in
         0) self_remote=1 ;;
         1) die 'another agent is running in this tmux session; kept the worktree' ;;
@@ -661,10 +688,22 @@ cmd_rm() {
       die "cannot find the Mac cmux relay in this session"
     fi
   fi
+  host=${host:-${WT_HOST:-}}
+  local tmux_identity='null' tmux_owner='null'
+  if is_remote; then
+    local identity_rc=0
+    tmux_identity=$(task_tmux_identity "$session") || identity_rc=$?
+    [[ $identity_rc != 2 ]] || die 'cannot identify the task tmux session'
+    [[ $identity_rc == 0 ]] || tmux_identity=null
+    if [[ $identity_rc == 0 ]]; then
+      if [[ $self_remote == 1 ]]; then tmux_owner=$WT_TMUX_OWNER
+      else tmux_owner=$(tmux_idle_owner "$session") || die 'cannot record idle task pane processes'; fi
+    fi
+  fi
   local final_reasons=()
   if [[ $force -eq 0 ]]; then
     # shellcheck disable=SC2034  # fetch_base consumes this cache entry.
-    WT_BASE_FETCHES["${base#refs/remotes/}"]=''
+    forget_base "$base" || die 'comparison base is no longer valid'
     rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
     ((${#final_reasons[@]} == 0)) || die "work changed during teardown: ${final_reasons[*]}"
   fi
@@ -683,8 +722,8 @@ cmd_rm() {
   local remote=0; is_remote && remote=1
   WT_TEARDOWN_JSON=$(jq -cn --arg name "$name" --arg repo "$REPO" --arg path "$path" --arg branch "$branch" \
     --arg head "$verified_head" --arg metadata_hash "$(file_hash "$(wt_meta "$name")")" --arg base "$base" --arg base_object "$verified_base" --arg proof "$proof" \
-    --arg generation "$generation" --arg row "$row" --arg self "$self" --arg session "$session" \
-    --arg title "$title" --arg host "$host" --arg keep "$keep" --arg native "$native" --arg remote "$remote" '$ARGS.named')
+    --arg generation "$generation" --arg agent "${WT_META[agent]-}" --argjson runtime "${WT_META[runtime]:-null}" --arg row "$row" --arg self "$self" --arg session "$session" \
+    --argjson tmux_identity "$tmux_identity" --argjson tmux_owner "$tmux_owner" --arg title "$title" --arg host "$host" --arg workspace "${WT_META[workspace]:-1}" --arg keep "$keep" --arg native "$native" --arg remote "$remote" '$ARGS.named')
   teardown_save prepared
   if [[ $force == 0 ]]; then
     rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
@@ -693,7 +732,7 @@ cmd_rm() {
   [[ $(git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed after preflight'
   [[ $(git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed after preflight'
   if [[ $self_remote == 1 ]]; then
-    tmux_self_ownership "$session" || die 'tmux ownership changed after preflight'
+    tmux_self_ownership "$session" "$name" || die 'tmux ownership changed after preflight'
   fi
   if ! is_remote; then
     local final_row='' final_self=''

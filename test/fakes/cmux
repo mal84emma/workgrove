@@ -230,7 +230,8 @@ case "$key" in
     jq -cn --arg title "$title" --argjson body "$body" '{title:$title,body:$body}' >>"$state/notify.requests.jsonl"
     if [[ -f $state/notify-dedupe && -f $state/last-content && $(cat "$state/last-content") == "$title|$body" ]]; then exit 0; fi
     printf '%s' "$title|$body" >"$state/last-content"
-    tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl" ;;
+    tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl"
+    if [[ -x $state/notify-callback ]]; then "$state/notify-callback"; fi ;;
   ping|diff|workspace-close|workspace-select|workspace-action|send|send-key|dismiss-notification) ;;
   ssh)
     if ((ssh_uuids)); then

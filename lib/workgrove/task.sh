@@ -412,7 +412,7 @@ tmux_agent() { # tmux_agent <session> [session exists output]
 # Return 0 for an exclusive caller-owned agent tree, 1 for another agent, and 2 for unknown process state.
 tmux_self_ownership() {
   local session=$1 panes tty agents='' found rc pid root='' caller_pid=$BASHPID command
-  panes=$(tmux list-panes -t "=$session" -F '#{pane_tty}' 2>/dev/null) || return 2
+  panes=$(tmux list-panes -s -t "=$session" -F '#{pane_tty}' 2>/dev/null) || return 2
   [[ -n $panes ]] || return 2
   while IFS= read -r tty; do
     [[ $tty =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 2
@@ -431,9 +431,89 @@ tmux_self_ownership() {
     fi
   done <<<"$agents"
   [[ -n $root ]] || return 2
+  local provider declared=''
+  provider=$(ps -p "$root" -o comm= 2>/dev/null) || return 2
+  if [[ -n ${2:-} && -f $(wt_meta "$2") ]]; then declared=$(jq -r .agent "$(wt_meta "$2")");
+  elif [[ -n ${WT_TEARDOWN_JSON:-} ]]; then declared=$(jq -r .agent <<<"$WT_TEARDOWN_JSON"); fi
+  if [[ $declared == codex || ${provider##*/} == codex* ]]; then
+    codex_owned_launch "${2:-}" "tmux:$session" "$root" || return 2
+  fi
+  local pane_pids ancestor_records='[]' identity_start
+  while IFS= read -r tty; do
+    pane_pids=$(ps -t "${tty#/dev/}" -o pid= 2>/dev/null) || return 2
+    while IFS= read -r pid; do
+      pid=${pid//[[:space:]]/}
+      [[ $pid =~ ^[0-9]+$ ]] || return 2
+      if ! process_descends "$pid" "$root"; then
+        process_descends "$root" "$pid" || return 1
+        identity_start=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 2
+        ancestor_records=$(jq -c --arg pid "$pid" --arg start "$identity_start" '. + [{pid:$pid,start:$start}]' <<<"$ancestor_records")
+      fi
+    done <<<"$pane_pids"
+  done <<<"$panes"
   while IFS= read -r pid; do
     [[ -z $pid ]] || process_descends "$pid" "$root" || return 1
   done <<<"$agents"
+  identity_start=$(LC_ALL=C ps -p "$root" -o lstart=) || return 2
+  WT_TMUX_OWNER=$(jq -cn --arg pid "$root" --arg start "$identity_start" --argjson ancestors "$ancestor_records" '$ARGS.named + {ancestors:$ancestors}')
+
+}
+
+# Capture idle pane processes so recovery cannot discard commands started after the original checks.
+# shellcheck disable=SC2034  # The removal caller saves this verified owner in its receipt.
+WT_TMUX_OWNER='null'
+tmux_idle_owner() {
+  local panes tty pids pid start records='[]'
+  panes=$(tmux list-panes -s -t "=$1" -F '#{pane_tty}') || return 1
+  while IFS= read -r tty; do
+    [[ $tty =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 1
+    pids=$(ps -t "${tty#/dev/}" -o pid=) || return 1
+    while IFS= read -r pid; do
+      pid=${pid//[[:space:]]/}; [[ $pid =~ ^[0-9]+$ ]] || return 1
+      start=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 1
+      records=$(jq -c --arg pid "$pid" --arg start "$start" '. + [{pid:$pid,start:$start}]' <<<"$records")
+    done <<<"$pids"
+  done <<<"$panes"
+  jq -cn --argjson ancestors "$records" '{pid:"0",start:"",ancestors:$ancestors}'
+}
+
+tmux_recorded_owner() { # Verify all live pane processes against the recorded task owner.
+  local session=$1 task=$2 owner=$3 root start current='' alive=0 panes tty pids pid allowed
+  root=$(jq -er '.pid | select(test("^[0-9]+$"))' <<<"$owner") || return 1
+  start=$(jq -r .start <<<"$owner")
+  if [[ $root != 0 ]]; then
+    current=$(LC_ALL=C ps -p "$root" -o lstart= 2>/dev/null || true)
+    if [[ -n $current ]]; then [[ $current == "$start" ]] || return 1; alive=1; fi
+  fi
+  if [[ $alive == 1 && $(jq -r .agent <<<"$WT_TEARDOWN_JSON") == codex ]]; then
+    codex_owned_launch "$task" "tmux:$session" "$root" observer || return 1
+  fi
+  panes=$(tmux list-panes -s -t "=$session" -F '#{pane_tty}') || return 1
+  while IFS= read -r tty; do
+    [[ $tty =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 1
+    pids=$(ps -t "${tty#/dev/}" -o pid=) || return 1
+    while IFS= read -r pid; do
+      pid=${pid//[[:space:]]/}; [[ $pid =~ ^[0-9]+$ ]] || return 1
+      if [[ $alive == 1 ]] && process_descends "$pid" "$root"; then continue; fi
+      current=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 1
+      allowed=$(jq -r --arg pid "$pid" --arg start "$current" 'any(.ancestors[]; .pid == $pid and .start == $start)' <<<"$owner") || return 1
+      [[ $allowed == true ]] || return 1
+    done <<<"$pids"
+  done <<<"$panes"
+}
+
+task_tmux_identity() { # Return 1 for a verified absent session and 2 for unreadable identity.
+  local session=$1 exists=false rc=0 id created socket server start
+  tmux_agent "$session" exists >/dev/null || rc=$?
+  [[ $rc != 2 ]] || return 2
+  [[ $exists == true ]] || return 1
+  id=$(tmux display-message -p -t "=$session" '#{session_id}') || return 2
+  created=$(tmux display-message -p -t "=$session" '#{session_created}') || return 2
+  socket=$(tmux display-message -p -t "=$session" '#{socket_path}') || return 2
+  server=$(tmux display-message -p -t "=$session" '#{pid}') || return 2
+  [[ $id =~ ^\$[0-9]+$ && $created =~ ^[0-9]+$ && $server =~ ^[0-9]+$ && $socket == /* && $socket != *$'\n'* ]] || return 2
+  start=$(LC_ALL=C ps -p "$server" -o lstart= 2>/dev/null) || return 2
+  jq -cn --arg id "$id" --arg created "$created" --arg socket "$socket" --arg server "$server" --arg start "$start" '$ARGS.named'
 }
 
 # ---------------------------------------------------------------- status

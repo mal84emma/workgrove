@@ -51,7 +51,7 @@ scenario_version() {
   json=$(run_wt -H fixture version)
   assert_eq 'remote version describes VM installation' true "$(jq -r --arg commit "$expected" '.commit == $commit and .protocol == 1' <<<"$json")"
   assert_eq 'VM reports the compatibility capabilities' true \
-    "$(jq -r '.capabilities | sort == (["result-records","show-facts","path-field","model-option","agent-probe","doctor-records"] | sort)' <<<"$json")"
+    "$(jq -r '.capabilities | sort == (["result-records","show-facts","path-field","model-option","agent-probe","doctor-records","teardown-receipts"] | sort)' <<<"$json")"
   json=$(bash "$TEST_ROOT/vm/.local/bin/wt" version)
   printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/bin/tmux"
   chmod +x "$TEST_ROOT/bin/tmux"

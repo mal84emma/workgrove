@@ -176,10 +176,12 @@ case $t in
         vm_result "$h" path result gone gone_error rc -- "$n" -r "$r" || result_rc=$?
         if ! vm_wt_failure "$h" close "$rc" "" "$result_rc" "${result[status]-}" "$n" "$id"; then
           :
+        elif ! receiver=$(vm_wt "$h" version 2>/dev/null) || ! printf '%s' "$receiver" | wt_read_version | jq -e '.capabilities | index("teardown-receipts") != null' >/dev/null 2>&1; then
+          log "VM teardown receiver lacks receipt support; update workgrove on $h before closing $ws"
         elif close_row "$ws" self >/dev/null 2>&1; then
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
-          if vm_tmux "$h" kill-session "$sess" >/dev/null 2>&1; then
+          if vm_wt "$h" rm "$n" -r "$r" --row-closed >/dev/null 2>&1; then
             quiet_control
           else
             log "could not stop tmux session $sess on $h after closing $ws"

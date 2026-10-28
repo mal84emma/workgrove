@@ -34,6 +34,11 @@ cat > "$TEST_ROOT/bin/ssh" <<'SSH'
 #!/bin/sh
 [ -z "${SSH_CALL_LOG:-}" ] || printf '%s\n' "$*" >>"$SSH_CALL_LOG"
 case "$*" in
+  *' version')
+    if [ "${REMOTE_TEARDOWN_RECEIPTS:-1}" = 1 ]; then
+      echo '{"commit":"test","protocol":1,"capabilities":["teardown-receipts"]}'
+    else echo '{"commit":"old","protocol":1,"capabilities":[]}'; fi
+    exit 0 ;;
   *' path task -r /vm/repos/repo')
     if [ -n "${REMOTE_PATH_RESULT:-}" ]; then printf '%s\n' "$REMOTE_PATH_RESULT" >&2; exit 1; fi
     if [ "$REMOTE_EXISTS" = 1 ]; then
@@ -360,6 +365,10 @@ scenario_native_attach_close() {
   lacks "$CMUX_LOG" 'workspace close'
   lacks "$CMUX_LOG" 'dismiss-notification'
   has "$XDG_STATE_HOME/cmux-hook.log" 'could not confirm its worktree is gone'
+  : > "$CMUX_LOG"
+  REMOTE_TEARDOWN_RECEIPTS=0 hook >/dev/null
+  lacks "$CMUX_LOG" 'workspace close'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'receiver lacks receipt support'
   : > "$CMUX_LOG"
   hook >/dev/null
   has "$CMUX_LOG" "workspace close $ROW_ID --force"
