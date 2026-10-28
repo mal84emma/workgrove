@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# github-guard: Claude Code's PreToolUse hook for Bash. It is the one place that decides what an agent may do
-# on GitHub. It reads the hook payload on stdin and answers for `gh api`, `gh pr`, `gh issue`, `git push` and
-# `wt pr`. It gives no answer at all for every other command, so the permission lists in
-# ~/.claude/settings.json decide those.
+# github-guard: a PreToolUse hook for Bash in Claude Code and Codex.
+# It reads the hook payload on stdin and checks `gh api`, `gh pr`, `gh issue`, `git push` and `wt pr`.
+# Other commands receive no answer. Each provider keeps its own permission controls.
+# Use --codex to return only denials. Codex 0.164.0 rejects an allow without updatedInput.
 #
 # GH_API_WRITES and the checker form strings define the approved forms and generate help and command matching.
 # The hook approves the forms below on every machine. Each form must be one simple command (defined below),
@@ -43,8 +43,8 @@
 #
 # What the hook does not see: one of these commands later in a compound (`npm test && git push`), or behind a
 # wrapper (`env git push`, `command gh api`). The hook gives those no answer, so the permission lists decide.
-# Nothing in those lists denies them now, so they prompt (or go to auto mode's classifier). The result is a
-# prompt, not a silent run. See the README's Security section.
+# Nothing in Claude's lists denies them now, so they prompt or go to auto mode's classifier.
+# Codex keeps its own sandbox and approvals. See the README's Security section.
 #
 # The exit status is always 0: exit 2 would block the tool call. This hook runs before every Bash command, so
 # a failure in the hook must never block them all. Any failure here (no jq, no payload) gives no answer.
@@ -70,6 +70,15 @@ fi
 
 command -v jq >/dev/null 2>&1 || exit 0
 payload=$(cat)
+codex_output=false
+# Codex shell tools use the canonical hook name Bash and tool_input.command.
+# Ignore other events and tools, including file edits with a command field.
+if [[ ${1:-} == --codex ]]; then
+  codex_output=true
+  printf '%s' "$payload" | jq -e '
+    .hook_event_name == "PreToolUse" and .tool_name == "Bash"
+    and (.tool_input.command | type == "string")' >/dev/null 2>&1 || exit 0
+fi
 # The hook refuses a control character outright and does not tokenize it. Bash drops a NUL from a variable,
 # but the shell that runs the command stops at the NUL. So the two would read different commands:
 # `-f x=1\0 -X GET` is a GET here and a POST there. Because jq sees the JSON string before bash does, jq flags
@@ -84,6 +93,8 @@ cwd=$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null) || cwd=''
 
 # decide <allow|deny> <reason>: print the hook's answer and end the run.
 decide() {
+  # A permitted Codex command still goes through Codex's sandbox and approvals.
+  [[ $codex_output == true && $1 == allow ]] && exit 0
   jq -cn --arg d "$1" --arg r "github-guard: $2" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}'
   exit 0

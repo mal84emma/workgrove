@@ -165,7 +165,7 @@ command -v codex  >/dev/null || curl -fsSL https://chatgpt.com/codex/install.sh 
 gh auth status >/dev/null 2>&1 || gh auth login --web --git-protocol https   # one-time code; VS Code forwards the callback
 claude auth status | grep -q '"loggedIn": true' || claude auth login   # browser login on the Mac
 codex login status >/dev/null 2>&1 || codex login   # browser login; the callback comes back through VS Code
-codex   # /hooks -> trust the five portable hook events, then exit
+codex   # /hooks -> trust the six portable hook events, then exit
 gh auth status; claude auth status; codex login status; claude doctor   # loggedIn true; ignore doctor's Remote Control lines
 gh repo clone OWNER/REPO ~/REPO
 ```

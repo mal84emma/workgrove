@@ -21,7 +21,7 @@ workgrove/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
 │   ├── agent-notify           agent lifecycle hook for Mac banners outside cmux
 │   ├── cmux-hook              Mac event handler for native VM row requests
-│   ├── github-guard           Claude PreToolUse hook: GitHub reads, pushes, PRs, issues, comments, reviews
+│   ├── github-guard           Claude and Codex PreToolUse hook for GitHub commands
 │   ├── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
 │   └── wt-ssh-host            register a supplied SSH fragment without a cloud API
 ├── lib/
@@ -364,6 +364,8 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
   - Denied: a body file outside the repository, and `--template`.
   - Denied: a remote whose push URL leaves github.com, including when `wt pr` would push through that remote.
   - `settings.base.json` wires the hook and carries no rule that would override it.
+  - Codex payloads return denials or no decision. A synthetic dispatcher checks harmless subprocess markers.
+    This simulation does not verify Codex runtime execution or hook trust.
 - **`bash test/doctor-smoke.sh`** checks cmux versions, methods, response shapes, hook paths, VM checks, and fixture redaction.
   It uses `test/fakes/cmux` to serve and replay recorded contract responses.
 - **`bash test/native-relay-smoke.sh`** checks native VM requests, tmux identity, notification validation, and automation backups.

@@ -52,8 +52,12 @@ Each brief authorizes only its listed actions, and nothing more.
 ## Run approved GitHub commands
 
 Claude's `github-guard` hook approves the forms below without a prompt, in this repository only.
-The hook denies other GitHub writes with a reason that names the approved form.
+Codex 0.164.0 runs the same checks through a trusted `PreToolUse` hook.
+For permitted commands, the Codex hook gives no decision; Codex keeps its own sandbox and approval controls.
+Review and trust the hook through Codex `/hooks` before relying on it.
+The hook denies other guarded GitHub writes with a reason that names the approved form.
 Read that reason and retry.
+The GitHub write restrictions remain binding when hooks are disabled, untrusted, or unavailable.
 
 Write each command so that the hook can approve it:
 
