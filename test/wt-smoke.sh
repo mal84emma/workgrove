@@ -4296,6 +4296,8 @@ PY
   fixture_git "$p" -c protocol.file.allow=always submodule update --init -q
   original=$(fixture_git "$p/child" rev-parse HEAD)
   fixture_git "$p/child" checkout -qb unfinished
+  fixture_git "$p/child" config user.name 'Smoke Test'
+  fixture_git "$p/child" config user.email 'smoke@example.invalid'
   fixture_commit "$p/child" unpublished.txt 'only nested branch bytes'
   fixture_git "$p/child" checkout -q --detach "$original"
   gitdir=$(fixture_git "$p/child" rev-parse --absolute-git-dir)
@@ -4354,6 +4356,8 @@ SHIM
   fixture_git "$p" -c protocol.file.allow=always submodule update --init -q
   original=$(fixture_git "$p/child" rev-parse HEAD)
   fixture_git "$p/child" checkout -qb private-branch
+  fixture_git "$p/child" config user.name 'Smoke Test'
+  fixture_git "$p/child" config user.email 'smoke@example.invalid'
   fixture_commit "$p/child" only.txt 'private recovery objects'
   nested_tip=$(fixture_git "$p/child" rev-parse HEAD)
   fixture_git "$p/child" checkout -q --detach "$original"
