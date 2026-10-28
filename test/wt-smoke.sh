@@ -333,6 +333,7 @@ PROMPT_FIXTURE=$'first "line": $HOME `date` \'quoted\' back\\slash\nsecond line:
 # shellcheck source=test/fakes/rows.sh
 source "$REPO/test/fakes/rows.sh"
 fake_cmux_init "$TEST_ROOT/cmux-state"
+touch "$FAKE_CMUX_STATE/mutate-close"
 CMUX_DEAD="$TEST_ROOT/cmux-dead/cmux"
 CMUX_ALIVE="$TEST_ROOT/cmux-alive/cmux"
 WT_STUB="$CMUX_DEAD"
@@ -418,7 +419,12 @@ stub_windows() {
 cat >"$FAKE_BIN/claude" <<'AGENT'
 #!/bin/sh
 printf '%s\n' "$@" >"$AGENT_ARGV_LOG"
+if [ "${1:-}" = --help ]; then
+  [ "${FAKE_AGENT_HELP_UNSUPPORTED:-0}" = 1 ] || echo '--no-daemon'
+  exit 0
+fi
 echo "FAKE-AGENT ran"
+exit "${FAKE_AGENT_STATUS:-0}"
 AGENT
 chmod +x "$FAKE_BIN/claude"
 cp "$FAKE_BIN/claude" "$FAKE_BIN/codex"
@@ -464,7 +470,7 @@ wt_run() {
            FAKE_CMUX_STATE="$FAKE_CMUX_STATE" CMUX_STUB_LOG="$CMUX_LOG" AGENT_ARGV_LOG="$AGENT_LOG" \
            CMUX_STUB_NONCE="$FAKE_CMUX_STATE/screen-append" \
            FAKE_VM_WT="$WT" FAKE_VM_REPO="$TEST_ROOT/vm/project" FAKE_VM_BIN="$TEST_ROOT/vm-bin" \
-           REMOTE_LOG="$TEST_ROOT/remote-log" \
+           REMOTE_LOG="$TEST_ROOT/remote-log" TMUX_PANE=%1 SELF_TMUX_OWNER_PID="$$" \
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
            REMOTE_WT_SESSION="${REMOTE_WT_SESSION:-wt-project-task}" \
            REMOTE_WT_FORMAT="${REMOTE_WT_FORMAT:-raw}" WT_MACHINE="${WT_MACHINE:-}" \
@@ -598,6 +604,7 @@ scenario_new_and_sidecar() {
 
 scenario_task_model() {
   begin_scenario "$1" || return 0
+  local codex_owned=(); [[ $OS != Darwin ]] || codex_owned=(--no-daemon)
   local r sidecar
   r="$(new_repo model)"
   sidecar="$r/.git/wt/chosen.json"
@@ -627,11 +634,11 @@ scenario_task_model() {
   WT_EXTRA='-m other -c model=older --search'
   rm -f "$AGENT_LOG"
   assert_wt_ok "Codex first launch" run codex-model -r "$r"
-  assert_eq "Codex got only the task model and the brief" "$(printf '%s\n' -m gpt-5.3-codex --search -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  assert_eq "Codex got only the task model and the brief" "$(printf '%s\n' -m gpt-5.3-codex --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
   WT_EXTRA='--model=other -mother -m=other -cmodel=older --config=model=older --search'
   rm -f "$AGENT_LOG"
   assert_wt_ok "Codex later launch" run codex-model -r "$r"
-  assert_eq "Codex later launch kept the task model" "$(printf '%s\n' -m gpt-5.3-codex --search -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  assert_eq "Codex later launch kept the task model" "$(printf '%s\n' -m gpt-5.3-codex --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
   WT_EXTRA=''
 
   assert_wt_ok "Claude Vertex model ID" new vertex --no-workspace -r "$r" -a claude -m 'claude-sonnet-4-5@20250514'
@@ -651,7 +658,7 @@ scenario_task_model() {
   WT_RELAY_ENV=()
   rm -f "$AGENT_LOG"
   assert_wt_ok "changed agent starts from brief" run chosen -r "$r"
-  assert_eq "Codex receives no stale Claude model" "$(printf '%s\n' -- 'the brief')" "$(cat "$AGENT_LOG")"
+  assert_eq "Codex receives no stale Claude model" "$(printf '%s\n' "${codex_owned[@]}" -- 'the brief')" "$(cat "$AGENT_LOG")"
 
   assert_wt_ok "shell-only task" new shell-only --no-workspace -r "$r" -a none
   jq '.model="bad model"' "$r/.git/wt/shell-only.json" >"$TEST_ROOT/shell-only.json"
@@ -1156,10 +1163,10 @@ scenario_rm_refusals() {
   fixture_git "$r" update-ref refs/heads/side "$(fixture_git "$r" rev-parse wt/kept)"
   assert_wt_ok "wt rm kept" rm kept -r "$r"
   assert_has "git would not call the branch merged, so wt keeps it" "$WT_OUT" \
-             "kept branch wt/kept: git will not delete it as merged"
-  assert_has "…and says so in what it printed" "$WT_OUT" "removed kept (branch wt/kept kept)"
+             "teardown complete kept"
+  assert_has "…and says so in what it printed" "$WT_OUT" "removed kept"
   assert_gone "…the worktree still goes" "$side"
-  assert_branch "$r" wt/kept yes
+  assert_branch "$r" wt/kept no
   end_scenario
 }
 
@@ -1213,14 +1220,12 @@ scenario_stacked_squash_base() {
   assert_eq 'show has no ahead count' null "$(jq -r .ahead <<<"$WT_OUT")"
   assert_eq 'show cannot determine landing' '?' "$(jq -r .merged <<<"$WT_OUT")"
   assert_wt_ok 'prune retains the child' prune --dry-run -r "$r"
-  assert_has 'prune names the missing parent' "$WT_OUT" "base 'wt/parent' cannot be compared"
-  assert_wt_fails 3 "base 'wt/parent' cannot be compared" rm child -r "$r"
-  assert_dir 'refusal preserves child worktree' "$child"
+  assert_has 'prune validates the effective destination' "$WT_OUT" 'would remove child'
+  assert_dir 'dry-run preserves child worktree' "$child"
   assert_branch "$r" wt/child yes
-  assert_eq 'refusal preserves child metadata' "$saved" "$(cat "$r/.git/wt/child.json")"
+  assert_eq 'comparison preserves child metadata' "$saved" "$(cat "$r/.git/wt/child.json")"
   WT_SANDBOX=seatbelt
-  assert_wt_fails 3 "base 'wt/parent' cannot be compared" rm child -r "$r"
-  assert_lacks 'base refusal precedes the sandbox check' "$WT_OUT" 'rerun this command with escalation'
+  assert_wt_fails 1 'rerun this command with escalation' rm child -r "$r"
   WT_SANDBOX=''
   # Run the existing content check against a candidate. This does not select a production base.
   sidecar=$(sha256_of "$r/.git/wt/child.json")
@@ -1254,6 +1259,12 @@ scenario_stacked_squash_base() {
   assert_eq 'content validation rejects a post-merge commit' 1 "$rc"
   assert_has 'content validation identifies unpreserved content' "$probe" 'would still change 1 path(s)'
   assert_dir 'the probe leaves the child intact' "$child"
+  assert_wt_fails 3 'not merged into origin/main' rm child -r "$r"
+  fixture_git "$child" reset -q --hard "$child_head"
+  assert_wt_ok 'stacked squash self-teardown uses a verified default' rm child -r "$r"
+  assert_gone 'stacked teardown removes its worktree' "$child"
+  assert_branch "$r" wt/child no
+  assert_eq 'receipt records the effective base' origin/main "$(jq -r .base "$r/.git/wt/teardown/child.json")"
   end_scenario
 }
 
@@ -1276,7 +1287,7 @@ scenario_teardown_evidence_limits() {
   assert_eq 'remote head no longer holds that tip' "$initial" \
     "$(fixture_git "$r" ls-remote --heads origin refs/heads/wt/rewound | cut -f1)"
   assert_wt_ok 'inspect rewound remote without deletion' prune --dry-run -r "$r"
-  assert_has 'current pushed check accepts ref existence' "$WT_OUT" 'would remove rewound'
+  assert_has 'current pushed check rejects a rewound tip' "$WT_OUT" 'keep rewound ('
   assert_dir 'dry run preserves unpublished content' "$r/.worktrees/rewound"
 
   r=$(new_repo stale-evidence)
@@ -1289,7 +1300,7 @@ scenario_teardown_evidence_limits() {
   fixture_git "$e" revert --no-edit main >/dev/null
   fixture_git "$e" push -q origin main
   assert_wt_ok 'inspect cached positive comparison' prune --dry-run -r "$r"
-  assert_has 'a stale positive comparison skips the fetch' "$WT_OUT" 'would remove stale'
+  assert_has 'a stale positive comparison refreshes before removal' "$WT_OUT" 'keep stale ('
   fixture_git "$r" fetch -q --prune origin
   assert_wt_ok 'inspect the refreshed revert' prune --dry-run -r "$r"
   assert_has 'the current base rejects the reverted squash' "$WT_OUT" 'keep stale ('
@@ -1309,7 +1320,7 @@ scenario_teardown_evidence_limits() {
   chmod +x "$shim/git"
   WT_PATH_PREFIX=$shim
   assert_wt_ok 'inspect comparison failure without deletion' prune --dry-run -r "$r"
-  assert_has 'current count errors become zero' "$WT_OUT" 'would remove error'
+  assert_has 'count errors refuse removal' "$WT_OUT" 'keep error ('
   assert_dir 'the investigation preserves unpublished work' "$r/.worktrees/error"
 
   WT_PATH_PREFIX=''
@@ -1338,10 +1349,97 @@ GIT
   chmod +x "$net_shim/git"
   WT_PATH_PREFIX=$net_shim
   assert_wt_ok 'inspect an empty-net comparison failure without deletion' prune --dry-run -r "$r"
-  assert_has 'the unchecked empty-net comparison error permits a candidate' "$WT_OUT" 'would remove empty'
+  assert_has 'the empty-net comparison error refuses removal' "$WT_OUT" 'keep empty ('
   assert_dir 'the dry run preserves the empty-net worktree' "$r/.worktrees/empty"
   assert_eq 'the dry run preserves canceled commit history' "$head" "$(fixture_git "$r" rev-parse wt/empty)"
   assert_regular "$r" .git/wt/empty.json
+  end_scenario
+}
+
+scenario_teardown_destinations() {
+  begin_scenario "$1" || return 0
+  local r e bare child sidecar mac_bin="$TEST_ROOT/destinations-mac" WT_PATH_PREFIX=''
+  export GIT_ALLOW_PROTOCOL=file
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  WT_PATH_PREFIX=$mac_bin
+  stub_cmux dead
+  r=$(new_repo renamed-default); e=$(add_origin "$r")
+  fixture_git "$r" remote rename origin upstream
+  fixture_git "$r" remote set-head upstream main
+  assert_wt_ok 'non-origin default supplies creation provenance' new parent --no-workspace -r "$r"
+  assert_meta "$r" parent base upstream/main
+  fixture_commit "$r/.worktrees/parent" parent.txt parent
+  fixture_git "$r" push -q -u upstream wt/parent
+  assert_wt_ok 'create child with a live parent' new child -b wt/parent --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/child" child.txt child
+  fixture_git "$r" push -q -u upstream wt/child
+  sidecar=$(cat "$r/.git/wt/child.json")
+  land_squash "$e" wt/parent parent
+  land_squash "$e" wt/child child
+  fixture_git "$e" branch -m main trunk
+  fixture_git "$e" push -q origin trunk
+  bare="$TEST_ROOT/origins/$(basename "$r").git"
+  fixture_git "$bare" symbolic-ref HEAD refs/heads/trunk
+  fixture_git "$e" push -q origin --delete main
+  assert_wt_ok 'retargeted child follows the advertised renamed default' rm child -r "$r"
+  assert_eq 'receipt names the actual remote and default' upstream/trunk "$(jq -r .base "$r/.git/wt/teardown/child.json")"
+  assert_branch "$r" wt/parent yes
+  assert_dir 'child cleanup leaves its parent task' "$r/.worktrees/parent"
+  assert_meta "$r" parent base upstream/main
+  assert_has 'saved child provenance included its original parent' "$sidecar" 'wt/parent'
+
+  r=$(new_repo local-stack)
+  assert_wt_ok 'create local-only parent' new parent --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/parent" parent.txt parent
+  assert_wt_ok 'create local-only child' new child -b wt/parent --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/child" child.txt child
+  fixture_git "$r" merge -q --squash wt/parent >/dev/null
+  fixture_git "$r" commit -q -m parent
+  assert_wt_ok 'remove the local squash parent' rm parent -r "$r"
+  fixture_git "$r" merge -q --squash wt/child >/dev/null
+  fixture_git "$r" commit -q -m child
+  assert_wt_ok 'saved root permits local-only stacked teardown' rm child -r "$r"
+  assert_eq 'local proof uses the saved root' main "$(jq -r .base "$r/.git/wt/teardown/child.json")"
+
+  r=$(new_repo ambiguous-destination); e=$(add_origin "$r")
+  assert_wt_ok 'create legacy missing-base fixture' new legacy --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/legacy" landed.txt landed
+  fixture_git "$r" push -q -u origin wt/legacy
+  land_squash "$e" wt/legacy legacy
+  jq '.base="wt/deleted" | del(.landing_ref,.landing_remote)' "$r/.git/wt/legacy.json" >"$r/.git/wt/legacy.new"
+  mv "$r/.git/wt/legacy.new" "$r/.git/wt/legacy.json"
+  fixture_git "$r" config --unset branch.wt/legacy.remote
+  fixture_git "$r" remote add mirror "$TEST_ROOT/origins/$(basename "$r").git"
+  assert_wt_fails 3 'cannot be compared' rm legacy -r "$r"
+  assert_dir 'ambiguous remotes preserve legacy work' "$r/.worktrees/legacy"
+  fixture_git "$r" config wt.landingRef wt/legacy
+  assert_wt_fails 3 'cannot be compared' rm legacy -r "$r"
+  fixture_git "$r" config wt.landingRef origin/main
+  fixture_git "$r" branch origin/main main
+  assert_wt_fails 3 'comparison ref' rm legacy -r "$r"
+  fixture_git "$r" branch -D origin/main >/dev/null
+  assert_wt_ok 'an explicit landing ref still requires content proof' rm legacy -r "$r"
+  assert_eq 'receipt records validated content' content "$(jq -r .proof "$r/.git/wt/teardown/legacy.json")"
+  r=$(new_repo unrelated-destinations)
+  assert_wt_ok 'create unrelated-history task' new foreign --no-workspace -r "$r"
+  local root orphan a1 b1 a2 b2
+  root=$(fixture_git "$r" rev-parse main)
+  orphan=$(printf 'other history\n' | fixture_git "$r" commit-tree 'main^{tree}')
+  fixture_git "$r" branch other-root "$orphan"
+  fixture_git "$r" config wt.landingRef other-root
+  assert_wt_fails 3 'no common history' rm foreign -r "$r"
+  assert_dir 'equal trees without history do not prove landing' "$r/.worktrees/foreign"
+  a1=$(printf 'A1\n' | fixture_git "$r" commit-tree 'main^{tree}' -p "$root")
+  b1=$(printf 'B1\n' | fixture_git "$r" commit-tree 'main^{tree}' -p "$root")
+  a2=$(printf 'A2\n' | fixture_git "$r" commit-tree 'main^{tree}' -p "$a1" -p "$b1")
+  b2=$(printf 'B2\n' | fixture_git "$r" commit-tree 'main^{tree}' -p "$b1" -p "$a1")
+  fixture_git "$r" branch criss-cross-base "$b2"
+  assert_wt_ok 'create criss-cross task history' new crossed -b "$a2" --no-workspace -r "$r"
+  fixture_git "$r" config wt.landingRef criss-cross-base
+  assert_wt_fails 3 'multiple merge bases' rm crossed -r "$r"
+  assert_branch "$r" wt/crossed yes
   end_scenario
 }
 
@@ -1463,7 +1561,8 @@ scenario_squash_merge() {
 
   # The real prune removes landed or pushed branches and their worktrees.
   assert_wt_ok "wt prune" prune -r "$r"
-  assert_eq "prune fetches the base once across all removal checks" 1 "$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main')"
+  local expected_fetches=11; [[ $hunks != yes ]] || expected_fetches=13
+  assert_eq "prune refreshes the base before each final removal" "$expected_fetches" "$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main')"
   for n in sq sq2 picked stack pushed; do
     assert_gone "prune removed $n" "$r/.worktrees/$n"
     assert_branch "$r" "wt/$n" no
@@ -1526,14 +1625,14 @@ scenario_squash_merge() {
   assert_wt_ok "wt new off" new off --no-workspace -r "$r"
   fixture_commit "$r/.worktrees/off" twelve.txt 'twelve'
   fixture_git "$r" remote set-url origin "$TEST_ROOT/no-such-origin.git"
-  refuses "$r" off "(merging wt/off into origin/main would still change 1 path(s); origin/main could not be refreshed from its remote)"
+  refuses "$r" off "origin/main could not be refreshed from its remote"
   assert_wt_ok "wt new off2" new off2 --no-workspace -r "$r" -b origin/main
   fixture_commit "$r/.worktrees/off2" thirteen.txt 'thirteen'
   assert_wt_ok "wt prune with an unreachable base" prune --dry-run -r "$r"
   assert_eq "a failed base fetch is tried once for all worktrees" 1 "$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main')"
   for n in off off2; do
     assert_has "prune keeps $n after the failed fetch" "$WT_OUT" \
-      "keep $n (1 commit(s) on wt/$n not merged into origin/main and not on a remote (merging wt/$n into origin/main would still change 1 path(s); origin/main could not be refreshed from its remote))"
+      "keep $n (base 'origin/main' cannot be compared"
   done
   fixture_git "$r" remote set-url origin "$TEST_ROOT/origins/$(basename "$r").git"
   end_scenario
@@ -1611,15 +1710,26 @@ show-environment)
     invalid) echo not-a-tty; exit 0 ;;
     pgrep|idle) echo /dev/pts/123; exit 0 ;;
   esac
-  [ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ] && echo /dev/pts/123 ;; display-message)
+  rm -f "$SELF_TMUX_LOG.pgrep-owner"
+  if [ "$3" = "=$SELF_TMUX_SESSION" ]; then
+    printf '%s\n' "$SELF_TMUX_OWNER_PID" >"$SELF_TMUX_LOG.pgrep-owner"
+    echo /dev/pts/123
+  elif [ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ]; then echo /dev/pts/123; fi ;; display-message)
   if [ "${SELF_TMUX_FAIL:-}" = 1 ]; then echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1; fi
-  printf '%s\n' "$SELF_TMUX_SESSION" ;;
+  case "$*" in *pane_pid*) printf '%s\n' "$SELF_TMUX_OWNER_PID" ;; *) printf '%s\n' "$SELF_TMUX_SESSION" ;; esac ;;
 esac
 STUB
   cat >"$fake/pgrep" <<'STUB'
 #!/bin/sh
 [ "${SELF_TMUX_PROBE:-}" = pgrep ] && exit 2
-[ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ]
+[ "${SELF_TMUX_PROBE:-}" = idle ] && exit 1
+if [ -f "$SELF_TMUX_LOG.pgrep-owner" ]; then
+  cat "$SELF_TMUX_LOG.pgrep-owner"
+  [ "${SELF_TMUX_OTHER_ACTIVE:-}" != 1 ] || echo 99999999
+  exit 0
+fi
+if [ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ]; then echo 99999999; exit 0; fi
+exit 1
 STUB
   chmod +x "$fake/tmux" "$fake/pgrep"
   stub_cmux alive
@@ -1658,6 +1768,10 @@ STUB
   WT_RELAY_ENV[${#WT_RELAY_ENV[@]}-1]="SELF_TMUX_FAIL=0"
   WT_RELAY_ENV[4]="SELF_TMUX_SESSION=$session"
   : >"$CMUX_LOG"; : >"$TEST_ROOT/self-tmux.log"
+  WT_RELAY_ENV+=("SELF_TMUX_OTHER_ACTIVE=1")
+  assert_wt_fails 1 'another agent is running in this tmux session' rm self -r "$r"
+  assert_dir 'a second agent in the caller session keeps its worktree' "$r/.worktrees/self"
+  unset 'WT_RELAY_ENV[${#WT_RELAY_ENV[@]}-1]'
   assert_wt_ok "VM self-removal" rm self -r "$r"
   assert_gone "self-removal removed the worktree" "$r/.worktrees/self"
   assert_branch "$r" wt/self no
@@ -1668,13 +1782,13 @@ STUB
                 "SELF_TMUX_NATIVE=0" "CMUX_TUI_SOCKET=/tmp/native"
                 "CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "WT_CLOSE_WAIT_SECONDS=0")
   : >"$CMUX_LOG"; : >"$TEST_ROOT/self-tmux.log"
-  assert_wt_ok "an unmarked native row requests Mac cleanup" rm unmarked -r "$r"
+  assert_wt_fails 1 "cleanup is pending" rm unmarked -r "$r"
   assert_gone "unmarked self-removal removed its worktree" "$r/.worktrees/unmarked"
   assert_branch "$r" wt/unmarked no
   assert_has "unmarked native self-removal sends wt-close" "$(cat "$CMUX_LOG")" "--socket /tmp/native notify --surface term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --title wt-close"
   assert_lacks "unmarked native self-removal leaves tmux to the Mac hook" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
   assert_has "an unanswered native close warns about incomplete cleanup" "$WT_OUT" "worktree removed, but its Mac row or tmux session is still open"
-  assert_has "an unanswered native close prints the manual cleanup" "$WT_OUT" "then run: ssh test-vm tmux kill-session -t '=wt-$(basename "$r")-unmarked'"
+  assert_has "an unanswered native close prints a recovery command" "$WT_OUT" "Retry: wt rm unmarked"
   rm "$fake/cmux-tui"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=other-session"
                 "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_OTHER_ACTIVE=1")
@@ -2103,7 +2217,7 @@ scenario_cmux() {
   fake_rows "$(fake_row "other-repo-row" "edited" "@local · $id2" | jq -c --arg directory "$r2" '.current_directory=$directory')" \
     "$(fake_row "edited-row" "edited" "@local · $id (waiting on review)" | jq -c --arg directory "$r/.worktrees/edited" '.current_directory=$directory')" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=1")
-  assert_wt_fails 1 "an agent is running in cmux row edited-row" rm edited --force -r "$r"
+  assert_wt_fails 1 "cannot verify ownership of the agent in cmux row edited-row" rm edited --force -r "$r"
   assert_dir "…and keeps the worktree" "$r/.worktrees/edited"
   # An agent that removes its own task closes its own row, as it does when the second line is intact.
   WT_RELAY_ENV=("CMUX_STUB_CALLER=edited-row" "CMUX_STUB_AGENTS=1")
@@ -2126,31 +2240,31 @@ scenario_cmux() {
   WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
   for line in "@local" "@local · wip"; do
     fake_rows "$(fake_row "busy-row" "guarded" "$line" | jq -c --arg directory "$guarded" '.current_directory=$directory')" >"$WT_ROWS"
-    assert_wt_fails 1 "an agent is running in cmux row busy-row, whose current directory is in this worktree" \
+    assert_wt_fails 1 "cannot verify ownership of the agent in cmux row busy-row" \
       rm guarded --force -r "$r"
   done
   # The check covers the worktree's subdirectories, and a directory that names the worktree through a symlink.
   ln -s "$guarded" "$TEST_ROOT/guarded-link"
   for line in "$guarded/src" "$TEST_ROOT/guarded-link"; do
     fake_rows "$(fake_row "busy-row" "notes" "@local" | jq -c --arg directory "$line" '.current_directory=$directory')" >"$WT_ROWS"
-    assert_wt_fails 1 "an agent is running in cmux row busy-row, whose current directory is in this worktree" \
+    assert_wt_fails 1 "cannot verify ownership of the agent in cmux row busy-row" \
       rm guarded -r "$r"
   done
   # Two rows can name the task without an edit, for example after a local wt attach while its row was open.
   # An agent in the second row is another agent, and the refusal says so.
   fake_rows "$(fake_row "first-row" "guarded" "@local · $id")" \
     "$(fake_row "busy-row" "guarded" "@local · $id")" >"$WT_ROWS"
-  assert_wt_fails 1 "another agent is running in cmux row busy-row; kept the worktree" rm guarded -r "$r"
+  assert_wt_fails 1 "cannot verify ownership of the agent in cmux row busy-row" rm guarded -r "$r"
   # wt rm checks every row that may be the task's, in any order. Here the list has the caller's own row and an
   # idle row with the old title, each next to a busy row.
   fake_rows "$(fake_row "own-row" "guarded" "")" \
     "$(fake_row "busy-row" "guarded" "")" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_CALLER=own-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
-  assert_wt_fails 1 "an agent is running in cmux row busy-row" rm guarded -r "$r"
+  assert_wt_fails 1 "cannot verify ownership of the agent in cmux row busy-row" rm guarded -r "$r"
   fake_rows "$(fake_row "old-row" "$id:guarded" "@local")" \
     "$(fake_row "busy-row" "guarded" "")" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=busy-row")
-  assert_wt_fails 1 "an agent is running in cmux row busy-row" rm guarded -r "$r"
+  assert_wt_fails 1 "cannot verify ownership of the agent in cmux row busy-row" rm guarded -r "$r"
   assert_dir "…and keeps the worktree" "$guarded"
   # These rows are not checked: a row on another host, a row with another title, and a row in a sibling
   # worktree whose name starts with this one's. A row found only by its current directory is never closed.
@@ -2188,7 +2302,7 @@ scenario_cmux() {
     assert_wt_ok "$agent test worktree" new "self-$agent" --no-workspace -r "$r"
     fake_rows "$(fake_row "own-$agent" "self-$agent" "@local · $id" | jq -c --arg directory "$r" '.current_directory=$directory')" >"$WT_ROWS"
     WT_RELAY_ENV=("CMUX_STUB_CALLER=other-row" "CMUX_STUB_AGENTS=1")
-    assert_wt_fails 1 "another agent is running" rm "self-$agent" --force -r "$r"
+    assert_wt_fails 1 "cannot verify ownership" rm "self-$agent" --force -r "$r"
     assert_dir "another $agent agent kept the worktree" "$r/.worktrees/self-$agent"
     assert_branch "$r" "wt/self-$agent" yes
     assert_regular "$r" ".git/wt/self-$agent.json"
@@ -2277,7 +2391,7 @@ STUB
   fake_rows "$(fake_row "active-vm-row" "$id:active-vm" "" "smoke.invalid" "connected" "cmux-tui" "null")" >"$WT_ROWS"
   WT_PATH_PREFIX="$fake" WT_RELAY_ENV=("CMUX_STUB_AGENTS=1")
   : >"$CMUX_LOG"; : >"$ssh_log"
-  assert_wt_fails 1 "another agent is running" -H smoke.invalid rm active-vm --force -r "$r"
+  assert_wt_fails 1 "cannot verify ownership" -H smoke.invalid rm active-vm --force -r "$r"
   assert_lacks "a Mac removal refuses an active VM row before SSH" "$(cat "$ssh_log")" "ssh "
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_ACTIVE=1")
   : >"$CMUX_LOG"; : >"$ssh_log"
@@ -2330,24 +2444,28 @@ scenario_codex_caller_context() {
   saved=$(cat "$r/.git/wt/requester.json")
   tip=$(fixture_git "$r" rev-parse wt/requester)
   WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_AGENTS=1" "CMUX_WORKSPACE_ID=seed-row")
-  assert_wt_fails 1 'another agent is running in cmux row requester-row; kept the worktree' rm requester -r "$r"
+  assert_wt_fails 1 'cannot verify ownership of the agent in cmux row requester-row' rm requester -r "$r"
   assert_dir 'caller mismatch preserves the worktree' "$r/.worktrees/requester"
   assert_eq 'caller mismatch preserves the branch' "$tip" "$(fixture_git "$r" rev-parse wt/requester)"
   assert_eq 'caller mismatch preserves the sidecar' "$saved" "$(cat "$r/.git/wt/requester.json")"
   assert_registered "$r" requester yes
   assert_lacks 'caller mismatch sends no close request' "$(cat "$CMUX_LOG")" 'workspace close'
   WT_CWD=$r
-  assert_wt_fails 1 'another agent is running in cmux row requester-row' rm requester -r "$r"
+  assert_wt_fails 1 'cannot verify ownership of the agent in cmux row requester-row' rm requester -r "$r"
   assert_lacks 'changing directory cannot repair caller identity' "$(cat "$CMUX_LOG")" 'workspace close'
-  assert_wt_ok 'prune currently reports success despite the refusal' prune -r "$r"
+  assert_wt_fails 1 'removal refused above' prune -r "$r"
   assert_has 'prune retains its refused candidate' "$WT_OUT" 'keep requester (removal refused above)'
   assert_dir 'prune did not remove the requesting task' "$r/.worktrees/requester"
   assert_lacks 'prune sends no close request' "$(cat "$CMUX_LOG")" 'workspace close'
   WT_RELAY_ENV=("CMUX_STUB_CALLER=" "CMUX_STUB_AGENTS=1")
-  assert_wt_fails 1 'another agent is running in cmux row requester-row' rm requester -r "$r"
+  assert_wt_fails 1 'cannot verify ownership of the agent in cmux row requester-row' rm requester -r "$r"
   assert_dir 'missing caller identity also keeps the task' "$r/.worktrees/requester"
-  # This models corrected context. It does not prove a provider launch configuration fixes inheritance.
-  WT_RELAY_ENV=("CMUX_STUB_CALLER=requester-row" "CMUX_STUB_AGENTS=1" "CMUX_WORKSPACE_ID=requester-row")
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_AGENTS=0")
+  fake_queue top '{"coding_agents":[],"windows":[]}'
+  assert_wt_fails 1 'incomplete process sample' rm requester -r "$r"
+  assert_dir 'zero agent totals cannot excuse missing row evidence' "$r/.worktrees/requester"
+  # Independent process attribution proves ownership despite stale caller hints.
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_OWNER_ROW=requester-row" "CMUX_STUB_AGENTS=1" "CMUX_WORKSPACE_ID=seed-row")
   : >"$CMUX_LOG"
   assert_wt_ok 'correct caller identity permits normal self-removal' rm requester -r "$r"
   assert_has 'only verified self-close skips confirmation' "$(cat "$CMUX_LOG")" 'workspace close requester-row --force'
@@ -2380,8 +2498,176 @@ scenario_close_confirmation_failure() {
   assert_gone 'worktree removal finished before confirmation failed' "$r/.worktrees/late"
   assert_branch "$r" wt/late no
   assert_absent "$r" .git/wt/late.json
-  assert_wt_fails 1 "no worktree named 'late'" rm late -r "$r"
+  assert_eq 'receipt preserves incomplete cleanup' close_requested "$(jq -r .stage "$r/.git/wt/teardown/late.json")"
+  assert_wt_fails 1 'cleanup remains pending' new late --no-workspace -r "$r"
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_AGENTS=0")
+  assert_wt_ok 'retry completes only pending row cleanup' rm late -r "$r"
+  assert_eq 'receipt records complete cleanup' complete "$(jq -r .stage "$r/.git/wt/teardown/late.json")"
   WT_RELAY_ENV=()
+  end_scenario
+}
+
+scenario_teardown_recovery_edges() {
+  begin_scenario "$1" || return 0
+  local r shim real_git generation branch_tip mac_bin="$TEST_ROOT/recovery-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  WT_PATH_PREFIX=$mac_bin
+  r=$(new_repo teardown-recovery)
+  stub_cmux dead
+  assert_wt_ok 'create interrupted removal' new interrupted --no-workspace -r "$r"
+  real_git=$(command -v git)
+  shim="$TEST_ROOT/interrupted-git"; mkdir -p "$shim"
+  {
+    cat <<'GIT'
+#!/usr/bin/env bash
+case "$*" in
+  *'worktree remove --force'*)
+    "$REAL_FIXTURE_GIT" "$@" || exit $?
+    exit 128 ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+GIT
+  } >"$shim/git"
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX="$shim:$mac_bin" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git")
+  assert_wt_fails 1 'git worktree remove failed' rm interrupted -r "$r"
+  assert_gone 'fault occurs after directory removal' "$r/.worktrees/interrupted"
+  assert_eq 'receipt covers the interrupted mutation' prepared "$(jq -r .stage "$r/.git/wt/teardown/interrupted.json")"
+  assert_branch "$r" wt/interrupted yes
+  WT_PATH_PREFIX=$mac_bin WT_RELAY_ENV=()
+  assert_wt_ok 'resume an interrupted Git operation' rm interrupted -r "$r"
+  assert_branch "$r" wt/interrupted no
+  assert_eq 'resumed operation finishes' complete "$(jq -r .stage "$r/.git/wt/teardown/interrupted.json")"
+  assert_wt_ok 'completed recovery is idempotent' rm interrupted -r "$r"
+
+  assert_wt_ok 'create branch failure fixture' new partial --no-workspace -r "$r"
+  branch_tip=$(fixture_git "$r" rev-parse wt/partial)
+  cat >"$shim/git" <<'GIT'
+#!/usr/bin/env bash
+case "$*" in *'update-ref --no-deref -d refs/heads/wt/partial '*) exit 128 ;; esac
+exec "$REAL_FIXTURE_GIT" "$@"
+GIT
+  WT_PATH_PREFIX="$shim:$mac_bin" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git")
+  assert_wt_fails 1 'branch deletion failed' rm partial -r "$r"
+  assert_eq 'branch failure remains recoverable' worktree_removed "$(jq -r .stage "$r/.git/wt/teardown/partial.json")"
+  assert_eq 'branch failure preserves the expected tip' "$branch_tip" "$(fixture_git "$r" rev-parse wt/partial)"
+  assert_regular "$r" .git/wt/partial.json
+  WT_PATH_PREFIX=$mac_bin WT_RELAY_ENV=()
+  assert_wt_ok 'retry failed branch cleanup' rm partial -r "$r"
+  assert_branch "$r" wt/partial no
+
+  assert_wt_ok 'create concurrent cleanup fixture' new locked --no-workspace -r "$r"
+  python3 -c '
+import fcntl, pathlib, sys, time
+root = pathlib.Path(sys.argv[1])
+with (root / "locked.lock").open("a") as stream:
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    (root / "holder-ready").touch()
+    for _ in range(1000):
+        if (root / "holder-release").exists():
+            break
+        time.sleep(0.01)
+' "$r/.git/wt/teardown" &
+  local holder=$! attempt
+  for ((attempt=0; attempt<500; attempt++)); do
+    [[ ! -f $r/.git/wt/teardown/holder-ready ]] || break
+    sleep 0.01
+  done
+  assert_wt_fails 1 'teardown already runs for locked' rm locked -r "$r"
+  assert_dir 'a competing cleanup cannot remove the task' "$r/.worktrees/locked"
+  touch "$r/.git/wt/teardown/holder-release"
+  wait "$holder"
+  assert_wt_ok 'the OS releases the lock after its holder exits' rm locked -r "$r"
+
+  assert_wt_ok 'create a ref-race fixture' new raced --no-workspace -r "$r"
+  local changed_tip
+  changed_tip=$(printf 'concurrent commit\n' | fixture_git "$r" commit-tree 'main^{tree}' -p main)
+  cat >"$shim/git" <<'GIT'
+#!/usr/bin/env bash
+case "$*" in
+  *'worktree remove --force'*)
+    "$REAL_FIXTURE_GIT" "$@" || exit $?
+    "$REAL_FIXTURE_GIT" -C "$RACE_FIXTURE_REPO" update-ref refs/heads/wt/raced "$RACE_FIXTURE_TIP"
+    exit $? ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+GIT
+  WT_PATH_PREFIX="$shim:$mac_bin" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git" "RACE_FIXTURE_REPO=$r" "RACE_FIXTURE_TIP=$changed_tip")
+  assert_wt_fails 1 'wt/raced changed; kept branch' rm raced -r "$r"
+  assert_eq 'compare-and-delete preserves a racing tip' "$changed_tip" "$(fixture_git "$r" rev-parse wt/raced)"
+  assert_regular "$r" .git/wt/raced.json
+  WT_PATH_PREFIX=$mac_bin WT_RELAY_ENV=()
+  assert_wt_ok 'keep-branch resumes cleanup while preserving the racing tip' rm raced --keep-branch -r "$r"
+  assert_eq 'recovery retains the changed branch' "$changed_tip" "$(fixture_git "$r" rev-parse wt/raced)"
+
+  assert_wt_ok 'create symbolic-ref race fixture' new symbolic --no-workspace -r "$r"
+  local main_tip
+  main_tip=$(fixture_git "$r" rev-parse main)
+  cat >"$shim/git" <<'GIT'
+#!/usr/bin/env bash
+case "$*" in
+  *'worktree remove --force'*)
+    "$REAL_FIXTURE_GIT" "$@" || exit $?
+    "$REAL_FIXTURE_GIT" -C "$RACE_FIXTURE_REPO" symbolic-ref refs/heads/wt/symbolic refs/heads/main
+    exit $? ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+GIT
+  WT_PATH_PREFIX="$shim:$mac_bin" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git" "RACE_FIXTURE_REPO=$r")
+  assert_wt_ok 'branch deletion never follows a racing symbolic ref' rm symbolic -r "$r"
+  assert_eq 'the unrelated main ref survives' "$main_tip" "$(fixture_git "$r" rev-parse main)"
+  assert_branch "$r" wt/symbolic no
+  WT_PATH_PREFIX=$mac_bin WT_RELAY_ENV=()
+
+  assert_wt_ok 'create published preservation fixture' new published --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/published" private-work.txt 'published work'
+  add_origin "$r" >/dev/null
+  fixture_git "$r" push -q origin wt/published:refs/heads/reviewed-tip
+  fixture_git "$r" config branch.wt/published.remote origin
+  fixture_git "$r" config branch.wt/published.merge refs/heads/reviewed-tip
+  generation=$(jq -r .generation "$r/.git/wt/published.json")
+  branch_tip=$(fixture_git "$r" rev-parse wt/published)
+  assert_wt_ok 'published-only removal retains a local copy' rm published -r "$r"
+  assert_eq 'preservation ref contains the frozen tip' "$branch_tip" "$(fixture_git "$r" rev-parse "refs/wt/preserved/$generation")"
+  assert_eq 'receipt identifies publication proof' published "$(jq -r .proof "$r/.git/wt/teardown/published.json")"
+  assert_wt_ok 'a completed name can be reused' new partial --no-workspace -r "$r"
+  assert_dir 'old recovery never deletes a new generation' "$r/.worktrees/partial"
+  end_scenario
+}
+
+scenario_codex_owned_launch() {
+  begin_scenario "$1" || return 0
+  local r mac_bin="$TEST_ROOT/launch-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  WT_PATH_PREFIX=$mac_bin
+  r=$(new_repo codex-owned-launch)
+  stub_cmux dead
+  assert_wt_ok 'create Codex launch fixture' new owned -a codex -m test-model -p 'the brief' --no-workspace -r "$r"
+  WT_RELAY_ENV=(FAKE_AGENT_HELP_UNSUPPORTED=1)
+  assert_wt_fails 1 'Codex lacks --no-daemon' run owned -r "$r"
+  assert_absent "$r" .git/wt/owned.started
+  WT_RELAY_ENV=()
+  WT_EXTRA='--remote unix:///tmp/fake-server'
+  assert_wt_fails 1 'task-owned runtime' run owned -r "$r"
+  assert_absent "$r" .git/wt/owned.started
+  WT_EXTRA=''
+  WT_RELAY_ENV=(CMUX_WORKSPACE_ID=unverified-row)
+  assert_wt_fails 1 'cannot validate Codex launch row' run owned -r "$r"
+  assert_absent "$r" .git/wt/owned.started
+  WT_RELAY_ENV=()
+  WT_EXTRA='--search'
+  assert_wt_ok 'Codex launches without a shared server' run owned -r "$r"
+  assert_eq 'model, profile arguments, and brief survive' "$(printf '%s\n' -m test-model --search --no-daemon -- 'the brief')" "$(cat "$AGENT_LOG")"
+  WT_EXTRA='--no-daemon --search'
+  assert_wt_ok 'an existing task-owned runtime argument stays valid' run owned -r "$r"
+  assert_eq 'the runtime flag is not duplicated' 1 "$(grep -xc -- '--no-daemon' "$AGENT_LOG")"
+  WT_RELAY_ENV=(FAKE_AGENT_STATUS=42)
+  assert_wt_fails 42 'codex exited with status 42' run owned -r "$r"
+  WT_RELAY_ENV=() WT_EXTRA=''
   end_scenario
 }
 

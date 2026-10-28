@@ -58,11 +58,21 @@ If Codex runs in a sandbox, run the teardown command with escalation.
 The sandbox can block the cmux and tmux sockets even after you change directories.
 `wt rm` refuses sandboxed removal before it deletes the worktree, so you can retry with escalation.
 
+`wt rm` verifies local ownership through cmux process attribution and operating-system process ancestry.
+Inherited cmux caller variables do not prove ownership.
+Unknown ownership keeps the worktree and reports the uncertainty.
+New local Codex launches use `--no-daemon` to keep their runtime in the task process tree.
+Older shared-server sessions can require a task-owned restart before teardown.
+Never replace their caller variables with guessed row identifiers.
+
 `wt rm` uses cmux's `--force` only for the verified caller's own row.
 That flag skips cmux's running-process confirmation. It does not discard Git work or waive `wt rm` safety checks.
 If Claude's automatic approval review rejects self-removal, report the rejection and leave the task intact.
 If `wt rm` refuses for another reason, the row stays open. Report the reason and leave the worktree.
-If the row close fails after removal, run the printed cmux command on the Mac with escalation when needed.
+If row closure fails after removal, report that Git cleanup succeeded and session cleanup remains pending.
+Retry the same `wt rm` command with escalation when needed.
+The receipt under `<repo>/.git/wt/teardown/` retains the remaining cleanup operation.
+A completed receipt makes repeated removal harmless.
 
 ### On a VM
 
@@ -78,7 +88,10 @@ Closing the row and stopping the session can cut off the tool call or the agent,
 For these older rows, `wt rm` waits for the Mac hook.
 If the session stays active after that wait, the cleanup is incomplete.
 The `removed` message confirms only worktree removal.
-In this case, report its warning. Tell the user to close the named row and tmux session from the Mac. `wt -H <vm> rm` cannot retry after the worktree is gone.
+In this case, report its warning and cleanup receipt.
+The command returns a failure status when the hook does not finish cleanup.
+Retry from the same session or inspect the named row and tmux session from the Mac.
+Do not close another running agent during recovery.
 
 ## Safety contract (enforced by `wt rm`, exit code 3 on refusal)
 
@@ -88,7 +101,7 @@ In this case, report its warning. Tell the user to close the named row and tmux 
 - The worktree has commits that are neither merged into the base branch nor pushed.
 - A file that `.wt-include` copied in now differs from its source in the main checkout. For example, an agent edited `.env`.
 - `wt rm` cannot compare the worktree with its base at all. This occurs in two cases:
-  - The base ref was deleted.
+  - The base ref was deleted, and no qualified replacement passes the preservation checks.
   - A sidecar (the task's files under `<repo>/.git/wt/`) from an older `wt` records the literal `HEAD`. `HEAD` resolves to the worktree's own tip, so every other count would read as nothing to lose.
 
 The refusal message names the reason and the file. `wt prune` applies the same checks.
@@ -99,7 +112,14 @@ The refusal message names the reason and the file. `wt prune` applies the same c
 Examples are GitHub's "squash and merge", a rebase-merge, and a cherry-pick into a branch that then merged.
 `wt rm` removes such a worktree and its branch.
 
-Before `wt rm` decides, it fetches the base once, because `origin/main` is stale right after a pull request (PR) merges.
+Before removal, `wt rm` refreshes remote evidence and checks it again at the deletion boundary.
+The cached base can be stale after a pull request (PR) merges or its squash commit is reverted.
+
+When a stacked parent disappears, `wt rm` can validate the saved root or an unambiguous remote's current default.
+It preserves the creation base in the sidecar.
+It validates the complete task tip, including unpublished post-merge work.
+Failed fetches and failed comparisons keep the task.
+For published-only removal, it retains the tip under `refs/wt/preserved/<generation>` and reports that ref.
 
 ### Refusals about the base
 

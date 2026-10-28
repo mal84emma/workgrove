@@ -1,5 +1,8 @@
 # Self-teardown after squash merges
 
+The initial investigation below describes the behavior before the runtime fix.
+See [implemented teardown behavior](task-teardown.md) for the resulting safety checks, recovery procedure, and remaining acceptance work.
+
 This investigation explains a removal refusal after a stacked task's pull request (PR) merged through a squash.
 It recommends a bounded design for safe comparison and session closure.
 The design is proposed, not implemented.

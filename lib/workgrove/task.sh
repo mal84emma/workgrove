@@ -174,7 +174,11 @@ repo_matches() { # repo_matches <name> -> the entries holding that repo, first e
 }
 
 default_base() {
-  local ref b
+  local ref b remote
+  remote=$(git -C "$REPO" remote)
+  if [[ -n $remote && $remote != *$'\n'* ]] && ref=$(git -C "$REPO" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null); then
+    printf '%s' "$ref"; return
+  fi
   if ref=$(git -C "$REPO" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null); then
     printf '%s' "$ref"; return
   fi
@@ -405,6 +409,33 @@ tmux_agent() { # tmux_agent <session> [session exists output]
   return 1
 }
 
+# Return 0 for an exclusive caller-owned agent tree, 1 for another agent, and 2 for unknown process state.
+tmux_self_ownership() {
+  local session=$1 panes tty agents='' found rc pid root='' caller_pid=$BASHPID command
+  panes=$(tmux list-panes -t "=$session" -F '#{pane_tty}' 2>/dev/null) || return 2
+  [[ -n $panes ]] || return 2
+  while IFS= read -r tty; do
+    [[ $tty =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 2
+    rc=0; found=$(pgrep -t "${tty#/dev/}" -x 'claude|codex') || rc=$?
+    case $rc in 0) agents+="$found"$'\n' ;; 1) ;; *) return 2 ;; esac
+  done <<<"$panes"
+  while IFS= read -r pid; do
+    [[ -n $pid ]] || continue
+    [[ $pid =~ ^[0-9]+$ ]] || return 2
+    if process_descends "$caller_pid" "$pid"; then
+      command=$(ps -p "$pid" -o command= 2>/dev/null) || return 2
+      case "${command%%' -- '*}" in
+        *' app-server'|*' app-server '*|*' exec-server'|*' exec-server '*) continue ;;
+      esac
+      if [[ -z $root ]] || process_descends "$root" "$pid"; then root=$pid; fi
+    fi
+  done <<<"$agents"
+  [[ -n $root ]] || return 2
+  while IFS= read -r pid; do
+    [[ -z $pid ]] || process_descends "$pid" "$root" || return 1
+  done <<<"$agents"
+}
+
 # ---------------------------------------------------------------- status
 wt_status() { # wt_status <name> <associative output> — keep merge caches and cleanup in this shell.
   local -n __status=$2
@@ -449,6 +480,16 @@ wt_status() { # wt_status <name> <associative output> — keep merge caches and 
   [[ $__ahead =~ ^[0-9]+$ ]] || __ahead='?'
   [[ $__behind =~ ^[0-9]+$ ]] || __behind='?'
   [[ $__dirty =~ ^[0-9]+$ ]] || __dirty='?'
+  local __comparison_ref='' __comparison_object='' __comparison_proof=unknown __comparison_why=''
+  if declare -F comparison_base >/dev/null && comparison_base "$__b" "$__base" __comparison_ref cached; then
+    __comparison_object=$(git -C "$REPO" rev-parse -q --verify "$__comparison_ref^{commit}" 2>/dev/null || true)
+    if [[ -n $__comparison_object ]]; then
+      if git -C "$REPO" merge-base --is-ancestor "$__b" "$__comparison_object" 2>/dev/null; then __comparison_proof=ancestry
+      elif branch_landed "$__b" "$__comparison_object" __comparison_why; then __comparison_proof=content; fi
+    fi
+  fi
+  __status["comparison"]=$(jq -cn --arg ref "$__comparison_ref" --arg object "$__comparison_object" --arg proof "$__comparison_proof" \
+    '{ref:$ref,object:$object,proof:$proof,freshness:"cached"}')
   __status["human_dirty"]=$__dirty
   [[ $__dirty != '?' ]] || __status["human_dirty"]=0
   __status["name"]=$__n __status["branch"]=$__b __status["human_branch"]=$__cur __status["base"]=$__base
@@ -458,7 +499,7 @@ wt_status() { # wt_status <name> <associative output> — keep merge caches and 
 }
 
 # One schema supplies field selection and JSON types for both renderers.
-WT_STATUS_FIELDS='name repo path branch checkout_branch:optional base ahead:count behind:count dirty:count last_commit_at:optional merged why'
+WT_STATUS_FIELDS='name repo path branch checkout_branch:optional base ahead:count behind:count dirty:count last_commit_at:optional merged why comparison:json'
 WT_SHOW_FIELDS='title task model'
 
 wt_status_args() { # wt_status_args <status array> <record array> [list|show]
@@ -486,7 +527,7 @@ wt_status_json() { # wt_status_json <list|show> <record pairs...>
         $values[$i] as $key | $values[$i+1] as $value
         | if $key == "" then .records += [.current] | .current = {}
           else .current[$key] = ($value | if $types[$key] == "count" then count
-            elif $types[$key] == "optional" then optional else . end) end)
+            elif $types[$key] == "optional" then optional elif $types[$key] == "json" then fromjson else . end) end)
     | if $command == "show" then .records[0] else .records end'
 }
 

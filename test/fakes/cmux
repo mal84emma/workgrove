@@ -152,9 +152,15 @@ if [[ -n $state ]]; then
     cat "$state/close-confirmation" >&2
     exit 1
   fi
+  if [[ $key == top && $# == 4 && -f $state/$file ]] &&
+      jq -e 'all(.coding_agents[]; .resources.process_count == 0)' "$state/$file" >/dev/null; then
+    jq --arg id "$3" '.windows=[{workspaces:[{id:$id,resources:{pids:[],process_count:0}}]}]' "$state/$file"
+    apply_effects
+    exit 0
+  fi
   if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; apply_effects; exit 0; fi
 fi
-if [[ -n $state && -f $state/mutate ]]; then
+if [[ -n $state && ( -f $state/mutate || ( $key == workspace-close && -f $state/mutate-close ) ) ]]; then
   # shellcheck source=test/fakes/rows.sh
   source "$HERE/rows.sh"
   case $key in

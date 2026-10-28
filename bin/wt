@@ -168,7 +168,7 @@ fi
 case $wg_lib in /*) WG_LIB_DIR=${wg_lib%/*} ;; *) WG_LIB_DIR=$PWD/${wg_lib%/*} ;; esac
 unset wg_lib
 WG_PREFIX=wt
-for wg_module in safety remote recovery hosts picker setup doctor; do
+for wg_module in safety teardown remote recovery hosts picker setup doctor; do
   # ShellCheck checks each module directly; this source path depends on the loop variable.
   # shellcheck source=/dev/null
   if ! source "$WG_LIB_DIR/$wg_module.sh" 2>/dev/null; then
@@ -213,6 +213,10 @@ cmd_new() {
   local p b; p=$(wt_path "$name"); b=$(wt_branch "$name")
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (kept by wt rm --keep-branch, or by a removal git would not call merged, or left behind by a worktree deleted outside wt); inspect it (git -C $REPO log $b), then delete it (git -C $REPO branch -D $b) or pick another name"
+  if [[ -f $REPO/.git/wt/teardown/$name.json ]]; then
+    [[ $(jq -r .stage "$REPO/.git/wt/teardown/$name.json") == complete ]] \
+      || die "cleanup remains pending for $name; retry wt rm $name before reusing this name"
+  fi
   check_identity "$name"
   if [[ $workspace -eq 1 ]] && is_remote; then   # the row request needs the host; fail before anything exists
     wt_host >/dev/null
@@ -251,9 +255,28 @@ cmd_new() {
   # If the SSH channel closes during a hook, attach --restart-agent must still know what to run.
   mkdir -p "$REPO/.git/wt"
   if [[ -n "$prompt" ]]; then printf '%s' "$prompt" > "$(wt_prompt "$name")"; fi
-  meta_set "$name" "base=$base" "created=$(date -u +%FT%TZ)" "agent=$agent" "model=$model" \
+  meta_set "$name" "base=$base" "metadata_version:=2" "creation_commit=$(git -C "$REPO" rev-parse "$base^{commit}")" \
+    "generation=$(printf '%s\n' "$BASHPID-$RANDOM-$(date -u +%s)" | git hash-object --stdin)" "created=$(date -u +%FT%TZ)" "agent=$agent" "model=$model" \
     "title=$(row_title "$name")" "session=$(wt_session "$name" "$REPO")" \
     "includes:=[]" "setup:=[]"
+  local landing_ref="$base" landing_remote='' parent_name
+  local -A parent_meta=()
+  case $base in
+    wt/*|refs/heads/wt/*)
+      parent_name=${base#refs/heads/}; parent_name=${parent_name#wt/}
+      meta_load "$parent_name" parent_meta || true
+      landing_ref=${parent_meta[landing_ref]:-${parent_meta[base]-}}
+      case $landing_ref in wt/*|refs/heads/wt/*) landing_ref='' ;; esac
+      landing_remote=${parent_meta[landing_remote]-}
+      ;;
+    refs/remotes/*) landing_remote=${base#refs/remotes/}; landing_remote=${landing_remote%%/*} ;;
+    */*) if git -C "$REPO" remote | grep -xF "${base%%/*}" >/dev/null; then landing_remote=${base%%/*}; fi ;;
+  esac
+  if [[ -z $landing_remote && $landing_ref == */* ]] && git -C "$REPO" remote | grep -xF "${landing_ref%%/*}" >/dev/null; then
+    landing_remote=${landing_ref%%/*}
+  fi
+  # Reload this task after reading its parent. Preserve every existing metadata field.
+  meta_set "$name" "landing_ref=$landing_ref" "landing_remote=$landing_remote" "parent_generation=${parent_meta[generation]-}"
   local includes; includes=$(copy_includes "$p")
   meta_set "$name" "includes:=$(printf '%s' "$includes" | jq -Rs 'split("\n") | map(select(length > 0))')"
   local setup=""
@@ -327,6 +350,30 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
   elif [[ -n "$brief" ]]; then
     args=(-- "$brief")                           # Codex always restarts from the brief
   fi
+  if [[ $agent == codex ]] && ! is_remote; then
+    "$agent" --help 2>/dev/null | grep -- '--no-daemon' >/dev/null \
+      || die 'Codex lacks --no-daemon; update Codex before launching a local task'
+    local owned_mode=0
+    for f in "${extra[@]}"; do
+      case $f in
+        --remote|--remote=*) die 'local task Codex requires a task-owned runtime; --remote is unsupported' ;;
+        --no-daemon) owned_mode=1 ;;
+      esac
+    done
+    [[ $owned_mode == 1 ]] || extra+=(--no-daemon)
+    if [[ -n ${CMUX_WORKSPACE_ID:-} ]]; then
+      local launch_state launch_pid=$BASHPID
+      launch_state=$(cmux_call top --workspace "$CMUX_WORKSPACE_ID" --json) || die 'cannot validate Codex launch row'
+      printf '%s' "$launch_state" | jq -e --arg id "$CMUX_WORKSPACE_ID" --argjson pid "$launch_pid" '
+        any(.windows[].workspaces[]; .id == $id and (.resources.pids | index($pid)) != null)' >/dev/null \
+        || die 'Codex launch row does not contain this wt run process; reopen the task row'
+    fi
+    for f in CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_SOCKET_PATH; do
+      if [[ -n ${!f:-} ]]; then
+        extra+=(-c "shell_environment_policy.set.$f=$(printf '%s' "${!f}" | jq -Rs .)")
+      fi
+    done
+  fi
   : > "$(wt_started "$name")"
   # cmux 0.65 shows a VM agent's state through the cmux-tui hooks. Give them this row's terminal at each hook.
   # lib/workgrove/cmux-tui-hook.sh explains why the pane's own environment names the wrong terminal.
@@ -337,7 +384,7 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
   fi
   "$agent" "${model_arg[@]}" "${extra[@]}" "${args[@]}" || rc=$?
   [[ $rc -eq 0 ]] || warn "$agent exited with status $rc"
-  return 0
+  return "$rc"
 }
 
 cmd_list() {
@@ -407,6 +454,7 @@ cmd_show() {
   esac
   printf '%s\n  path:    %s\n  repo:    %s\n  branch:  %s  (+%s / -%s vs %s)\n  merged:  %s\n  row:     %s\n  task:    %s\n  dirty:   %s file(s)\n  last:    %s\n' \
     "$nn" "$path" "$REPO" "$br" "$ah" "$be" "$base" "$mg" "$title $(row_tag "" "$REPO")" "$(prompt_line "$name")" "$di" "$last"
+  printf '  comparison: %s (cached; removal refreshes and validates)\n' "$(jq -r .ref <<<"${status[comparison]}")"
   [[ -z "$model" ]] || printf '  model:   %s\n' "$model"
   local state=''
   local -A session_status=()
@@ -525,7 +573,27 @@ cmd_rm() {
   discard_commits=${opts[discard_commits]-$discard_commits}
   repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "rm: worktree name required"
-  resolve_repo "$repo"; local path branch; require_wt "$name" path branch "rm"
+  resolve_repo "$repo"; local path branch
+  valid_name "$name" || die "invalid worktree name: $name"
+  [[ -z "${CODEX_SANDBOX:-}" ]] || die 'the Codex sandbox can block cmux or tmux cleanup; rerun this command with escalation'
+  teardown_lock "$name" "$@"
+  WT_TEARDOWN_FILE="$REPO/.git/wt/teardown/$name.json"
+  if [[ ! -d $(wt_path "$name") && -f $WT_TEARDOWN_FILE ]]; then
+    WT_TEARDOWN_JSON=$(cat "$WT_TEARDOWN_FILE")
+    jq -e --arg repo "$REPO" --arg name "$name" --arg path "$(wt_path "$name")" '.repo == $repo and .name == $name and .path == $path and .branch == ("wt/" + $name) and (.head | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and all(.keep,.native,.remote; IN("0","1")) and (.stage | IN("prepared","worktree_removed","git_removed","close_requested","complete"))' <<<"$WT_TEARDOWN_JSON" >/dev/null \
+      || die 'invalid teardown receipt'
+    if [[ $(jq -r .stage <<<"$WT_TEARDOWN_JSON") != complete || ! -f $(wt_meta "$name") ]]; then
+      if [[ $keep == 1 ]]; then
+        WT_TEARDOWN_JSON=$(jq -c '.keep="1"' <<<"$WT_TEARDOWN_JSON")
+        teardown_save "$(jq -r .stage <<<"$WT_TEARDOWN_JSON")"
+      fi
+      teardown_finish; return
+    fi
+  fi
+  require_wt "$name" path branch "rm"
+  teardown_preflight "$path"
+  local verified_head verified_base='' proof='' generation
+  verified_head=$(git -C "$REPO" rev-parse --verify "refs/heads/$branch") || die 'cannot resolve task head'
   local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
   meta_require "$name"
@@ -541,16 +609,27 @@ cmd_rm() {
       exit 3
     fi
   fi
-  # Socket access can fail after Git deletes the worktree. Require escalation before removal.
-  [[ -z "${CODEX_SANDBOX:-}" ]] \
-    || die "the Codex sandbox can block cmux or tmux cleanup; rerun this command with escalation"
+  if [[ $force == 0 ]]; then base=${WT_RM_BASE:-$base}; proof=${WT_RM_PROOF:-discard}; else proof=discard; fi
+  verified_base=$(git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true)
   if is_remote && [[ -n ${TMUX:-} ]]; then
     local current
     session=$(wt_session "$name" "$REPO")
-    current=$(tmux display-message -p '#S' 2>&1) \
+    [[ ${TMUX_PANE:-} =~ ^%[0-9]+$ ]] || die 'cannot identify the caller tmux pane; kept the worktree'
+    current=$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>&1) \
       || die "cannot read the current tmux session: $current; rerun this command with escalation if a sandbox blocks the socket"
     [[ -n "$current" ]] || die "cannot read the current tmux session: tmux returned no session name"
-    if [[ "$current" == "$session" ]]; then self_remote=1; fi
+    if [[ "$current" == "$session" ]]; then
+      local pane_pid
+      pane_pid=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_pid}') || die 'cannot identify tmux pane process'
+      process_descends "$BASHPID" "$pane_pid" || die 'cannot verify caller tmux ownership; kept the worktree'
+      local ownership_rc=0
+      tmux_self_ownership "$session" || ownership_rc=$?
+      case $ownership_rc in
+        0) self_remote=1 ;;
+        1) die 'another agent is running in this tmux session; kept the worktree' ;;
+        *) die 'cannot verify exclusive agent ownership in this tmux session; kept the worktree' ;;
+      esac
+    fi
   fi
   local row="" self=""
   title=$(task_title "$name")
@@ -582,49 +661,50 @@ cmd_rm() {
       die "cannot find the Mac cmux relay in this session"
     fi
   fi
-  # the ignored files that remain are unchanged copies or build output, so --force is normal here
-  if [[ -d "$path" ]]; then
-    git -C "$REPO" worktree remove --force "$path" || die "git worktree remove failed for $path; free it, then: rm -rf $path && git -C $REPO worktree prune"
-  else
-    git -C "$REPO" worktree prune          # the directory was removed outside wt; drop its registration
+  local final_reasons=()
+  if [[ $force -eq 0 ]]; then
+    # shellcheck disable=SC2034  # fetch_base consumes this cache entry.
+    WT_BASE_FETCHES["${base#refs/remotes/}"]=''
+    rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
+    ((${#final_reasons[@]} == 0)) || die "work changed during teardown: ${final_reasons[*]}"
   fi
-  if [[ $keep -eq 0 ]]; then
-    # Use branch -d, so git's own merged check is the last safeguard behind the reasons above. The flags
-    # --force and --discard-commits are the deliberate ways to discard commits. Otherwise wt keeps the
-    # branch and says so. One more case gets -D: a branch whose work branch_landed found in the base.
-    # Git's -d knows nothing of squash merges, so it declines to delete that branch. The exception is when
-    # a stale remote-tracking ref still equals the branch: -d takes that as merged upstream. The reasons
-    # above already let the worktree go on that same finding, made against this same base, so the branch
-    # goes with it.
-    if ! git -C "$REPO" branch -d "$branch" >/dev/null 2>&1; then
-      if [[ $force -eq 1 || $discard_commits -eq 1 ]] || { [[ "$base" != HEAD ]] && branch_landed "$branch" "$base" landed_why; }; then
-        git -C "$REPO" branch -D "$branch" >/dev/null 2>&1 || true
-      else keep=1; warn "kept branch $branch: git will not delete it as merged (git -C $REPO branch -D $branch discards it)"; fi
+  [[ $(git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed during teardown'
+  [[ $(git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed during teardown'
+  generation=${WT_META[generation]:-$verified_head}
+  if [[ $proof == published || $base =~ ^[0-9a-f]{40,64}$ ]]; then
+    local retained=''
+    retained=$(git -C "$REPO" rev-parse -q --verify "refs/wt/preserved/$generation" 2>/dev/null || true)
+    if [[ $retained != "$verified_head" ]]; then
+      git -C "$REPO" update-ref "refs/wt/preserved/$generation" "$verified_head" '' || die 'cannot retain preserved work'
     fi
+    warn "retained published commits at refs/wt/preserved/$generation"
   fi
-  rm -f "$(wt_meta "$name")" "$(wt_prompt "$name")" "$(wt_started "$name")"
-  git -C "$REPO" worktree prune
-  printf 'removed %s%s\n' "$name" "$([[ $keep -eq 1 ]] && echo " (branch $branch kept)")"
-  if is_remote; then
-    [[ -n "$session" ]] || session=$(wt_session "$name" "$REPO")
-    if [[ $native -eq 1 ]]; then
-      # The row execs its tmux client. Stopping this session ends the terminal and its Mac row.
-      tmux kill-session -t "=$session"
-    elif [[ $self_remote -eq 1 ]]; then
-      # The Mac hook closes the row and kills this session.
-      # If this process is still alive after the hook's deadline, the cleanup did not finish.
-      if notify_mac wt-close host "$host" repo "$REPO" task "$name"; then
-        local close_wait="${WT_CLOSE_WAIT_SECONDS:-22}" i
-        [[ "$close_wait" =~ ^[0-9]+$ ]] || close_wait=22
-        for ((i=0; i<close_wait; i++)); do sleep 1; done
-      fi
-      warn "worktree removed, but its Mac row or tmux session is still open"
-      warn "on the Mac: close row $(row_title "$name") $(row_tag "$host" "$REPO") (titled $(repo_id "$REPO"):$name if an older wt made it), then run: ssh $host tmux kill-session -t '=$session'"
-    else
-      tmux kill-session -t "=$session" 2>/dev/null || true   # the Mac owns the row
-    fi
-  elif [[ -n "$row" ]]; then cmux_require close_row "$row" "$self"
-  else cmux_require close_workspace "$name" "$title"; fi
+  if [[ $self_remote == 1 ]]; then self=remote; fi
+  local remote=0; is_remote && remote=1
+  WT_TEARDOWN_JSON=$(jq -cn --arg name "$name" --arg repo "$REPO" --arg path "$path" --arg branch "$branch" \
+    --arg head "$verified_head" --arg metadata_hash "$(file_hash "$(wt_meta "$name")")" --arg base "$base" --arg base_object "$verified_base" --arg proof "$proof" \
+    --arg generation "$generation" --arg row "$row" --arg self "$self" --arg session "$session" \
+    --arg title "$title" --arg host "$host" --arg keep "$keep" --arg native "$native" --arg remote "$remote" '$ARGS.named')
+  teardown_save prepared
+  if [[ $force == 0 ]]; then
+    rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
+    ((${#final_reasons[@]} == 0)) || die "work changed after preflight: ${final_reasons[*]}"
+  fi
+  [[ $(git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed after preflight'
+  [[ $(git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed after preflight'
+  if [[ $self_remote == 1 ]]; then
+    tmux_self_ownership "$session" || die 'tmux ownership changed after preflight'
+  fi
+  if ! is_remote; then
+    local final_row='' final_self=''
+    cmux_require check_row_removal "$title" "$REPO" final_row final_self '' "$path"
+    [[ $final_row == "$row" && $final_self == "$self" ]] || die 'row ownership changed after preflight'
+  fi
+  if [[ -d $path ]]; then
+    git -C "$REPO" worktree remove --force "$path" || die "git worktree remove failed; receipt: $WT_TEARDOWN_FILE"
+  else git -C "$REPO" worktree prune || die 'cannot prune missing worktree'; fi
+  teardown_save worktree_removed
+  teardown_finish
 }
 
 cmd_prune() {
@@ -634,7 +714,7 @@ cmd_prune() {
   dry=${opts[dry]-$dry}
   repo=${opts[repo]-$repo}
   resolve_repo "$repo"
-  local names n p base why
+  local names n p base why failed=0
   local reasons=()
   names=$(list_names)     # before `git worktree prune`; otherwise a directory deleted by hand loses its
                           # registration here and is never examined, so its branch and metadata stay forever
@@ -646,9 +726,10 @@ cmd_prune() {
     why=$(IFS=';'; echo "${reasons[*]}")
     if [[ -n "$why" ]]; then printf 'keep %s (%s)\n' "$n" "$why"                            # dry run included
     elif [[ $dry -eq 1 ]]; then printf 'would remove %s (nothing to lose vs %s)\n' "$n" "$base"
-    elif ! ( cd "$REPO" && cmd_rm "$n" ); then printf 'keep %s (removal refused above)\n' "$n"; fi
+    elif ! ( cd "$REPO" && cmd_rm "$n" ); then printf 'keep %s (removal refused above)\n' "$n"; failed=1; fi
   done <<<"$names"
   git -C "$REPO" worktree prune
+  return "$failed"
 }
 
 cmd_path() {

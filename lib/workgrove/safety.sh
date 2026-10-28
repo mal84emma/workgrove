@@ -120,18 +120,21 @@ unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-s
 }
 
 branch_pushed() { # branch_pushed <branch> — 0 only when the remote still has every commit of that branch.
-  # A remote-tracking ref is not proof. refs/remotes/origin/wt/x outlives the remote branch (an abandoned PR,
-  # `git push origin :wt/x`, someone else's cleanup). The next fetch with fetch.prune then drops it, and
-  # those commits become unreachable with no reflog. So ask the remote itself, and count an unreachable
-  # remote as not pushed. Refusing while offline is the safe direction, and --force is one keystroke away.
-  local b="$1" remote
-  git -C "$REPO" rev-parse -q --verify "$b@{u}" >/dev/null 2>&1 || return 1
-  [[ -z "$(git -C "$REPO" log "$b@{u}..$b" --oneline 2>/dev/null)" ]] || return 1
-  remote=$(git -C "$REPO" config "branch.$b.remote" 2>/dev/null || true)
-  [[ -n "$remote" ]] || return 1
-  warn "asking $remote whether $b is still there (ctrl-c and use --force if it hangs)"
-  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}" \
-    git -C "$REPO" ls-remote --exit-code --heads "$remote" "refs/heads/$b" >/dev/null 2>&1
+  # Fetch the configured upstream into a private ref and verify actual commit containment.
+  # A cached ref or a remote branch name alone cannot establish publication.
+  local b="$1" remote upstream ref tip rc=1
+  remote=$(git -C "$REPO" config "branch.$b.remote" 2>/dev/null) || return 1
+  upstream=$(git -C "$REPO" config "branch.$b.merge" 2>/dev/null) || return 1
+  [[ -n $remote && $upstream == refs/heads/* ]] || return 1
+  ref="refs/wt/verify/$BASHPID-$RANDOM"
+  warn "checking current remote commits for $b"
+  if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}" \
+      git -C "$REPO" fetch -q --no-tags "$remote" "+$upstream:$ref" >/dev/null 2>&1; then
+    tip=$(git -C "$REPO" rev-parse --verify "$ref^{commit}") || return 1
+    git -C "$REPO" merge-base --is-ancestor "$b" "$tip" 2>/dev/null && rc=0
+    git -C "$REPO" update-ref -d "$ref" "$tip" || return 1
+  fi
+  return "$rc"
 }
 
 git_merges_trees() { # 0 when this git has `merge-tree --write-tree` (2.38, September 2022). Ubuntu 22.04's
@@ -178,10 +181,14 @@ branch_landed() { # branch_landed <branch> <base> <reason output>
   local -n __landed_why=$3
   local __b="$1" __base="$2" __m __tree_b __tree_t="" __out __rc=0 __n __idx
   __landed_why=""
-  __m=$(git -C "$REPO" merge-base "$__b" "$__base" 2>/dev/null) || { __landed_why="$__b has no common history with $__base"; return 1; }
-  if git -C "$REPO" diff-tree --quiet "$__m" "$__b" 2>/dev/null; then
+  __m=$(git -C "$REPO" merge-base --all "$__b" "$__base" 2>/dev/null) || { __landed_why="$__b has no common history with $__base"; return 1; }
+  [[ $__m != *$'\n'* ]] || { __landed_why="multiple merge bases for $__b and $__base"; return 1; }
+  git -C "$REPO" diff-tree --quiet "$__m" "$__b" 2>/dev/null || __rc=$?
+  if [[ $__rc -eq 0 ]]; then
     __landed_why="the net change of $__b since $(git -C "$REPO" rev-parse --short "$__m") is empty, which proves nothing"; return 1
   fi
+  [[ $__rc -eq 1 ]] || { __landed_why="git diff-tree could not compare $__b with $__base"; return 1; }
+  __rc=0
   __tree_b=$(git -C "$REPO" rev-parse "$__base^{tree}" 2>/dev/null) || { __landed_why="$__base has no tree"; return 1; }
   # WT_COMPAT: Remove the read-tree branch when every machine has Git 2.38 or later.
   if git_merges_trees; then
@@ -215,13 +222,9 @@ fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as or
                # 0 when it refreshed the base; 1 when the fetch failed (now, or earlier this run);
                # 2 when the base is not a remote's branch and there was nothing to do;
                # 3 when the base was already refreshed this run.
-  # A squash merge lands on GitHub, and the next command typed is `wt rm`. Here, origin/main is whatever the
-  # last fetch left, which is from before the merge, and branch_landed compares against that. So when the
-  # offline checks say no and the base is a remote's branch, fetch that one branch and ask again. Offline,
-  # the fetch fails quietly within the same 5-second ceiling that branch_pushed already accepts. The offline
-  # verdict then stands, and the refusal says that the base could not be refreshed. A local base (`main`) is
-  # never fetched.
-  local base="$1" remote
+  # Refresh remote content before accepting cached success. A failed fetch cannot authorize removal.
+  # Local branches need no network operation. Cache each refresh until the deletion-boundary check.
+  local base="${1#refs/remotes/}" remote
   [[ "$base" == */* ]] || return 2
   remote="${base%%/*}"
   git -C "$REPO" remote 2>/dev/null | grep -xF "$remote" >/dev/null || return 2
@@ -229,12 +232,59 @@ fetch_base() { # fetch_base <base> — refresh a remote-tracking base such as or
     ok) return 3 ;;
     failed) return 1 ;;
   esac
-  warn "fetching $base from $remote to see whether the branch landed (ctrl-c and use --force if it hangs)"
+  warn "fetching $base from $remote to verify current landing content"
   if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}" \
-       git -C "$REPO" fetch -q "$remote" "${base#*/}" >/dev/null 2>&1; then
+       git -C "$REPO" fetch -q --no-tags "$remote" "+refs/heads/${base#*/}:refs/remotes/$base" >/dev/null 2>&1; then
     WT_BASE_FETCHES[$base]=ok; return 0
   fi
   WT_BASE_FETCHES[$base]=failed; return 1
+}
+
+comparison_unambiguous() {
+  local ref=$1 matches
+  matches=$(git -C "$REPO" for-each-ref --format='%(refname)' -- "$ref" "refs/heads/$ref" "refs/remotes/$ref" "refs/tags/$ref") || return 1
+  [[ $matches != *$'\n'* ]]
+}
+
+# Select a landing destination without changing the creation base or dependent sidecars.
+# WT_RM_BASE and WT_RM_PROOF describe the verified removal decision.
+# shellcheck disable=SC2034  # The removal caller consumes the preservation proof.
+WT_RM_BASE='' WT_RM_PROOF=''
+comparison_base() { # comparison_base <branch> <creation base> <output>
+  local -n __effective=$3
+  local __branch=$1 __saved=$2 __configured __remote __advertised __head __remotes
+  __effective=$__saved
+  [[ $__saved != HEAD && $__saved != "$__branch" && $__saved != "refs/heads/$__branch" ]] || return 1
+  __configured=$(git -C "$REPO" config --get wt.landingRef 2>/dev/null || true)
+  if [[ -n $__configured ]]; then __effective=$__configured
+  elif [[ ${4:-} != landing ]] && git -C "$REPO" rev-parse -q --verify "$__saved^{commit}" >/dev/null 2>&1; then return 0
+  else
+    if [[ -n ${WT_META[landing_ref]-} && -z ${WT_META[landing_remote]-} ]]; then
+      __effective=${WT_META[landing_ref]}
+      [[ $__effective != "$__branch" && $__effective != HEAD ]] || return 1
+      git -C "$REPO" rev-parse -q --verify "$__effective^{commit}" >/dev/null 2>&1
+      return
+    fi
+    __remote=${WT_META[landing_remote]-}
+    [[ -n $__remote ]] || __remote=$(git -C "$REPO" config "branch.$__branch.remote" 2>/dev/null || true)
+    if [[ -z $__remote ]]; then
+      __remotes=$(git -C "$REPO" remote)
+      [[ -n $__remotes && $__remotes != *$'\n'* ]] || return 1
+      __remote=$__remotes
+    fi
+    [[ $__remote != . ]] || return 1
+    if [[ ${4:-} == cached ]]; then
+      __effective=$(git -C "$REPO" symbolic-ref -q --short "refs/remotes/$__remote/HEAD" 2>/dev/null) || return 1
+      return 0
+    fi
+    __advertised=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}" \
+      git -C "$REPO" ls-remote --symref "$__remote" HEAD 2>/dev/null) || return 1
+    __head=$(printf '%s\n' "$__advertised" | sed -n 's/^ref: refs\/heads\/\([^[:space:]]*\)[[:space:]]HEAD$/\1/p')
+    [[ -n $__head && $__head != *$'\n'* ]] || return 1
+    __effective="$__remote/$__head"
+  fi
+  [[ $__effective != HEAD && $__effective != "$__branch" && $__effective != "refs/heads/$__branch" ]] || return 1
+  return 0
 }
 
 rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array> [discard commits]
@@ -250,34 +300,56 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
   __reasons=()
   __dirty=$(unexplained_dirt "$__n" "$__p" | wc -l | tr -d ' ')
   [[ "$__dirty" -gt 0 ]] && __reasons+=("$__dirty uncommitted change(s)")
-  # A base that no longer resolves fails both checks below, and each failure reads as "nothing to lose". The
-  # literal HEAD (metadata from before wt canonicalized the base) resolves in every worktree to that
-  # worktree's own tip, and reads the same way. So settle the base first, and make either case a refusal.
-  # WT_COMPAT: Remove the HEAD guard when no sidecar stores a literal HEAD base.
-  if [[ "$__base" != HEAD ]] && git -C "$REPO" rev-parse -q --verify "$__base^{commit}" >/dev/null 2>&1; then
-    __base_ok=1
-    # merged means one of two things:
-    # - the branch is an ancestor of the base (a merge commit, a fast-forward);
-    # - all its work is in the base's tip without its commits (a squash merge; see branch_landed).
-    # Check the second case offline first. Then, in case the merge is newer than the last fetch, refresh a
-    # remote base and check once more. With --discard-commits, check neither: the reason is waived whatever
-    # the answer, so there is nothing to go online for.
-    if git -C "$REPO" merge-base --is-ancestor "$__b" "$__base" 2>/dev/null; then __merged=1
-    elif [[ $__discard_commits -eq 1 ]]; then __merged=0
-    elif branch_landed "$__b" "$__base" __landed_reason; then __merged=1
-    else
-      __why=" ($__landed_reason)"
-      fetch_base "$__base" && __rc=0 || __rc=$?
-      if [[ $__rc -eq 0 ]]; then
-        if branch_landed "$__b" "$__base" __landed_reason; then __merged=1; else __why=" ($__landed_reason)"; fi
-      elif [[ $__rc -eq 1 ]]; then __why=" ($__landed_reason; $__base could not be refreshed from its remote)"
+  # WT_COMPAT: Remove the literal HEAD refusal when every sidecar records a canonical creation base.
+  WT_RM_BASE=$__base WT_RM_PROOF=''
+  if [[ -d $__p ]] && ! git -C "$__p" status --porcelain -z >/dev/null 2>&1; then
+    __reasons+=("cannot read worktree status")
+  fi
+  if ! git -C "$REPO" rev-parse -q --verify "$__b^{commit}" >/dev/null 2>&1; then
+    __reasons+=("branch '$__b' cannot be resolved")
+  fi
+  if comparison_base "$__b" "$__base" WT_RM_BASE; then
+    __base=$WT_RM_BASE
+    if ! comparison_unambiguous "$__base"; then
+      __reasons+=("comparison ref '$__base' is ambiguous")
+      return 0
+    fi
+    fetch_base "$__base" && __rc=0 || __rc=$?
+    if [[ $__rc -ne 1 ]] && git -C "$REPO" rev-parse -q --verify "$__base^{commit}" >/dev/null 2>&1; then
+      __base_ok=1
+      if ! __ahead=$(git -C "$REPO" rev-list --count "$__base..$__b" 2>/dev/null); then
+        __reasons+=("git rev-list could not compare $__b with $__base")
+      elif [[ ! $__ahead =~ ^[0-9]+$ ]]; then
+        __reasons+=("git rev-list returned an invalid count")
+      elif git -C "$REPO" merge-base --is-ancestor "$__b" "$__base" 2>/dev/null; then
+        __merged=1; WT_RM_PROOF=ancestry
+      elif [[ $__discard_commits -eq 0 ]] && branch_landed "$__b" "$__base" __landed_reason; then
+        __merged=1; WT_RM_PROOF=content
+      else __why=" (${__landed_reason:-content not validated})"
+      fi
+    else __why=" ($__base could not be refreshed from its remote)"
+    fi
+  fi
+  # A retargeted child can retain a live or stale parent ref. Validate the complete stack at its root.
+  if [[ $__merged -eq 0 && $__discard_commits -eq 0 && ( $__base_ok == 0 || $4 == wt/* || $4 == */wt/* ) ]]; then
+    local __root_base=''
+    if comparison_base "$__b" "$4" __root_base landing && [[ $__root_base != "$__base" ]] && comparison_unambiguous "$__root_base"; then
+      fetch_base "$__root_base" && __rc=0 || __rc=$?
+      if [[ $__rc != 1 ]] && git -C "$REPO" rev-parse -q --verify "$__root_base^{commit}" >/dev/null 2>&1; then
+        if git -C "$REPO" merge-base --is-ancestor "$__b" "$__root_base" 2>/dev/null; then
+          __merged=1; WT_RM_PROOF=ancestry
+        elif branch_landed "$__b" "$__root_base" __landed_reason; then
+          __merged=1; WT_RM_PROOF=content
+        fi
+        if [[ $__merged == 1 ]]; then __base=$__root_base; WT_RM_BASE=$__base; __base_ok=1; fi
       fi
     fi
-    __ahead=$(git -C "$REPO" rev-list --count "$__base..$__b" 2>/dev/null || echo 0)
   fi
-  [[ $__base_ok -eq 1 ]] || __reasons+=("base '$__base' cannot be compared with $__b (gone, or the literal HEAD)")
-  if [[ "$__ahead" -gt 0 && $__merged -eq 0 && $__discard_commits -eq 0 ]] && ! branch_pushed "$__b"; then
-    __reasons+=("$__ahead commit(s) on $__b not merged into $__base and not on a remote$__why")
+  [[ $__base_ok -eq 1 ]] || __reasons+=("base '$__base' cannot be compared with $__b (gone, or the literal HEAD)$__why")
+  if [[ $__base_ok -eq 1 && $__ahead -gt 0 && $__merged -eq 0 && $__discard_commits -eq 0 ]]; then
+    # shellcheck disable=SC2034  # The removal caller consumes this proof.
+    if branch_pushed "$__b"; then WT_RM_PROOF=published
+    else __reasons+=("$__ahead commit(s) on $__b not merged into $__base and not on a remote$__why"); fi
   fi
   # The checks above use $__b. A different HEAD adds a reason of its own.
   # Removing the worktree loses a state that no branch keeps, such as a bisect or detached checkout.

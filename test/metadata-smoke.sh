@@ -91,8 +91,9 @@ assert_eq 'new sidecars store arrays' '["array","array"]' "$(jq -c '[.includes|t
 invoke show first --json
 assert_eq 'JSON show succeeds' 0 "$(cat "$TEST_ROOT/status")"
 assert_eq 'show reads its sidecar once' 1 "$(wc -l <"$META_READS" | tr -d ' ')"
-keys='["ahead","base","behind","branch","checkout_branch","dirty","last_commit_at","merged","model","name","path","repo","task","title","why"]'
-assert_eq 'show pins the complete initial shape' "$keys" "$(jq -c 'keys' "$TEST_ROOT/out")"
+keys='["ahead","base","behind","branch","checkout_branch","comparison","dirty","last_commit_at","merged","model","name","path","repo","task","title","why"]'
+assert_eq 'show pins the additive comparison shape' "$keys" "$(jq -c 'keys' "$TEST_ROOT/out")"
+assert_eq 'comparison labels cached evidence' cached "$(jq -r .comparison.freshness "$TEST_ROOT/out")"
 assert_eq 'show preserves paths and brief text' true "$(jq --arg repo "$REPO" '.repo == $repo and .path == ($repo + "/.worktrees/first") and .task == "brief \"quoted\"" and .title == "first" and .model == ""' "$TEST_ROOT/out")"
 assert_eq 'common status fields use the documented values' true "$(jq '.name == "first" and .branch == "wt/first" and .checkout_branch == "wt/first" and .base == "main" and .ahead == 0 and .behind == 0 and .dirty == 0 and .merged == "yes" and .why == "" and (.last_commit_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))' "$TEST_ROOT/out")"
 cp "$TEST_ROOT/out" "$TEST_ROOT/show.json"

@@ -166,6 +166,19 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   if [[ -n "$__self_row" ]]; then __rm_row=$__self_row; __rm_self=self; fi
 }
 
+process_descends() { # process_descends <pid> <ancestor>; unreadable ancestry never proves ownership.
+  local pid=$1 ancestor=$2 parent steps=0
+  [[ $pid =~ ^[0-9]+$ && $ancestor =~ ^[0-9]+$ ]] || return 1
+  while ((pid > 1 && steps < 128)); do
+    [[ $pid != "$ancestor" ]] || return 0
+    parent=$(ps -p "$pid" -o ppid= 2>/dev/null) || return 1
+    parent=${parent//[[:space:]]/}
+    [[ $parent =~ ^[0-9]+$ && $parent != "$pid" ]] || return 1
+    pid=$parent; steps=$((steps + 1))
+  done
+  return 1
+}
+
 row_agent() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's own row, "busy" when an agent
   # runs in the row, else "idle". A failed check returns a diagnostic in CMUX_ERROR.
   local state
@@ -174,13 +187,54 @@ row_agent() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's o
   printf '%s' "$state" | jq -e '.coding_agents | type == "array"
     and all(.[]; .resources.process_count | type == "number" and . >= 0)' >/dev/null 2>&1 \
     || { cmux_error "cannot check the agent in cmux row $1; kept the worktree"; return 1; }
-  if printf '%s' "$state" | jq -e --arg id "$1" '.caller.workspace_id == $id' >/dev/null; then
-    ROW_AGENT=self
-  elif printf '%s' "$state" | jq -e 'any(.coding_agents[]; .resources.process_count > 0)' >/dev/null; then
-    ROW_AGENT=busy
-  else
-    ROW_AGENT=idle
+  ROW_AGENT=idle
+  printf '%s' "$state" | jq -e 'all(.coding_agents[];
+    (.resources.pids | type == "array") and (.resources.pids | length) == .resources.process_count
+    and all(.resources.pids[]; type == "number" and . > 1 and floor == .))' >/dev/null 2>&1 \
+    || { cmux_error "cannot verify agent process data; kept the worktree"; return 1; }
+  ROW_AGENT=busy
+  local pids row_pids root='' pid command
+  # cmux caller fields echo environment hints. Use attributed PIDs and OS ancestry instead.
+  printf '%s' "$state" | jq -e --arg id "$1" '
+    [.windows[].workspaces[] | select(.id == $id)] as $rows
+    | ($rows | length) == 1 and ($rows[0].resources as $r
+      | ($r.pids | type == "array") and ($r.pids | length) == $r.process_count
+      and (($r.missing_pids // []) | length) == 0)' >/dev/null 2>&1 \
+    || { cmux_error "cannot verify ownership of the agent in cmux row $1; incomplete process sample; kept the worktree"; return 1; }
+  if ! printf '%s' "$state" | jq -e 'any(.coding_agents[]; .resources.process_count > 0)' >/dev/null; then ROW_AGENT=idle; return 0; fi
+  pids=$(printf '%s' "$state" | jq -r --arg id "$1" '
+    [.windows[].workspaces[] | select(.id == $id) | .resources.pids] as $rows
+    | (if ($rows | length) != 1 or ($rows[0] | type) != "array" then error("missing row PIDs") else $rows[0] end) as $row
+    | [.coding_agents[].resources.pids[] | select(. as $p | $row | index($p))] | unique
+    | if any(.[]; type != "number" or . <= 1 or floor != .) then error("invalid agent PIDs")
+      elif length == 0 then empty else .[] end' 2>/dev/null) || {
+      cmux_error "cannot verify ownership of the agent in cmux row $1; kept the worktree (restart the task with updated wt run)"; return 1;
+    }
+  # Other rows can contribute to the global agent totals. No intersection means this row is idle.
+  [[ -n $pids ]] || { ROW_AGENT=idle; return 0; }
+  while IFS= read -r pid; do
+    if process_descends "$BASHPID" "$pid"; then
+      command=$(ps -p "$pid" -o command= 2>/dev/null) || return 1
+      case "${command%%' -- '*}" in
+        *' app-server'|*' app-server '*|*' exec-server'|*' exec-server '*) continue ;;
+      esac
+      if [[ -z $root ]] || process_descends "$root" "$pid"; then root=$pid; fi
+    fi
+  done <<<"$pids"
+  if [[ -z $root ]]; then
+    cmux_error "agent session ownership is unverified in cmux row $1; kept the worktree. Shared-server sessions need a task-owned restart with wt run"
+    return 1
   fi
+  while IFS= read -r pid; do
+    process_descends "$pid" "$root" || return 0
+  done <<<"$pids"
+  row_pids=$(printf '%s' "$state" | jq -r --arg id "$1" '
+    .windows[].workspaces[] | select(.id == $id) | .resources.pids[]
+    | if type == "number" and . > 1 and floor == . then . else error("invalid PID") end') || return 1
+  while IFS= read -r pid; do
+    process_descends "$pid" "$root" || process_descends "$root" "$pid" || return 0
+  done <<<"$row_pids"
+  ROW_AGENT=self
 }
 
 # cmux_rows_load <skip|stop|checked> [command...] sets CMUX_ROWS_JSON and CMUX_ROWS_FULL.
