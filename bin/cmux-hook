@@ -185,6 +185,10 @@ case $t in
         elif ! remote_row_idle "$ws"; then
           log "relay row ownership prevents closure: $CMUX_ERROR"
         elif close_row "$ws" self >/dev/null 2>&1; then
+          closed_rows=$(rows_json checked) || { log "cannot verify row absence after closing $ws; session cleanup remains pending"; exit 0; }
+          absence_rc=0
+          jq -e --arg row "$ws" 'any(.workspaces[]; .id == $row)' <<<"$closed_rows" >/dev/null || absence_rc=$?
+          [[ $absence_rc == 1 ]] || { log "row absence is unverified after closing $ws; session cleanup remains pending"; exit 0; }
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
           if vm_wt "$h" rm "$n" -r "$r" --row-closed >/dev/null 2>&1; then
@@ -194,7 +198,7 @@ case $t in
             if command -v osascript >/dev/null 2>&1; then
               osascript -e 'on run argv' \
                 -e 'display notification (item 1 of argv) with title "workgrove teardown incomplete"' \
-                -e 'end run' "Run: ssh $h tmux kill-session -t '=$sess'" >/dev/null 2>&1 || true
+                -e 'end run' "Run: wt -H $h rm $n -r $(shell_join "$r")" >/dev/null 2>&1 || true
             fi
           fi
         else log "could not close row $ws for task $n of $id on $h"; fi

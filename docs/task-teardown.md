@@ -58,6 +58,8 @@ Creation object fields are audit metadata, rather than independent preservation 
 Remote comparisons refresh before accepting cached success and again before deletion.
 Failed fetches and invalid counts refuse removal.
 Failed comparisons, unrelated histories, and ambiguous merge bases cannot establish content preservation.
+An ancestry-check error refuses removal even when the reported ahead count is zero.
+Only explicit discard flags can produce a discard decision.
 Independent publication evidence can preserve commits without proving that their content landed.
 Tracked changes, unexplained untracked files, changed included private files, detached HEAD, and another checked-out branch retain their protections.
 Old Git versions retain the stricter whole-file merge comparison.
@@ -65,6 +67,28 @@ Old Git versions retain the stricter whole-file merge comparison.
 `wt show --json` preserves its original `base`, counts, and merge-status fields.
 Its additive `comparison` object labels the candidate and proof as cached.
 Status never fetches and cannot authorize deletion by itself.
+
+## Preserve working files
+
+Removal enumerates all untracked files and submodule changes, regardless of status display settings.
+It disables filesystem-monitor caching for these checks.
+Assume-unchanged and skip-worktree index flags refuse removal because they can hide modified tracked files.
+Workgrove does not clear those flags or change global Git configuration.
+
+Private-file snapshots compare bytes independently of filename escaping.
+Link fingerprints start with `L` and hash the link target text without following it.
+An unchanged setup link remains removable; retargeting it does not match identical target contents.
+New private dangling links remain protected when current include patterns cover them.
+
+New task metadata keeps `includes_status` pending until copying and fingerprint capture finish.
+Failed reads, copies, hashes, or unsupported filename encoding leave that status pending and block removal.
+Older sidecars without this field remain unchanged.
+The reader normalizes valid escaped digests from older hash commands in memory.
+Malformed or unverified snapshot records refuse comparison.
+Older content-only link records can require inspection because they do not establish link identity.
+
+Creation records protect copied files after include patterns change or disappear.
+Newly created ignored files depend on the current `.wt-include` patterns.
 
 ## Verify the requesting session
 
@@ -122,6 +146,13 @@ Before deletion, workgrove writes a private receipt under `<repo>/.git/wt/teardo
 Atomic replacement and filesystem synchronization preserve each recorded stage.
 The receipt records object identities and component progress, without copying private file contents or task briefs.
 
+Before deleting sidecars, workgrove persists the `sidecars_removing` stage and their fingerprints.
+Retries accept a recorded sidecar's absence after that intent, while refusing changed replacements.
+Observation cannot report completion while any sidecar remains.
+Older receipts acquire missing sidecar snapshots only before deletion, while their original metadata still matches.
+Recovery removes only the target registration; it does not prune unrelated missing worktrees.
+The registration reader supports Git 2.34 porcelain output, including quoted paths.
+
 Only the most recent receipt for each task name is retained.
 A completed receipt can be replaced when another generation finishes.
 
@@ -153,8 +184,10 @@ Legacy hooks validate the recorded VM owner before closing their authenticated r
 They refresh row identity and require a complete local process sample containing only the SSH transport tree.
 Local agents, independent commands, and uncertain samples prevent forced closure.
 The hooks use the same acknowledgment after row closure.
+They independently confirm row absence before acknowledging it to the VM.
 They require the VM's `teardown-receipts` capability before closing it.
 A failed acknowledgment remains pending and can be retried from the Mac.
+Failure notices print the safe receipt retry instead of a raw session-name kill command.
 Recovery can finish the recorded original agent after a lost callback.
 An added agent, independent command, or replacement session still blocks closure.
 

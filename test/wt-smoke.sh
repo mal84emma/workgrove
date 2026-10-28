@@ -2889,12 +2889,13 @@ scenario_teardown_review_preservation() {
   real_hash=$(command -v shasum)
   cat >"$shim/shasum" <<'SHIM'
 #!/bin/sh
-case "$*" in *"$FAIL_HASH_PATH") exit 1 ;; esac
+if [ -n "${FAIL_HASH_PATH:-}" ] && [ -f "$FAIL_HASH_PATH" ] && python3 -c 'import os,sys; sys.exit(not os.path.samestat(os.fstat(0), os.stat(sys.argv[1])))' "$FAIL_HASH_PATH" 2>/dev/null; then : >"$HASH_FAULT_MARKER"; exit 1; fi
 exec "$REAL_FIXTURE_HASH" "$@"
 SHIM
   chmod +x "$shim/shasum"
-  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_HASH=$real_hash" "FAIL_HASH_PATH=$p/a")
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_HASH=$real_hash" "FAIL_HASH_PATH=$p/a" "HASH_FAULT_MARKER=$TEST_ROOT/setup-hash-fault")
   assert_wt_fails 3 'cannot enumerate working files' rm setup -r "$r"
+  assert_regular "$TEST_ROOT" setup-hash-fault
   assert_eq 'a failed hash never matches a recorded deletion' 'recreated private work' "$(cat "$p/a")"
   WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
   rm "$shim/shasum"
@@ -2925,7 +2926,7 @@ SHIM
   rm "$r/.git/wt/generation.json" "$r/mutated"
   cat >"$shim/shasum" <<'SHIM'
 #!/bin/sh
-case "$*" in *"$FAIL_HASH_PATH") exit 1 ;; esac
+if [ -n "${FAIL_HASH_PATH:-}" ] && [ -f "$FAIL_HASH_PATH" ] && python3 -c 'import os,sys; sys.exit(not os.path.samestat(os.fstat(0), os.stat(sys.argv[1])))' "$FAIL_HASH_PATH" 2>/dev/null; then : >"$HASH_FAULT_MARKER"; exit 1; fi
 exec "$REAL_FIXTURE_HASH" "$@"
 SHIM
   chmod +x "$shim/shasum"
@@ -2935,10 +2936,11 @@ SHIM
   # shellcheck disable=SC2016  # Preserve variables for the generated Git wrapper.
   sed 's@jq .* >"$RACE_REPO/new-metadata"@cp "$RACE_REPO/legacy-metadata" "$RACE_REPO/new-metadata"@' "$shim/git" >"$shim/git-new"
   mv "$shim/git-new" "$shim/git"; chmod +x "$shim/git"
-  WT_RELAY_ENV+=("REAL_FIXTURE_HASH=$real_hash" "FAIL_HASH_PATH=$r/.git/wt/generation.json")
+  WT_RELAY_ENV+=("REAL_FIXTURE_HASH=$real_hash" "FAIL_HASH_PATH=$r/.git/wt/generation.json" "HASH_FAULT_MARKER=$TEST_ROOT/metadata-hash-fault")
   assert_wt_fails 1 'task metadata changed before worktree removal' rm generation -r "$r"
   assert_dir 'an unreadable new sidecar cannot equal original absence' "$p"
   assert_branch "$r" wt/generation yes
+  assert_regular "$TEST_ROOT" metadata-hash-fault
   assert_eq 'the unreadable replacement remains' original "$(jq -r .generation "$r/.git/wt/generation.json")"
   WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
 
@@ -3202,6 +3204,323 @@ SHIM
     rm "$r/.worktrees/tools/bin/$tool"
   done
   WT_PATH_PREFIX=$mac
+  end_scenario
+}
+
+scenario_teardown_astra_files() {
+  begin_scenario "$1" || return 0
+  local r p name flag mac="$TEST_ROOT/astra-files-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  r=$(new_repo astra-files)
+  fixture_commit "$r" tracked.txt original
+  for name in top nested; do
+    assert_wt_ok 'create hidden untracked fixture' new "$name" --no-workspace -r "$r"
+    p="$r/.worktrees/$name"
+    fixture_git "$p" config status.showUntrackedFiles no
+    if [[ $name == nested ]]; then mkdir -p "$p/directory"; printf 'only copy\n' >"$p/directory/private.txt"
+    else printf 'only copy\n' >"$p/private.txt"; fi
+    assert_wt_fails 3 'uncommitted change' rm "$name" -r "$r"
+    assert_dir 'hidden untracked work keeps its directory' "$p"
+    assert_branch "$r" "wt/$name" yes
+  done
+  for flag in assume-unchanged skip-worktree; do
+    assert_wt_ok 'create hidden tracked fixture' new "$flag" --no-workspace -r "$r"
+    p="$r/.worktrees/$flag"
+    fixture_git "$p" update-index "--$flag" tracked.txt
+    printf 'only modified copy\n' >"$p/tracked.txt"
+    assert_wt_fails 3 'Git index flags can hide tracked changes' rm "$flag" -r "$r"
+    assert_eq 'hidden modified bytes survive' 'only modified copy' "$(cat "$p/tracked.txt")"
+    assert_registered "$r" "$flag" yes
+  done
+  assert_wt_ok 'create stale filesystem monitor fixture' new fsmonitor --no-workspace -r "$r"
+  p="$r/.worktrees/fsmonitor"
+  printf '#!/bin/sh\nprintf "token\\0"\n' >"$TEST_ROOT/stale-fsmonitor"; chmod +x "$TEST_ROOT/stale-fsmonitor"
+  fixture_git "$r" config core.fsmonitor "$TEST_ROOT/stale-fsmonitor"
+  fixture_git "$r" config core.fsmonitorHookVersion 2
+  fixture_git "$p" status --porcelain >/dev/null
+  printf 'only modified monitor copy\n' >"$p/tracked.txt"
+  assert_eq 'the fixture monitor hides ordinary status changes' '' "$(fixture_git "$p" status --porcelain --untracked-files=all --ignore-submodules=none)"
+  assert_wt_fails 3 'uncommitted change' rm fsmonitor -r "$r"
+  assert_eq 'a stale successful monitor cannot hide modified bytes' 'only modified monitor copy' "$(cat "$p/tracked.txt")"
+  fixture_git "$r" config --unset core.fsmonitor
+
+  printf '.private\n' >"$r/.gitignore"
+  printf '.private\n' >"$r/.wt-include"
+  fixture_git "$r" add .gitignore .wt-include; fixture_git "$r" commit -qm include
+  assert_wt_ok 'create dangling private link fixture' new private-link --no-workspace -r "$r"
+  p="$r/.worktrees/private-link"
+  ln -s unique-destination "$p/.private"
+  assert_wt_fails 3 '.private was edited or created' rm private-link -r "$r"
+  assert_eq 'the dangling private link survives' unique-destination "$(readlink "$p/.private")"
+
+  printf 'same content\n' >"$r/.private"
+  printf 'same content\n' >"$TEST_ROOT/private-link-target"
+  assert_wt_ok 'create copied private file fixture' new copied-link --no-workspace -r "$r"
+  p="$r/.worktrees/copied-link"
+  rm "$p/.private"; ln -s "$TEST_ROOT/private-link-target" "$p/.private"
+  assert_wt_fails 3 '.private was edited or created' rm copied-link -r "$r"
+  assert_eq 'identical target bytes cannot hide a file-to-link replacement' "$TEST_ROOT/private-link-target" "$(readlink "$p/.private")"
+
+  fixture_commit "$r" one 'identical bytes'
+  fixture_commit "$r" two 'identical bytes'
+  printf '#!/bin/sh\nln -s one generated\n' >"$r/.wt-setup"; chmod +x "$r/.wt-setup"
+  fixture_git "$r" add .wt-setup; fixture_git "$r" commit -qm setup
+  assert_wt_ok 'create unchanged setup link fixture' new setup-clean --no-workspace -r "$r"
+  assert_wt_ok 'an unchanged setup link remains removable' rm setup-clean -r "$r"
+  assert_wt_ok 'create changed setup link fixture' new setup-changed --no-workspace -r "$r"
+  p="$r/.worktrees/setup-changed"
+  rm "$p/generated"; ln -s two "$p/generated"
+  assert_wt_fails 3 'uncommitted change' rm setup-changed -r "$r"
+  assert_eq 'setup link retargeting survives identical target contents' two "$(readlink "$p/generated")"
+  local child
+  child=$(new_repo astra-submodule)
+  fixture_commit "$child" tracked.txt 'child content'
+  r=$(new_repo astra-submodule-parent)
+  fixture_git "$r" -c protocol.file.allow=always submodule add -q "$child" child
+  fixture_git "$r" commit -qm submodule
+  assert_wt_ok 'create hidden submodule fixture' new submodule --no-workspace -r "$r"
+  p="$r/.worktrees/submodule"
+  fixture_git "$p" -c protocol.file.allow=always submodule update -q --init
+  fixture_git "$p" config diff.ignoreSubmodules all
+  fixture_git "$p" config submodule.child.ignore all
+  printf 'only child copy\n' >"$p/child/private.txt"
+  assert_wt_fails 3 'uncommitted change' rm submodule -r "$r"
+  assert_eq 'ignored submodule dirt remains protected' 'only child copy' "$(cat "$p/child/private.txt")"
+  end_scenario
+}
+
+scenario_teardown_astra_sidecars() {
+  begin_scenario "$1" || return 0
+  local r name suffix shim real_rm mac="$TEST_ROOT/astra-sidecars-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  r=$(new_repo astra-sidecars)
+  shim="$TEST_ROOT/astra-sidecar-bin"; mkdir -p "$shim"
+  real_rm=$(command -v rm)
+  cat >"$shim/rm" <<'SHIM'
+#!/bin/sh
+for argument do
+  if [ "$argument" = "$FAIL_SIDECAR" ]; then "$REAL_FIXTURE_RM" "$@" || exit $?; exit 1; fi
+done
+exec "$REAL_FIXTURE_RM" "$@"
+SHIM
+  chmod +x "$shim/rm"
+  for suffix in json prompt started; do
+    name="partial-$suffix"
+    WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+    assert_wt_ok 'create sidecar interruption fixture' new "$name" --no-workspace -p 'the brief' -r "$r"
+    printf 'started\n' >"$r/.git/wt/$name.started"
+    WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_RM=$real_rm" "FAIL_SIDECAR=$r/.git/wt/$name.$suffix")
+    assert_wt_fails 1 'sidecar cleanup failed' rm "$name" -r "$r"
+    assert_eq 'sidecar intent survives interruption' sidecars_removing "$(jq -r .stage "$r/.git/wt/teardown/$name.json")"
+    assert_absent "$r" ".git/wt/$name.$suffix"
+    assert_branch "$r" "wt/$name" no
+    WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+    if [[ $suffix == json ]]; then
+      assert_wt_fails 1 'cleanup absence cannot be verified' rm "$name" --observe-only -r "$r"
+      assert_eq 'observation cannot complete while prompt or started sidecars remain' sidecars_removing "$(jq -r .stage "$r/.git/wt/teardown/$name.json")"
+    fi
+    assert_wt_ok 'normal retry resumes after successful sidecar unlink' rm "$name" -r "$r"
+    assert_eq 'sidecar recovery completes' complete "$(jq -r .stage "$r/.git/wt/teardown/$name.json")"
+    assert_absent "$r" ".git/wt/$name.json"
+    assert_absent "$r" ".git/wt/$name.prompt"
+    assert_absent "$r" ".git/wt/$name.started"
+  done
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  assert_wt_ok 'create replacement sidecar fixture' new replacement --no-workspace -p 'old brief' -r "$r"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_RM=$real_rm" "FAIL_SIDECAR=$r/.git/wt/replacement.json")
+  assert_wt_fails 1 'sidecar cleanup failed' rm replacement -r "$r"
+  printf 'new independent brief\n' >"$r/.git/wt/replacement.prompt"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  assert_wt_fails 1 'sidecars changed during cleanup' rm replacement -r "$r"
+  assert_eq 'a replacement brief survives recovery' 'new independent brief' "$(cat "$r/.git/wt/replacement.prompt")"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  assert_wt_ok 'create reappearing worktree fixture' new reappeared --no-workspace -p 'old brief' -r "$r"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_RM=$real_rm" "FAIL_SIDECAR=$r/.git/wt/reappeared.json")
+  assert_wt_fails 1 'sidecar cleanup failed' rm reappeared -r "$r"
+  mkdir -p "$r/.worktrees/reappeared"
+  printf 'new work\n' >"$r/.worktrees/reappeared/private.txt"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  assert_wt_fails 1 'exists but is not a registered worktree' rm reappeared -r "$r"
+  assert_eq 'a replacement directory survives recovery' 'new work' "$(cat "$r/.worktrees/reappeared/private.txt")"
+
+  assert_wt_ok 'create receipt-write interruption fixture' new receipt --no-workspace -p 'the brief' -r "$r"
+  local real_python
+  real_python=$(command -v python3)
+  cat >"$shim/python3" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *'data = json.load(sys.stdin)'*)
+    payload=$(cat)
+    if jq -e '.stage == "git_removed"' <<<"$payload" >/dev/null; then exit 1; fi
+    printf '%s\n' "$payload" | "$REAL_FIXTURE_PYTHON" "$@"
+    exit $? ;;
+esac
+exec "$REAL_FIXTURE_PYTHON" "$@"
+SHIM
+  chmod +x "$shim/python3"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_PYTHON=$real_python" "REAL_FIXTURE_RM=$real_rm" FAIL_SIDECAR=unused)
+  assert_wt_fails 1 'cannot persist teardown receipt' rm receipt -r "$r"
+  assert_eq 'receipt-write failure preserves sidecar intent' sidecars_removing "$(jq -r .stage "$r/.git/wt/teardown/receipt.json")"
+  assert_absent "$r" .git/wt/receipt.json
+  assert_absent "$r" .git/wt/receipt.prompt
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  assert_wt_ok 'receipt-write interruption resumes after all sidecars are absent' rm receipt -r "$r"
+  end_scenario
+}
+
+scenario_teardown_astra_hashes() {
+  begin_scenario "$1" || return 0
+  local r p name hash record shim real_hash private_name='a\b.env' mac="$TEST_ROOT/astra-hash-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  r=$(new_repo astra-hashes)
+  printf '*.env\n' >"$r/.gitignore"
+  printf '*.env\n' >"$r/.wt-include"
+  fixture_git "$r" add .gitignore .wt-include; fixture_git "$r" commit -qm include
+  printf '\000original\377\n' >"$r/$private_name"
+  for name in canonical legacy-clean legacy-edited malformed; do
+    assert_wt_ok 'create binary escaped-filename fixture' new "$name" --no-workspace -r "$r"
+    p="$r/.worktrees/$name"
+    hash=$(jq -r '.includes[0] | split(":") | last' "$r/.git/wt/$name.json")
+    assert_eq 'private snapshot stores a canonical digest' 1 "$([[ $hash =~ ^[0-9a-f]{64}$ ]] && echo 1 || echo 0)"
+    if [[ $name == legacy-* || $name == malformed ]]; then
+      if [[ $name == malformed ]]; then record="$private_name:"
+      else record="$private_name:\\$hash"; fi
+      jq --arg record "$record" '.includes=[$record] | del(.metadata_version)' "$r/.git/wt/$name.json" >"$r/.git/wt/$name.new"
+      mv "$r/.git/wt/$name.new" "$r/.git/wt/$name.json"
+    fi
+    if [[ $name != legacy-clean ]]; then printf '\000only private copy\376\n' >"$p/$private_name"; fi
+  done
+  rm "$r/.wt-include"
+  assert_wt_fails 3 'was edited or created' rm canonical -r "$r"
+  assert_wt_ok 'unchanged escaped legacy digests remain comparable' rm legacy-clean -r "$r"
+  assert_wt_fails 3 'was edited or created' rm legacy-edited -r "$r"
+  assert_wt_fails 3 'cannot enumerate included private files' rm malformed -r "$r"
+  for name in canonical legacy-edited malformed; do
+    assert_eq 'private binary work survives missing current patterns' 1 "$(python3 -c 'import pathlib,sys; print(int(pathlib.Path(sys.argv[1]).read_bytes()==b"\x00only private copy\xfe\n"))' "$r/.worktrees/$name/$private_name")"
+  done
+
+  r=$(new_repo astra-copy-fault)
+  printf '.env\n' >"$r/.gitignore"
+  printf '.env\n' >"$r/.wt-include"
+  fixture_git "$r" add .gitignore .wt-include; fixture_git "$r" commit -qm include
+  printf 'original private copy\n' >"$r/.env"
+  shim="$TEST_ROOT/astra-copy-hash-bin"; mkdir -p "$shim"
+  real_hash=$(command -v shasum)
+  cat >"$shim/shasum" <<'SHIM'
+#!/bin/sh
+if [ -f "$FAIL_HASH_PATH" ] && python3 -c 'import os,sys; sys.exit(not os.path.samestat(os.fstat(0), os.stat(sys.argv[1])))' "$FAIL_HASH_PATH" 2>/dev/null; then : >"$HASH_FAULT_MARKER"; exit 1; fi
+exec "$REAL_FIXTURE_HASH" "$@"
+SHIM
+  chmod +x "$shim/shasum"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_HASH=$real_hash" "FAIL_HASH_PATH=$r/.worktrees/copy-fault/.env" "HASH_FAULT_MARKER=$TEST_ROOT/copy-hash-fault")
+  assert_wt_fails 1 'private-file snapshot is incomplete' new copy-fault --no-workspace -r "$r"
+  assert_regular "$TEST_ROOT" copy-hash-fault
+  assert_eq 'interrupted copying leaves durable pending status' pending "$(jq -r .includes_status "$r/.git/wt/copy-fault.json")"
+  printf 'new only copy\n' >"$r/.worktrees/copy-fault/.env"
+  rm "$r/.wt-include"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  assert_wt_fails 3 'cannot enumerate included private files' rm copy-fault -r "$r"
+  assert_eq 'incomplete snapshots retain copied work without current patterns' 'new only copy' "$(cat "$r/.worktrees/copy-fault/.env")"
+  end_scenario
+}
+
+scenario_teardown_astra_registrations() {
+  begin_scenario "$1" || return 0
+  local r other_metadata other_head shim real_git mac="$TEST_ROOT/astra-registration-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  r=$(new_repo astra-registration)
+  assert_wt_ok 'create interrupted target fixture' new target --no-workspace -r "$r"
+  assert_wt_ok 'create unrelated missing fixture' new unrelated --no-workspace -r "$r"
+  other_metadata=$(cat "$r/.git/wt/unrelated.json")
+  other_head=$(fixture_git "$r" rev-parse wt/unrelated)
+  guard_scratch_root "$r/.worktrees/unrelated"
+  rm -rf "$r/.worktrees/unrelated"
+  shim="$TEST_ROOT/astra-registration-bin"; mkdir -p "$shim"
+  real_git=$(command -v git)
+  cat >"$shim/git" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in *'worktree list --porcelain -z'*) echo "error: unknown switch z" >&2; exit 129 ;; esac
+case "$*" in *'worktree remove --force'*) "$REAL_FIXTURE_GIT" "$@" || exit $?; exit 128 ;; esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git")
+  assert_wt_fails 1 'git worktree remove failed' rm target -r "$r"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git")
+  # shellcheck disable=SC2016  # The generated shim expands its own arguments.
+  printf '#!/usr/bin/env bash\ncase "$*" in *"worktree list --porcelain -z"*) exit 129 ;; esac\nexec "$REAL_FIXTURE_GIT" "$@"\n' >"$shim/git"
+  assert_wt_ok 'prepared recovery removes only its recorded registration' rm target -r "$r"
+  assert_registered "$r" unrelated yes
+  assert_eq 'unrelated sidecars remain byte-for-byte intact' "$other_metadata" "$(cat "$r/.git/wt/unrelated.json")"
+  assert_eq 'unrelated branch remains intact' "$other_head" "$(fixture_git "$r" rev-parse wt/unrelated)"
+  assert_wt_ok 'create a missing target registration fixture' new missing-target --no-workspace -r "$r"
+  guard_scratch_root "$r/.worktrees/missing-target"
+  rm -rf "$r/.worktrees/missing-target"
+  assert_wt_ok 'missing-directory removal targets one registration' rm missing-target -r "$r"
+  assert_registered "$r" unrelated yes
+  assert_registered "$r" missing-target no
+  assert_eq 'other metadata survives targeted missing-directory cleanup' "$other_metadata" "$(cat "$r/.git/wt/unrelated.json")"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  local quoted_path result quoted_rc=0
+  quoted_path="$r/.worktrees/quoted\"back\\slash"
+  fixture_git "$r" worktree add -q -b quoted "$quoted_path"
+  guard_scratch_root "$quoted_path"
+  result=$(
+    # shellcheck source=lib/workgrove/teardown.sh
+    source "$REPO/lib/workgrove/teardown.sh"
+    REPO="$r" teardown_remove_registration "$quoted_path"
+  ) || quoted_rc=$?
+  assert_eq 'registration recovery decodes Git-quoted path bytes' 0 "$quoted_rc"
+  assert_eq 'quoted registration removal reports no error' '' "$result"
+  assert_gone 'quoted target registration cleanup removes only its directory' "$quoted_path"
+  assert_registered "$r" unrelated yes
+  end_scenario
+}
+
+scenario_teardown_astra_proofs() {
+  begin_scenario "$1" || return 0
+  local r p shim real_git tip mac="$TEST_ROOT/astra-proof-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  r=$(new_repo astra-proofs)
+  assert_wt_ok 'create zero-ahead comparison fixture' new landed --no-workspace -r "$r"
+  p="$r/.worktrees/landed"
+  fixture_commit "$p" unique.txt 'only task work'
+  tip=$(fixture_git "$r" rev-parse wt/landed)
+  fixture_git "$r" merge -q --ff-only wt/landed
+  shim="$TEST_ROOT/astra-proof-bin"; mkdir -p "$shim"
+  real_git=$(command -v git)
+  cat >"$shim/git" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in *'merge-base --is-ancestor'*) exit 128 ;; esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git")
+  assert_wt_fails 3 'git merge-base could not compare' rm landed -r "$r"
+  assert_eq 'comparison failure retains task bytes' 'only task work' "$(cat "$p/unique.txt")"
+  assert_eq 'comparison failure retains task ref' "$tip" "$(fixture_git "$r" rev-parse wt/landed)"
+  assert_absent "$r" .git/wt/teardown/landed.json
+  assert_wt_ok 'prune can report the same comparison refusal' prune --dry-run -r "$r"
+  assert_has 'prune never proposes removal without proof' "$WT_OUT" 'keep landed ('
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  assert_wt_ok 'ordinary validated ancestry still removes cleanly' rm landed -r "$r"
+  assert_eq 'normal removal records actual proof instead of discard' ancestry "$(jq -r .proof "$r/.git/wt/teardown/landed.json")"
   end_scenario
 }
 

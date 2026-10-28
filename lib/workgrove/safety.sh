@@ -2,14 +2,16 @@
 # Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WG_VERSION_ROOT, WT_BASE_FETCHES, WT_DIRNAME, WT_MERGE_TREE, WT_META, WT_TMPFILES.
 file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shasum, Linux sha256sum)
   local h=""
-  if have shasum; then h=$(shasum -a 256 "$1" 2>/dev/null) || h=""
-  elif have sha256sum; then h=$(sha256sum "$1" 2>/dev/null) || h=""
+  if have shasum; then h=$(shasum -a 256 2>/dev/null <"$1") || h=""
+  elif have sha256sum; then h=$(sha256sum 2>/dev/null <"$1") || h=""
   else
     # shellcheck source=lib/workgrove/vm/python-runtime.sh
     source "$WG_VERSION_ROOT/lib/workgrove/vm/python-runtime.sh"
     h=$(wg_run_python -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1" 2>/dev/null) || h=""
   fi
-  printf '%s' "${h%% *}"
+  h=${h%% *}
+  [[ $h =~ ^[0-9a-f]{64}$ ]] || h=''
+  printf '%s' "$h"
 }
 
 metadata_fingerprint() { # Absence and an unreadable sidecar must never compare equal.
@@ -19,6 +21,13 @@ metadata_fingerprint() { # Absence and an unreadable sidecar must never compare 
   hash=$(file_hash "$path")
   [[ $hash =~ ^[0-9a-f]{64}$ ]] || return 1
   printf '%s' "$hash"
+}
+
+work_file_hash() { # Link fingerprints preserve link identity without following their targets.
+  if [[ ! -L $1 ]]; then file_hash "$1"; return; fi
+  # shellcheck source=lib/workgrove/vm/python-runtime.sh
+  source "$WG_VERSION_ROOT/lib/workgrove/vm/python-runtime.sh" || return 1
+  wg_run_python -c 'import hashlib,os,sys; print("L" + hashlib.sha256(os.readlink(os.fsencode(sys.argv[1]))).hexdigest())' "$1"
 }
 
 include_match() { # include_match <path relative to a checkout> — 0 when .wt-include covers it
@@ -35,16 +44,25 @@ include_match() { # include_match <path relative to a checkout> — 0 when .wt-i
   return 1
 }
 
-copy_includes() { # copy gitignored files listed in .wt-include into the new worktree; prints "<path>:<sha256>"
-  local dest="$1" f                       # the hash is of what was copied, so rm can tell a copy edited inside
+copy_includes() { # Copy ignored files from .wt-include; print "<path>:<fingerprint>" for each successful snapshot.
+  local dest="$1" f hash encoded match_rc  # the hash is of what was copied, so rm can tell a copy edited inside
   [[ -f "$REPO/.wt-include" ]] || return 0   # the worktree from a file changed in the main checkout since
   git -C "$REPO" ls-files --others --ignored --exclude-standard -z | while IFS= read -r -d '' f; do
-    if [[ "$f" != "$WT_DIRNAME/"* ]] && include_match "$f"; then
+    [[ $f != "$WT_DIRNAME/"* ]] || continue
+    match_rc=0; include_match "$f" || match_rc=$?
+    [[ $match_rc != 2 ]] || { warn 'cannot read private-file include patterns'; return 1; }
+    if [[ $match_rc == 0 ]]; then
+      [[ $f != *$'\n'* ]] || { warn 'cannot snapshot a copied filename containing a newline'; return 1; }
+      encoded=$(jq -nr --arg path "$f" '$path') || return 1
+      [[ $encoded == "$f" ]] || { warn 'cannot encode a copied filename in task metadata'; return 1; }
       # errexit does not reach in here (a pipeline inside $( )), so catch a failed copy by hand. If the loop
       # printed a failed copy anyway, "includes" would record a file that the worktree does not have.
       mkdir -p "$dest/$(dirname "$f")"
-      if cp -p "$REPO/$f" "$dest/$f"; then printf '%s:%s\n' "$f" "$(file_hash "$dest/$f")"
-      else warn "could not copy $f into the worktree"; fi
+      if cp -p "$REPO/$f" "$dest/$f"; then
+        hash=$(work_file_hash "$dest/$f") || return 1
+        [[ $hash =~ ^L?[0-9a-f]{64}$ ]] || { warn 'cannot fingerprint a copied private file'; return 1; }
+        printf '%s:%s\n' "$f" "$hash"
+      else warn "could not copy $f into the worktree"; return 1; fi
     fi
   done
 }
@@ -66,6 +84,7 @@ worktree_includes() { # worktree_includes <path> — ignored files inside the wo
       case $match_rc in 0) printf '%s\n' "$f" ;; 1) ;; *) match_error=1; break ;; esac
     fi
   done <"$listing"
+  [[ -z $f ]] || match_error=1
   rm -f "$listing"
   [[ $match_error == 0 ]]
 }
@@ -79,6 +98,7 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
   local n="$1" p="$2" f h e list
   local -A seen=()
   meta_require "$n"
+  [[ ${WT_META[includes_status]:-complete} == complete ]] || return 1
   local current
   current=$(worktree_includes "$p") || return 1
   list=$(while IFS= read -r e; do [[ -z $e ]] || printf 'R:%s\n' "$e"; done <<<"${WT_META[includes]-}"
@@ -88,15 +108,20 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
     if [[ $e == F:* ]]; then f=${e#F:}; h=''
     else
     e=${e#R:}; f="${e%:*}"; h="${e##*:}"
+    if [[ $h == \\* && ${h:1} =~ ^[0-9a-f]{64}$ ]]; then h=${h:1}; fi
+    if [[ ${WT_META[metadata_version]:-0} == 3 && ! $h =~ ^L?[0-9a-f]{64}$ ]]; then return 1; fi
+    if [[ ! $h =~ ^L?[0-9a-f]{64}$ && $f != "$e" && ( -e $p/$f || -L $p/$f ) ]]; then return 1; fi
     # WT_COMPAT: Remove when every sidecar records hashes for included files.
-    [[ "$h" =~ ^[0-9a-f]{64}$ ]] || { f="$e"; h=""; }   # metadata from an older wt: plain names, no hash
+    [[ "$h" =~ ^L?[0-9a-f]{64}$ ]] || { f="$e"; h=""; }   # metadata from an older wt: plain names, no hash
     fi
     [[ -n $f ]] || return 1
     [[ -z ${seen["$f"]-} ]] || continue
     seen["$f"]=1
-    [[ -e "$p/$f" ]] || continue
+    [[ -e "$p/$f" || -L "$p/$f" ]] || continue
     if [[ -n "$h" ]]; then
-      [[ "$(file_hash "$p/$f")" == "$h" ]] || printf '%s\n' "$f"
+      [[ "$(work_file_hash "$p/$f")" == "$h" ]] || printf '%s\n' "$f"
+    elif [[ -L "$p/$f" || -L "$REPO/$f" ]]; then
+      printf '%s\n' "$f"
     elif [[ -e "$REPO/$f" ]]; then
       cmp -s "$p/$f" "$REPO/$f" || printf '%s\n' "$f"   # no hash: the main checkout is all there is to compare with
     else
@@ -105,26 +130,43 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
   done <<<"$list"
 }
 
+index_visibility() { # Hidden index entries cannot establish work preservation through status.
+  local listing record='' result=0
+  listing=$(mktemp "${TMPDIR:-/tmp}/wt-index-flags.XXXXXX") || return 1
+  wt_register_tmpfile "$listing"
+  if ! git -C "$1" ls-files -v -z >"$listing"; then rm -f "$listing"; return 1; fi
+  while IFS= read -r -d '' record; do
+    if [[ ${record:1:1} != ' ' || ${record:0:1} != [HMRCKU?] ]]; then result=1; break; fi
+  done <"$listing"
+  [[ -z $record ]] || result=1
+  rm -f "$listing"
+  if [[ $result != 0 ]]; then warn 'Git index flags can hide tracked changes; inspect assume-unchanged and skip-worktree entries'; fi
+  return "$result"
+}
+
 porcelain_paths() { # porcelain_paths <checkout> — one path per line for every entry `git status` reports.
   # Use -z, because without it a path with a space in it comes back quoted, and this list is compared by
   # exact string. A rename or copy emits its source as a second record. The loop reads that record and drops
   # it: the destination is the dirty path, and the source no longer exists to hash.
   local p="$1" rec f path_error=0
   local listing
+  index_visibility "$p" || return 1
   listing=$(mktemp "${TMPDIR:-/tmp}/wt-status.XXXXXX") || return 1
   wt_register_tmpfile "$listing"
-  if ! git -C "$p" status --porcelain -z >"$listing" 2>/dev/null; then rm -f "$listing"; return 1; fi
+  if ! git -C "$p" -c core.fsmonitor=false status --porcelain -z --untracked-files=all --ignore-submodules=none >"$listing" 2>/dev/null; then rm -f "$listing"; return 1; fi
   while IFS= read -r -d '' rec; do
+    if [[ ${rec:2:1} != ' ' || ! ${rec:0:2} =~ ^[\ MADRCUT?!]{2}$ ]]; then path_error=1; break; fi
     f="${rec:3}"
     if [[ $f == *$'\n'* ]]; then path_error=1; break; fi
-    case "${rec:0:2}" in R*|C*) IFS= read -r -d '' _src || true ;; esac
+    case "${rec:0:2}" in R*|C*) IFS= read -r -d '' _src || { path_error=1; break; } ;; esac
     if [[ -n "$f" ]]; then printf '%s\n' "$f"; fi
   done <"$listing"
+  [[ -z $rec ]] || path_error=1
   rm -f "$listing"
   [[ $path_error == 0 ]]
 }
 
-setup_dirt() { # setup_dirt <worktree path> — what .wt-setup left in git's way, as "<path>:<sha256>" lines.
+setup_dirt() { # setup_dirt <worktree path> — what .wt-setup left in git's way, as "<path>:<fingerprint>" lines.
   # wt calls this only immediately after the hook ran, so what it finds is the hook's own output and nobody
   # else's. This record exists for the same reason that copy_includes records a hash. With it, rm can tell
   # the work a human did inside the worktree from the state that the worktree was born with. A `.wt-setup`
@@ -134,7 +176,7 @@ setup_dirt() { # setup_dirt <worktree path> — what .wt-setup left in git's way
   # not list them.
   local p="$1" f
   porcelain_paths "$p" | while IFS= read -r f; do
-    printf '%s:%s\n' "$f" "$(file_hash "$p/$f")"      # a file the hook DELETED hashes to "", and matches as ""
+    printf '%s:%s\n' "$f" "$(work_file_hash "$p/$f")"      # a file the hook DELETED hashes to "", and matches as ""
   done
 }
 
@@ -152,7 +194,8 @@ unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-s
   [[ -n "$recorded" ]] || { printf '%s' "$listing"; return 0; }
   while IFS= read -r f; do
     [[ -n $f ]] || continue
-    h=$(file_hash "$p/$f"); explained=0
+    h=$(work_file_hash "$p/$f") || return 1
+    explained=0
     if [[ -z $h && ( -e $p/$f || -L $p/$f ) ]]; then return 1; fi
     while IFS= read -r e; do
       if [[ -n "$e" && "${e%:*}" == "$f" && "${e##*:}" == "$h" ]]; then explained=1; break; fi
@@ -409,13 +452,17 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
       __base_ok=1
       if ! __ahead=$(git -C "$REPO" rev-list --count "$__base..$__b" 2>/dev/null); then
         __reasons+=("git rev-list could not compare $__b with $__base")
+        __ahead=0
       elif [[ ! $__ahead =~ ^[0-9]+$ ]]; then
         __reasons+=("git rev-list returned an invalid count")
-      elif git -C "$REPO" merge-base --is-ancestor "$__b" "$__base" 2>/dev/null; then
-        __merged=1; WT_RM_PROOF=ancestry
-      elif [[ $__discard_commits -eq 0 ]] && branch_landed "$__b" "$__base" __landed_reason; then
-        __merged=1; WT_RM_PROOF=content
-      else __why=" (${__landed_reason:-content not validated})"
+        __ahead=0
+      else
+        __rc=0; git -C "$REPO" merge-base --is-ancestor "$__b" "$__base" 2>/dev/null || __rc=$?
+        if [[ $__rc == 0 ]]; then __merged=1; WT_RM_PROOF=ancestry
+        elif [[ $__rc != 1 ]]; then __reasons+=("git merge-base could not compare $__b with $__base")
+        elif [[ $__discard_commits -eq 0 ]] && branch_landed "$__b" "$__base" __landed_reason; then
+          __merged=1; WT_RM_PROOF=content
+        else __why=" (${__landed_reason:-content not validated})"; fi
       fi
     else __why=" ($__base could not be refreshed from its remote)"
     fi
@@ -426,16 +473,18 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
     if comparison_base "$__b" "$4" __root_base landing && [[ $__root_base != "$__base" ]] && comparison_unambiguous "$__root_base"; then
       fetch_base "$__root_base" && __rc=0 || __rc=$?
       if [[ $__rc != 1 ]] && git -C "$REPO" rev-parse -q --verify "$__root_base^{commit}" >/dev/null 2>&1; then
-        if git -C "$REPO" merge-base --is-ancestor "$__b" "$__root_base" 2>/dev/null; then
-          __merged=1; WT_RM_PROOF=ancestry
-        elif branch_landed "$__b" "$__root_base" __landed_reason; then
-          __merged=1; WT_RM_PROOF=content
-        fi
+        __rc=0; git -C "$REPO" merge-base --is-ancestor "$__b" "$__root_base" 2>/dev/null || __rc=$?
+        if [[ $__rc == 0 ]]; then __merged=1; WT_RM_PROOF=ancestry
+        elif [[ $__rc != 1 ]]; then __reasons+=("git merge-base could not compare $__b with $__root_base")
+        elif branch_landed "$__b" "$__root_base" __landed_reason; then __merged=1; WT_RM_PROOF=content; fi
         if [[ $__merged == 1 ]]; then __base=$__root_base; WT_RM_BASE=$__base; __base_ok=1; fi
       fi
     fi
   fi
   [[ $__base_ok -eq 1 ]] || __reasons+=("base '$__base' cannot be compared with $__b (gone, or the literal HEAD)$__why")
+  if [[ $__base_ok == 1 && $__merged == 0 && $__ahead == 0 && $__discard_commits == 0 ]]; then
+    __reasons+=("cannot establish a preservation proof for $__b")
+  fi
   if [[ $__base_ok -eq 1 && $__ahead -gt 0 && $__merged -eq 0 && $__discard_commits -eq 0 ]]; then
     # shellcheck disable=SC2034  # The removal caller consumes this proof.
     if branch_pushed "$__b"; then WT_RM_PROOF=published

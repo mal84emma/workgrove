@@ -267,9 +267,54 @@ teardown_preservation() { # Recheck the frozen proof before deleting the remaini
   [[ $current == "$expected" ]]
 }
 
+teardown_sidecars_snapshot() {
+  local metadata prompt started
+  metadata=$(metadata_fingerprint "$(wt_meta "$1")") || return 1
+  prompt=$(metadata_fingerprint "$(wt_prompt "$1")") || return 1
+  started=$(metadata_fingerprint "$(wt_started "$1")") || return 1
+  jq -cn --arg metadata "$metadata" --arg prompt "$prompt" --arg started "$started" '$ARGS.named'
+}
+
+teardown_remove_registration() { # One task's recovery must never prune another task's registration.
+  local path=$1 listing registered
+  listing=$(git -C "$REPO" -c core.quotePath=true worktree list --porcelain) || return 1
+  registered=$(teardown_interpreter -c '
+import ast, os, sys
+target = os.fsencode(sys.argv[1])
+if b"\n" in target:
+    sys.exit("wt: cannot safely inspect a multiline worktree path")
+found = False
+for line in sys.stdin.buffer.read().split(b"\n"):
+    if not line.startswith(b"worktree "):
+        continue
+    path = line[len(b"worktree "):]
+    if path.startswith(b"\""):
+        path = ast.literal_eval("b" + path.decode("ascii"))
+    if not isinstance(path, bytes):
+        sys.exit("wt: invalid worktree path record")
+    found |= path == target
+print("present" if found else "absent")
+' "$path" <<<"$listing") || return 1
+  if [[ $registered == present ]]; then git -C "$REPO" worktree remove --force "$path"
+  else [[ ! -e $path && ! -L $path ]]; fi
+}
+
+teardown_sidecars_check() { # Absence is valid only after durable sidecar-removal intent.
+  local name=$1 snapshot=$2 allow_absent=${3:-0} key path expected current
+  for key in metadata prompt started; do
+    case $key in metadata) path=$(wt_meta "$name") ;; prompt) path=$(wt_prompt "$name") ;; started) path=$(wt_started "$name") ;; esac
+    expected=$(jq -er --arg key "$key" '.[$key] | select(type == "string")' <<<"$snapshot") || return 1
+    [[ $expected == absent || $expected =~ ^[0-9a-f]{64}$ ]] || return 1
+    current=$(metadata_fingerprint "$path") || return 1
+    [[ $allow_absent != 1 || $current != absent ]] || continue
+    [[ $current == "$expected" ]] || return 1
+  done
+}
+
 teardown_observe() { # Observe absence only; this function never closes a row or deletes Git work.
   local name=$1 path=$2 branch=$3 keep=$4 row=$5 remote=$6 registrations current rc=0 rows
-  [[ ! -e $path && ! -f $(wt_meta "$name") ]] || return 1
+  [[ ! -e $path && ! -L $path ]] || return 1
+  [[ $(teardown_sidecars_snapshot "$name") == '{"metadata":"absent","prompt":"absent","started":"absent"}' ]] || return 1
   registrations=$(git -C "$REPO" worktree list --porcelain) || return 1
   ! grep -qxF "worktree $path" <<<"$registrations" || return 1
   if [[ $keep == 0 ]]; then
@@ -302,7 +347,7 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
   if [[ $stage == prepared ]]; then
     # An interrupted removal may have deleted the directory before updating its receipt.
     [[ ! -e $path ]] || die "teardown is prepared but the worktree remains; rerun normal removal"
-    git -C "$REPO" worktree prune || die 'could not prune removed worktree'
+    teardown_remove_registration "$path" || die 'could not remove the recorded task registration'
   fi
   if [[ $stage == prepared || $stage == worktree_removed ]]; then
     local ref_rc=0
@@ -325,14 +370,39 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
       teardown_control check || die 'teardown coordinator exited before branch removal'
       git -C "$REPO" update-ref --no-deref -d "refs/heads/$branch" "$head" || die "worktree removed, but branch deletion failed; retry wt rm $name -r $(shell_join "$REPO")"
     fi
-    if [[ -e $(wt_meta "$name") && $(metadata_fingerprint "$(wt_meta "$name")") != $(jq -r .metadata_hash <<<"$WT_TEARDOWN_JSON") ]]; then
-      die 'worktree removed, but task metadata changed; kept metadata and cleanup receipt'
+    local snapshot
+    snapshot=$(jq -c '.sidecars // null' <<<"$WT_TEARDOWN_JSON")
+    if [[ $snapshot == null ]]; then
+      snapshot=$(teardown_sidecars_snapshot "$name") || die 'cannot fingerprint remaining sidecars'
+      WT_TEARDOWN_JSON=$(jq -c --argjson sidecars "$snapshot" '.sidecars=$sidecars' <<<"$WT_TEARDOWN_JSON")
     fi
-    teardown_control check || die 'teardown coordinator exited before metadata removal'
-    rm -f "$(wt_meta "$name")" "$(wt_prompt "$name")" "$(wt_started "$name")" || die 'worktree removed, but sidecar cleanup failed'
+    [[ $(jq -r .metadata <<<"$snapshot") == $(jq -r .metadata_hash <<<"$WT_TEARDOWN_JSON") ]] || die 'metadata snapshot changed; kept sidecars and receipt'
+    teardown_sidecars_check "$name" "$snapshot" || die 'sidecars changed before cleanup; kept sidecars and receipt'
+    teardown_save sidecars_removing
+    stage=sidecars_removing
+  fi
+  if [[ $stage == sidecars_removing ]]; then
+    [[ ! -e $path && ! -L $path ]] || die 'worktree reappeared; kept sidecars and receipt'
+    if [[ $keep == 0 ]]; then
+      local branch_rc=0
+      git -C "$REPO" show-ref -q --verify "refs/heads/$branch" || branch_rc=$?
+      [[ $branch_rc == 1 ]] || die 'task branch reappeared or is unreadable; kept sidecars and receipt'
+    fi
+    local sidecars key sidecar
+    sidecars=$(jq -c .sidecars <<<"$WT_TEARDOWN_JSON")
+    teardown_sidecars_check "$name" "$sidecars" 1 || die 'sidecars changed during cleanup; kept sidecars and receipt'
+    for key in metadata prompt started; do
+      teardown_sidecars_check "$name" "$sidecars" 1 || die 'sidecars changed during cleanup; kept sidecars and receipt'
+      case $key in metadata) sidecar=$(wt_meta "$name") ;; prompt) sidecar=$(wt_prompt "$name") ;; started) sidecar=$(wt_started "$name") ;; esac
+      teardown_control check || die 'teardown coordinator exited before sidecar removal'
+      rm -f "$sidecar" || die 'worktree removed, but sidecar cleanup failed'
+    done
+    [[ $(teardown_sidecars_snapshot "$name") == '{"metadata":"absent","prompt":"absent","started":"absent"}' ]] || die 'sidecars reappeared during cleanup'
     teardown_save git_removed
     printf 'removed %s%s\n' "$name" "$(if [[ $keep == 1 ]]; then printf ' (branch %s kept)' "$branch"; fi)"
   fi
+  [[ ! -e $path && ! -L $path ]] || die 'worktree reappeared; session cleanup remains pending'
+  [[ $(teardown_sidecars_snapshot "$name") == '{"metadata":"absent","prompt":"absent","started":"absent"}' ]] || die 'sidecars reappeared; session cleanup remains pending'
   row=$(jq -r .row <<<"$WT_TEARDOWN_JSON"); self=$(jq -r .self <<<"$WT_TEARDOWN_JSON")
   session=$(jq -r .session <<<"$WT_TEARDOWN_JSON"); native=$(jq -r .native <<<"$WT_TEARDOWN_JSON")
   remote=$(jq -r .remote <<<"$WT_TEARDOWN_JSON"); host=$(jq -r .host <<<"$WT_TEARDOWN_JSON")

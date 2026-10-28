@@ -263,7 +263,7 @@ cmd_new() {
   meta_set "$name" "base=$base" "metadata_version:=3" "creation_commit=$(git -C "$REPO" rev-parse "$base^{commit}")" \
     "generation=$(printf '%s\n' "$BASHPID-$RANDOM-$(date -u +%s)" | git hash-object --stdin)" "created=$(date -u +%FT%TZ)" "agent=$agent" "model=$model" \
     "title=$(row_title "$name")" "session=$(wt_session "$name" "$REPO")" \
-    "workspace=$workspace" "includes:=[]" "setup:=[]"
+    "workspace=$workspace" "includes:=[]" "includes_status=pending" "setup:=[]"
   local landing_ref="$base" landing_remote='' parent_name
   local -A parent_meta=()
   case $base in
@@ -283,8 +283,8 @@ cmd_new() {
   fi
   # Reload this task after reading its parent. Preserve every existing metadata field.
   meta_set "$name" "landing_ref=$landing_ref" "landing_remote=$landing_remote" "parent_generation=${parent_meta[generation]-}"
-  local includes; includes=$(copy_includes "$p")
-  meta_set "$name" "includes:=$(printf '%s' "$includes" | jq -Rs 'split("\n") | map(select(length > 0))')"
+  local includes; includes=$(copy_includes "$p") || die 'private-file snapshot is incomplete; kept the task for inspection'
+  meta_set "$name" "includes_status=complete" "includes:=$(printf '%s' "$includes" | jq -Rs 'split("\n") | map(select(length > 0))')"
   local setup=""
   if [[ -x "$REPO/.wt-setup" ]]; then
     ( cd "$p" && WT_NAME="$name" WT_REPO="$REPO" "$REPO/.wt-setup" ) || warn ".wt-setup exited non-zero"
@@ -606,7 +606,7 @@ cmd_rm() {
   WT_TEARDOWN_FILE="$REPO/.git/wt/teardown/$name.json"
   if [[ ! -d $(wt_path "$name") && -f $WT_TEARDOWN_FILE ]]; then
     WT_TEARDOWN_JSON=$(cat "$WT_TEARDOWN_FILE")
-    jq -e --arg repo "$REPO" --arg name "$name" --arg path "$(wt_path "$name")" '.repo == $repo and .name == $name and .path == $path and .branch == ("wt/" + $name) and (.head | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and all(.keep,.native,.remote; IN("0","1")) and (.stage | IN("prepared","worktree_removed","git_removed","close_requested","complete"))' <<<"$WT_TEARDOWN_JSON" >/dev/null \
+    jq -e --arg repo "$REPO" --arg name "$name" --arg path "$(wt_path "$name")" '.repo == $repo and .name == $name and .path == $path and .branch == ("wt/" + $name) and (.head | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and all(.keep,.native,.remote; IN("0","1")) and (.stage | IN("prepared","worktree_removed","sidecars_removing","git_removed","close_requested","complete"))' <<<"$WT_TEARDOWN_JSON" >/dev/null \
       || die 'invalid teardown receipt'
     if [[ $(jq -r .stage <<<"$WT_TEARDOWN_JSON") != complete || ! -f $(wt_meta "$name") ]]; then
       if [[ $keep == 1 ]]; then
@@ -623,9 +623,10 @@ cmd_rm() {
   verified_head=$(git -C "$REPO" rev-parse --verify "refs/heads/$branch") || die 'cannot resolve task head'
   local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
-  local verified_metadata metadata_path
+  local verified_metadata verified_sidecars metadata_path
   metadata_path=$(wt_meta "$name")
-  verified_metadata=$(metadata_fingerprint "$metadata_path") || die 'cannot fingerprint task metadata'
+  verified_sidecars=$(teardown_sidecars_snapshot "$name") || die 'cannot fingerprint task metadata or sidecars'
+  verified_metadata=$(jq -r .metadata <<<"$verified_sidecars")
   meta_require "$name"
   [[ $(metadata_fingerprint "$metadata_path") == "$verified_metadata" ]] || die 'task metadata changed while loading'
   local base; base=${WT_META[base]-}; [[ -n "$base" ]] || base=$(default_base)
@@ -639,7 +640,12 @@ cmd_rm() {
       exit 3
     fi
   fi
-  if [[ $force == 0 ]]; then base=${WT_RM_BASE:-$base}; proof=${WT_RM_PROOF:-discard}; else proof=discard; fi
+  if [[ $force == 1 ]]; then proof=discard
+  else
+    base=${WT_RM_BASE:-$base}; proof=${WT_RM_PROOF:-}
+    if [[ -z $proof && $discard_commits == 1 ]]; then proof=discard; fi
+    [[ -n $proof ]] || die 'work preservation proof is missing; kept the worktree'
+  fi
   verified_base=$(git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true)
   if is_remote && [[ -n ${TMUX:-} ]]; then
     local current
@@ -729,7 +735,7 @@ cmd_rm() {
   local remote=0; is_remote && remote=1
   WT_TEARDOWN_JSON=$(jq -cn --arg name "$name" --arg repo "$REPO" --arg path "$path" --arg branch "$branch" \
     --arg head "$verified_head" --arg metadata_hash "$verified_metadata" --arg base "$base" --arg base_object "$verified_base" --arg proof "$proof" \
-    --arg generation "$generation" --arg agent "${WT_META[agent]-}" --argjson runtime "${WT_META[runtime]:-null}" --arg row "$row" --arg self "$self" --arg session "$session" \
+    --argjson sidecars "$verified_sidecars" --arg generation "$generation" --arg agent "${WT_META[agent]-}" --argjson runtime "${WT_META[runtime]:-null}" --arg row "$row" --arg self "$self" --arg session "$session" \
     --argjson tmux_identity "$tmux_identity" --argjson tmux_owner "$tmux_owner" --arg title "$title" --arg host "$host" --arg workspace "${WT_META[workspace]:-1}" --arg keep "$keep" --arg native "$native" --arg remote "$remote" '$ARGS.named')
   teardown_save prepared
   if [[ $force == 0 ]]; then
@@ -747,10 +753,11 @@ cmd_rm() {
     [[ $final_row == "$row" && $final_self == "$self" ]] || die 'row ownership changed after preflight'
   fi
   [[ $(metadata_fingerprint "$metadata_path") == "$verified_metadata" ]] || die 'task metadata changed before worktree removal; kept the worktree'
+  teardown_sidecars_check "$name" "$verified_sidecars" || die 'sidecars changed before worktree removal; kept the worktree'
   teardown_control check || die 'teardown coordinator exited before worktree removal'
   if [[ -d $path ]]; then
     git -C "$REPO" worktree remove --force "$path" || die "git worktree remove failed; receipt: $WT_TEARDOWN_FILE"
-  else git -C "$REPO" worktree prune || die 'cannot prune missing worktree'; fi
+  else teardown_remove_registration "$path" || die 'cannot remove the missing task registration'; fi
   teardown_save worktree_removed
   teardown_finish
 }

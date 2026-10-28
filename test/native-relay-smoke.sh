@@ -377,9 +377,21 @@ scenario_native_attach_close() {
   has "$XDG_STATE_HOME/cmux-hook.log" 'receiver lacks receipt support'
   : > "$CMUX_LOG"
   printf '{"coding_agents":[],"windows":[]}\n' >"$FAKE_CMUX_STATE/top.json"
+  touch "$FAKE_CMUX_STATE/mutate-close"
+  export SSH_CALL_LOG="$TEST_ROOT/close-ssh.log"
+  : >"$SSH_CALL_LOG"
   hook >/dev/null
   has "$CMUX_LOG" "workspace close $ROW_ID --force"
+  has "$SSH_CALL_LOG" '--row-closed'
   lacks "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
+  rm "$FAKE_CMUX_STATE/mutate-close"
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  : >"$SSH_CALL_LOG"
+  hook >/dev/null
+  has "$CMUX_LOG" "workspace close $ROW_ID --force"
+  lacks "$SSH_CALL_LOG" '--row-closed'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'row absence is unverified'
+  unset SSH_CALL_LOG
   record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
   REMOTE_DEFER_FAIL=1 hook >/dev/null
   lacks "$CMUX_LOG" 'workspace close'
