@@ -202,13 +202,16 @@ Provider, app-server, exec-server, and related provider helpers remain protected
 Their recorded absence is still required for completion.
 Sibling background commands receive bounded termination and, when needed, kill signals before the last work-preservation check.
 Fresh live-provider samples can extend the manifest before any new signal.
-Replacement identities and changed executables remain untouched.
+Detected replacement identities and changed executables remain untouched.
 
 After independently verified row or session closure, ordinary recovery can stop remaining pinned runtime processes.
 Observation-only recovery never sends signals.
 Completed-receipt retries and task-name reuse also require recorded process absence.
 An older self-removal receipt without command evidence cannot prove process completion after its provider disappears.
 Workgrove does not adopt an orphan from its process ID, directory, name, environment, or process group.
+
+Kernel identity checks and signaling are separate operations.
+A process can exit between its check and signal; concurrent PID reuse is not atomically excluded.
 
 Repeated samples do not freeze concurrent forks.
 A new command launched after the final sample can escape the manifest when its parent exits.

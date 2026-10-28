@@ -737,10 +737,16 @@ cmd_rm() {
   local remote=0; is_remote && remote=1
   local previous_commands=null
   if [[ -f $WT_TEARDOWN_FILE ]]; then
-    previous_commands=$(jq -c --arg generation "$generation" --arg repo "$REPO" --arg name "$name" \
-      'select(.generation == $generation and .repo == $repo and .name == $name) | if has("commands") then .commands else null end' "$WT_TEARDOWN_FILE") \
-      || die 'previous cleanup generation is unverified; kept its command evidence'
-    [[ -n $previous_commands ]] || die 'previous cleanup generation changed; kept its command evidence'
+    local previous_record previous_generation
+    previous_record=$(jq -ec --arg repo "$REPO" --arg name "$name" 'select(.repo == $repo and .name == $name)' "$WT_TEARDOWN_FILE") \
+      || die 'previous cleanup identity is unverified; kept its command evidence'
+    previous_generation=$(jq -r .generation <<<"$previous_record")
+    if [[ $previous_generation == "$generation" ]]; then
+      previous_commands=$(jq -c 'if has("commands") then .commands else null end' <<<"$previous_record") || die 'invalid previous command evidence'
+    elif [[ $(jq -r .stage <<<"$previous_record") == complete ]]; then
+      (WT_TEARDOWN_JSON=$previous_record; teardown_commands_observe) \
+        || die 'previous generation has unverified task commands; kept its receipt'
+    else die 'previous cleanup generation changed; kept its command evidence'; fi
   fi
   if [[ $previous_commands != null ]]; then
     teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/commands.py" validate "$generation" <<<"$previous_commands" \

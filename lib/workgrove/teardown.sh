@@ -501,8 +501,6 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
       fi
       if [[ $identity_rc == 0 && $caller_session == "$session" ]] && process_descends "$BASHPID" "$pane_pid"; then
         tmux_self_ownership "$session" "$name" || die 'session ownership changed; cleanup remains pending'
-        teardown_commands_capture "$(jq -r .pid <<<"$WT_TMUX_OWNER")" "$(jq -r .start <<<"$WT_TMUX_OWNER")" \
-          || die 'task command cancellation is incomplete; session cleanup remains pending'
         if [[ $(jq -r '.mode // "agent"' <<<"$WT_TMUX_OWNER") == shell ]]; then
           local saved_owner saved_shell saved_start
           saved_owner=$(jq -c .tmux_owner <<<"$WT_TEARDOWN_JSON")
@@ -512,7 +510,12 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
             <<<"$saved_owner" >/dev/null || die 'recorded task shell changed; cleanup remains pending'
           WT_TEARDOWN_JSON=$(jq -c --argjson owner "$WT_TMUX_OWNER" '.tmux_owner=$owner' <<<"$WT_TEARDOWN_JSON")
           teardown_save close_requested
+        else
+          [[ $(jq -c '[.pid,.start]' <<<"$WT_TMUX_OWNER") == $(jq -c '.tmux_owner | [.pid,.start]' <<<"$WT_TEARDOWN_JSON") ]] \
+            || die 'recorded task provider changed; cleanup remains pending'
         fi
+        teardown_commands_capture "$(jq -r .pid <<<"$WT_TMUX_OWNER")" "$(jq -r .start <<<"$WT_TMUX_OWNER")" \
+          || die 'task command cancellation is incomplete; session cleanup remains pending'
         if [[ $native == 1 ]]; then
           tmux kill-session -t "$(jq -r .id <<<"$identity")" || rc=$?
         elif notify_mac wt-close host "$host" repo "$REPO" task "$name"; then

@@ -153,6 +153,7 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   # Refuse unreadable rows or another running agent. Without a host, the path names the local worktree.
   local -n __rm_row=$3 __rm_self=$4
   __rm_row=""; __rm_self=""
+  ROW_AGENT_PID='' ROW_AGENT_START=''
   local __err
   if ! cmux_bin >/dev/null; then
     [[ -z ${CMUX_WORKSPACE_ID:-} ]] || { cmux_error "cmux CLI not found; kept the worktree"; return 1; }
@@ -170,7 +171,7 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   # Refuse when another agent runs in any of them. Close only the first row that task_row finds, or the
   # caller's own row when the title matches it. A row found only by its directory may belong to anything,
   # such as the driver, so wt never closes it.
-  local __rows __checks=() __check __kind __id __dir __root="" __self_row=""
+  local __rows __checks=() __check __kind __id __dir __root="" __self_row="" __self_pid='' __self_start=''
   __rows=$(rows_json checked) || { cmux_error "cannot list cmux rows; kept the worktree"; return 1; }
   # One line for each row to check: "found <id>", "unclaimed <id>" or "dir <id> <current directory>". A
   # directory with a newline in it would split its line, so such a row is not checked by its directory.
@@ -196,13 +197,16 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
     local __task_path=${6:-}
     row_agent "$__id" "${__task_path##*/}" || return
     case $__kind/$ROW_AGENT in
-      found/self|unclaimed/self) __self_row=$__id ;;
+      found/self|unclaimed/self) __self_row=$__id; __self_pid=$ROW_AGENT_PID; __self_start=$ROW_AGENT_START ;;
       found/busy) cmux_error "another agent is running in cmux row $__id; kept the worktree${CMUX_ERROR:+; $CMUX_ERROR}"; return 1 ;;
       unclaimed/busy) cmux_error "an agent is running in cmux row $__id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run"; return 1 ;;
       dir/busy) cmux_error "an agent is running in cmux row $__id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run"; return 1 ;;
     esac
   done
-  if [[ -n "$__self_row" ]]; then __rm_row=$__self_row; __rm_self=self; fi
+  if [[ -n "$__self_row" ]]; then
+    __rm_row=$__self_row; __rm_self=self
+    ROW_AGENT_PID=$__self_pid ROW_AGENT_START=$__self_start
+  else ROW_AGENT_PID='' ROW_AGENT_START=''; fi
 }
 
 process_descends() { # process_descends <pid> <ancestor>; unreadable ancestry never proves ownership.

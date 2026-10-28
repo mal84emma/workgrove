@@ -4497,6 +4497,8 @@ scenario_teardown_command_completion() {
   assert_wt_fails 1 'task commands remain active or unverified' rm completed -r "$r"
   printf '%s\n' "$receipt" >"$r/.git/wt/teardown/completed.json"
   assert_wt_ok 'valid headless completion remains repeatable' rm completed -r "$r"
+  assert_wt_ok 'verified completion permits a new generation' new completed --no-workspace -r "$r"
+  assert_wt_ok 'the new generation removes without adopting old command evidence' rm completed -r "$r"
   end_scenario
 }
 

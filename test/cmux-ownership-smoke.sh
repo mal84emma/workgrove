@@ -133,5 +133,24 @@ rc=0; tmux_agent target || rc=$?
 assert_eq 'a same-named window cannot hide the actual task provider' 0 "$rc"
 identity=$(task_tmux_identity target)
 assert_eq 'session identity uses a qualified pane target' "\$7" "$(jq -r .id <<<"$identity")"
+result=$(
+  mkdir -p "$ROOT/task"
+  cmux_bin() { printf /fake/cmux; }
+  cmux_call() { [[ $1 == ping ]]; }
+  rows_json() {
+    jq -nc --arg path "$ROOT/task" '{workspaces:[
+      {id:"owned-row",title:"target",description:"@local · repo",current_directory:$path},
+      {id:"aux-row",title:"auxiliary",description:"@local · repo",current_directory:$path}]}'
+  }
+  row_agent() {
+    ROW_AGENT_PID='' ROW_AGENT_START=''
+    if [[ $1 == owned-row ]]; then ROW_AGENT=self; ROW_AGENT_PID=100; ROW_AGENT_START=stable
+    else ROW_AGENT=idle; fi
+  }
+  row='' self=''
+  check_row_removal target repo row self '' "$ROOT/task"
+  printf '%s %s %s %s' "$row" "$self" "$ROW_AGENT_PID" "$ROW_AGENT_START"
+)
+assert_eq 'an auxiliary idle row cannot overwrite the selected provider identity' 'owned-row self 100 stable' "$result"
 end_scenario
 lib_summary

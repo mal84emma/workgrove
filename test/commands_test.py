@@ -103,6 +103,37 @@ class CommandTests(unittest.TestCase):
         self.assertNotEqual(refreshed, self.manifest)
         self.assertIn(90, {r['pid'] for r in refreshed['records']})
 
+    def test_replacement_owner_refuses_before_capture(self):
+        import tempfile
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(prefix='wt-command-owner-') as directory:
+            marker = Path(directory) / 'captured'
+            script = r"""
+set -eu
+source "$SOURCE_REPO/lib/workgrove/common.sh"
+source "$SOURCE_REPO/lib/workgrove/safety.sh"
+source "$SOURCE_REPO/lib/workgrove/teardown.sh"
+WT_TEARDOWN_JSON=$(jq -nc --arg path "$TEST_ROOT/absent" '{name:"target",path:$path,branch:"wt/target",head:"unused",keep:"0",stage:"close_requested",row:"",self:"remote",session:"target",native:"1",remote:"1",host:"fixture",title:"target",tmux_identity:{id:"$1"},tmux_owner:{pid:"111",start:"old",ancestors:[]}}')
+task_admin_preserved() { return 0; }
+teardown_sidecars_snapshot() { printf '%s' '{"metadata":"absent","prompt":"absent","started":"absent"}'; }
+teardown_save() { return 0; }
+teardown_release() { return 0; }
+task_tmux_identity() { printf '%s' '{"id":"$1"}'; }
+process_descends() { return 0; }
+tmux() { case "$*" in *pane_pid*) echo 222 ;; *'#S'*) echo target ;; *) return 1 ;; esac; }
+tmux_self_ownership() { WT_TMUX_OWNER=$(jq -nc --arg mode "$OWNER_MODE" '{mode:$mode,pid:"222",start:"new",ancestors:[]}'); }
+teardown_commands_capture() { touch "$TEST_ROOT/captured"; }
+export TMUX=fixture TMUX_PANE=%1
+teardown_finish
+"""
+            for mode in ('shell', 'agent'):
+                with self.subTest(mode=mode):
+                    environment = dict(os.environ, HOME=directory, SOURCE_REPO=str(root), TEST_ROOT=directory, OWNER_MODE=mode)
+                    result = subprocess.run(['bash', '-c', script], env=environment, capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('recorded task ' + ('shell' if mode == 'shell' else 'provider') + ' changed', result.stderr)
+                    self.assertFalse(marker.exists())
+
     def test_real_owned_detached_child_ignores_term_and_is_reaped(self):
         backend = commands.Processes()
         child = subprocess.Popen([sys.executable, '-c',
