@@ -105,8 +105,13 @@ These fixtures do not establish real provider cancellation or terminal shutdown.
 ## Recover incomplete cleanup
 
 A per-task operating-system lock prevents cooperating removal commands from deleting the same generation concurrently.
-A finite child command holds the lock through Git cleanup.
-The command releases it before an independent session-cleanup callback runs.
+A finite coordinator holds the lock through Git cleanup.
+Only the coordinator holds its descriptor; Git commands and hooks inherit a control channel.
+Detached hook children cannot retain the lock after the coordinator exits.
+The coordinator isolates its command group and stops remaining commands before releasing the lock.
+The lock file records that group while Git cleanup runs.
+After unexpected coordinator death, retries refuse while its command group remains active.
+The coordinator releases it before an independent session-cleanup callback runs.
 Later receipt writes acquire the lock and reject a different generation.
 Process exit also releases the lock, including interrupted self-closure.
 
@@ -118,7 +123,7 @@ The receipt records object identities and component progress, without copying pr
 Only the most recent receipt for each task name is retained.
 A completed receipt can be replaced when another generation finishes.
 
-Removal rechecks work, refs, and local row ownership after preflight.
+Removal rechecks work, refs, metadata fingerprints, and local row ownership after preflight.
 It deletes the branch with its verified old object as the expected value.
 A changed branch, branch-deletion failure, or changed sidecar retains the remaining state and reports incomplete cleanup.
 Use `--keep-branch` during recovery to preserve a branch that changed after directory removal.
@@ -141,6 +146,8 @@ The controller then acknowledges row absence to the VM, which validates and stop
 Legacy hooks use the same acknowledgment after closing their authenticated requesting row.
 They require the VM's `teardown-receipts` capability before closing it.
 A failed acknowledgment remains pending and can be retried from the Mac.
+Recovery can finish the recorded original agent after a lost callback.
+An added agent, independent command, or replacement session still blocks closure.
 
 The controller flags are narrow cleanup operations:
 
@@ -153,7 +160,7 @@ These flags never waive work-preservation checks or authorize another running ag
 A lock does not exclude arbitrary editors or external Git writers.
 The deletion-boundary checks narrow that race but cannot atomically exclude uncooperative filesystem changes.
 Stop task-owned writers before requesting teardown.
-No daemon, background service, broad process killer, or automatic remote-branch deletion is added.
+No daemon, background service, unrelated process termination, or automatic remote-branch deletion is added.
 
 ## Manual acceptance requires separate authorization
 

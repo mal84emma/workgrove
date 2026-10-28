@@ -203,7 +203,7 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   local agent_rc=0
   agent_on_vm "$host" "$session" || agent_rc=$?
   case $agent_rc in
-    0) die "another agent is running in tmux session $session on $host; kept the worktree" ;;
+    0) : ;;
     1) ;;
     *) die "cannot check the agent in tmux session $session on $host; kept the worktree" ;;
   esac

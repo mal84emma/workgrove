@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Reads globals: CMUX_ERROR, REPO, WG_LIB_DIR, WG_MACHINE_RESULT, WG_TEARDOWN_LOCK_FD,
+# Reads globals: CMUX_ERROR, REPO, WG_LIB_DIR, WG_MACHINE_RESULT, WG_TEARDOWN_CONTROL_FD, WG_TEARDOWN_WORKER_PID,
 #   WG_TEARDOWN_LOCK_PATH, WT_TEARDOWN_FILE, WT_TEARDOWN_JSON.
 # Receipts survive the task directory and distinguish Git removal from session cleanup.
 WT_TEARDOWN_FILE='' WT_TEARDOWN_JSON='' WG_TEARDOWN_CLOSE_PHASE=0
@@ -9,55 +9,157 @@ teardown_interpreter() {
   wg_run_python "$@"
 }
 
-teardown_lock() { # Hold an OS lock through a finite child command. Process death releases it automatically.
+teardown_control() {
+  teardown_interpreter -c '
+import json, socket, sys
+channel = socket.socket(fileno=int(sys.argv[1]))
+channel.sendall((json.dumps({"op":sys.argv[2],"path":sys.argv[3]}) + "\n").encode())
+reply = b""
+while not reply.endswith(b"\n") and len(reply) < 16384:
+    part = channel.recv(4096)
+    if not part:
+        sys.exit("wt: teardown coordinator exited")
+    reply += part
+if reply != b"ok\n":
+    sys.exit("wt: " + reply.decode().strip())
+' "$WG_TEARDOWN_CONTROL_FD" "$1" "$WG_TEARDOWN_LOCK_PATH"
+}
+
+teardown_lock() { # Only the finite coordinator holds the lock descriptor; commands inherit a control channel.
   local name=$1 lock_path="$REPO/.git/wt/teardown/$1.lock"
   shift
-  if [[ ${WG_TEARDOWN_LOCK_PATH:-} == "$lock_path" && ${WG_TEARDOWN_LOCK_FD:-} =~ ^[0-9]+$ ]]; then
-    teardown_interpreter -c '
-import fcntl, os, sys
-fd = int(sys.argv[1])
-if not os.path.samestat(os.fstat(fd), os.stat(sys.argv[2])):
-    sys.exit("wt: teardown lock identity changed")
-fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-' "$WG_TEARDOWN_LOCK_FD" "$lock_path" || die 'cannot validate inherited teardown lock'
+  if [[ ${WG_TEARDOWN_LOCK_PATH:-} == "$lock_path" && ${WG_TEARDOWN_WORKER_PID:-} == "$BASHPID" ]]; then
+    teardown_control acquire || die 'cannot validate teardown coordinator'
     return 0
   fi
   local rc=0
+  # shellcheck disable=SC2016  # The worker shell expands its own PID and arguments.
   teardown_interpreter -c '
-import fcntl, os, subprocess, sys
+import fcntl, json, os, select, signal, socket, subprocess, sys, time
 path, name, interpreter, script, machine = sys.argv[1:6]
+prior = os.environ.get("WG_TEARDOWN_CONTROL_FD", "")
+if prior.isdigit():
+    try:
+        os.close(int(prior))
+    except OSError:
+        pass
 os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
 fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+parent, worker = socket.socketpair()
+child = None
+held = False
+def worker_exited():
+    state = subprocess.check_output(["ps", "-p", str(child.pid), "-o", "stat="], text=True).strip()
+    return state.startswith("Z")
+def group_inactive(group):
+    listing = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True)
+    for line in listing.splitlines():
+        pgid, state = line.split()
+        if int(pgid) == group and not state.startswith("Z"):
+            return False
+    return True
+def acquire():
+    global held
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    previous = os.pread(fd, 4096, 0)
+    if previous:
+        group = json.loads(previous)["group"]
+        if not group_inactive(group):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            raise ValueError("previous teardown commands are still running")
+    held = True
+def record(group=None):
+    os.ftruncate(fd, 0)
+    if group is not None:
+        os.pwrite(fd, json.dumps({"group":group}).encode(), 0)
+    os.fsync(fd)
+def stop_worker():
+    if not group_inactive(child.pid):
+        os.killpg(child.pid, signal.SIGKILL)
+    for _ in range(500):
+        if group_inactive(child.pid):
+            return child.wait()
+        time.sleep(0.01)
+    raise RuntimeError("teardown commands have not stopped; cleanup remains pending")
 try:
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        acquire()
     except BlockingIOError:
         sys.exit("wt: teardown already runs for " + name)
-    environment = dict(os.environ, WG_TEARDOWN_LOCK_FD=str(fd), WG_TEARDOWN_LOCK_PATH=path)
+    environment = dict(os.environ, WG_TEARDOWN_CONTROL_FD=str(worker.fileno()), WG_TEARDOWN_LOCK_PATH=path)
     if machine:
         environment["WT_MACHINE"] = machine
-    result = subprocess.call([interpreter, script, "rm", *sys.argv[6:]], env=environment, pass_fds=(fd,))
+    child = subprocess.Popen([interpreter, "-c", "export WG_TEARDOWN_WORKER_PID=$BASHPID; exec \"$@\"", "worker",
+                              interpreter, script, "rm", *sys.argv[6:]], env=environment,
+                             pass_fds=(worker.fileno(),), start_new_session=True)
+    record(child.pid)
+    worker.close()
+    def forward(signum, frame):
+        if not group_inactive(child.pid):
+            os.killpg(child.pid, signum)
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, forward)
+    buffer = b""
+    while True:
+        ready, _, _ = select.select([parent], [], [], 0.05)
+        if not ready:
+            if worker_exited():
+                break
+            continue
+        part = parent.recv(4096)
+        if not part:
+            break
+        buffer += part
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            answer = "ok"
+            try:
+                request = json.loads(line)
+                if request.get("path") != path:
+                    raise ValueError("teardown lock identity changed")
+                operation = request.get("op")
+                if operation == "acquire":
+                    if not held:
+                        acquire()
+                        record(child.pid)
+                elif operation == "release":
+                    record()
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    held = False
+                elif operation != "check" or not held:
+                    raise ValueError("teardown lock is not held")
+            except (ValueError, OSError) as error:
+                answer = str(error)
+            parent.sendall((answer + "\n").encode())
+        if len(buffer) > 16384:
+            raise ValueError("invalid teardown control message")
+    result = stop_worker()
     sys.exit(result if result >= 0 else 128 - result)
 finally:
+    if child is not None and child.returncode is None:
+        stop_worker()
+    if held:
+        record()
+        fcntl.flock(fd, fcntl.LOCK_UN)
     os.close(fd)
+    parent.close()
+    worker.close()
 ' "$lock_path" "$name" "$BASH" "$WG_LIB_DIR/../../bin/wt" "${WG_MACHINE_RESULT:-}" "$@" || rc=$?
   exit "$rc"
 }
 
-teardown_release() { # Release Git serialization before an external observer completes session cleanup.
-  teardown_interpreter -c 'import fcntl,sys; fcntl.flock(int(sys.argv[1]), fcntl.LOCK_UN)' "$WG_TEARDOWN_LOCK_FD" || die 'cannot release cleanup lock'
+teardown_release() { # Permit an independent observer after all Git cleanup has finished.
+  teardown_control release || die 'cannot release cleanup lock'
   WG_TEARDOWN_CLOSE_PHASE=1
 }
 
 teardown_save() { # teardown_save <stage>; flush the receipt before the next destructive operation.
   WT_TEARDOWN_JSON=$(jq -c --arg stage "$1" '.stage=$stage' <<<"$WT_TEARDOWN_JSON") || die 'cannot encode teardown receipt'
+  if [[ ${WG_TEARDOWN_CLOSE_PHASE:-0} == 1 ]]; then teardown_control acquire; else teardown_control check; fi \
+    || die 'teardown lock is unavailable'
   teardown_interpreter -c '
-import fcntl, json, os, sys, tempfile
+import json, os, sys, tempfile
 path = sys.argv[1]
-close_phase = sys.argv[2] == "1"
-lock_fd = int(sys.argv[3])
-if close_phase:
-    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 data = json.load(sys.stdin)
 if os.path.exists(path):
     with open(path) as previous:
@@ -82,9 +184,8 @@ try:
 finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
-    if close_phase:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-' "$WT_TEARDOWN_FILE" "${WG_TEARDOWN_CLOSE_PHASE:-0}" "$WG_TEARDOWN_LOCK_FD" <<<"$WT_TEARDOWN_JSON" || die "cannot persist teardown receipt $WT_TEARDOWN_FILE"
+' "$WT_TEARDOWN_FILE" <<<"$WT_TEARDOWN_JSON" || die "cannot persist teardown receipt $WT_TEARDOWN_FILE"
+  if [[ ${WG_TEARDOWN_CLOSE_PHASE:-0} == 1 ]]; then teardown_control release || die 'cannot release receipt lock'; fi
 }
 
 teardown_preflight() { # teardown_preflight <worktree path>
@@ -158,16 +259,20 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
       1) current='' ;;
       *) die 'cannot inspect remaining task branch; cleanup remains pending' ;;
     esac
+    [[ $(metadata_fingerprint "$(wt_meta "$name")") == $(jq -r .metadata_hash <<<"$WT_TEARDOWN_JSON") ]] \
+      || die 'task metadata changed before branch removal; kept the branch and metadata'
     if [[ $keep == 0 && -n $current ]]; then
       [[ $current == "$head" ]] || die "worktree removed, but $branch changed; kept branch and receipt $WT_TEARDOWN_FILE (retry with --keep-branch to preserve it)"
       local registrations
       registrations=$(git -C "$REPO" worktree list --porcelain) || die 'cannot check branch registrations'
       if grep -qxF "branch refs/heads/$branch" <<<"$registrations"; then die "branch $branch is checked out elsewhere; kept it"; fi
+      teardown_control check || die 'teardown coordinator exited before branch removal'
       git -C "$REPO" update-ref --no-deref -d "refs/heads/$branch" "$head" || die "worktree removed, but branch deletion failed; retry wt rm $name -r $(shell_join "$REPO")"
     fi
-    if [[ -e $(wt_meta "$name") && $(file_hash "$(wt_meta "$name")") != $(jq -r .metadata_hash <<<"$WT_TEARDOWN_JSON") ]]; then
+    if [[ -e $(wt_meta "$name") && $(metadata_fingerprint "$(wt_meta "$name")") != $(jq -r .metadata_hash <<<"$WT_TEARDOWN_JSON") ]]; then
       die 'worktree removed, but task metadata changed; kept metadata and cleanup receipt'
     fi
+    teardown_control check || die 'teardown coordinator exited before metadata removal'
     rm -f "$(wt_meta "$name")" "$(wt_prompt "$name")" "$(wt_started "$name")" || die 'worktree removed, but sidecar cleanup failed'
     teardown_save git_removed
     printf 'removed %s%s\n' "$name" "$(if [[ $keep == 1 ]]; then printf ' (branch %s kept)' "$branch"; fi)"
@@ -189,8 +294,10 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
       [[ $(jq -cS . <<<"$identity") == $(jq -cS . <<<"$saved_identity") ]] || die 'tmux session identity changed; kept the replacement session'
     fi
     if [[ ${defer_close:-0} == 1 ]]; then
-      tmux_agent "$session" exists >/dev/null || agent_rc=$?
-      [[ $agent_rc == 1 ]] || die 'cannot defer cleanup of a running or unknown agent'
+      if [[ $identity_rc == 0 ]]; then
+        tmux_recorded_owner "$session" "$name" "$(jq -c .tmux_owner <<<"$WT_TEARDOWN_JSON")" \
+          || die 'recorded owner validation blocks deferred cleanup'
+      fi
       printf 'Git cleanup complete; Mac controller must finish session cleanup\n'
       return 0
     fi

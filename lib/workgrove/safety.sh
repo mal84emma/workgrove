@@ -12,6 +12,15 @@ file_hash() { # sha256 of a file, or "" when it cannot be read (the Mac has shas
   printf '%s' "${h%% *}"
 }
 
+metadata_fingerprint() { # Absence and an unreadable sidecar must never compare equal.
+  local path=$1 hash
+  if [[ ! -e $path && ! -L $path ]]; then printf absent; return 0; fi
+  [[ -f $path ]] || return 1
+  hash=$(file_hash "$path")
+  [[ $hash =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$hash"
+}
+
 include_match() { # include_match <path relative to a checkout> — 0 when .wt-include covers it
   local f="$1" inc="$REPO/.wt-include" pat contents
   [[ -f "$inc" ]] || return 1
@@ -67,7 +76,8 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
   #   the main checkout does not make every existing worktree unremovable.
   # - Every ignored file that the patterns cover *now*. An .env.local that an agent wrote in the worktree is
   #   in no snapshot, and `worktree remove --force` deletes it without a warning.
-  local n="$1" p="$2" f h e seen="" list
+  local n="$1" p="$2" f h e list
+  local -A seen=()
   meta_require "$n"
   local current
   current=$(worktree_includes "$p") || return 1
@@ -81,8 +91,9 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
     # WT_COMPAT: Remove when every sidecar records hashes for included files.
     [[ "$h" =~ ^[0-9a-f]{64}$ ]] || { f="$e"; h=""; }   # metadata from an older wt: plain names, no hash
     fi
-    case "$seen" in *"|$f|"*) continue ;; esac          # recorded and still matching: judge it once
-    seen="$seen|$f|"
+    [[ -n $f ]] || return 1
+    [[ -z ${seen["$f"]-} ]] || continue
+    seen["$f"]=1
     [[ -e "$p/$f" ]] || continue
     if [[ -n "$h" ]]; then
       [[ "$(file_hash "$p/$f")" == "$h" ]] || printf '%s\n' "$f"
@@ -98,17 +109,19 @@ porcelain_paths() { # porcelain_paths <checkout> — one path per line for every
   # Use -z, because without it a path with a space in it comes back quoted, and this list is compared by
   # exact string. A rename or copy emits its source as a second record. The loop reads that record and drops
   # it: the destination is the dirty path, and the source no longer exists to hash.
-  local p="$1" rec f
+  local p="$1" rec f path_error=0
   local listing
   listing=$(mktemp "${TMPDIR:-/tmp}/wt-status.XXXXXX") || return 1
   wt_register_tmpfile "$listing"
   if ! git -C "$p" status --porcelain -z >"$listing" 2>/dev/null; then rm -f "$listing"; return 1; fi
   while IFS= read -r -d '' rec; do
     f="${rec:3}"
+    if [[ $f == *$'\n'* ]]; then path_error=1; break; fi
     case "${rec:0:2}" in R*|C*) IFS= read -r -d '' _src || true ;; esac
     if [[ -n "$f" ]]; then printf '%s\n' "$f"; fi
   done <"$listing"
   rm -f "$listing"
+  [[ $path_error == 0 ]]
 }
 
 setup_dirt() { # setup_dirt <worktree path> — what .wt-setup left in git's way, as "<path>:<sha256>" lines.
@@ -140,6 +153,7 @@ unexplained_dirt() { # unexplained_dirt <name> <path> — dirty paths that .wt-s
   while IFS= read -r f; do
     [[ -n $f ]] || continue
     h=$(file_hash "$p/$f"); explained=0
+    if [[ -z $h && ( -e $p/$f || -L $p/$f ) ]]; then return 1; fi
     while IFS= read -r e; do
       if [[ -n "$e" && "${e%:*}" == "$f" && "${e##*:}" == "$h" ]]; then explained=1; break; fi
     done <<<"$recorded"

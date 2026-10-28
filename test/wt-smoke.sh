@@ -1757,7 +1757,7 @@ STUB
   {
     printf '#!/bin/sh\n'
     # shellcheck disable=SC2016  # The fake process probe expands these variables.
-    printf 'if [ "$1" = -t ]; then echo "$SELF_TMUX_OWNER_PID"; exit 0; fi\n'
+    printf 'if [ "$1" = -t ]; then echo "$SELF_TMUX_OWNER_PID"; [ "${SELF_TMUX_OTHER_ACTIVE:-}" != 1 ] || echo 99999999; exit 0; fi\n'
     printf 'exec %q "$@"\n' "$real_ps"
   } >"$fake/ps"
   chmod +x "$fake/ps"
@@ -1873,6 +1873,13 @@ STUB
   replacement="wt-$(basename "$r")-sandboxed"
   grep -vxF "$replacement" "$TEST_ROOT/self-tmux.log.closed" >"$TEST_ROOT/remaining-sessions" || true
   mv "$TEST_ROOT/remaining-sessions" "$TEST_ROOT/self-tmux.log.closed"
+  WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$replacement" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
+  : >"$TEST_ROOT/self-tmux.log"
+  assert_wt_ok 'a pending receipt accepts the still-running original owner' rm sandboxed --defer-close -r "$r"
+  assert_lacks 'deferred cleanup leaves session closure to the Mac' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
+  WT_RELAY_ENV+=("SELF_TMUX_OTHER_ACTIVE=1")
+  assert_wt_fails 1 'recorded owner validation' rm sandboxed --defer-close -r "$r"
+  assert_lacks 'another running agent prevents recovery closure' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$replacement" "SELF_TMUX_INSTANCE=\$202" "SELF_TMUX_PROBE=idle" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
   : >"$TEST_ROOT/self-tmux.log"
   assert_wt_fails 1 'identity changed' rm sandboxed --row-closed -r "$r"
@@ -1881,7 +1888,7 @@ STUB
   callback_session="wt-$(basename "$r")-callback"
   {
     printf '#!/bin/sh\n'
-    printf 'exec env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_LOCK_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed -r %s\n' \
+    printf 'exec env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_CONTROL_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed -r %s\n' \
       "$(shell_join "$WT_BASH")" "$(shell_join "$WT")" "$(shell_join "$r")"
   } >"$FAKE_CMUX_STATE/notify-callback"
   chmod +x "$FAKE_CMUX_STATE/notify-callback"
@@ -2442,7 +2449,12 @@ printf 'ssh %s\n' "$*" >>"$ssh_dir/calls.log"
 script=$(mktemp "$ssh_dir/stdin.XXXXXX")
 cat >"$script"
 printf '%s\n' "$script" >>"$ssh_dir/scripts.log"
-[ "${VM_AGENT_ACTIVE:-}" = 1 ] && exit 0
+if [ "${VM_AGENT_ACTIVE:-}" = 1 ]; then
+  case "$cmd" in
+    *' rm '*) echo 'another agent is running in tmux session' >&2; exit 1 ;;
+    *) exit 0 ;;
+  esac
+fi
 if [ "${VM_AGENT_QUERY_FAIL:-}" = 1 ]; then
   fake_ssh_run "$cmd" <"$script"
   exit $?
@@ -2465,8 +2477,8 @@ STUB
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_ACTIVE=1")
   : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
-  assert_has "the Mac checks VM processes when native cmux has no local agent" "$(cat "$(tail -n 1 "$fake/scripts.log")")" "tmux_agent ()"
-  assert_lacks "an older VM wt cannot remove the active task" "$(cat "$ssh_log")" "rm active-vm"
+  assert_has "the Mac delegates active ownership to the receiver" "$(cat "$ssh_log")" "ssh -o"
+  assert_lacks "a receiver refusal preserves the row" "$(cat "$CMUX_LOG")" 'close-workspace'
   WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_QUERY_FAIL=1")
   : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "cannot check the agent in tmux session" -H smoke.invalid rm active-vm -r "$r"
@@ -2778,7 +2790,8 @@ scenario_teardown_review_git() {
   fixture_git "$e" push -q origin main
   assert_wt_fails 3 'not merged' rm stale -r "$r"
   assert_has 'slash-bearing remote refreshes before accepting cached success' "$WT_OUT" 'fetching team/upstream/main from team/upstream'
-  fixture_git "$r" remote add team "$TEST_ROOT/origins/$(basename "$r").git"
+  fixture_git "$r" config remote.team.url "$TEST_ROOT/origins/$(basename "$r").git"
+  fixture_git "$r" config remote.team.fetch '+refs/heads/*:refs/remotes/team/*'
   assert_wt_fails 3 'not merged' rm stale -r "$r"
   jq 'del(.metadata_version,.landing_remote)' "$r/.git/wt/stale.json" >"$r/.git/wt/stale.legacy"
   mv "$r/.git/wt/stale.legacy" "$r/.git/wt/stale.json"
@@ -2833,6 +2846,185 @@ GIT
   assert_wt_fails 3 'cannot enumerate included private files' rm names -r "$r"
   assert_eq 'unsupported filename encoding keeps private data' 'private bytes' "$(cat "$r/.worktrees/names/$private_name")"
   WT_RELAY_ENV=() WT_PATH_PREFIX=''
+  end_scenario
+}
+
+scenario_teardown_review_preservation() {
+  begin_scenario "$1" || return 0
+  local r p shim real_git real_hash controller_output mac="$TEST_ROOT/review-preserve-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  r=$(new_repo newline-status)
+  assert_wt_ok 'create a newline status fixture' new unusual --no-workspace -r "$r"
+  p="$r/.worktrees/unusual"
+  printf 'private\n' >"$p/"$'\n'
+  assert_wt_fails 3 'cannot enumerate working files' rm unusual -r "$r"
+  assert_eq 'a newline-only filename survives refusal' private "$(cat "$p/"$'\n')"
+  assert_branch "$r" wt/unusual yes
+  assert_registered "$r" unusual yes
+
+  r=$(new_repo pipe-includes)
+  printf 'a|b\nb\n' >"$r/.wt-include"
+  printf 'a|b\nb\n' >"$r/.gitignore"
+  fixture_git "$r" add .wt-include .gitignore; fixture_git "$r" commit -q -m include
+  printf 'copied secret\n' >"$r/a|b"
+  assert_wt_ok 'create a delimiter filename fixture' new private --no-workspace -r "$r"
+  p="$r/.worktrees/private"
+  printf 'new secret\n' >"$p/b"
+  assert_wt_fails 3 'b was edited or created' rm private -r "$r"
+  assert_eq 'an existing delimiter filename cannot hide a new file' 'new secret' "$(cat "$p/b")"
+  assert_same_bytes 'the original copied file survives' "$r/a|b" "$p/a|b"
+
+  r=$(new_repo setup-read-failure)
+  printf 'before\n' >"$r/a"
+  printf '#!/bin/sh\nrm a\n' >"$r/.wt-setup"; chmod +x "$r/.wt-setup"
+  fixture_git "$r" add a .wt-setup; fixture_git "$r" commit -q -m setup
+  assert_wt_ok 'record a setup deletion' new setup --no-workspace -r "$r"
+  p="$r/.worktrees/setup"
+  printf 'recreated private work\n' >"$p/a"
+  shim="$TEST_ROOT/review-preserve-bin"; mkdir -p "$shim"
+  real_hash=$(command -v shasum)
+  cat >"$shim/shasum" <<'SHIM'
+#!/bin/sh
+case "$*" in *"$FAIL_HASH_PATH") exit 1 ;; esac
+exec "$REAL_FIXTURE_HASH" "$@"
+SHIM
+  chmod +x "$shim/shasum"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_HASH=$real_hash" "FAIL_HASH_PATH=$p/a")
+  assert_wt_fails 3 'cannot enumerate working files' rm setup -r "$r"
+  assert_eq 'a failed hash never matches a recorded deletion' 'recreated private work' "$(cat "$p/a")"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  rm "$shim/shasum"
+
+  r=$(new_repo metadata-race)
+  assert_wt_ok 'create a metadata race fixture' new generation --no-workspace -r "$r"
+  p="$r/.worktrees/generation"
+  real_git=$(command -v git)
+  cat >"$shim/git" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *'status --porcelain -z'*)
+    if [[ -f $RACE_REPO/.git/wt/teardown/generation.json && ! -e $RACE_REPO/mutated ]]; then
+      jq '.generation="replacement-generation"' "$RACE_REPO/.git/wt/generation.json" >"$RACE_REPO/new-metadata"
+      mv "$RACE_REPO/new-metadata" "$RACE_REPO/.git/wt/generation.json"
+      touch "$RACE_REPO/mutated"
+    fi ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git" "RACE_REPO=$r")
+  assert_wt_fails 1 'task metadata changed before worktree removal' rm generation -r "$r"
+  assert_dir 'a changed generation preserves the worktree' "$p"
+  assert_registered "$r" generation yes
+  assert_branch "$r" wt/generation yes
+  assert_eq 'new generation metadata survives' replacement-generation "$(jq -r .generation "$r/.git/wt/generation.json")"
+  rm "$r/.git/wt/generation.json" "$r/mutated"
+  cat >"$shim/shasum" <<'SHIM'
+#!/bin/sh
+case "$*" in *"$FAIL_HASH_PATH") exit 1 ;; esac
+exec "$REAL_FIXTURE_HASH" "$@"
+SHIM
+  chmod +x "$shim/shasum"
+  # This legacy task starts without metadata; the final status call publishes a replacement.
+  rm "$r/.git/wt/teardown/generation.json"
+  printf '{"generation":"original"}\n' >"$r/legacy-metadata"
+  # shellcheck disable=SC2016  # Preserve variables for the generated Git wrapper.
+  sed 's@jq .* >"$RACE_REPO/new-metadata"@cp "$RACE_REPO/legacy-metadata" "$RACE_REPO/new-metadata"@' "$shim/git" >"$shim/git-new"
+  mv "$shim/git-new" "$shim/git"; chmod +x "$shim/git"
+  WT_RELAY_ENV+=("REAL_FIXTURE_HASH=$real_hash" "FAIL_HASH_PATH=$r/.git/wt/generation.json")
+  assert_wt_fails 1 'task metadata changed before worktree removal' rm generation -r "$r"
+  assert_dir 'an unreadable new sidecar cannot equal original absence' "$p"
+  assert_branch "$r" wt/generation yes
+  assert_eq 'the unreadable replacement remains' original "$(jq -r .generation "$r/.git/wt/generation.json")"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+
+  # shellcheck disable=SC2329,SC2030,SC2031  # host_rm invokes these isolated controller replacements.
+  controller_output=$(
+    # shellcheck source=lib/workgrove/remote.sh
+    source "$REPO/lib/workgrove/remote.sh"
+    cmux_require() { "$@"; }
+    check_row_removal() { printf -v "$3" '%s' recorded-row; printf -v "$4" '%s' ''; }
+    agent_on_vm() { return 0; }
+    remote_wt() { printf 'receiver %s\n' "$*"; }
+    close_row() { echo row-closed; }
+    rows_json() { echo '{"workspaces":[]}'; }
+    host_rm test.invalid pending -r /scratch/repo
+  )
+  assert_has 'a live recorded owner reaches receiver recovery' "$controller_output" '--defer-close'
+  assert_has 'the controller acknowledges closure only after receiver checks' "$controller_output" '--row-closed'
+  end_scenario
+}
+
+scenario_teardown_hook_lock() {
+  begin_scenario "$1" || return 0
+  local r p hook holder attempt mac="$TEST_ROOT/hook-lock-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  r=$(new_repo hook-lock)
+  assert_wt_ok 'create detached hook fixture' new hooked --no-workspace -r "$r"
+  hook="$r/.git/hooks/reference-transaction"
+  cat >"$hook" <<'HOOK'
+#!/bin/sh
+[ "$1" = prepared ] || exit 0
+grep -q refs/heads/wt/hooked || exit 0
+[ -f "$HOOK_ROOT/reject" ] || exit 0
+python3 -c '
+import os, pathlib, sys, time
+os.setsid()
+root = pathlib.Path(sys.argv[1])
+(root / "holder-pid").write_text(str(os.getpid()))
+while not (root / "release").exists():
+    time.sleep(0.01)
+' "$HOOK_ROOT" </dev/null >/dev/null 2>&1 &
+while [ ! -f "$HOOK_ROOT/holder-pid" ]; do sleep 0.01; done
+exit 1
+HOOK
+  chmod +x "$hook"
+  touch "$r/reject"
+  WT_RELAY_ENV=("HOOK_ROOT=$r")
+  assert_wt_fails 1 'branch deletion failed' rm hooked -r "$r"
+  for ((attempt=0; attempt<500; attempt++)); do [[ ! -f $r/holder-pid ]] || break; sleep 0.01; done
+  holder=$(cat "$r/holder-pid")
+  assert_gone 'hook failure follows worktree removal' "$r/.worktrees/hooked"
+  assert_branch "$r" wt/hooked yes
+  assert_eq 'the detached fixture child remains alive' live "$(kill -0 "$holder" 2>/dev/null && echo live)"
+  rm "$r/reject"
+  assert_wt_ok 'a detached hook child cannot retain the cleanup lock' rm hooked -r "$r"
+  assert_eq 'recovery does not depend on the hook child exiting' live "$(kill -0 "$holder" 2>/dev/null && echo live)"
+  touch "$r/release"
+  assert_wt_ok 'create interrupted worker fixture' new interrupted --no-workspace -r "$r"
+  local shim="$TEST_ROOT/interrupt-worker-bin" real_git
+  real_git=$(command -v git); mkdir -p "$shim"
+  cat >"$shim/git" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *'worktree remove --force'*)
+    printf '%s\n' "$WG_TEARDOWN_WORKER_PID" >"$PAUSE_ROOT/worker-pid"
+    touch "$PAUSE_ROOT/command-ready"
+    while [[ ! -f $PAUSE_ROOT/command-release ]]; do sleep 0.01; done
+    touch "$PAUSE_ROOT/mutation-started" ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("PAUSE_ROOT=$r" "REAL_FIXTURE_GIT=$real_git")
+  (wt_run rm interrupted -r "$r"; printf '%s\n' "$WT_RC" >"$r/owner-result") &
+  local interrupted_runner_pid=$!
+  for ((attempt=0; attempt<1000; attempt++)); do [[ ! -f $r/command-ready ]] || break; sleep 0.01; done
+  kill -KILL "$(cat "$r/worker-pid")"
+  wait "$interrupted_runner_pid"
+  assert_eq 'worker interruption reports failure' 137 "$(cat "$r/owner-result")"
+  touch "$r/command-release"
+  assert_dir 'the surviving synchronous command stops before unlocking' "$r/.worktrees/interrupted"
+  assert_gone 'the interrupted child never reaches mutation' "$r/mutation-started"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  assert_wt_ok 'recovery acquires the lock after interrupted commands stop' rm interrupted -r "$r"
+  WT_RELAY_ENV=()
   end_scenario
 }
 

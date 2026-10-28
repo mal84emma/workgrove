@@ -623,9 +623,12 @@ cmd_rm() {
   verified_head=$(git -C "$REPO" rev-parse --verify "refs/heads/$branch") || die 'cannot resolve task head'
   local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
+  local verified_metadata metadata_path
+  metadata_path=$(wt_meta "$name")
+  verified_metadata=$(metadata_fingerprint "$metadata_path") || die 'cannot fingerprint task metadata'
   meta_require "$name"
-  # shellcheck disable=SC2034
-  local base landed_why; base=${WT_META[base]-}; [[ -n "$base" ]] || base=$(default_base)
+  [[ $(metadata_fingerprint "$metadata_path") == "$verified_metadata" ]] || die 'task metadata changed while loading'
+  local base; base=${WT_META[base]-}; [[ -n "$base" ]] || base=$(default_base)
   if [[ $force -eq 0 ]]; then
     local reasons=()
     rm_reasons "$name" "$path" "$branch" "$base" reasons "$discard_commits"
@@ -721,7 +724,7 @@ cmd_rm() {
   if [[ $self_remote == 1 ]]; then self=remote; fi
   local remote=0; is_remote && remote=1
   WT_TEARDOWN_JSON=$(jq -cn --arg name "$name" --arg repo "$REPO" --arg path "$path" --arg branch "$branch" \
-    --arg head "$verified_head" --arg metadata_hash "$(file_hash "$(wt_meta "$name")")" --arg base "$base" --arg base_object "$verified_base" --arg proof "$proof" \
+    --arg head "$verified_head" --arg metadata_hash "$verified_metadata" --arg base "$base" --arg base_object "$verified_base" --arg proof "$proof" \
     --arg generation "$generation" --arg agent "${WT_META[agent]-}" --argjson runtime "${WT_META[runtime]:-null}" --arg row "$row" --arg self "$self" --arg session "$session" \
     --argjson tmux_identity "$tmux_identity" --argjson tmux_owner "$tmux_owner" --arg title "$title" --arg host "$host" --arg workspace "${WT_META[workspace]:-1}" --arg keep "$keep" --arg native "$native" --arg remote "$remote" '$ARGS.named')
   teardown_save prepared
@@ -739,6 +742,8 @@ cmd_rm() {
     cmux_require check_row_removal "$title" "$REPO" final_row final_self '' "$path"
     [[ $final_row == "$row" && $final_self == "$self" ]] || die 'row ownership changed after preflight'
   fi
+  [[ $(metadata_fingerprint "$metadata_path") == "$verified_metadata" ]] || die 'task metadata changed before worktree removal; kept the worktree'
+  teardown_control check || die 'teardown coordinator exited before worktree removal'
   if [[ -d $path ]]; then
     git -C "$REPO" worktree remove --force "$path" || die "git worktree remove failed; receipt: $WT_TEARDOWN_FILE"
   else git -C "$REPO" worktree prune || die 'cannot prune missing worktree'; fi
