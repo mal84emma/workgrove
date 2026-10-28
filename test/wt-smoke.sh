@@ -3394,7 +3394,7 @@ scenario_teardown_astra_hashes() {
     if [[ $name == legacy-* || $name == malformed ]]; then
       if [[ $name == malformed ]]; then record="$private_name:"
       else record="$private_name:\\$hash"; fi
-      jq --arg record "$record" '.includes=[$record] | del(.metadata_version)' "$r/.git/wt/$name.json" >"$r/.git/wt/$name.new"
+      jq --arg record "$record" '.includes=[$record] | del(.metadata_version,.includes_status)' "$r/.git/wt/$name.json" >"$r/.git/wt/$name.new"
       mv "$r/.git/wt/$name.new" "$r/.git/wt/$name.json"
     fi
     if [[ $name != legacy-clean ]]; then printf '\000only private copy\376\n' >"$p/$private_name"; fi
@@ -3430,6 +3430,13 @@ SHIM
   WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
   assert_wt_fails 3 'cannot enumerate included private files' rm copy-fault -r "$r"
   assert_eq 'incomplete snapshots retain copied work without current patterns' 'new only copy' "$(cat "$r/.worktrees/copy-fault/.env")"
+  local invalid_status
+  for invalid_status in '""' null; do
+    jq --argjson status "$invalid_status" '.includes_status=$status' "$r/.git/wt/copy-fault.json" >"$r/.git/wt/copy-fault.new"
+    mv "$r/.git/wt/copy-fault.new" "$r/.git/wt/copy-fault.json"
+    assert_wt_fails 3 'cannot enumerate included private files' rm copy-fault -r "$r"
+    assert_eq 'an invalid copy status cannot authorize deletion' 'new only copy' "$(cat "$r/.worktrees/copy-fault/.env")"
+  done
   end_scenario
 }
 

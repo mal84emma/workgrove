@@ -98,7 +98,7 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
   local n="$1" p="$2" f h e list
   local -A seen=()
   meta_require "$n"
-  [[ ${WT_META[includes_status]:-complete} == complete ]] || return 1
+  [[ ${WT_META[includes_status]-complete} == complete ]] || return 1
   local current
   current=$(worktree_includes "$p") || return 1
   list=$(while IFS= read -r e; do [[ -z $e ]] || printf 'R:%s\n' "$e"; done <<<"${WT_META[includes]-}"

@@ -83,6 +83,7 @@ New private dangling links remain protected when current include patterns cover 
 New task metadata keeps `includes_status` pending until copying and fingerprint capture finish.
 Failed reads, copies, hashes, or unsupported filename encoding leave that status pending and block removal.
 Older sidecars without this field remain unchanged.
+Explicitly empty or null copy status refuses removal; it does not mean completion.
 The reader normalizes valid escaped digests from older hash commands in memory.
 Malformed or unverified snapshot records refuse comparison.
 Older content-only link records can require inspection because they do not establish link identity.
