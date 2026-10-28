@@ -42,6 +42,10 @@ Older metadata remains unchanged and uses only unambiguous remote mappings.
 Ambiguous or unavailable destinations keep the task.
 An explicit landing ref still requires preservation proof.
 
+Git ancestry uses the original objects, with grafts and replacement refs disabled for preservation checks.
+A separate temporary object view performs content comparisons without source merge drivers, filters, or attributes.
+Its attributes require Git's built-in text merge, which cannot use a configured replacement driver.
+These checks do not alter source configuration, refs, index entries, or object files.
 Git ancestry can establish preservation of the task commits.
 Otherwise, a nonempty, conflict-free simulated merge must leave the destination tree unchanged.
 The comparison covers the complete current task tip and its inherited parent changes.
@@ -75,6 +79,14 @@ It disables filesystem-monitor caching for these checks.
 Assume-unchanged and skip-worktree index flags refuse removal because they can hide modified tracked files.
 Workgrove does not clear those flags or change global Git configuration.
 
+Clean filters can hide raw working bytes from Git status and the index.
+New tasks capture raw fingerprints for filtered tracked files after setup.
+Removal accepts unchanged creation or setup bytes, exact index blob bytes, or an independent identical main-checkout copy.
+Otherwise, it refuses removal and requires inspection or an external copy.
+Legacy tasks lack creation fingerprints and use the remaining proofs conservatively.
+Workgrove does not archive private raw bytes into Git objects.
+An incomplete filtered-file snapshot blocks removal.
+
 Private-file snapshots compare bytes independently of filename escaping.
 Link fingerprints start with `L` and hash the link target text without following it.
 An unchanged setup link remains removable; retargeting it does not match identical target contents.
@@ -99,7 +111,10 @@ Workgrove preserves model, brief, profile arguments, sandbox settings, and appro
 It refuses explicit remote-server arguments for this local task mode.
 Unsupported launch options and provider failures return nonzero statuses.
 
-When launch context names a cmux row, its process sample must contain the launching `wt run` process.
+When launch context names a cmux row, attributed process membership normally verifies the launching `wt run` process.
+An idle row can lack process attribution before its first provider starts.
+A unique physical terminal can establish launch ownership through UUID surface identity and the launcher's terminal and process start identity.
+This launch check does not replace later session-removal ownership checks.
 A generation-bound record saves the validated owner, launcher process identifier (PID), process start identity, provider, and runtime mode.
 Self-removal must verify this record against the live launcher and its process ancestry.
 
@@ -112,6 +127,15 @@ During removal, cmux process attribution identifies the agents in the target row
 Operating-system process ancestry must connect the requesting command to that agent tree.
 Every attributed row process must belong to that tree or its ancestor chain before forced self-closure is permitted.
 A second independent agent or command prevents that exception.
+Mac task rows start through noninteractive Bash, which executes the normal `wt run` launcher.
+Cmux recognizes this nested-shell command and stops its sibling Git watcher before launching the provider.
+The outer terminal shell remains available after normal provider exit.
+Existing rows with independent shell watchers can require a task-owned restart.
+A complete native parent graph can establish ownership of a sampled child that exits before validation.
+The operating system must positively confirm that child's absence.
+Unreadable processes, live PID reuse, incomplete graphs, and unverified vanished ancestors do not qualify.
+Unattributed terminal PIDs remain part of self-ownership checks and cannot establish an idle row.
+Unproven vanished processes trigger at most three fresh samples before refusal.
 The check does not trust cmux's environment-derived caller identity.
 
 Unknown samples, unreadable processes, and unverified shared-server ownership keep the task.
@@ -119,10 +143,17 @@ Legacy shared-server sessions can require a task-owned restart.
 Workgrove never stops a shared Codex daemon as a teardown workaround.
 
 VM self-removal pins the caller pane and verifies its process ancestry and exclusive agent ownership before accepting the named session.
+An agentless shell can request its own removal when every pane process belongs to that cleanup command's ancestry or descendants.
+A sibling background command or another pane prevents this shell exception.
+Shell recovery records process start identities and cannot adopt arbitrary later shell descendants.
+A retry can refresh the cleanup caller chain only beneath the original verified shell.
 Native terminal exit and legacy Mac-hook cleanup retain their existing transport paths.
 The legacy path returns failure when the hook does not finish cleanup.
 Receipts bind the tmux session ID, creation time, socket, server PID, and server start identity.
 Recovery rejects replacement sessions even when their names match.
+Pane and window queries use the exact session-qualified target `=<session>:`.
+A bare session string is unsafe for commands that expect a pane or window target.
+The qualified target also prevents same-named windows from hiding another session's provider.
 
 Exclusive ownership covers every window and pane, including independent commands.
 These fixtures do not establish real provider cancellation or terminal shutdown.
@@ -161,6 +192,15 @@ Removal rechecks work, refs, metadata fingerprints, and local row ownership afte
 Branch deletion rechecks the frozen landing object or a direct preservation anchor.
 Changed preservation evidence retains the branch and metadata.
 It deletes the branch with its verified old object as the expected value.
+The receipt freezes local branch configuration before directory removal.
+A durable `branch_config_removing` stage precedes configuration cleanup under Git's configuration and task-ref locks.
+Changed configuration remains pending; unrelated configuration and kept-branch configuration remain intact.
+Retries accept already-absent configuration after intent.
+Private hard-link anchors record each cleanup lock's inode before workgrove exposes it as a standard Git lock.
+Generation and process start records let retries reclaim verified stale cleanup locks after hard interruptions.
+Unknown Git locks and replacement inodes remain untouched.
+Configuration replacement synchronizes the Git directory before cleanup advances.
+Legacy receipts cannot delete remaining configuration without an original snapshot; `--keep-branch` preserves it explicitly.
 A changed branch, branch-deletion failure, or changed sidecar retains the remaining state and reports incomplete cleanup.
 Use `--keep-branch` during recovery to preserve a branch that changed after directory removal.
 It does not silently discard the unexpected object or metadata.
@@ -205,10 +245,56 @@ The deletion-boundary checks narrow that race but cannot atomically exclude unco
 Stop task-owned writers before requesting teardown.
 No daemon, background service, unrelated process termination, or automatic remote-branch deletion is added.
 
+## Live acceptance on October 28, 2026
+
+The user authorized disposable live tasks on the Mac and one Ubuntu VM.
+Both hosts used cmux 0.65.1.
+The VM used tmux 3.2a and a dedicated test server for the final matrix.
+The tests used this candidate without updating either installed workgrove copy.
+
+| Host | Provider | Ordinary squash | Stacked squash |
+|---|---|---|---|
+| The Mac | Claude 2.1.312 | Passed | Passed |
+| The Mac | Codex 0.164.0 | Passed | Passed |
+| Ubuntu VM | Claude 2.1.306 | Passed | Passed |
+| Ubuntu VM | Codex 0.164.0 | Passed | Passed |
+
+Each case used a disposable bare remote and actual squash commits.
+The ordinary case deleted its remote head after merging.
+The stacked case removed its landed parent before merging the child, then deleted both remote heads.
+The child's sidecar retained its deleted creation base.
+
+Each provider started background work through its real command tool, then waited for an independent observer.
+The observer recorded provider ancestry, process start identities, session identity, and the background process before releasing teardown.
+Each provider saved its pre-close summary and invoked its own safe removal from outside the worktree.
+Codex used interactive sessions, workspace-write sandboxing, on-request approval, and the escalated complete removal command.
+The temporary VM Codex installation included its matching official command host.
+The user authorized trust entries only for the four disposable Codex repositories.
+The entries were removed after acceptance; all other parsed settings remained unchanged.
+
+The observer confirmed absence of the worktree, registration, branch, branch configuration, sidecars, row, and recorded processes in all eight cases.
+The VM observer also confirmed task-session absence and survival of an independent sentinel session.
+The main-checkout ref and working status remained unchanged in every test repository.
+Observation-only acknowledgments completed receipts after independently verified row absence.
+The controller did not issue the initial removal for these passing cases.
+
+Claude used print mode with real Bash tools and automatic permission handling.
+These cases establish actual Claude tool and process cleanup, but do not establish interactive Claude terminal behavior.
+Legacy VM transport, denial of approval, and interrupted cleanup retain fixture coverage and require separate live acceptance.
+
+An earlier shared-server probe caused tmux 3.2a to crash and closed three existing VM rows.
+Their task worktrees remained intact; teardown had not started.
+A dedicated-server reproduction confirmed that an unqualified pane target could trigger the crash.
+Task-scoped pane and window commands now use the qualified `=session:` target.
+A real Linux regression checks a colliding window name from another session on a private server.
+The user authorized restoration of two verified original provider sessions, which resumed successfully.
+The third row's identity remained uncertain, so it stayed closed.
+The final matrix used a dedicated server to protect existing sessions.
+
 ## Manual acceptance requires separate authorization
 
 Disposable fixtures establish Git decisions, process-check branches, and cleanup ordering.
-They cannot establish real Codex cancellation, cmux terminal exit, or socket approval behavior.
+Fixtures alone cannot establish real Codex cancellation, cmux terminal exit, or socket approval behavior.
 Use separately authorized disposable tasks for these checks:
 
 1. Launch local Claude and Codex tasks through the updated installation.

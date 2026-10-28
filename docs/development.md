@@ -44,6 +44,8 @@ workgrove/
 │       ├── picker.sh          task picker and driver commands
 │       ├── recovery.sh        VM row recovery and task attachment
 │       ├── remote.sh          remote commands and result parsing
+│       ├── filtered_files.py  raw filtered-file preservation checks
+│       ├── branch_config.py   frozen local branch configuration cleanup
 │       ├── safety.sh          worktree removal checks
 │       ├── teardown.sh        durable cleanup receipts and retry handling
 │       └── vm/                scripts that bin/wt sends to a VM on SSH standard input
@@ -128,6 +130,10 @@ workgrove/
 │   │       ├── version.txt
 │   │       └── windows.json
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
+│   ├── tmux-target-smoke.sh  real Linux tmux parsing on a private server
+│   ├── cmux-ownership-smoke.sh  native parent snapshots and idle launch ownership
+│   ├── branch-config-smoke.sh  hard-interruption recovery for owned Git locks
+│   ├── branch_config_test.py  disposable branch configuration and lock fixtures
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── hosts_records_test.py  host fallback records and inventory validation
 │   ├── ssh-host-smoke.sh      offline SSH fragment registration tests

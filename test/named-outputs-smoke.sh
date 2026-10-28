@@ -63,7 +63,7 @@ test_branch_landed() {
   begin_scenario 'branch reasons can use an internal local name' || return 0
   branch_landed missing main b || status=$?
   assert_eq 'a missing branch fails the check' 1 "$status"
-  assert_eq 'the caller receives the branch reason' 'missing has no common history with main' "$b"
+  assert_eq 'the caller receives the branch reason' 'cannot resolve missing' "$b"
   end_scenario
 }
 test_branch_landed

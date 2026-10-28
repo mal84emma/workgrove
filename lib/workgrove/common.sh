@@ -187,6 +187,10 @@ wt_read_result_into() {
 # These builders do not run commands or report errors.
 # shellcheck disable=SC2016  # HOME belongs to the VM shell.
 vm_wt_line() { printf 'exec "$HOME/.local/bin/wt" %s' "$(shell_join "$@")"; }
+local_run_line() { # A noninteractive shell prevents cmux from starting a sibling Git watcher.
+  shell_join bash -c "exec $(shell_join "$1" run "$2" -r "$3")"
+}
+
 # shellcheck disable=SC2016  # HOME belongs to the VM shell.
 vm_run_line() { printf '"$HOME/.local/bin/wt" run %s' "$(shell_join "$1" -r "$2")"; }
 

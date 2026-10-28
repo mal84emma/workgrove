@@ -9,6 +9,7 @@ case "$1" in
       denied) echo 'error connecting to tmux socket (Operation not permitted)' >&2; exit 1 ;;
     esac ;;
   list-panes)
+    case "$4" in =*:) ;; *) echo 'unsafe unqualified session target for list-panes' >&2; exit 2 ;; esac
     case "${FAKE_TMUX_PROBE:-running}" in
       panes) echo 'cannot read panes' >&2; exit 1 ;;
       empty) ;;

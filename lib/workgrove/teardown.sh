@@ -253,7 +253,7 @@ teardown_preservation() { # Recheck the frozen proof before deleting the remaini
     git -C "$REPO" check-ref-format "$retained" >/dev/null 2>&1 || return 1
     git -C "$REPO" symbolic-ref -q "$retained" >/dev/null 2>&1 && return 1
     [[ $? == 1 ]] || return 1
-    current=$(git -C "$REPO" rev-parse -q --verify "$retained^{commit}") || return 1
+    current=$(preservation_git -C "$REPO" rev-parse -q --verify "$retained^{commit}") || return 1
     [[ $current == "$head" ]]
     return
   fi
@@ -263,7 +263,7 @@ teardown_preservation() { # Recheck the frozen proof before deleting the remaini
   fetch_base "$base" || rc=$?
   [[ $rc != 1 ]] || return 1
   expected=$(jq -r .base_object <<<"$WT_TEARDOWN_JSON")
-  current=$(git -C "$REPO" rev-parse -q --verify "$canonical^{commit}") || return 1
+  current=$(preservation_git -C "$REPO" rev-parse -q --verify "$canonical^{commit}") || return 1
   [[ $current == "$expected" ]]
 }
 
@@ -314,12 +314,14 @@ teardown_sidecars_check() { # Absence is valid only after durable sidecar-remova
 teardown_observe() { # Observe absence only; this function never closes a row or deletes Git work.
   local name=$1 path=$2 branch=$3 keep=$4 row=$5 remote=$6 registrations current rc=0 rows
   [[ ! -e $path && ! -L $path ]] || return 1
+  [[ ! -e $REPO/.git/wt/teardown/$name.branch-locks && ! -L $REPO/.git/wt/teardown/$name.branch-locks ]] || return 1
   [[ $(teardown_sidecars_snapshot "$name") == '{"metadata":"absent","prompt":"absent","started":"absent"}' ]] || return 1
   registrations=$(git -C "$REPO" worktree list --porcelain) || return 1
   ! grep -qxF "worktree $path" <<<"$registrations" || return 1
   if [[ $keep == 0 ]]; then
     git -C "$REPO" show-ref -q --verify "refs/heads/$branch" && return 1
     rc=$?; [[ $rc == 1 ]] || return 1
+    [[ $(teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/branch_config.py" snapshot "$REPO" "$branch") == '""' ]] || return 1
   fi
   if [[ $remote == 1 ]]; then
     [[ ${row_closed:-0} == 1 || ( $(jq -r .workspace <<<"$WT_TEARDOWN_JSON") == 0 && $(jq -r .self <<<"$WT_TEARDOWN_JSON") == '' ) ]] || return 1
@@ -353,7 +355,7 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
     local ref_rc=0
     git -C "$REPO" show-ref -q --verify "refs/heads/$branch" || ref_rc=$?
     case $ref_rc in
-      0) current=$(git -C "$REPO" rev-parse --verify "refs/heads/$branch") || die 'cannot resolve remaining task branch' ;;
+      0) current=$(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$branch") || die 'cannot resolve remaining task branch' ;;
       1) current='' ;;
       *) die 'cannot inspect remaining task branch; cleanup remains pending' ;;
     esac
@@ -369,6 +371,16 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
         || die 'task metadata changed before branch removal; kept the branch and metadata'
       teardown_control check || die 'teardown coordinator exited before branch removal'
       git -C "$REPO" update-ref --no-deref -d "refs/heads/$branch" "$head" || die "worktree removed, but branch deletion failed; retry wt rm $name -r $(shell_join "$REPO")"
+    fi
+    teardown_save branch_config_removing
+    stage=branch_config_removing
+  fi
+  if [[ $stage == branch_config_removing ]]; then
+    teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/branch_config.py" recover "$REPO" "$branch" null "$(jq -r .generation <<<"$WT_TEARDOWN_JSON")" \
+      || die 'cannot recover recorded branch cleanup locks; kept sidecars and receipt'
+    if [[ $keep == 0 ]]; then
+      teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/branch_config.py" remove "$REPO" "$branch" "$(jq -c '.branch_config // null' <<<"$WT_TEARDOWN_JSON")" "$(jq -r .generation <<<"$WT_TEARDOWN_JSON")" \
+        || die 'Git branch cleanup remains pending; kept sidecars and receipt'
     fi
     local snapshot
     snapshot=$(jq -c '.sidecars // null' <<<"$WT_TEARDOWN_JSON")
@@ -444,6 +456,16 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
       fi
       if [[ $identity_rc == 0 && $caller_session == "$session" ]] && process_descends "$BASHPID" "$pane_pid"; then
         tmux_self_ownership "$session" "$name" || die 'session ownership changed; cleanup remains pending'
+        if [[ $(jq -r '.mode // "agent"' <<<"$WT_TMUX_OWNER") == shell ]]; then
+          local saved_owner saved_shell saved_start
+          saved_owner=$(jq -c .tmux_owner <<<"$WT_TEARDOWN_JSON")
+          saved_shell=$(jq -r .pid <<<"$WT_TMUX_OWNER"); saved_start=$(jq -r .start <<<"$WT_TMUX_OWNER")
+          jq -e --arg pid "$saved_shell" --arg start "$saved_start" \
+            '(.pid == $pid and .start == $start) or any(.ancestors[]; .pid == $pid and .start == $start)' \
+            <<<"$saved_owner" >/dev/null || die 'recorded task shell changed; cleanup remains pending'
+          WT_TEARDOWN_JSON=$(jq -c --argjson owner "$WT_TMUX_OWNER" '.tmux_owner=$owner' <<<"$WT_TEARDOWN_JSON")
+          teardown_save close_requested
+        fi
         if [[ $native == 1 ]]; then
           tmux kill-session -t "$(jq -r .id <<<"$identity")" || rc=$?
         elif notify_mac wt-close host "$host" repo "$REPO" task "$name"; then

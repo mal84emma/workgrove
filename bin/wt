@@ -263,7 +263,7 @@ cmd_new() {
   meta_set "$name" "base=$base" "metadata_version:=3" "creation_commit=$(git -C "$REPO" rev-parse "$base^{commit}")" \
     "generation=$(printf '%s\n' "$BASHPID-$RANDOM-$(date -u +%s)" | git hash-object --stdin)" "created=$(date -u +%FT%TZ)" "agent=$agent" "model=$model" \
     "title=$(row_title "$name")" "session=$(wt_session "$name" "$REPO")" \
-    "workspace=$workspace" "includes:=[]" "includes_status=pending" "setup:=[]"
+    "workspace=$workspace" "includes:=[]" "includes_status=pending" "setup:=[]" "filtered_status=pending" "filtered_files:={}"
   local landing_ref="$base" landing_remote='' parent_name
   local -A parent_meta=()
   case $base in
@@ -291,6 +291,10 @@ cmd_new() {
     setup=$(setup_dirt "$p")               # recorded even when the hook failed: it may have written part of it
     meta_set "$name" "setup:=$(printf '%s' "$setup" | jq -Rs 'split("\n") | map(select(length > 0))')"
   fi
+
+  local filtered_snapshot
+  filtered_snapshot=$(filtered_files capture "$name" "$p") || die 'filtered-file snapshot is incomplete; kept the task for inspection'
+  meta_set "$name" "filtered_files:=$filtered_snapshot" "filtered_status=complete"
 
   printf 'created %s\n  path:   %s\n  branch: %s (from %s)\n  repo:   %s\n  session: %s\n' \
     "$name" "$p" "$b" "$base" "$REPO" "$(wt_session "$name" "$REPO")"
@@ -370,8 +374,7 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
     local launch_state launch_pid=$BASHPID launch_owner=''
     if ! is_remote && [[ -n ${CMUX_WORKSPACE_ID:-} ]]; then
       launch_state=$(cmux_call top --workspace "$CMUX_WORKSPACE_ID" --json) || die 'cannot validate Codex launch row'
-      printf '%s' "$launch_state" | jq -e --arg id "$CMUX_WORKSPACE_ID" --argjson pid "$launch_pid" '
-        any(.windows[].workspaces[]; .id == $id and (.resources.pids | index($pid)) != null)' >/dev/null \
+      codex_launch_row "$CMUX_WORKSPACE_ID" "$launch_pid" "$launch_state" \
         || die 'Codex launch row does not contain this wt run process; reopen the task row'
       launch_owner=$CMUX_WORKSPACE_ID
     elif is_remote && [[ -n ${TMUX:-} && ${TMUX_PANE:-} =~ ^%[0-9]+$ ]]; then
@@ -606,7 +609,7 @@ cmd_rm() {
   WT_TEARDOWN_FILE="$REPO/.git/wt/teardown/$name.json"
   if [[ ! -d $(wt_path "$name") && -f $WT_TEARDOWN_FILE ]]; then
     WT_TEARDOWN_JSON=$(cat "$WT_TEARDOWN_FILE")
-    jq -e --arg repo "$REPO" --arg name "$name" --arg path "$(wt_path "$name")" '.repo == $repo and .name == $name and .path == $path and .branch == ("wt/" + $name) and (.head | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and all(.keep,.native,.remote; IN("0","1")) and (.stage | IN("prepared","worktree_removed","sidecars_removing","git_removed","close_requested","complete"))' <<<"$WT_TEARDOWN_JSON" >/dev/null \
+    jq -e --arg repo "$REPO" --arg name "$name" --arg path "$(wt_path "$name")" '.repo == $repo and .name == $name and .path == $path and .branch == ("wt/" + $name) and (.head | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and all(.keep,.native,.remote; IN("0","1")) and (.stage | IN("prepared","worktree_removed","branch_config_removing","sidecars_removing","git_removed","close_requested","complete"))' <<<"$WT_TEARDOWN_JSON" >/dev/null \
       || die 'invalid teardown receipt'
     if [[ $(jq -r .stage <<<"$WT_TEARDOWN_JSON") != complete || ! -f $(wt_meta "$name") ]]; then
       if [[ $keep == 1 ]]; then
@@ -620,13 +623,14 @@ cmd_rm() {
   require_wt "$name" path branch "rm"
   teardown_preflight "$path"
   local verified_head verified_base='' proof='' generation
-  verified_head=$(git -C "$REPO" rev-parse --verify "refs/heads/$branch") || die 'cannot resolve task head'
+  verified_head=$(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$branch") || die 'cannot resolve task head'
   local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
   [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
-  local verified_metadata verified_sidecars metadata_path
+  local verified_metadata verified_sidecars verified_branch_config metadata_path
   metadata_path=$(wt_meta "$name")
   verified_sidecars=$(teardown_sidecars_snapshot "$name") || die 'cannot fingerprint task metadata or sidecars'
   verified_metadata=$(jq -r .metadata <<<"$verified_sidecars")
+  verified_branch_config=$(teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/branch_config.py" snapshot "$REPO" "$branch") || die 'cannot snapshot local branch configuration'
   meta_require "$name"
   [[ $(metadata_fingerprint "$metadata_path") == "$verified_metadata" ]] || die 'task metadata changed while loading'
   local base; base=${WT_META[base]-}; [[ -n "$base" ]] || base=$(default_base)
@@ -646,7 +650,7 @@ cmd_rm() {
     if [[ -z $proof && $discard_commits == 1 ]]; then proof=discard; fi
     [[ -n $proof ]] || die 'work preservation proof is missing; kept the worktree'
   fi
-  verified_base=$(git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true)
+  verified_base=$(preservation_git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true)
   if is_remote && [[ -n ${TMUX:-} ]]; then
     local current
     session=$(wt_session "$name" "$REPO")
@@ -717,15 +721,15 @@ cmd_rm() {
     rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
     ((${#final_reasons[@]} == 0)) || die "work changed during teardown: ${final_reasons[*]}"
   fi
-  [[ $(git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed during teardown'
-  [[ $(git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed during teardown'
+  [[ $(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed during teardown'
+  [[ $(preservation_git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed during teardown'
   generation=${WT_META[generation]:-$verified_head}
   if [[ $proof == published || $base =~ ^[0-9a-f]{40,64}$ ]]; then
     local retained=''
     local anchor_rc=0
     git -C "$REPO" symbolic-ref -q "refs/wt/preserved/$generation" >/dev/null 2>&1 || anchor_rc=$?
     [[ $anchor_rc == 1 ]] || die 'preservation anchor must be a direct ref; kept the worktree'
-    retained=$(git -C "$REPO" rev-parse -q --verify "refs/wt/preserved/$generation" 2>/dev/null || true)
+    retained=$(preservation_git -C "$REPO" rev-parse -q --verify "refs/wt/preserved/$generation" 2>/dev/null || true)
     if [[ $retained != "$verified_head" ]]; then
       git -C "$REPO" update-ref --no-deref "refs/wt/preserved/$generation" "$verified_head" '' || die 'cannot retain preserved work'
     fi
@@ -735,15 +739,15 @@ cmd_rm() {
   local remote=0; is_remote && remote=1
   WT_TEARDOWN_JSON=$(jq -cn --arg name "$name" --arg repo "$REPO" --arg path "$path" --arg branch "$branch" \
     --arg head "$verified_head" --arg metadata_hash "$verified_metadata" --arg base "$base" --arg base_object "$verified_base" --arg proof "$proof" \
-    --argjson sidecars "$verified_sidecars" --arg generation "$generation" --arg agent "${WT_META[agent]-}" --argjson runtime "${WT_META[runtime]:-null}" --arg row "$row" --arg self "$self" --arg session "$session" \
+    --argjson branch_config "$verified_branch_config" --argjson sidecars "$verified_sidecars" --arg generation "$generation" --arg agent "${WT_META[agent]-}" --argjson runtime "${WT_META[runtime]:-null}" --arg row "$row" --arg self "$self" --arg session "$session" \
     --argjson tmux_identity "$tmux_identity" --argjson tmux_owner "$tmux_owner" --arg title "$title" --arg host "$host" --arg workspace "${WT_META[workspace]:-1}" --arg keep "$keep" --arg native "$native" --arg remote "$remote" '$ARGS.named')
   teardown_save prepared
   if [[ $force == 0 ]]; then
     rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
     ((${#final_reasons[@]} == 0)) || die "work changed after preflight: ${final_reasons[*]}"
   fi
-  [[ $(git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed after preflight'
-  [[ $(git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed after preflight'
+  [[ $(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed after preflight'
+  [[ $(preservation_git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed after preflight'
   if [[ $self_remote == 1 ]]; then
     tmux_self_ownership "$session" "$name" || die 'tmux ownership changed after preflight'
   fi

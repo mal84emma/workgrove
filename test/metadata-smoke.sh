@@ -193,19 +193,20 @@ printf 'edited\n' >"$p/.env"
 assert_eq 'legacy copies detect edits' .env "$(changed_includes first "$p")"
 end_scenario
 
-begin_scenario 'status preserves the merge cache and temporary-file registration'
+begin_scenario 'status preserves the merge cache and cleans isolated comparisons'
 printf 'committed\n' >"$p/change"
 git -C "$p" add change
 git -C "$p" -c user.name=Test -c user.email=test@example.com commit -qm change
 WT_MERGE_TREE=''
 declare -A n=()
 wt_status first n
+# shellcheck disable=SC2031  # The associative array uses the literal key name.
 assert_eq 'named status returns the task name' first "${n[name]}"
 if [[ -n $WT_MERGE_TREE ]]; then pass; else fail 'status lost the merge capability cache'; fi
 WT_MERGE_TREE=0
-before=${#WT_TMPFILES[@]}
-wt_status first n
-if ((${#WT_TMPFILES[@]} > before)); then pass; else fail 'status lost the temporary index registration'; fi
+mkdir -p "$TEST_ROOT/proof-temp"
+TMPDIR="$TEST_ROOT/proof-temp" wt_status first n
+assert_eq 'isolated comparison leaves no temporary index or repository' '' "$(find "$TEST_ROOT/proof-temp" -mindepth 1 -print)"
 assert_eq 'unmerged status includes its reason' no "${n[merged]}"
 end_scenario
 

@@ -1725,7 +1725,7 @@ show-environment)
     pgrep|idle) echo /dev/pts/123; exit 0 ;;
   esac
   rm -f "$SELF_TMUX_LOG.pgrep-owner"
-  if [ "$4" = "=$SELF_TMUX_SESSION" ]; then
+  if [ "${4%:}" = "=$SELF_TMUX_SESSION" ]; then
     printf '%s\n' "$SELF_TMUX_OWNER_PID" >"$SELF_TMUX_LOG.pgrep-owner"
     echo /dev/pts/123
   elif [ "${SELF_TMUX_OTHER_ACTIVE:-}" = 1 ]; then echo /dev/pts/123; fi ;; display-message)
@@ -3531,6 +3531,189 @@ SHIM
   end_scenario
 }
 
+scenario_teardown_raw_history() {
+  begin_scenario "$1" || return 0
+  local r p ancestor main task driver
+  stub_cmux dead
+  for driver in ours union; do
+    r=$(new_repo "raw-$driver")
+    printf 'base\n' >"$r/data"
+    printf 'data merge=%s\n' "$driver" >"$r/.gitattributes"
+    fixture_git "$r" add data .gitattributes
+    fixture_git "$r" commit -qm attributes
+    fixture_git "$r" config merge.ours.driver true
+    assert_wt_ok 'create divergent filtered-merge fixture' new divergent --no-workspace -r "$r" -b main
+    p="$r/.worktrees/divergent"
+    if [[ $driver == union ]]; then : >"$p/data"; else printf 'task\n' >"$p/data"; fi
+    fixture_git "$p" commit -qam task
+    printf 'unrelated main work\n' >"$r/data"
+    fixture_git "$r" commit -qam main
+    assert_wt_fails 3 'not merged into' rm divergent -r "$r"
+    assert_dir 'merge attributes cannot hide task work' "$p"
+    assert_branch "$r" wt/divergent yes
+  done
+  r=$(new_repo raw-graph)
+  assert_wt_ok 'create genuine divergent history' new virtual --no-workspace -r "$r" -b main
+  p="$r/.worktrees/virtual"
+  fixture_commit "$p" task.txt 'only task bytes'
+  task=$(fixture_git "$r" rev-parse wt/virtual)
+  fixture_commit "$r" main.txt 'unrelated main'
+  main=$(fixture_git "$r" rev-parse main)
+  mkdir -p "$r/.git/info"
+  printf '%s %s\n' "$main" "$task" >"$r/.git/info/grafts"
+  assert_wt_fails 3 'not merged into' rm virtual -r "$r"
+  assert_dir 'grafts cannot fabricate preservation' "$p"
+  assert_wt_ok 'status uses original ancestry under grafts' show virtual --json -r "$r"
+  assert_eq 'grafts cannot fabricate status ancestry' unknown "$(jq -r .comparison.proof <<<"$WT_OUT")"
+  assert_eq 'grafts cannot hide the ahead count' 1 "$(jq -r .ahead <<<"$WT_OUT")"
+  rm "$r/.git/info/grafts"
+  ancestor=$(fixture_git "$r" rev-parse main^)
+  fixture_git "$r" replace --graft "$main" "$task" >/dev/null
+  assert_wt_fails 3 'not merged into' rm virtual -r "$r"
+  assert_eq 'virtual history refusal preserves original task bytes' 'only task bytes' "$(cat "$p/task.txt")"
+  assert_branch "$r" wt/virtual yes
+  assert_eq 'the raw ancestor remains a real commit' commit "$(fixture_git "$r" cat-file -t "$ancestor")"
+  end_scenario
+}
+
+scenario_teardown_raw_filters() {
+  begin_scenario "$1" || return 0
+  local r p before driver
+  r=$(new_repo raw-filter); stub_cmux dead
+  printf 'base\n' >"$r/data"
+  printf 'data filter=public\n' >"$r/.gitattributes"
+  fixture_git "$r" add data .gitattributes
+  fixture_git "$r" commit -qm filter
+  fixture_git "$r" config filter.public.clean 'sed /^private:/d'
+  fixture_git "$r" config filter.public.smudge cat
+  assert_wt_ok 'capture a raw filtered baseline' new filtered --no-workspace -r "$r" -b main
+  p="$r/.worktrees/filtered"
+  before=$(jq -r '.filtered_files.data' "$r/.git/wt/filtered.json")
+  assert_eq 'creation stores a typed raw fingerprint' F "${before:0:1}"
+  printf 'private: only copy\n' >>"$p/data"
+  fixture_git "$p" add data
+  assert_eq 'a clean filter hides raw working bytes from Git' '' "$(fixture_git "$p" status --porcelain)"
+  assert_wt_fails 3 'cannot preserve raw filtered files' rm filtered -r "$r"
+  assert_has 'refusal retains the private payload' "$(cat "$p/data")" 'private: only copy'
+  cp "$p/data" "$r/data"
+  assert_wt_ok 'an independent main copy preserves raw bytes' rm filtered -r "$r"
+  assert_gone 'copied raw task can be removed' "$p"
+  assert_wt_ok 'unchanged filtered checkout remains removable' new unchanged --no-workspace -r "$r" -b main
+  assert_wt_ok 'raw baseline permits unchanged filtered files' rm unchanged -r "$r"
+  assert_wt_ok 'create legacy filtered task' new legacy --no-workspace -r "$r" -b main
+  p="$r/.worktrees/legacy"
+  jq 'del(.filtered_status,.filtered_files)' "$r/.git/wt/legacy.json" >"$r/legacy-meta"
+  mv "$r/legacy-meta" "$r/.git/wt/legacy.json"
+  printf 'private: legacy only copy\n' >>"$p/data"
+  assert_wt_fails 3 'cannot preserve raw filtered files' rm legacy -r "$r"
+  assert_has 'legacy refusal preserves raw data' "$(cat "$p/data")" 'private: legacy only copy'
+  for driver in unset unspecified; do
+    fixture_git "$r" config "filter.$driver.clean" 'sed /^private:/d'
+    fixture_git "$r" config "filter.$driver.smudge" cat
+    printf 'data filter=%s\n' "$driver" >"$r/.gitattributes"
+    fixture_git "$r" commit -qam "reserved filter $driver"
+    assert_wt_ok 'capture a reserved-name filter' new "$driver" --no-workspace -r "$r" -b main
+    p="$r/.worktrees/$driver"
+    printf 'private: reserved only copy\n' >>"$p/data"
+    fixture_git "$p" add data
+    assert_eq 'reserved filter hides raw working bytes' '' "$(fixture_git "$p" status --porcelain)"
+    assert_wt_fails 3 'cannot preserve raw filtered files' rm "$driver" -r "$r"
+    assert_has 'reserved-name refusal preserves payload' "$(cat "$p/data")" 'private: reserved only copy'
+  done
+  end_scenario
+}
+
+scenario_teardown_branch_configuration() {
+  begin_scenario "$1" || return 0
+  local r p snapshot helper shim real_git
+  r=$(new_repo branch-config); stub_cmux dead
+  helper="$REPO/lib/workgrove/branch_config.py"
+  assert_wt_ok 'create a configured task' new configured --no-workspace -r "$r" -b main
+  fixture_git "$r" config branch.wt/configured.remote upstream
+  fixture_git "$r" config branch.wt/configured.merge refs/heads/old-target
+  fixture_git "$r" config branch.unrelated.description 'leave this alone'
+  shim="$TEST_ROOT/branch-config-bin"; mkdir -p "$shim"
+  real_git=$(command -v git)
+  cat >"$shim/git" <<'SHIM'
+#!/bin/sh
+case "$*" in *'--remove-section branch.wt/configured'*) [ ! -f "$CONFIG_FAULT_ROOT/reject-config" ] || exit 1 ;; esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git"
+  touch "$r/reject-config"
+  WT_PATH_PREFIX="$shim" WT_RELAY_ENV=("CONFIG_FAULT_ROOT=$r" "REAL_FIXTURE_GIT=$real_git")
+  assert_wt_fails 1 'Git branch cleanup remains pending' rm configured -r "$r"
+  assert_gone 'configuration failure follows directory removal' "$r/.worktrees/configured"
+  assert_branch "$r" wt/configured no
+  assert_eq 'configuration intent survives interruption' branch_config_removing "$(jq -r .stage "$r/.git/wt/teardown/configured.json")"
+  assert_regular "$r" .git/wt/configured.json
+  rm "$r/reject-config"
+  WT_PATH_PREFIX='' WT_RELAY_ENV=()
+  assert_wt_ok 'removal resumes local branch configuration cleanup' rm configured -r "$r"
+  assert_eq 'stale upstream no longer survives deletion' '' "$(fixture_git "$r" config --get branch.wt/configured.remote || true)"
+  assert_eq 'unrelated branch configuration survives' 'leave this alone' "$(fixture_git "$r" config --get branch.unrelated.description)"
+  assert_wt_ok 'the task name can be reused safely' new configured --no-workspace -r "$r" -b main
+  assert_eq 'name reuse has no stale upstream' '' "$(fixture_git "$r" config --get branch.wt/configured.merge || true)"
+  fixture_git "$r" config branch.wt/configured.description preserved
+  assert_wt_ok 'keep-branch preserves its configuration' rm configured --keep-branch -r "$r"
+  assert_eq 'kept branch retains description' preserved "$(fixture_git "$r" config --get branch.wt/configured.description)"
+  fixture_git "$r" config branch.wt/absent.remote old
+  snapshot=$(python3 "$helper" snapshot "$r" wt/absent)
+  fixture_git "$r" config branch.wt/absent.remote replacement
+  if python3 "$helper" remove "$r" wt/absent "$snapshot" >/dev/null 2>&1; then
+    assert_eq 'changed configuration must refuse removal' refused succeeded
+  else assert_eq 'changed configuration refuses removal' refused refused; fi
+  assert_eq 'changed configuration remains intact' replacement "$(fixture_git "$r" config --get branch.wt/absent.remote)"
+  snapshot=$(python3 "$helper" snapshot "$r" wt/absent)
+  python3 "$helper" remove "$r" wt/absent "$snapshot"
+  python3 "$helper" remove "$r" wt/absent "$snapshot"
+  assert_eq 'configuration cleanup is idempotent after intent' '' "$(fixture_git "$r" config --get branch.wt/absent.remote || true)"
+  assert_wt_ok 'underscores remain valid task names' new my_task --no-workspace -r "$r" -b main
+  assert_wt_ok 'underscores remain removable' rm my_task -r "$r"
+  assert_wt_ok 'create a legacy task without metadata' new no-sidecar --no-workspace -r "$r" -b main
+  rm "$r/.git/wt/no-sidecar.json"
+  assert_wt_ok 'verified sidecar absence retains legacy removal' rm no-sidecar -r "$r"
+  end_scenario
+}
+
+scenario_teardown_idle_shell() {
+  begin_scenario "$1" || return 0
+  local result
+  result=$(
+    local TMUX_PANE=%1 WT_TEARDOWN_JSON='{"agent":"codex"}' WT_TMUX_OWNER=null rc=0 caller=$BASHPID
+    tmux() {
+      case "$*" in *pane_pid*) echo 100 ;; *"'#S'"*|*'#S'*) echo target ;; *list-panes*) echo /dev/pts/123 ;; esac
+    }
+    pgrep() { return 1; }
+    process_descends() {
+      [[ $1 == "$2" || ( $1 == "$caller" && $2 == 100 ) || ( $1 == 120 && $2 == 100 ) ]]
+    }
+    ps() {
+      if [[ $1 == -t ]]; then echo 100; [[ ${SHELL_SIBLING:-0} == 0 ]] || echo 120; return 0; fi
+      case ${4:-} in comm=) echo "${SHELL_COMMAND:-bash}" ;; lstart=) echo identity ;; *) return 1 ;; esac
+    }
+    tmux_self_ownership target || rc=$?
+    printf 'idle=%s mode=%s\n' "$rc" "$(jq -r .mode <<<"$WT_TMUX_OWNER")"
+    rc=0; tmux_recorded_owner target shell "$WT_TMUX_OWNER" || rc=$?
+    printf 'recorded=%s\n' "$rc"
+    SHELL_COMMAND=claude
+    rc=0; tmux_recorded_owner target shell "$WT_TMUX_OWNER" || rc=$?
+    printf 'exec-provider=%s\n' "$rc"
+    SHELL_COMMAND=bash
+    SHELL_SIBLING=1
+    rc=0; tmux_self_ownership target || rc=$?
+    printf 'sibling=%s\n' "$rc"
+    rc=0; tmux_recorded_owner target shell "$WT_TMUX_OWNER" || rc=$?
+    printf 'recorded-sibling=%s\n' "$rc"
+  )
+  assert_has 'a verified idle shell can request self-removal' "$result" 'idle=0 mode=shell'
+  assert_has 'shell recovery skips obsolete Codex launch binding' "$result" 'recorded=0'
+  assert_has 'a sibling command prevents shell self-removal' "$result" 'sibling=1'
+  assert_has 'recorded shell cannot adopt a later background command' "$result" 'recorded-sibling=1'
+  assert_has 'a same-PID provider replacement cannot inherit shell authorization' "$result" 'exec-provider=1'
+  end_scenario
+}
+
 scenario_teardown_review_ownership() {
   begin_scenario "$1" || return 0
   local result
@@ -3693,7 +3876,7 @@ case "$1" in
       *) if [ "$(cat "$REMOTE_TMUX.drawn")" = attached ]; then echo '/dev/pts/3: wt-project-task [200x50 xterm-256color] (utf8)'; fi ;;
     esac ;;
   display-message)
-    [ "$2" = -d ] && [ "$3" = 5000 ] && [ "$4" = -t ] && [ "$5" = =wt-project-task ] || exit 1
+    [ "$2" = -d ] && [ "$3" = 5000 ] && [ "$4" = -t ] && [ "$5" = =wt-project-task: ] || exit 1
     for arg do nonce=$arg; done
     [ -f "$REMOTE_TMUX_LATE_RECONNECT.triggered" ] || printf '%s\n' "$nonce" >"$CMUX_STUB_NONCE" ;;
   detach-client)
