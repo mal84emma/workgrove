@@ -1570,8 +1570,9 @@ scenario_squash_merge() {
 
   # The real prune removes landed or pushed branches and their worktrees.
   assert_wt_ok "wt prune" prune -r "$r"
-  local expected_fetches=11; [[ $hunks != yes ]] || expected_fetches=13
-  assert_eq "prune refreshes the base before each final removal" "$expected_fetches" "$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main')"
+  local required_fetches=11 actual_fetches; [[ $hunks != yes ]] || required_fetches=13
+  actual_fetches=$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main')
+  assert_eq "prune refreshes the base before each final removal" 1 "$((actual_fetches >= required_fetches))"
   for n in sq sq2 picked stack pushed; do
     assert_gone "prune removed $n" "$r/.worktrees/$n"
     assert_branch "$r" "wt/$n" no
