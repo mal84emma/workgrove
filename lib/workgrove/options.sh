@@ -10,7 +10,7 @@ WT_COMMANDS='new||host_new|Create a task.|name;-p,--prompt:prompt:a brief;--prom
 attach||host_attach|Open or recover a task row.|name;-a,--agent:agent:an agent;-p,--prompt:prompt:a brief;-r,--repo:repo:a repo|name;--restart-agent:restart:=1;--reattach:reattach:=1;-r,--repo:repo:a repo
 list|ls|host_list|List tasks.|!unknown;--all:all:=1;--json:format:=json;-r,--repo:repo:a repo|
 show||forward with -r|Show task status.|name;--diff:diff:=1;--json:format:=json;-r,--repo:repo:a repo|
-rm|remove|host_rm|Remove a task.|name;--force,-f:force:=1;--keep-branch:keep:=1;--discard-commits:discard_commits:=1;-r,--repo:repo:a repo|
+rm|remove|host_rm|Remove a task.|name;--force,-f:force:=1;--keep-branch:keep:=1;--discard-commits:discard_commits:=1;--defer-close:defer_close:=1;--row-closed:row_closed:=1;--observe-only:observe_only:=1;-r,--repo:repo:a repo|
 path||forward with -r|Print a task path.|name;-r,--repo:repo:a repo|
 open||host_open|Open a task in VS Code.|name;-r,--repo:repo:a repo|
 repos||host_repos|List or locate repositories.|name!repos;--porcelain:mode:=porcelain;--table:mode:=table|

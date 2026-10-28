@@ -34,6 +34,11 @@ cat > "$TEST_ROOT/bin/ssh" <<'SSH'
 #!/bin/sh
 [ -z "${SSH_CALL_LOG:-}" ] || printf '%s\n' "$*" >>"$SSH_CALL_LOG"
 case "$*" in
+  *' version')
+    if [ "${REMOTE_TEARDOWN_RECEIPTS:-1}" = 1 ]; then
+      echo '{"commit":"test","protocol":1,"capabilities":["teardown-receipts"]}'
+    else echo '{"commit":"old","protocol":1,"capabilities":[]}'; fi
+    exit 0 ;;
   *' path task -r /vm/repos/repo')
     if [ -n "${REMOTE_PATH_RESULT:-}" ]; then printf '%s\n' "$REMOTE_PATH_RESULT" >&2; exit 1; fi
     if [ "$REMOTE_EXISTS" = 1 ]; then
@@ -43,6 +48,12 @@ case "$*" in
     printf 'WT_RESULT\t%s\n' '{"version":1,"command":"path","status":"missing","name":"task","repo":"/vm/repos/repo","session":"","state":""}' >&2
     echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
     exit 1 ;;
+  *' rm task -r /vm/repos/repo --defer-close')
+    if [ "${REMOTE_RETARGET:-0}" = 1 ]; then
+      jq '.workspaces[0].remote.destination="other-vm"' "$FAKE_CMUX_STATE/rows.json" >"$FAKE_CMUX_STATE/retarget.json"
+      mv "$FAKE_CMUX_STATE/retarget.json" "$FAKE_CMUX_STATE/rows.json"
+    fi
+    exit "${REMOTE_DEFER_FAIL:-0}" ;;
 esac
 exit 0
 SSH
@@ -361,9 +372,42 @@ scenario_native_attach_close() {
   lacks "$CMUX_LOG" 'dismiss-notification'
   has "$XDG_STATE_HOME/cmux-hook.log" 'could not confirm its worktree is gone'
   : > "$CMUX_LOG"
+  REMOTE_TEARDOWN_RECEIPTS=0 hook >/dev/null
+  lacks "$CMUX_LOG" 'workspace close'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'receiver lacks receipt support'
+  : > "$CMUX_LOG"
+  printf '{"coding_agents":[],"windows":[]}\n' >"$FAKE_CMUX_STATE/top.json"
+  touch "$FAKE_CMUX_STATE/mutate-close"
+  export SSH_CALL_LOG="$TEST_ROOT/close-ssh.log"
+  : >"$SSH_CALL_LOG"
   hook >/dev/null
   has "$CMUX_LOG" "workspace close $ROW_ID --force"
+  has "$SSH_CALL_LOG" '--row-closed'
   lacks "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
+  rm "$FAKE_CMUX_STATE/mutate-close"
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  : >"$SSH_CALL_LOG"
+  hook >/dev/null
+  has "$CMUX_LOG" "workspace close $ROW_ID --force"
+  lacks "$SSH_CALL_LOG" '--row-closed'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'row absence is unverified'
+  unset SSH_CALL_LOG
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  REMOTE_DEFER_FAIL=1 hook >/dev/null
+  lacks "$CMUX_LOG" 'workspace close'
+  record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+  REMOTE_RETARGET=1 hook >/dev/null
+  lacks "$CMUX_LOG" 'workspace close'
+  has "$XDG_STATE_HOME/cmux-hook.log" 'relay row identity changed'
+  local sample
+  for sample in agent command unknown; do
+    record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+    jq -cn --arg row "$ROW_ID" --arg kind "$sample" '{coding_agents:(if $kind == "agent" then [{resources:{pids:[99999999],process_count:1}}] else [{resources:{pids:[99999998],process_count:1}}] end),windows:[{workspaces:[{id:$row,resources:{pids:[99999999],process_count:(if $kind == "unknown" then 2 else 1 end)}}]}]}' >"$FAKE_CMUX_STATE/top.json"
+    hook >/dev/null
+    lacks "$CMUX_LOG" 'workspace close'
+    has "$CMUX_LOG" "top --workspace $ROW_ID --json"
+  done
+  rm "$FAKE_CMUX_STATE/top.json"
   end_scenario
 }
 scenario_native_attach_close

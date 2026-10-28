@@ -122,9 +122,10 @@ fake_queue() {
 }
 
 fake_top() {
-  jq -c --arg caller "$1" --argjson count "$2" '
+  jq -c --arg caller "$1" --arg owner "${CMUX_STUB_OWNER_ROW:-$1}" --argjson pid "$$" --argjson count "$2" '
     .caller.workspace_id=$caller
-    | .coding_agents=[.coding_agents[0] | .resources.process_count=$count]' "$FAKE_CMUX_FIXTURES/top.json"
+    | .coding_agents=[.coding_agents[0] | .resources.process_count=$count | .resources.pids=(if $count > 0 then [$pid] else [] end)]
+    | .windows=[{workspaces:[{id:$owner,resources:{pids:[$pid],process_count:1}}]}]' "$FAKE_CMUX_FIXTURES/top.json"
 }
 
 fake_window_rows() {

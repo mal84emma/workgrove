@@ -91,9 +91,9 @@ case "$1 ${2:-}" in
     key=workspace-list; file=rows.json
     if [[ $# == 5 ]]; then key+=--$5; file=rows/$5.json; fi ;;
   'top --json'|'top --workspace')
-    [[ $# == 2 && $2 == --json || $# == 4 && $2 == --workspace && -n $3 && $4 == --json ]] || unexpected_command "$@"
+    [[ $# == 2 && $2 == --json || $# == 4 && $2 == --workspace && -n $3 && $4 == --json || $# == 5 && $2 == --workspace && -n $3 && $4 == --processes && $5 == --json ]] || unexpected_command "$@"
     key=top; file=top.json
-    if [[ $# == 4 && -n $state && -f $state/top/$3.json ]]; then file=top/$3.json; fi ;;
+    if [[ $# -ge 4 && -n $state && -f $state/top/$3.json ]]; then file=top/$3.json; fi ;;
   'workspace create') key=workspace-create; file=create.json ;;
   'workspace close')
     [[ $# == 3 || $# == 4 && $4 == --force ]] || unexpected_command "$@"
@@ -152,9 +152,15 @@ if [[ -n $state ]]; then
     cat "$state/close-confirmation" >&2
     exit 1
   fi
+  if [[ $key == top && $# -ge 4 && -f $state/$file ]] &&
+      jq -e 'all(.coding_agents[]; .resources.process_count == 0)' "$state/$file" >/dev/null; then
+    jq --arg id "$3" '.windows=[{workspaces:[{id:$id,resources:{pids:[],process_count:0}}]}]' "$state/$file"
+    apply_effects
+    exit 0
+  fi
   if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; apply_effects; exit 0; fi
 fi
-if [[ -n $state && -f $state/mutate ]]; then
+if [[ -n $state && ( -f $state/mutate || ( $key == workspace-close && -f $state/mutate-close ) ) ]]; then
   # shellcheck source=test/fakes/rows.sh
   source "$HERE/rows.sh"
   case $key in
@@ -224,7 +230,8 @@ case "$key" in
     jq -cn --arg title "$title" --argjson body "$body" '{title:$title,body:$body}' >>"$state/notify.requests.jsonl"
     if [[ -f $state/notify-dedupe && -f $state/last-content && $(cat "$state/last-content") == "$title|$body" ]]; then exit 0; fi
     printf '%s' "$title|$body" >"$state/last-content"
-    tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl" ;;
+    tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl"
+    if [[ -x $state/notify-callback ]]; then "$state/notify-callback"; fi ;;
   ping|diff|workspace-close|workspace-select|workspace-action|send|send-key|dismiss-notification) ;;
   ssh)
     if ((ssh_uuids)); then

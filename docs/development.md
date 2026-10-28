@@ -44,7 +44,12 @@ workgrove/
 │       ├── picker.sh          task picker and driver commands
 │       ├── recovery.sh        VM row recovery and task attachment
 │       ├── remote.sh          remote commands and result parsing
+│       ├── commands.py       generation-bound task command cancellation
+│       ├── cmux_monitor.py   detached native Codex monitor identity checks
+│       ├── filtered_files.py  raw tracked-file preservation checks
+│       ├── branch_config.py   frozen local branch configuration cleanup
 │       ├── safety.sh          worktree removal checks
+│       ├── teardown.sh        durable cleanup receipts and retry handling
 │       └── vm/                scripts that bin/wt sends to a VM on SSH standard input
 │           ├── host-new-preflight.sh
 │           ├── capacity.py    effective Linux allocation from kernel limits
@@ -111,6 +116,7 @@ workgrove/
 │   ├── fakes/
 │   │   ├── cmux              the shared cmux and cmux-tui fake
 │   │   ├── pgrep             supplies the fake VM's pane process status
+│   │   ├── commands-python.sh  safe command-manifest fake for synthetic process IDs
 │   │   ├── rows.sh           builds scenario data from recorded responses
 │   │   └── tmux              supplies the fake VM's session, pane, and client answers
 │   ├── fixtures/
@@ -127,6 +133,14 @@ workgrove/
 │   │       ├── version.txt
 │   │       └── windows.json
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
+│   ├── tmux-target-smoke.sh  real Linux tmux parsing on a private server
+│   ├── cmux-ownership-smoke.sh  native parent snapshots and idle launch ownership
+│   ├── commands-smoke.sh    task command identity and owned-process cancellation checks
+│   ├── commands_test.py     fake process graphs and disposable detached children
+│   ├── cmux-monitor-smoke.sh  detached native monitor proof checks
+│   ├── cmux_monitor_test.py  native-shaped samples, observer binding, and kernel arguments
+│   ├── branch-config-smoke.sh  hard-interruption recovery for owned Git locks
+│   ├── branch_config_test.py  disposable branch configuration and lock fixtures
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── hosts_records_test.py  host fallback records and inventory validation
 │   ├── ssh-host-smoke.sh      offline SSH fragment registration tests
@@ -156,6 +170,7 @@ workgrove/
     ├── vm-agent-status.md     agent status in VM rows after cmux 0.65
     ├── wt-json.md             the JSON status contract of wt list --json and wt show --json
     ├── self-teardown-squash.md investigation of stacked squash removal and session cleanup
+│   ├── task-teardown.md        implemented removal, ownership checks, and cleanup recovery
     ├── codex-self-teardown.md caller identity and failure reporting for local Codex teardown
     ├── documentation-style.md the writing rules for docs, agent instructions and comments
     └── ssh-config.example     the Host block a VM alias needs

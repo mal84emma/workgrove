@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: CMUX_BUNDLED_CLI_PATH, CMUX_ROWS, CMUX_ROWS_FULL, CMUX_ROWS_JSON, CMUX_RUN,
-#   CMUX_WORKSPACE_ID, DEADLINE, HOME, REPO, ROW_AGENT, ROW_JQ, ROW_SEP, WS_JSON, WS_RC, WT_FS.
+#   CMUX_WORKSPACE_ID, CMUX_SAMPLE_RETRY, DEADLINE, HOME, REPO, ROW_AGENT, ROW_JQ, ROW_SEP, WS_JSON, WS_RC, WT_FS.
 # The shared adapter owns cmux commands and row identity queries.
 # CMUX_ERROR holds a diagnostic; callers choose whether to stop or log it.
 # Callers read the exported diagnostics and creation state.
@@ -83,7 +83,7 @@ open_workspace() { # open_workspace <name> — always unfocused: a new task row 
   title=$(task_title "$n")
   # shellcheck disable=SC2153
   out=$(cmux_create --name "$title" --description "$(row_tag "" "$REPO")" --cwd "$(wt_path "$n")" --focus false \
-        --command "$(shell_join "$HOME/.local/bin/wt" run "$n" -r "$REPO")" 2>&1) || { cmux_error "cmux workspace create failed: $out"; return 1; }
+        --command "$(local_run_line "$HOME/.local/bin/wt" "$n" "$REPO")" 2>&1) || { cmux_error "cmux workspace create failed: $out"; return 1; }
   local ref; ref=$(printf '%s' "$out" | cmux_ref)
   meta_set "$n" "title=$title"
   printf 'workspace: %s\n' "${ref:-$out}"
@@ -111,10 +111,49 @@ close_row() { # close_row <row id> [self|new] — silent when the row is already
   }
 }
 
+remote_row_idle() { # Forced relay closure requires a complete sample containing only the SSH transport tree.
+  local row=$1 state pids pid root='' command start
+  state=$(cmux_call top --workspace "$row" --json) || { cmux_error 'cannot inspect relay row processes; kept the row'; return 1; }
+  jq -e --arg row "$row" '
+    [.windows[].workspaces[] | select(.id == $row)] as $rows
+    | ($rows | length) == 1 and ($rows[0].resources as $r
+      | ($r.pids | type == "array") and ($r.pids | length) == $r.process_count
+      and all($r.pids[]; type == "number" and . > 1 and floor == .)
+      and ($r.pids | unique | length) == ($r.pids | length)
+      and (($r.missing_pids // []) | type == "array" and length == 0))
+    and (.coding_agents | type == "array")
+    and all(.coding_agents[]; (.resources as $r
+      | ($r.pids | type == "array") and ($r.pids | length) == $r.process_count
+      and all($r.pids[]; type == "number" and . > 1 and floor == .)
+      and ($r.pids | unique | length) == ($r.pids | length)))
+    and ([$rows[0].resources.pids[]] as $pids
+      | all(.coding_agents[].resources.pids[]; . as $pid | $pids | index($pid) == null))' <<<"$state" >/dev/null \
+    || { cmux_error 'relay row agent ownership is busy or unknown; kept the row'; return 1; }
+  local extras
+  extras=$(cmux_extra_row_pids "$state" "$row") || { cmux_error 'relay row attribution is uncertain; kept the row'; return 1; }
+  [[ -z $extras ]] || { cmux_error 'relay row attribution is uncertain; kept the row'; return 1; }
+  pids=$(jq -r --arg row "$row" '.windows[].workspaces[] | select(.id == $row) | .resources.pids[]' <<<"$state") || return 1
+  [[ -n $pids ]] || return 0
+  while IFS= read -r pid; do
+    command=$(ps -p "$pid" -o comm=) || { cmux_error 'cannot inspect relay row process; kept the row'; return 1; }
+    if [[ ${command##*/} == ssh ]]; then
+      if [[ -z $root ]] || process_descends "$root" "$pid"; then root=$pid; fi
+    fi
+  done <<<"$pids"
+  [[ -n $root ]] || { cmux_error 'cannot identify relay SSH transport; kept the row'; return 1; }
+  start=$(LC_ALL=C ps -p "$root" -o lstart=) || return 1
+  while IFS= read -r pid; do
+    process_descends "$pid" "$root" || process_descends "$root" "$pid" \
+      || { cmux_error 'independent command in relay row; kept the row'; return 1; }
+  done <<<"$pids"
+  [[ $(LC_ALL=C ps -p "$root" -o lstart=) == "$start" ]]
+}
+
 check_row_removal() { # check_row_removal <title> <repo> <row output> <self output> [host] [worktree path]
   # Refuse unreadable rows or another running agent. Without a host, the path names the local worktree.
   local -n __rm_row=$3 __rm_self=$4
   __rm_row=""; __rm_self=""
+  ROW_AGENT_PID='' ROW_AGENT_START='' ROW_AGENT_OBSERVERS='[]'
   local __err
   if ! cmux_bin >/dev/null; then
     [[ -z ${CMUX_WORKSPACE_ID:-} ]] || { cmux_error "cmux CLI not found; kept the worktree"; return 1; }
@@ -132,7 +171,7 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   # Refuse when another agent runs in any of them. Close only the first row that task_row finds, or the
   # caller's own row when the title matches it. A row found only by its directory may belong to anything,
   # such as the driver, so wt never closes it.
-  local __rows __checks=() __check __kind __id __dir __root="" __self_row=""
+  local __rows __checks=() __check __kind __id __dir __root="" __self_row="" __self_pid='' __self_start='' __self_observers='[]'
   __rows=$(rows_json checked) || { cmux_error "cannot list cmux rows; kept the worktree"; return 1; }
   # One line for each row to check: "found <id>", "unclaimed <id>" or "dir <id> <current directory>". A
   # directory with a newline in it would split its line, so such a row is not checked by its directory.
@@ -155,32 +194,274 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
       path_within "$__dir" "${6:-}" || path_within "$(physical_dir "$__dir")" "$__root" || continue
     fi
     [[ $__kind != found || -n "$__rm_row" ]] || __rm_row=$__id
-    row_agent "$__id" || return
+    local __task_path=${6:-}
+    row_agent "$__id" "${__task_path##*/}" || return
     case $__kind/$ROW_AGENT in
-      found/self|unclaimed/self) __self_row=$__id ;;
-      found/busy) cmux_error "another agent is running in cmux row $__id; kept the worktree"; return 1 ;;
+      found/self|unclaimed/self) __self_row=$__id; __self_pid=$ROW_AGENT_PID; __self_start=$ROW_AGENT_START; __self_observers=$ROW_AGENT_OBSERVERS ;;
+      found/busy) cmux_error "another agent is running in cmux row $__id; kept the worktree${CMUX_ERROR:+; $CMUX_ERROR}"; return 1 ;;
       unclaimed/busy) cmux_error "an agent is running in cmux row $__id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run"; return 1 ;;
       dir/busy) cmux_error "an agent is running in cmux row $__id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run"; return 1 ;;
     esac
   done
-  if [[ -n "$__self_row" ]]; then __rm_row=$__self_row; __rm_self=self; fi
+  if [[ -n "$__self_row" ]]; then
+    __rm_row=$__self_row; __rm_self=self
+    ROW_AGENT_PID=$__self_pid ROW_AGENT_START=$__self_start ROW_AGENT_OBSERVERS=$__self_observers
+  else ROW_AGENT_PID='' ROW_AGENT_START='' ROW_AGENT_OBSERVERS='[]'; fi
 }
 
-row_agent() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's own row, "busy" when an agent
+process_descends() { # process_descends <pid> <ancestor>; unreadable ancestry never proves ownership.
+  local pid=$1 ancestor=$2 parent steps=0
+  [[ $pid =~ ^[0-9]+$ && $ancestor =~ ^[0-9]+$ ]] || return 1
+  while ((pid > 1 && steps < 128)); do
+    [[ $pid != "$ancestor" ]] || return 0
+    parent=$(ps -p "$pid" -o ppid= 2>/dev/null) || return 1
+    parent=${parent//[[:space:]]/}
+    [[ $parent =~ ^[0-9]+$ && $parent != "$pid" ]] || return 1
+    pid=$parent; steps=$((steps + 1))
+  done
+  return 1
+}
+
+codex_owned_launch() { # Validate the task-owned launcher independently of inherited caller hints.
+  local task=$1 row=$2 root=$3 record generation binding launcher start current agent=''
+  [[ -n $task && -n ${REPO:-} ]] || return 1
+  if [[ -f $(wt_meta "$task") ]]; then
+    record=$(cat "$(wt_meta "$task")") || return 1
+  elif [[ -n ${WT_TEARDOWN_JSON:-} ]]; then
+    record=$WT_TEARDOWN_JSON
+    [[ $(jq -r .name <<<"$record") == "$task" && $(jq -r .repo <<<"$record") == "$REPO" ]] || return 1
+  else return 1; fi
+  agent=$(jq -r '.agent // ""' <<<"$record") || return 1
+  generation=$(jq -r '.generation // ""' <<<"$record") || return 1
+  binding=$(jq -c '.runtime // {}' <<<"$record") || return 1
+  jq -e --arg row "$row" --arg generation "$generation" '
+    .provider == "codex" and .mode == "no-daemon" and .row == $row and .generation == $generation
+    and ($generation | length > 0) and (.launcher_pid | type == "number" and . > 1)
+    and (.launcher_start | type == "string" and length > 0)' <<<"$binding" >/dev/null || return 1
+  [[ $agent == codex ]] || return 1
+  launcher=$(jq -r .launcher_pid <<<"$binding"); start=$(jq -r .launcher_start <<<"$binding")
+  current=$(LC_ALL=C ps -p "$launcher" -o lstart= 2>/dev/null) || return 1
+  [[ $start == "$current" ]] || return 1
+  if [[ ${4:-} != observer ]]; then process_descends "$BASHPID" "$launcher" || return 1; fi
+  process_descends "$root" "$launcher"
+}
+
+process_vanished() { # Only a successful absence check can excuse an expired sampled child.
+  local output rc=0
+  output=$(LC_ALL=C ps -p "$1" -o pid= 2>&1) || rc=$?
+  [[ $rc == 1 && -z $output ]]
+}
+
+sampled_process_descends() { # Validate the complete native sample before following a vanished child's parents.
+  local state=$1 row=$2 pid=$3 root=$4 records child parent walk steps=0
+  local -A parents=() visited=()
+  records=$(printf '%s' "$state" | jq -er --arg row "$row" '
+    select(.include_processes == true)
+    | [.windows[].workspaces[] | select(.id == $row)] as $rows
+    | select(($rows | length) == 1)
+    | $rows[0] as $r
+    | [$r.panes[].surfaces[].processes[] | recurse(.children[]?)] as $nodes
+    | select(all($nodes[]; .kind == "process" and (.pid | type == "number" and . > 1 and floor == .)
+      and (.ppid | type == "number" and . >= 0 and floor == .)))
+    | select(($nodes | map(.pid) | unique | length) == ($nodes | length))
+    | select(($nodes | map(.pid) | sort) == ($r.resources.pids | sort))
+    | $nodes[] | "\(.pid) \(.ppid)"') || return 1
+  while read -r child parent; do
+    [[ $child =~ ^[0-9]+$ && $parent =~ ^[0-9]+$ ]] || return 1
+    parents[$child]=$parent
+  done <<<"$records"
+  for child in "${!parents[@]}"; do
+    visited=(); walk=$child; steps=0
+    while [[ -n ${parents[$walk]-} ]]; do
+      [[ -z ${visited[$walk]-} && $steps -lt 128 ]] || return 1
+      visited[$walk]=1; walk=${parents[$walk]}; steps=$((steps + 1))
+    done
+  done
+  visited=(); steps=0
+  [[ -n ${parents[$pid]-} && -n ${parents[$root]-} ]] || return 1
+  while ((pid > 1 && steps < 128)); do
+    [[ $pid != "$root" ]] || return 0
+    [[ -z ${visited[$pid]-} && -n ${parents[$pid]-} ]] || return 1
+    visited[$pid]=1
+    pid=${parents[$pid]}; steps=$((steps + 1))
+  done
+  return 1
+}
+
+codex_launch_row() { # Idle rows can lack process attribution before their first provider starts.
+  local row=$1 launcher=$2 state=$3 start tty tree rows surface=${CMUX_SURFACE_ID:-}
+  if jq -e --arg id "$row" --argjson pid "$launcher" '
+      any(.windows[].workspaces[]; .id == $id and (.resources.pids | index($pid)) != null)' <<<"$state" >/dev/null; then return 0; fi
+  [[ -n $surface ]] || return 1
+  start=$(LC_ALL=C ps -p "$launcher" -o lstart=) || return 1
+  [[ -n $start ]] || return 1
+  tty=$(ps -p "$launcher" -o tty=) || return 1
+  tty=${tty//[[:space:]]/}; tty=${tty#/dev/}
+  [[ $tty =~ ^ttys[0-9]+$ ]] || return 1
+  tree=$(cmux_call --id-format uuids tree --all --json) || return 1
+  rows=$(jq -cer --arg row "$row" --arg surface "$surface" --arg tty "$tty" '
+    [.windows[].workspaces[]] as $rows
+    | select(($rows | map(.id) | unique | length) == ($rows | length))
+    | [$rows[] | .id as $row | .panes[].surfaces[] | . + {workspace:$row}] as $surfaces
+    | select(all($surfaces[]; .type == "terminal" or (.type | type == "string")))
+    | select(($surfaces | map(.id // .ref) | unique | length) == ($surfaces | length))
+    | [$surfaces[] | select((.tty // "" | ltrimstr("/dev/")) == $tty)]
+    | select(length == 1 and .[0].type == "terminal" and .[0].workspace == $row)
+    | select(.[0].id == $surface or .[0].surface_id == $surface)
+    | .[0]' <<<"$tree") || return 1
+  [[ -n $rows && $(LC_ALL=C ps -p "$launcher" -o lstart=) == "$start" ]]
+}
+
+cmux_extra_row_pids() { # Unattributed terminal processes must never disappear from ownership checks.
+  jq -er --arg row "$2" '
+    [.windows[].workspaces[] | select(.id == $row)] as $rows
+    | select(($rows | length) == 1)
+    | select(($rows[0] | has("panes") | not) or ($rows[0].panes | type == "array"))
+    | select(all($rows[0].panes[]?; (.surfaces | type == "array")))
+    | [$rows[0].panes[]?.surfaces[]] as $surfaces
+    | select(all($surfaces[];
+      ((has("tty_process_pids") | not) or (.tty_process_pids | type == "array"))
+      and ((has("unattributed_tty_process_pids") | not) or (.unattributed_tty_process_pids | type == "array"))
+      and ((.unattributed_resources.pids // []) | type == "array")
+      and ((.unattributed_resources.missing_pids // []) | length) == 0
+      and (if has("unattributed_resources") then .unattributed_resources as $u
+        | ($u.process_count | type == "number" and . >= 0 and floor == .)
+        and ($u.pids | length) == $u.process_count
+        and ($u.pids | unique | length) == $u.process_count else true end)
+      and ((has("tty_ownership_reasons") | not) or (.tty_ownership_reasons | type == "object"))))
+    | [$surfaces[] | (.unattributed_tty_process_pids // [])[], (.unattributed_resources.pids // [])[]] as $unattributed
+    | $rows[0].resources.pids as $attributed
+    | select(all($unattributed[]; . as $pid | ($attributed | index($pid)) == null))
+    | [$surfaces[] | (.tty_process_pids // [])[], (.unattributed_tty_process_pids // [])[],
+        (.unattributed_resources.pids // [])[], ((.tty_ownership_reasons // {}) | keys[] | tonumber)] | unique
+    | select(all(.[]; type == "number" and . > 1 and floor == .))
+    | . - $attributed
+    | if length == 0 then "" else .[] end' <<<"$1"
+}
+
+row_agent() {
+  local attempt result
+  for attempt in 1 2 3; do
+    CMUX_SAMPLE_RETRY=0
+    CMUX_ERROR=''
+    result=0; row_agent_once "$@" || result=$?
+    [[ $result != 0 ]] || return 0
+    [[ $CMUX_SAMPLE_RETRY == 1 && $attempt != 3 ]] || return "$result"
+    sleep 0.1
+  done
+}
+
+cmux_codex_monitor() { # A detached native observer must have independent row and process evidence.
+  local state=$1 row=$2 provider=$3 monitor=$4 task=$5 tree executable evidence
+  [[ -n $task && -n ${REPO:-} ]] || return 1
+  executable=$(cmux_bin) || return 1
+  tree=$(cmux_call --id-format uuids tree --all --json 2>/dev/null) || return 1
+  evidence=$(jq -cn --argjson top "$state" --argjson tree "$tree" '{top:$top,tree:$tree}') || return 1
+  (
+    # shellcheck source=lib/workgrove/vm/python-runtime.sh
+    source "$WG_VERSION_ROOT/lib/workgrove/vm/python-runtime.sh" || exit 1
+    wg_run_python "$WG_VERSION_ROOT/lib/workgrove/cmux_monitor.py" "$row" "$(wt_path "$task")" \
+      "$provider" "$monitor" "$executable" <<<"$evidence"
+  )
+}
+
+row_agent_once() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's own row, "busy" when an agent
   # runs in the row, else "idle". A failed check returns a diagnostic in CMUX_ERROR.
   local state
-  state=$(cmux_call top --workspace "$1" --json 2>/dev/null) \
+  ROW_AGENT=busy
+  ROW_AGENT_PID='' ROW_AGENT_START='' ROW_AGENT_OBSERVERS='[]'
+  state=$(cmux_call top --workspace "$1" --processes --json 2>/dev/null) \
     || { cmux_error "cannot check the agent in cmux row $1; kept the worktree"; return 1; }
   printf '%s' "$state" | jq -e '.coding_agents | type == "array"
     and all(.[]; .resources.process_count | type == "number" and . >= 0)' >/dev/null 2>&1 \
     || { cmux_error "cannot check the agent in cmux row $1; kept the worktree"; return 1; }
-  if printf '%s' "$state" | jq -e --arg id "$1" '.caller.workspace_id == $id' >/dev/null; then
-    ROW_AGENT=self
-  elif printf '%s' "$state" | jq -e 'any(.coding_agents[]; .resources.process_count > 0)' >/dev/null; then
-    ROW_AGENT=busy
-  else
-    ROW_AGENT=idle
+  printf '%s' "$state" | jq -e 'all(.coding_agents[];
+    (.resources.pids | type == "array") and (.resources.pids | length) == .resources.process_count
+    and all(.resources.pids[]; type == "number" and . > 1 and floor == .)
+    and (.resources.pids | unique | length) == (.resources.pids | length))' >/dev/null 2>&1 \
+    || { cmux_error "cannot verify agent process data; kept the worktree"; return 1; }
+  ROW_AGENT=busy
+  local observer pids row_pids extra_pids root='' root_start pid command provider declared_agent=''
+  if [[ -n ${2:-} && -f $(wt_meta "$2") ]]; then declared_agent=$(jq -r .agent "$(wt_meta "$2")");
+  elif [[ -n ${WT_TEARDOWN_JSON:-} ]]; then declared_agent=$(jq -r .agent <<<"$WT_TEARDOWN_JSON"); fi
+  # cmux caller fields echo environment hints. Use attributed PIDs and OS ancestry instead.
+  printf '%s' "$state" | jq -e --arg id "$1" '
+    [.windows[].workspaces[] | select(.id == $id)] as $rows
+    | ($rows | length) == 1 and ($rows[0].resources as $r
+      | ($r.pids | type == "array") and ($r.pids | length) == $r.process_count
+      and all($r.pids[]; type == "number" and . > 1 and floor == .)
+      and ($r.pids | unique | length) == ($r.pids | length)
+      and (($r.missing_pids // []) | type == "array" and length == 0))' >/dev/null 2>&1 \
+    || { cmux_error "cannot verify ownership of the agent in cmux row $1; incomplete process sample; kept the worktree"; return 1; }
+  extra_pids=$(cmux_extra_row_pids "$state" "$1") || { cmux_error 'cannot inspect unattributed row processes; kept the worktree'; return 1; }
+  if ! printf '%s' "$state" | jq -e 'any(.coding_agents[]; .resources.process_count > 0)' >/dev/null; then
+    [[ -z $extra_pids ]] || { cmux_error 'row process attribution is uncertain; kept the worktree'; return 1; }
+    ROW_AGENT=idle; return 0
   fi
+  pids=$(printf '%s' "$state" | jq -r --arg id "$1" '
+    [.windows[].workspaces[] | select(.id == $id) | .resources.pids] as $rows
+    | (if ($rows | length) != 1 or ($rows[0] | type) != "array" then error("missing row PIDs") else $rows[0] end) as $row
+    | [.coding_agents[].resources.pids[] | select(. as $p | $row | index($p))] | unique
+    | if any(.[]; type != "number" or . <= 1 or floor != .) then error("invalid agent PIDs")
+      elif length == 0 then empty else .[] end' 2>/dev/null) || {
+      cmux_error "cannot verify ownership of the agent in cmux row $1; kept the worktree (restart the task with updated wt run)"; return 1;
+    }
+  # Other rows can contribute to the global agent totals. No intersection means this row is idle.
+  if [[ -z $pids ]]; then
+    [[ -z $extra_pids ]] || { cmux_error 'row process attribution is uncertain; kept the worktree'; return 1; }
+    ROW_AGENT=idle; return 0
+  fi
+  while IFS= read -r pid; do
+    if process_descends "$BASHPID" "$pid"; then
+      command=$(ps -p "$pid" -o command= 2>/dev/null) || return 1
+      case "${command%%' -- '*}" in
+        *' app-server'|*' app-server '*|*' exec-server'|*' exec-server '*) continue ;;
+      esac
+      if [[ -z $root ]] || process_descends "$root" "$pid"; then root=$pid; fi
+    fi
+  done <<<"$pids"
+  if [[ -z $root ]]; then
+    cmux_error "agent session ownership is unverified in cmux row $1; kept the worktree. Shared-server sessions need a task-owned restart with wt run"
+    return 1
+  fi
+  root_start=$(LC_ALL=C ps -p "$root" -o lstart=) || { cmux_error 'cannot identify the requesting provider; kept the worktree'; return 1; }
+  [[ -n $root_start ]] || { cmux_error 'requesting provider identity is empty; kept the worktree'; return 1; }
+  provider=$(ps -p "$root" -o comm= 2>/dev/null) || return 1
+  provider=${provider##*/}
+  if [[ $declared_agent == codex || ${provider,,} == codex* ]]; then
+    codex_owned_launch "${2:-}" "$1" "$root" || {
+      cmux_error "cannot verify task-owned Codex launch in row $1; legacy shared-server ancestry is insufficient; kept the worktree"
+      return 1
+    }
+  fi
+  while IFS= read -r pid; do
+    if ! process_descends "$pid" "$root"; then
+      CMUX_ERROR="additional provider process $pid does not belong to requesting agent $root"
+      return 0
+    fi
+  done <<<"$pids"
+  row_pids=$(printf '%s' "$state" | jq -r --arg id "$1" '
+    .windows[].workspaces[] | select(.id == $id) | .resources.pids[]
+    | if type == "number" and . > 1 and floor == . then . else error("invalid PID") end') || return 1
+  row_pids+="${extra_pids:+$'\n'$extra_pids}"
+  while IFS= read -r pid; do
+    if process_descends "$pid" "$root" || process_descends "$root" "$pid"; then continue; fi
+    if [[ $declared_agent == codex ]] && observer=$(cmux_codex_monitor "$state" "$1" "$root" "$pid" "${2:-}"); then
+      ROW_AGENT_OBSERVERS=$(jq -c --argjson observer "$observer" '. + [$observer]' <<<"$ROW_AGENT_OBSERVERS") || return 1
+      continue
+    fi
+    if process_vanished "$pid"; then
+      if sampled_process_descends "$state" "$1" "$pid" "$root"; then continue; fi
+      CMUX_SAMPLE_RETRY=1
+      cmux_error 'a row process disappeared without verified ownership; kept the worktree'
+      return 1
+    fi
+    CMUX_ERROR="process $pid is independent of requesting agent $root, or its ancestry is unreadable"
+    return 0
+  done <<<"$row_pids"
+  [[ $(LC_ALL=C ps -p "$root" -o lstart=) == "$root_start" ]] || { cmux_error 'requesting provider changed during ownership verification'; return 1; }
+  ROW_AGENT=self
+  ROW_AGENT_PID=$root ROW_AGENT_START=$root_start
 }
 
 # cmux_rows_load <skip|stop|checked> [command...] sets CMUX_ROWS_JSON and CMUX_ROWS_FULL.

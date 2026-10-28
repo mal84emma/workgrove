@@ -686,6 +686,12 @@ The variables below are internal. Workgrove writes them; do not set them as user
 - `WT_META`, `WT_META_FILE`, `WT_META_JSON`, and `WT_META_FILTER` hold cached sidecar data and its decoder.
 - `WT_STATUS_FIELDS` and `WT_SHOW_FIELDS` define task status fields.
 - `WT_BASE_FETCHES` caches base-fetch results. `WT_MERGE_TREE` caches merge support.
+- `WT_RM_BASE` and `WT_RM_PROOF` hold the effective removal base and preservation proof.
+- `WT_TEARDOWN_FILE` and `WT_TEARDOWN_JSON` hold the cleanup receipt path and contents.
+- `WG_TEARDOWN_CONTROL_FD`, `WG_TEARDOWN_LOCK_PATH`, and `WG_TEARDOWN_WORKER_PID` bind the finite cleanup coordinator and worker.
+- `WG_TEARDOWN_ORIGIN_PID` identifies the original cleanup command, whose subtree the command manifest excludes.
+- `WG_TEARDOWN_CLOSE_PHASE` selects receipt locking after Git cleanup releases its lock.
+- `WT_TMUX_OWNER` holds the verified session owner and permitted ancestor process identities.
 - `WT_TMPFILES` and `WT_TMPFILES_PID` track temporary files for each process.
 - `WT_PR_FORM` holds the guard's approved `wt pr` diagnostic.
 <!-- Internal variables end. -->

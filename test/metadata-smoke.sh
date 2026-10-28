@@ -91,8 +91,9 @@ assert_eq 'new sidecars store arrays' '["array","array"]' "$(jq -c '[.includes|t
 invoke show first --json
 assert_eq 'JSON show succeeds' 0 "$(cat "$TEST_ROOT/status")"
 assert_eq 'show reads its sidecar once' 1 "$(wc -l <"$META_READS" | tr -d ' ')"
-keys='["ahead","base","behind","branch","checkout_branch","dirty","last_commit_at","merged","model","name","path","repo","task","title","why"]'
-assert_eq 'show pins the complete initial shape' "$keys" "$(jq -c 'keys' "$TEST_ROOT/out")"
+keys='["ahead","base","behind","branch","checkout_branch","comparison","dirty","last_commit_at","merged","model","name","path","repo","task","title","why"]'
+assert_eq 'show pins the additive comparison shape' "$keys" "$(jq -c 'keys' "$TEST_ROOT/out")"
+assert_eq 'comparison labels cached evidence' cached "$(jq -r .comparison.freshness "$TEST_ROOT/out")"
 assert_eq 'show preserves paths and brief text' true "$(jq --arg repo "$REPO" '.repo == $repo and .path == ($repo + "/.worktrees/first") and .task == "brief \"quoted\"" and .title == "first" and .model == ""' "$TEST_ROOT/out")"
 assert_eq 'common status fields use the documented values' true "$(jq '.name == "first" and .branch == "wt/first" and .checkout_branch == "wt/first" and .base == "main" and .ahead == 0 and .behind == 0 and .dirty == 0 and .merged == "yes" and .why == "" and (.last_commit_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))' "$TEST_ROOT/out")"
 cp "$TEST_ROOT/out" "$TEST_ROOT/show.json"
@@ -185,6 +186,10 @@ begin_scenario 'legacy records still protect copied files and explain setup outp
 p="$REPO/.worktrees/first"
 printf 'copied\n' >"$p/.env"
 printf 'setup\n' >"$p/lock"
+# Legacy records predate typed copy completion metadata.
+jq 'del(.metadata_version,.includes_status)' "$REPO/.git/wt/first.json" >"$TEST_ROOT/legacy.json"
+mv "$TEST_ROOT/legacy.json" "$REPO/.git/wt/first.json"
+WT_META_FILE=''
 meta_set first "includes=.env:$(file_hash "$p/.env")" "setup=lock:$(file_hash "$p/lock")"
 assert_eq 'legacy copies remain unchanged' '' "$(changed_includes first "$p")"
 assert_eq 'legacy setup explains its own file' .env "$(unexplained_dirt first "$p")"
@@ -192,19 +197,20 @@ printf 'edited\n' >"$p/.env"
 assert_eq 'legacy copies detect edits' .env "$(changed_includes first "$p")"
 end_scenario
 
-begin_scenario 'status preserves the merge cache and temporary-file registration'
+begin_scenario 'status preserves the merge cache and cleans isolated comparisons'
 printf 'committed\n' >"$p/change"
 git -C "$p" add change
 git -C "$p" -c user.name=Test -c user.email=test@example.com commit -qm change
 WT_MERGE_TREE=''
 declare -A n=()
 wt_status first n
+# shellcheck disable=SC2031  # The associative array uses the literal key name.
 assert_eq 'named status returns the task name' first "${n[name]}"
 if [[ -n $WT_MERGE_TREE ]]; then pass; else fail 'status lost the merge capability cache'; fi
 WT_MERGE_TREE=0
-before=${#WT_TMPFILES[@]}
-wt_status first n
-if ((${#WT_TMPFILES[@]} > before)); then pass; else fail 'status lost the temporary index registration'; fi
+mkdir -p "$TEST_ROOT/proof-temp"
+TMPDIR="$TEST_ROOT/proof-temp" wt_status first n
+assert_eq 'isolated comparison leaves no temporary index or repository' '' "$(find "$TEST_ROOT/proof-temp" -mindepth 1 -print)"
 assert_eq 'unmerged status includes its reason' no "${n[merged]}"
 end_scenario
 

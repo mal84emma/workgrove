@@ -1,5 +1,8 @@
 # Codex self-teardown and caller identity
 
+The initial investigation below describes the behavior before the runtime fix.
+See [implemented teardown behavior](task-teardown.md) for the resulting safety checks, recovery procedure, and remaining acceptance work.
+
 This follow-up investigates a Mac Codex session that could not recognize its own task during teardown.
 The original error is unavailable.
 A read-only live check reproduces a caller-context mismatch in this investigation's session.

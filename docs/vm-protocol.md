@@ -418,6 +418,7 @@ Capabilities do not increase the result protocol number.
 | `model-option` | New accepts the model option. |
 | `agent-probe` | Task commands use the checked agent probe. |
 | `doctor-records` | Doctor emits its result record and checks array. |
+| `teardown-receipts` | Removal supports generation-bound receipts and Mac row-closure acknowledgment. |
 
 Group B is retired. Run this command on the Mac to identify configured VMs that do not meet its requirements:
 

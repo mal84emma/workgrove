@@ -127,6 +127,15 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   local out err name repo session rc result_rc=0
   local -A result=()
   vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
+  if [[ $rc != 0 && $err == *'cleanup remains pending for '* && -n ${opts[name]-} && -n $repo_request ]]; then
+    local pending_row
+    pending_row=$(cmux_row_field "$(row_title "${opts[name]}")" "$repo_request" id "$host" checked) || return 1
+    if [[ -z $pending_row ]] && \
+        remote_wt "$host" rm "${opts[name]}" -r "$repo_request" --observe-only --row-closed >/dev/null; then
+      result_rc=0
+      vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
+    fi
+  fi
   [[ -z $err ]] || printf '%s\n' "$err" >&2
   if [[ $rc != 0 ]]; then
     [[ -z "$out" ]] || printf '%s\n' "$out" >&2
@@ -195,13 +204,26 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   local agent_rc=0
   agent_on_vm "$host" "$session" || agent_rc=$?
   case $agent_rc in
-    0) die "another agent is running in tmux session $session on $host; kept the worktree" ;;
+    0) : ;;
     1) ;;
     *) die "cannot check the agent in tmux session $session on $host; kept the worktree" ;;
   esac
-  remote_wt "$host" rm "${args[@]}"
-  cmux_require close_row "$(cmux_row_field "$title" "$repo" id "$host")"
-  vm_tmux "$host" kill-session "$session" >/dev/null 2>&1 || true
+  if [[ ${opts[observe_only]:-0} == 1 ]]; then
+    [[ -z $_row ]] || die 'VM row is still present; observation did not close it'
+    remote_wt "$host" rm "${args[@]}" --row-closed
+    return
+  fi
+  remote_wt "$host" rm "${args[@]}" --defer-close || return $?
+  # shellcheck disable=SC2034  # The checked helper also returns caller ownership.
+  local checked_row='' checked_self='' rows
+  cmux_require check_row_removal "$title" "$repo" checked_row checked_self "$host"
+  [[ $checked_row == "$_row" ]] || die 'VM row identity changed; cleanup remains pending'
+  cmux_require close_row "$checked_row"
+  rows=$(rows_json checked) || die 'cannot confirm VM row absence'
+  if [[ -n $checked_row ]] && jq -e --arg id "$checked_row" 'any(.workspaces[]; .id == $id)' <<<"$rows" >/dev/null; then
+    die 'VM row remains open; session cleanup is pending'
+  fi
+  remote_wt "$host" rm "${args[@]}" --row-closed
 }
 
 host_list() {

@@ -176,17 +176,29 @@ case $t in
         vm_result "$h" path result gone gone_error rc -- "$n" -r "$r" || result_rc=$?
         if ! vm_wt_failure "$h" close "$rc" "" "$result_rc" "${result[status]-}" "$n" "$id"; then
           :
+        elif ! receiver=$(vm_wt "$h" version 2>/dev/null) || ! printf '%s' "$receiver" | wt_read_version | jq -e '.capabilities | index("teardown-receipts") != null' >/dev/null 2>&1; then
+          log "VM teardown receiver lacks receipt support; update workgrove on $h before closing $ws"
+        elif ! vm_wt "$h" rm "$n" -r "$r" --defer-close >/dev/null 2>&1; then
+          log "recorded VM owner validation failed; kept row $ws"
+        elif ! ws_load fresh || ! from_row_on_host "$ws" "$h" || [[ $(row_by_title "$(row_title "$n")" "$id" "$h") != "$ws" ]]; then
+          log "relay row identity changed; kept row $ws"
+        elif ! remote_row_idle "$ws"; then
+          log "relay row ownership prevents closure: $CMUX_ERROR"
         elif close_row "$ws" self >/dev/null 2>&1; then
+          closed_rows=$(rows_json checked) || { log "cannot verify row absence after closing $ws; session cleanup remains pending"; exit 0; }
+          absence_rc=0
+          jq -e --arg row "$ws" 'any(.workspaces[]; .id == $row)' <<<"$closed_rows" >/dev/null || absence_rc=$?
+          [[ $absence_rc == 1 ]] || { log "row absence is unverified after closing $ws; session cleanup remains pending"; exit 0; }
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
-          if vm_tmux "$h" kill-session "$sess" >/dev/null 2>&1; then
+          if vm_wt "$h" rm "$n" -r "$r" --row-closed >/dev/null 2>&1; then
             quiet_control
           else
             log "could not stop tmux session $sess on $h after closing $ws"
             if command -v osascript >/dev/null 2>&1; then
               osascript -e 'on run argv' \
                 -e 'display notification (item 1 of argv) with title "workgrove teardown incomplete"' \
-                -e 'end run' "Run: ssh $h tmux kill-session -t '=$sess'" >/dev/null 2>&1 || true
+                -e 'end run' "Run: wt -H $h rm $n -r $(shell_join "$r")" >/dev/null 2>&1 || true
             fi
           fi
         else log "could not close row $ws for task $n of $id on $h"; fi

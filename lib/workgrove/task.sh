@@ -174,7 +174,11 @@ repo_matches() { # repo_matches <name> -> the entries holding that repo, first e
 }
 
 default_base() {
-  local ref b
+  local ref b remote
+  remote=$(git -C "$REPO" remote)
+  if [[ -n $remote && $remote != *$'\n'* ]] && ref=$(git -C "$REPO" symbolic-ref -q --short "refs/remotes/$remote/HEAD" 2>/dev/null); then
+    printf '%s' "$ref"; return
+  fi
   if ref=$(git -C "$REPO" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null); then
     printf '%s' "$ref"; return
   fi
@@ -200,6 +204,14 @@ WT_META_FILTER='
   | if any(to_entries[]; .key == "" or (.key | index("\u0000") != null)
          or (.value | any(.. | strings; index("\u0000") != null)))
     then error("unsupported NUL or empty key") else . end
+  | if has("metadata_version") and (.metadata_version | IN(1,2,3) | not)
+    then error("unsupported metadata version") else . end
+  | if .metadata_version == 3 or has("includes_status") then
+      if (.includes | type) != "array" then error("invalid copy snapshot")
+      elif any(.includes[]; type != "string" or . == "" or index("\n") != null
+               or (test("^.+:(L?[0-9a-f]{64}|\\\\[0-9a-f]{64})$") | not))
+      then error("invalid copy snapshot record") else . end
+    else . end
   | ("", tojson, (to_entries[] | .key,
       (. as $entry | .value | if . == null then ""
         elif type == "string" then .
@@ -394,7 +406,7 @@ tmux_agent() { # tmux_agent <session> [session exists output]
     esac
   fi
   if [[ -n ${2:-} ]]; then __present=true; fi
-  __panes=$(tmux list-panes -s -t "=$1" -F '#{pane_tty}' 2>&1) || { printf '%s\n' "$__panes" >&2; return 2; }
+  __panes=$(tmux list-panes -s -t "=$1:" -F '#{pane_tty}' 2>&1) || { printf '%s\n' "$__panes" >&2; return 2; }
   [[ -n "$__panes" ]] || return 2
   while IFS= read -r __t; do
     [[ "$__t" =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 2
@@ -403,6 +415,178 @@ tmux_agent() { # tmux_agent <session> [session exists output]
     case $__rc in 0) return 0 ;; 1) ;; *) return 2 ;; esac
   done <<<"$__panes"
   return 1
+}
+
+# A shell caller can close its own pane only when every process belongs to this cleanup command.
+tmux_shell_ownership() {
+  local session=$1 caller=$BASHPID root command panes tty pids pid start root_start records='[]' identity_command
+  [[ ${TMUX_PANE:-} =~ ^%[0-9]+$ ]] || return 2
+  [[ $(tmux display-message -p -t "$TMUX_PANE" '#S') == "$session" ]] || return 2
+  root=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_pid}') || return 2
+  [[ $root =~ ^[0-9]+$ ]] || return 2
+  process_descends "$caller" "$root" || return 2
+  command=$(ps -p "$root" -o comm=) || return 2
+  case ${command##*/} in bash|zsh|sh|dash|ksh|-bash|-zsh|-sh|-dash|-ksh) ;; *) return 2 ;; esac
+  root_start=$(LC_ALL=C ps -p "$root" -o lstart=) || return 2
+  [[ -n $root_start ]] || return 2
+  panes=$(tmux list-panes -s -t "=$session:" -F '#{pane_tty}') || return 2
+  [[ -n $panes ]] || return 2
+  while IFS= read -r tty; do
+    [[ $tty =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 2
+    pids=$(ps -t "${tty#/dev/}" -o pid=) || return 2
+    [[ -n $pids ]] || return 2
+    while IFS= read -r pid; do
+      pid=${pid//[[:space:]]/}; [[ $pid =~ ^[0-9]+$ ]] || return 2
+      process_descends "$pid" "$root" || return 1
+      if ! process_descends "$pid" "$caller"; then process_descends "$caller" "$pid" || return 1; fi
+      start=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 2
+      identity_command=$(ps -p "$pid" -o comm=) || return 2
+      records=$(jq -c --arg pid "$pid" --arg start "$start" --arg command "$identity_command" '. + [$ARGS.named]' <<<"$records") || return 2
+    done <<<"$pids"
+  done <<<"$panes"
+  WT_TMUX_OWNER=$(jq -cn --arg pid "$root" --arg start "$root_start" --argjson ancestors "$records" \
+    '$ARGS.named + {mode:"shell"}')
+}
+
+# Return 0 for an exclusive caller-owned agent tree, 1 for another agent, and 2 for unknown process state.
+tmux_self_ownership() {
+  local session=$1 panes tty agents='' found rc pid root='' caller_pid=$BASHPID command
+  panes=$(tmux list-panes -s -t "=$session:" -F '#{pane_tty}' 2>/dev/null) || return 2
+  [[ -n $panes ]] || return 2
+  while IFS= read -r tty; do
+    [[ $tty =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 2
+    rc=0; found=$(pgrep -t "${tty#/dev/}" -x 'claude|codex') || rc=$?
+    case $rc in 0) agents+="$found"$'\n' ;; 1) ;; *) return 2 ;; esac
+  done <<<"$panes"
+  while IFS= read -r pid; do
+    [[ -n $pid ]] || continue
+    [[ $pid =~ ^[0-9]+$ ]] || return 2
+    if process_descends "$caller_pid" "$pid"; then
+      command=$(ps -p "$pid" -o command= 2>/dev/null) || return 2
+      case "${command%%' -- '*}" in
+        *' app-server'|*' app-server '*|*' exec-server'|*' exec-server '*) continue ;;
+      esac
+      if [[ -z $root ]] || process_descends "$root" "$pid"; then root=$pid; fi
+    fi
+  done <<<"$agents"
+  if [[ -z $root ]]; then
+    [[ -z ${agents//$'\n'/} ]] || return 1
+    tmux_shell_ownership "$session"
+    return
+  fi
+  local provider declared=''
+  provider=$(ps -p "$root" -o comm= 2>/dev/null) || return 2
+  if [[ -n ${2:-} && -f $(wt_meta "$2") ]]; then declared=$(jq -r .agent "$(wt_meta "$2")");
+  elif [[ -n ${WT_TEARDOWN_JSON:-} ]]; then declared=$(jq -r .agent <<<"$WT_TEARDOWN_JSON"); fi
+  if [[ $declared == codex || ${provider##*/} == codex* ]]; then
+    codex_owned_launch "${2:-}" "tmux:$session" "$root" || return 2
+  fi
+  local pane_pids ancestor_records='[]' identity_start identity_command
+  while IFS= read -r tty; do
+    pane_pids=$(ps -t "${tty#/dev/}" -o pid= 2>/dev/null) || return 2
+    while IFS= read -r pid; do
+      pid=${pid//[[:space:]]/}
+      [[ $pid =~ ^[0-9]+$ ]] || return 2
+      if ! process_descends "$pid" "$root"; then
+        process_descends "$root" "$pid" || return 1
+        identity_start=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 2
+        identity_command=$(ps -p "$pid" -o comm=) || return 2
+        ancestor_records=$(jq -c --arg pid "$pid" --arg start "$identity_start" --arg command "$identity_command" '. + [$ARGS.named]' <<<"$ancestor_records")
+      fi
+    done <<<"$pane_pids"
+  done <<<"$panes"
+  while IFS= read -r pid; do
+    [[ -z $pid ]] || process_descends "$pid" "$root" || return 1
+  done <<<"$agents"
+  identity_start=$(LC_ALL=C ps -p "$root" -o lstart=) || return 2
+  WT_TMUX_OWNER=$(jq -cn --arg pid "$root" --arg start "$identity_start" --argjson ancestors "$ancestor_records" '$ARGS.named + {ancestors:$ancestors}')
+
+}
+
+# Capture idle pane processes so recovery cannot discard commands started after the original checks.
+# shellcheck disable=SC2034  # The removal caller saves this verified owner in its receipt.
+WT_TMUX_OWNER='null'
+tmux_idle_owner() {
+  local panes tty pids pid start command records='[]' agent_rc=0
+  tmux_agent "$1" || agent_rc=$?
+  [[ $agent_rc == 1 ]] || return 1
+  panes=$(tmux list-panes -s -t "=$1:" -F '#{pane_tty}') || return 1
+  while IFS= read -r tty; do
+    [[ $tty =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 1
+    pids=$(ps -t "${tty#/dev/}" -o pid=) || return 1
+    while IFS= read -r pid; do
+      pid=${pid//[[:space:]]/}; [[ $pid =~ ^[0-9]+$ ]] || return 1
+      start=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 1
+      command=$(ps -p "$pid" -o comm=) || return 1
+      records=$(jq -c --arg pid "$pid" --arg start "$start" --arg command "$command" '. + [$ARGS.named]' <<<"$records")
+    done <<<"$pids"
+  done <<<"$panes"
+  agent_rc=0; tmux_agent "$1" || agent_rc=$?
+  [[ $agent_rc == 1 ]] || return 1
+  jq -cn --argjson ancestors "$records" '{pid:"0",start:"",ancestors:$ancestors}'
+}
+
+tmux_recorded_owner() { # Verify all live pane processes against the recorded task owner.
+  local session=$1 task=$2 owner=$3 root start current='' alive=0 panes tty pids pid allowed
+  root=$(jq -er '.pid | select(test("^[0-9]+$"))' <<<"$owner") || return 1
+  start=$(jq -r .start <<<"$owner")
+  if [[ $root != 0 ]]; then
+    current=$(LC_ALL=C ps -p "$root" -o lstart= 2>/dev/null || true)
+    if [[ -n $current ]]; then [[ $current == "$start" ]] || return 1; alive=1; fi
+  fi
+  local mode
+  mode=$(jq -r '.mode // "agent"' <<<"$owner")
+  case $mode in agent|shell) ;; *) return 1 ;; esac
+  if [[ $mode == shell ]]; then
+    [[ $alive == 1 ]] || return 1
+    local command
+    command=$(ps -p "$root" -o comm=) || return 1
+    case ${command##*/} in bash|zsh|sh|dash|ksh|-bash|-zsh|-sh|-dash|-ksh) ;; *) return 1 ;; esac
+  fi
+  if [[ $alive == 1 && $mode != shell && $(jq -r .agent <<<"$WT_TEARDOWN_JSON") == codex ]]; then
+    codex_owned_launch "$task" "tmux:$session" "$root" observer || return 1
+  fi
+  panes=$(tmux list-panes -s -t "=$session:" -F '#{pane_tty}') || return 1
+  while IFS= read -r tty; do
+    [[ $tty =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 1
+    local provider_rc=0 providers provider
+    providers=$(pgrep -t "${tty#/dev/}" -x 'claude|codex') || provider_rc=$?
+    [[ $provider_rc == 0 || $provider_rc == 1 ]] || return 1
+    while IFS= read -r provider; do
+      [[ -n $provider ]] || continue
+      [[ $alive == 1 && $mode != shell ]] || return 1
+      process_descends "$provider" "$root" || return 1
+    done <<<"$providers"
+    pids=$(ps -t "${tty#/dev/}" -o pid=) || return 1
+    while IFS= read -r pid; do
+      pid=${pid//[[:space:]]/}; [[ $pid =~ ^[0-9]+$ ]] || return 1
+      if [[ $alive == 1 && $mode != shell ]] && process_descends "$pid" "$root"; then continue; fi
+      current=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 1
+      local identity_command saved_command
+      identity_command=$(ps -p "$pid" -o comm=) || return 1
+      allowed=$(jq -r --arg pid "$pid" --arg start "$current" 'any(.ancestors[]; .pid == $pid and .start == $start)' <<<"$owner") || return 1
+      [[ $allowed == true ]] || return 1
+      saved_command=$(jq -r --arg pid "$pid" --arg start "$current" '.ancestors[] | select(.pid == $pid and .start == $start) | .command // ""' <<<"$owner") || return 1
+      if [[ -n $saved_command ]]; then [[ $saved_command == "$identity_command" ]] || return 1
+      else
+        case ${identity_command##*/} in bash|zsh|sh|dash|ksh|-bash|-zsh|-sh|-dash|-ksh) ;; *) return 1 ;; esac
+      fi
+    done <<<"$pids"
+  done <<<"$panes"
+}
+
+task_tmux_identity() { # Return 1 for a verified absent session and 2 for unreadable identity.
+  local session=$1 exists=false rc=0 id created socket server start
+  tmux_agent "$session" exists >/dev/null || rc=$?
+  [[ $rc != 2 ]] || return 2
+  [[ $exists == true ]] || return 1
+  id=$(tmux display-message -p -t "=$session:" '#{session_id}') || return 2
+  created=$(tmux display-message -p -t "=$session:" '#{session_created}') || return 2
+  socket=$(tmux display-message -p -t "=$session:" '#{socket_path}') || return 2
+  server=$(tmux display-message -p -t "=$session:" '#{pid}') || return 2
+  [[ $id =~ ^\$[0-9]+$ && $created =~ ^[0-9]+$ && $server =~ ^[0-9]+$ && $socket == /* && $socket != *$'\n'* ]] || return 2
+  start=$(LC_ALL=C ps -p "$server" -o lstart= 2>/dev/null) || return 2
+  jq -cn --arg id "$id" --arg created "$created" --arg socket "$socket" --arg server "$server" --arg start "$start" '$ARGS.named'
 }
 
 # ---------------------------------------------------------------- status
@@ -416,17 +600,17 @@ wt_status() { # wt_status <name> <associative output> — keep merge caches and 
   __base=${WT_META[base]-}; [[ -n "$__base" ]] || __base=$(default_base)
   # Count against the BRANCH, not HEAD, because the column is labeled with the branch. In a worktree that is
   # mid-bisect or on a detached checkout, the two differ. That is the shape of the bug that wt rm had.
-  __ahead=$(git -C "$__p" rev-list --count "$__base..$__b" 2>/dev/null || echo '?')
-  __behind=$(git -C "$__p" rev-list --count "$__b..$__base" 2>/dev/null || echo '?')
+  __ahead=$(preservation_git -C "$__p" rev-list --count "$__base..$__b" 2>/dev/null || echo '?')
+  __behind=$(preservation_git -C "$__p" rev-list --count "$__b..$__base" 2>/dev/null || echo '?')
   local __porcelain
-  if __porcelain=$(git -C "$__p" status --porcelain 2>/dev/null); then
+  if __porcelain=$(preservation_git -C "$__p" status --porcelain 2>/dev/null); then
     if [[ -z $__porcelain ]]; then __dirty=0; else __dirty=$(printf '%s\n' "$__porcelain" | wc -l | tr -d ' '); fi
   else __dirty='?'; fi
   local __log __commit_at=''
-  if __log=$(git -C "$__p" log -1 --format='%cr%n%cI' 2>/dev/null); then
+  if __log=$(preservation_git -C "$__p" log -1 --format='%cr%n%cI' 2>/dev/null); then
     __last=${__log%%$'\n'*} __commit_at=${__log#*$'\n'}
   else __last='-'; fi
-  local __cur; __cur=$(git -C "$__p" branch --show-current 2>/dev/null || true)   # empty, exit 0, on a detached HEAD
+  local __cur; __cur=$(preservation_git -C "$__p" branch --show-current 2>/dev/null || true)   # empty, exit 0, on a detached HEAD
   local __checkout=$__cur
   [[ -n "$__cur" ]] || __cur="$__b (HEAD detached)"
   # merged, judged the way `wt rm` will judge it:
@@ -449,6 +633,16 @@ wt_status() { # wt_status <name> <associative output> — keep merge caches and 
   [[ $__ahead =~ ^[0-9]+$ ]] || __ahead='?'
   [[ $__behind =~ ^[0-9]+$ ]] || __behind='?'
   [[ $__dirty =~ ^[0-9]+$ ]] || __dirty='?'
+  local __comparison_ref='' __comparison_object='' __comparison_proof=unknown __comparison_why=''
+  if declare -F comparison_base >/dev/null && comparison_base "$__b" "$__base" __comparison_ref cached; then
+    __comparison_object=$(preservation_git -C "$REPO" rev-parse -q --verify "$__comparison_ref^{commit}" 2>/dev/null || true)
+    if [[ -n $__comparison_object ]]; then
+      if preservation_git -C "$REPO" merge-base --is-ancestor "$__b" "$__comparison_object" 2>/dev/null; then __comparison_proof=ancestry
+      elif branch_landed "$__b" "$__comparison_object" __comparison_why; then __comparison_proof=content; fi
+    fi
+  fi
+  __status["comparison"]=$(jq -cn --arg ref "$__comparison_ref" --arg object "$__comparison_object" --arg proof "$__comparison_proof" \
+    '{ref:$ref,object:$object,proof:$proof,freshness:"cached"}')
   __status["human_dirty"]=$__dirty
   [[ $__dirty != '?' ]] || __status["human_dirty"]=0
   __status["name"]=$__n __status["branch"]=$__b __status["human_branch"]=$__cur __status["base"]=$__base
@@ -458,7 +652,7 @@ wt_status() { # wt_status <name> <associative output> — keep merge caches and 
 }
 
 # One schema supplies field selection and JSON types for both renderers.
-WT_STATUS_FIELDS='name repo path branch checkout_branch:optional base ahead:count behind:count dirty:count last_commit_at:optional merged why'
+WT_STATUS_FIELDS='name repo path branch checkout_branch:optional base ahead:count behind:count dirty:count last_commit_at:optional merged why comparison:json'
 WT_SHOW_FIELDS='title task model'
 
 wt_status_args() { # wt_status_args <status array> <record array> [list|show]
@@ -486,7 +680,7 @@ wt_status_json() { # wt_status_json <list|show> <record pairs...>
         $values[$i] as $key | $values[$i+1] as $value
         | if $key == "" then .records += [.current] | .current = {}
           else .current[$key] = ($value | if $types[$key] == "count" then count
-            elif $types[$key] == "optional" then optional else . end) end)
+            elif $types[$key] == "optional" then optional elif $types[$key] == "json" then fromjson else . end) end)
     | if $command == "show" then .records[0] else .records end'
 }
 

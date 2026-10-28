@@ -114,7 +114,7 @@ wt_version() (
   if [[ -e $WG_VERSION_ROOT/.git ]]; then
     commit=$(git -C "$WG_VERSION_ROOT" rev-parse --short HEAD 2>/dev/null) || commit=unknown
   fi
-  jq -cn --arg commit "$commit" --argjson protocol "$WT_PROTOCOL" '{commit:$commit,protocol:$protocol,capabilities:["result-records","show-facts","path-field","model-option","agent-probe","doctor-records"]}'
+  jq -cn --arg commit "$commit" --argjson protocol "$WT_PROTOCOL" '{commit:$commit,protocol:$protocol,capabilities:["result-records","show-facts","path-field","model-option","agent-probe","doctor-records","teardown-receipts"]}'
 )
 
 # Unknown scalar keys are kept. Doctor also accepts a checks array. New fields are additive.
@@ -187,6 +187,10 @@ wt_read_result_into() {
 # These builders do not run commands or report errors.
 # shellcheck disable=SC2016  # HOME belongs to the VM shell.
 vm_wt_line() { printf 'exec "$HOME/.local/bin/wt" %s' "$(shell_join "$@")"; }
+local_run_line() { # A noninteractive shell prevents cmux from starting a sibling Git watcher.
+  shell_join bash -c "exec $(shell_join "$1" run "$2" -r "$3")"
+}
+
 # shellcheck disable=SC2016  # HOME belongs to the VM shell.
 vm_run_line() { printf '"$HOME/.local/bin/wt" run %s' "$(shell_join "$1" -r "$2")"; }
 

@@ -49,7 +49,9 @@ Angle brackets mark values supplied by the caller.
 | `cmux workspace close <id> [--force]` | `close_row` uses `--force` for the caller's own row or a newly created row during failed setup. |
 | `cmux ssh <host> --name <title> --no-focus --command <command> --json --id-format uuids` | `cmux_row_create_ssh` creates a VM row before tagging it. Requested selection follows the description update. |
 | `cmux workspace-action --workspace <id> --action set-description --description <description>` | `cmux_row_create_ssh` and `cmux_row_open_ssh` write the second line. |
-| `cmux top --workspace <id> --json` | `row_agent` reads the caller identity and agent process counts before removal. |
+| `cmux top --workspace <id> --json` | `cmd_run` checks launch attribution; `remote_row_idle` checks SSH transport ownership. |
+| `cmux top --workspace <id> --processes --json` | `row_agent` checks caller identity, provider ownership, and sampled process ancestry before removal. |
+| `cmux --id-format uuids tree --all --json` | `codex_launch_row` finds a unique physical terminal when an idle launcher lacks attribution. |
 | `cmux top --json` | `doctor_mac` in `doctor.sh` checks the response shape. |
 | `cmux read-screen --workspace <id>` | `cmux_screen` returns screen text. `row_shell_prompt` checks its last nonblank lines before recovery sends input. |
 | `cmux send --workspace <id> <text>` | `send_tmux_line` sends the tmux attachment command. |
@@ -118,12 +120,20 @@ Additional fields in captured fixtures do not establish additional runtime requi
 | Native backend | `.remote.enabled` must be true. `.remote.backend` must equal `cmux-tui`. | [bin/cmux-hook](../bin/cmux-hook): the top-level `--event` handler. |
 | Remote state | `.remote.state` must equal `connected` for automatic input or client replacement. | `cmux.sh`: `row_remote_field`. `recovery.sh`: `reattach_shell_row`, `reinit_task_client`. |
 | Row directory | `.current_directory` identifies local rows that might hold the target worktree. | `cmux.sh`: `check_row_removal`. [task.sh](../lib/workgrove/task.sh): `check_identity`. |
-| Agent status | `.caller.workspace_id` identifies the caller's own row. `.coding_agents[].resources.process_count` must be nonnegative numbers. | `cmux.sh`: `row_agent`. `doctor.sh`: `doctor_mac`, which also checks `.caller` as an object. |
+| Agent status | `.caller.workspace_id` identifies the reported caller row. `.coding_agents[].resources.process_count` must be nonnegative numbers. | `cmux.sh`: `row_agent` validates live process ancestry and, for Codex, the saved launcher identity. `doctor.sh`: `doctor_mac` also checks `.caller` as an object. |
 | Notifications | The outer value is an array. `.id` and `.workspace_id` identify a record. `.title` and `.body` must be strings. | `cmux.sh`: `cmux_notifications`. `doctor.sh`: `doctor_mac`. `bin/cmux-hook`: the `--event` handler. |
 | Automation event | `.name == "notification.created"`, `.workspace_id`, and `.payload.notification_id` identify the request. The hook requires UUIDs for both IDs. | `bin/cmux-hook`: the `--event` handler. `doctor.sh`: `doctor_record`. |
 | Capabilities | `.methods` is an array with every method in the probe table. | `doctor.sh`: `doctor_mac`. |
 | VM provider hooks | `.errors == []`; `.providers` is an array. Each requested `.provider` occurs once, with `.state == "installed"`. | `doctor.sh`: `doctor_vm`. |
 | Focused notification hook | `.context.appFocused` controls suppression of the desktop notification. | [cmux.json](../home/.config/cmux/cmux.json): the inline `quiet-when-focused` jq command in `.notifications.hooks`. |
+
+Removal requires a complete process sample for the selected row.
+PID arrays require unique positive integers and matching counts, including when the row has no provider.
+Unattributed resource and terminal processes join the ownership check; unexplained processes refuse closure.
+A sampled parent graph can explain an expired child only after the operating system positively confirms its absence.
+Live reused process identifiers, unreadable state, ambiguous parents, and changed provider roots refuse closure.
+Idle launch validation uses terminal UUIDs, terminal device identity, and the launcher's process start identity.
+It does not authorize later removal without the saved runtime ownership checks.
 
 `ROW_JQ` identifies task rows by title, repository, and host.
 The description is `@<host> · <repo>`; the separator contains spaces and U+00B7 MIDDLE DOT.
