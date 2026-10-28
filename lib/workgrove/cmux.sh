@@ -119,11 +119,13 @@ remote_row_idle() { # Forced relay closure requires a complete sample containing
     | ($rows | length) == 1 and ($rows[0].resources as $r
       | ($r.pids | type == "array") and ($r.pids | length) == $r.process_count
       and all($r.pids[]; type == "number" and . > 1 and floor == .)
-      and (($r.missing_pids // []) | length) == 0)
+      and ($r.pids | unique | length) == ($r.pids | length)
+      and (($r.missing_pids // []) | type == "array" and length == 0))
     and (.coding_agents | type == "array")
     and all(.coding_agents[]; (.resources as $r
       | ($r.pids | type == "array") and ($r.pids | length) == $r.process_count
-      and all($r.pids[]; type == "number" and . > 1 and floor == .)))
+      and all($r.pids[]; type == "number" and . > 1 and floor == .)
+      and ($r.pids | unique | length) == ($r.pids | length)))
     and ([$rows[0].resources.pids[]] as $pids
       | all(.coding_agents[].resources.pids[]; . as $pid | $pids | index($pid) == null))' <<<"$state" >/dev/null \
     || { cmux_error 'relay row agent ownership is busy or unknown; kept the row'; return 1; }
@@ -348,15 +350,16 @@ row_agent() {
 row_agent_once() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's own row, "busy" when an agent
   # runs in the row, else "idle". A failed check returns a diagnostic in CMUX_ERROR.
   local state
+  ROW_AGENT=busy
   state=$(cmux_call top --workspace "$1" --processes --json 2>/dev/null) \
     || { cmux_error "cannot check the agent in cmux row $1; kept the worktree"; return 1; }
   printf '%s' "$state" | jq -e '.coding_agents | type == "array"
     and all(.[]; .resources.process_count | type == "number" and . >= 0)' >/dev/null 2>&1 \
     || { cmux_error "cannot check the agent in cmux row $1; kept the worktree"; return 1; }
-  ROW_AGENT=idle
   printf '%s' "$state" | jq -e 'all(.coding_agents[];
     (.resources.pids | type == "array") and (.resources.pids | length) == .resources.process_count
-    and all(.resources.pids[]; type == "number" and . > 1 and floor == .))' >/dev/null 2>&1 \
+    and all(.resources.pids[]; type == "number" and . > 1 and floor == .)
+    and (.resources.pids | unique | length) == (.resources.pids | length))' >/dev/null 2>&1 \
     || { cmux_error "cannot verify agent process data; kept the worktree"; return 1; }
   ROW_AGENT=busy
   local pids row_pids extra_pids root='' root_start pid command provider declared_agent=''
@@ -367,7 +370,9 @@ row_agent_once() { # row_agent <row id> — sets ROW_AGENT: "self" for the calle
     [.windows[].workspaces[] | select(.id == $id)] as $rows
     | ($rows | length) == 1 and ($rows[0].resources as $r
       | ($r.pids | type == "array") and ($r.pids | length) == $r.process_count
-      and (($r.missing_pids // []) | length) == 0)' >/dev/null 2>&1 \
+      and all($r.pids[]; type == "number" and . > 1 and floor == .)
+      and ($r.pids | unique | length) == ($r.pids | length)
+      and (($r.missing_pids // []) | type == "array" and length == 0))' >/dev/null 2>&1 \
     || { cmux_error "cannot verify ownership of the agent in cmux row $1; incomplete process sample; kept the worktree"; return 1; }
   extra_pids=$(cmux_extra_row_pids "$state" "$1") || { cmux_error 'cannot inspect unattributed row processes; kept the worktree'; return 1; }
   if ! printf '%s' "$state" | jq -e 'any(.coding_agents[]; .resources.process_count > 0)' >/dev/null; then

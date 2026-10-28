@@ -186,6 +186,10 @@ begin_scenario 'legacy records still protect copied files and explain setup outp
 p="$REPO/.worktrees/first"
 printf 'copied\n' >"$p/.env"
 printf 'setup\n' >"$p/lock"
+# Legacy records predate typed copy completion metadata.
+jq 'del(.metadata_version,.includes_status)' "$REPO/.git/wt/first.json" >"$TEST_ROOT/legacy.json"
+mv "$TEST_ROOT/legacy.json" "$REPO/.git/wt/first.json"
+WT_META_FILE=''
 meta_set first "includes=.env:$(file_hash "$p/.env")" "setup=lock:$(file_hash "$p/lock")"
 assert_eq 'legacy copies remain unchanged' '' "$(changed_includes first "$p")"
 assert_eq 'legacy setup explains its own file' .env "$(unexplained_dirt first "$p")"

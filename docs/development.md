@@ -44,7 +44,7 @@ workgrove/
 │       ├── picker.sh          task picker and driver commands
 │       ├── recovery.sh        VM row recovery and task attachment
 │       ├── remote.sh          remote commands and result parsing
-│       ├── filtered_files.py  raw filtered-file preservation checks
+│       ├── filtered_files.py  raw tracked-file preservation checks
 │       ├── branch_config.py   frozen local branch configuration cleanup
 │       ├── safety.sh          worktree removal checks
 │       ├── teardown.sh        durable cleanup receipts and retry handling

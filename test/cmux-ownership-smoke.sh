@@ -73,6 +73,22 @@ write_sample incomplete
 assert_eq 'an incomplete unattributed count refuses' '1 busy' "$(row_result)"
 write_sample idle
 assert_eq 'normal attributed terminal PIDs permit idle rows' '0 idle' "$(row_result)"
+for invalid_pids in '[null]' '["unknown"]' '[0]' '[1]' '[-2]' '[2.5]' '[90,90]'; do
+  write_sample idle
+  python3 - "$STATE" "$invalid_pids" <<'PY'
+import json,sys
+path=sys.argv[1];sample=json.load(open(path));pids=json.loads(sys.argv[2])
+row=sample['windows'][0]['workspaces'][0]
+row['resources'].update(pids=pids,process_count=len(pids))
+json.dump(sample,open(path,'w'))
+PY
+  assert_eq 'malformed idle row PIDs cannot authorize removal' '1 busy' "$(row_result)"
+  MODE=ssh
+  rc=0; remote_row_idle target || rc=$?
+  assert_eq 'malformed relay row PIDs cannot authorize closure' 1 "$rc"
+  MODE=gone
+done
+write_sample idle
 MODE=ssh
 rc=0; remote_row_idle target || rc=$?
 assert_eq 'normal attributed SSH transport remains closable' 0 "$rc"

@@ -277,6 +277,7 @@ teardown_sidecars_snapshot() {
 
 teardown_remove_registration() { # One task's recovery must never prune another task's registration.
   local path=$1 listing registered
+  task_admin_preserved "$path" || return 1
   listing=$(git -C "$REPO" -c core.quotePath=true worktree list --porcelain) || return 1
   registered=$(teardown_interpreter -c '
 import ast, os, sys
@@ -316,6 +317,7 @@ teardown_observe() { # Observe absence only; this function never closes a row or
   [[ ! -e $path && ! -L $path ]] || return 1
   [[ ! -e $REPO/.git/wt/teardown/$name.branch-locks && ! -L $REPO/.git/wt/teardown/$name.branch-locks ]] || return 1
   [[ $(teardown_sidecars_snapshot "$name") == '{"metadata":"absent","prompt":"absent","started":"absent"}' ]] || return 1
+  task_admin_preserved "$path" || return 1
   registrations=$(git -C "$REPO" worktree list --porcelain) || return 1
   ! grep -qxF "worktree $path" <<<"$registrations" || return 1
   if [[ $keep == 0 ]]; then
@@ -346,6 +348,7 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
   fi
   if [[ ${row_closed:-0} == 1 && $remote != 1 ]]; then die 'row acknowledgment is only valid for VM cleanup'; fi
   if [[ $stage == complete ]]; then printf 'teardown complete %s\n' "$name"; return 0; fi
+  task_admin_preserved "$path" || die 'private submodule Git data prevents cleanup; kept the task registration'
   if [[ $stage == prepared ]]; then
     # An interrupted removal may have deleted the directory before updating its receipt.
     [[ ! -e $path ]] || die "teardown is prepared but the worktree remains; rerun normal removal"

@@ -128,6 +128,7 @@ Additional fields in captured fixtures do not establish additional runtime requi
 | Focused notification hook | `.context.appFocused` controls suppression of the desktop notification. | [cmux.json](../home/.config/cmux/cmux.json): the inline `quiet-when-focused` jq command in `.notifications.hooks`. |
 
 Removal requires a complete process sample for the selected row.
+PID arrays require unique positive integers and matching counts, including when the row has no provider.
 Unattributed resource and terminal processes join the ownership check; unexplained processes refuse closure.
 A sampled parent graph can explain an expired child only after the operating system positively confirms its absence.
 Live reused process identifiers, unreadable state, ambiguous parents, and changed provider roots refuse closure.

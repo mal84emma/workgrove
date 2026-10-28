@@ -748,8 +748,18 @@ cmd_rm() {
   fi
   [[ $(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed after preflight'
   [[ $(preservation_git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed after preflight'
-  if [[ $self_remote == 1 ]]; then
-    tmux_self_ownership "$session" "$name" || die 'tmux ownership changed after preflight'
+  if is_remote; then
+    local final_identity='' final_identity_rc=0
+    final_identity=$(task_tmux_identity "$session") || final_identity_rc=$?
+    [[ $final_identity_rc != 2 ]] || die 'cannot verify tmux identity after preflight'
+    [[ $final_identity_rc == 0 ]] || final_identity=null
+    [[ $(jq -cS . <<<"$final_identity") == $(jq -cS . <<<"$tmux_identity") ]] \
+      || die 'tmux session identity changed after preflight'
+    if [[ $self_remote == 1 ]]; then
+      tmux_self_ownership "$session" "$name" || die 'tmux ownership changed after preflight'
+    elif [[ $final_identity_rc == 0 ]]; then
+      tmux_recorded_owner "$session" "$name" "$tmux_owner" || die 'idle tmux ownership changed after preflight'
+    fi
   fi
   if ! is_remote; then
     local final_row='' final_self=''
@@ -758,6 +768,7 @@ cmd_rm() {
   fi
   [[ $(metadata_fingerprint "$metadata_path") == "$verified_metadata" ]] || die 'task metadata changed before worktree removal; kept the worktree'
   teardown_sidecars_check "$name" "$verified_sidecars" || die 'sidecars changed before worktree removal; kept the worktree'
+  task_admin_preserved "$path" || die 'private submodule Git data prevents worktree removal'
   teardown_control check || die 'teardown coordinator exited before worktree removal'
   if [[ -d $path ]]; then
     git -C "$REPO" worktree remove --force "$path" || die "git worktree remove failed; receipt: $WT_TEARDOWN_FILE"

@@ -133,21 +133,21 @@ changed_includes() { # changed_includes <name> <path> -> ignored files that remo
   done <<<"$list"
 }
 
-filtered_files() ( # Git filters cannot prove that raw working bytes have a surviving copy.
-  local operation=$1 name=$2 path=$3 scratch config_rc=0
+task_admin_preserved() { # Private submodule refs can survive deinitialization but disappear with the task registration.
+  # shellcheck source=lib/workgrove/vm/python-runtime.sh
+  source "$WG_VERSION_ROOT/lib/workgrove/vm/python-runtime.sh" || return 1
+  wg_run_python "$WG_VERSION_ROOT/lib/workgrove/filtered_files.py" admin "$REPO" "$1"
+}
+
+filtered_files() ( # Git cleaning and stat caches cannot prove preservation of raw tracked bytes.
+  local operation=$1 name=$2 path=$3 scratch
   scratch=$(mktemp -d "${TMPDIR:-/tmp}/wt-filtered.XXXXXX") || return 1
   trap 'rm -rf -- "$scratch"' EXIT
   preservation_git -C "$path" ls-files --stage -z >"$scratch/index" || return 1
-  preservation_git -C "$path" ls-files -z >"$scratch/paths" || return 1
-  preservation_git -C "$path" check-attr -z --stdin filter <"$scratch/paths" >"$scratch/attrs" || return 1
-  preservation_git -C "$path" config --null --get-regexp '^filter\.(unset|unspecified)\.(clean|process)$' >"$scratch/filters" || config_rc=$?
-  [[ $config_rc == 0 || $config_rc == 1 ]] || return 1
   # shellcheck source=lib/workgrove/vm/python-runtime.sh
   source "$WG_VERSION_ROOT/lib/workgrove/vm/python-runtime.sh" || return 1
-  if [[ $operation == check ]]; then
-    wg_run_python "$WG_VERSION_ROOT/lib/workgrove/filtered_files.py" oids "$scratch" "$path" "$REPO" "$(wt_meta "$name")" >"$scratch/oids" || return 1
-    preservation_git -C "$path" cat-file --batch <"$scratch/oids" >"$scratch/blobs" || return 1
-  fi
+  wg_run_python "$WG_VERSION_ROOT/lib/workgrove/filtered_files.py" oids "$scratch" "$path" "$REPO" "$(wt_meta "$name")" >"$scratch/oids" || return 1
+  preservation_git -C "$path" cat-file --batch <"$scratch/oids" >"$scratch/blobs" || return 1
   wg_run_python "$WG_VERSION_ROOT/lib/workgrove/filtered_files.py" "$operation" "$scratch" "$path" "$REPO" "$(wt_meta "$name")"
 )
 
@@ -476,10 +476,13 @@ rm_reasons() { # rm_reasons <name> <path> <branch> <base> <reasons output array>
   local __n="$1" __p="$2" __b="$3" __base="$4" __dirty __ahead=0 __merged=0 __base_ok=0 __head_ref __f __why="" __rc __landed_reason
   meta_require "$__n"
   __reasons=()
+  if ! task_admin_preserved "$__p"; then
+    __reasons+=("cannot preserve private submodule Git data; kept the task registration")
+  fi
   local __dirty_paths=''
   if [[ -d $__p ]]; then
     if ! filtered_files check "$__n" "$__p"; then
-      __reasons+=("cannot preserve raw filtered files; inspect or copy their bytes outside the task")
+      __reasons+=("cannot preserve raw tracked files; inspect tracked bytes and submodule data before removal")
     fi
     if __dirty_paths=$(unexplained_dirt "$__n" "$__p"); then
       if [[ -n $__dirty_paths ]]; then

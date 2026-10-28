@@ -81,14 +81,28 @@ It disables filesystem-monitor caching for these checks.
 Assume-unchanged and skip-worktree index flags refuse removal because they can hide modified tracked files.
 Workgrove does not clear those flags or change global Git configuration.
 
-Clean filters can hide raw working bytes from Git status and the index.
-New tasks capture raw fingerprints for filtered tracked files after setup.
-Removal accepts unchanged creation or setup bytes, exact index blob bytes, or an independent identical main-checkout copy.
-Otherwise, it refuses removal and requires inspection or an external copy.
+Git cleaning and stat caches can hide unique tracked working bytes from status.
+This includes custom filters, built-in `ident` cleaning, and equal-length edits under minimal stat checks.
+Removal reads every tracked regular file and symbolic link independently of Git's stat cache.
+It compares raw bytes or link target text with the corresponding raw index blob.
+Setup fingerprints and independent identical main-checkout copies can also establish preservation.
 
-Legacy tasks lack creation fingerprints and use the remaining proofs conservatively.
-Workgrove does not archive private raw bytes into Git objects.
-An incomplete filtered-file snapshot blocks removal.
+After setup, creation captures fingerprints only for raw bytes that differ from their canonical index blobs.
+These records permit unchanged generated `ident`, line-ending, encoding, and filter output.
+The existing `filtered_files` and `filtered_status` fields retain these records; existing sidecars remain unchanged.
+Older records may lack fingerprints for built-in transformations and require inspection or an independent copy.
+Workgrove does not archive private raw working bytes into Git objects.
+An incomplete snapshot or comparison blocks removal.
+
+Initialized or nonempty submodules refuse safe removal.
+Their private Git directories can contain unpublished refs and objects even when every working file appears clean.
+Workgrove does not automatically deinitialize submodules or discard their Git data.
+Empty, uninitialized gitlinks remain removable.
+Preserve and inspect both working bytes and full Git administrative data before separate submodule cleanup.
+
+The same protection covers deinitialized modules and removed gitlinks with retained private Git data.
+The check identifies the actual target registration through its `gitdir` pointer, including relative pointers and colliding registration names.
+Missing-directory removal and prepared recovery retain that data, branch, sidecars, and pending receipt.
 
 Private-file snapshots compare bytes independently of filename escaping.
 Link fingerprints start with `L` and hash the link target text without following it.
@@ -98,6 +112,10 @@ New private dangling links remain protected when current include patterns cover 
 New task metadata keeps `includes_status` pending until copying and fingerprint capture finish.
 Failed reads, copies, hashes, or unsupported filename encoding leave that status pending and block removal.
 Older sidecars without this field remain unchanged.
+
+Version-3 copy snapshots require arrays of valid fingerprint records before metadata decoding.
+Missing, null, or wrongly typed snapshots refuse removal; valid empty arrays remain accepted.
+Legacy string records remain supported without the new copy-completion fields.
 Explicitly empty or null copy status refuses removal; it does not mean completion.
 
 The reader normalizes valid escaped digests from older hash commands in memory.
@@ -233,6 +251,10 @@ Creation can reconcile already-absent local rows without closing anything.
 The Mac can reconcile an absent VM row and session before retrying a requested task name.
 Otherwise, pending cleanup blocks reuse of the task name.
 
+Controller-side VM removal captures idle processes only between fresh samples that confirm no provider is running.
+Before Git deletion, it rechecks the exact session identity and those recorded processes.
+A new provider, replacement session, or independent command retains the worktree, branch, and sidecars.
+
 Mac-controlled removal defers session cleanup until it confirms row closure.
 The controller then acknowledges row absence to the VM, which validates and stops only the recorded session and its original process owners.
 
@@ -256,7 +278,7 @@ The controller flags are narrow cleanup operations:
 
 These flags never waive work-preservation checks or authorize another running agent's closure.
 
-A lock does not exclude arbitrary editors or external Git writers.
+A lock does not exclude arbitrary editors, external Git writers, or independent process starts.
 The deletion-boundary checks narrow that race but cannot atomically exclude uncooperative filesystem changes.
 Stop task-owned writers before requesting teardown.
 No daemon, background service, unrelated process termination, or automatic remote-branch deletion is added.

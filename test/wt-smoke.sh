@@ -3589,11 +3589,11 @@ scenario_teardown_raw_filters() {
   assert_wt_ok 'capture a raw filtered baseline' new filtered --no-workspace -r "$r" -b main
   p="$r/.worktrees/filtered"
   before=$(jq -r '.filtered_files.data' "$r/.git/wt/filtered.json")
-  assert_eq 'creation stores a typed raw fingerprint' F "${before:0:1}"
+  assert_eq 'canonical raw bytes need no creation exception' null "$before"
   printf 'private: only copy\n' >>"$p/data"
   fixture_git "$p" add data
   assert_eq 'a clean filter hides raw working bytes from Git' '' "$(fixture_git "$p" status --porcelain)"
-  assert_wt_fails 3 'cannot preserve raw filtered files' rm filtered -r "$r"
+  assert_wt_fails 3 'cannot preserve raw tracked files' rm filtered -r "$r"
   assert_has 'refusal retains the private payload' "$(cat "$p/data")" 'private: only copy'
   cp "$p/data" "$r/data"
   assert_wt_ok 'an independent main copy preserves raw bytes' rm filtered -r "$r"
@@ -3605,7 +3605,7 @@ scenario_teardown_raw_filters() {
   jq 'del(.filtered_status,.filtered_files)' "$r/.git/wt/legacy.json" >"$r/legacy-meta"
   mv "$r/legacy-meta" "$r/.git/wt/legacy.json"
   printf 'private: legacy only copy\n' >>"$p/data"
-  assert_wt_fails 3 'cannot preserve raw filtered files' rm legacy -r "$r"
+  assert_wt_fails 3 'cannot preserve raw tracked files' rm legacy -r "$r"
   assert_has 'legacy refusal preserves raw data' "$(cat "$p/data")" 'private: legacy only copy'
   for driver in unset unspecified; do
     fixture_git "$r" config "filter.$driver.clean" 'sed /^private:/d'
@@ -3617,7 +3617,7 @@ scenario_teardown_raw_filters() {
     printf 'private: reserved only copy\n' >>"$p/data"
     fixture_git "$p" add data
     assert_eq 'reserved filter hides raw working bytes' '' "$(fixture_git "$p" status --porcelain)"
-    assert_wt_fails 3 'cannot preserve raw filtered files' rm "$driver" -r "$r"
+    assert_wt_fails 3 'cannot preserve raw tracked files' rm "$driver" -r "$r"
     assert_has 'reserved-name refusal preserves payload' "$(cat "$p/data")" 'private: reserved only copy'
   done
   end_scenario
@@ -4202,6 +4202,274 @@ scenario_cleanup_guard() {
   out="$(TEST_ROOT="$good" KEEP='' "$BASH" -c '. "$1"; lib_cleanup' _ "$REPO/test/lib.sh" 2>&1)" || true
   assert_gone "a root with nothing of the user's under it is still removed" "$good"
   assert_eq "…and says nothing about it" "" "$out"
+  end_scenario
+}
+
+scenario_teardown_raw_tracked() {
+  begin_scenario "$1" || return 0
+  local r p child original gitdir nested_tip shim real_git mac="$TEST_ROOT/raw-tracked-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac; stub_cmux dead
+  r=$(new_repo raw-ident)
+  printf 'data ident\n' >"$r/.gitattributes"
+  printf '%s\n' "\$Id\$" >"$r/data"
+  fixture_git "$r" add .gitattributes data; fixture_git "$r" commit -qm ident
+  assert_wt_ok 'capture generated ident bytes' new unchanged --no-workspace -r "$r"
+  assert_eq 'generated ident bytes have a creation fingerprint' F "$(jq -r '.filtered_files.data[0:1]' "$r/.git/wt/unchanged.json")"
+  assert_wt_ok 'unchanged ident expansion remains removable' rm unchanged -r "$r"
+  assert_wt_ok 'create hidden ident edit' new ident --no-workspace -r "$r"
+  p="$r/.worktrees/ident"
+  printf '%s\n' "\$Id: unique task payload \$" >"$p/data"
+  fixture_git "$p" add data
+  assert_eq 'ident cleaning hides arbitrary raw payload' '' "$(fixture_git "$p" status --porcelain)"
+  assert_wt_fails 3 'cannot preserve raw tracked files' rm ident -r "$r"
+  assert_eq 'ident refusal preserves unique bytes' "\$Id: unique task payload \$" "$(cat "$p/data")"
+  cp "$p/data" "$r/data"
+  assert_wt_ok 'an independent raw ident copy permits removal' rm ident -r "$r"
+
+  r=$(new_repo raw-crlf)
+  printf 'data text eol=crlf\n' >"$r/.gitattributes"
+  printf 'line\n' >"$r/data"
+  fixture_git "$r" add .gitattributes data; fixture_git "$r" commit -qm crlf
+  assert_wt_ok 'capture generated CRLF bytes' new crlf --no-workspace -r "$r"
+  assert_eq 'CRLF checkout bytes differ from canonical blobs' F "$(jq -r '.filtered_files.data[0:1]' "$r/.git/wt/crlf.json")"
+  assert_wt_ok 'unchanged generated CRLF remains removable' rm crlf -r "$r"
+
+  r=$(new_repo raw-encoding)
+  printf 'data working-tree-encoding=UTF-16LE\n' >"$r/.gitattributes"
+  python3 - "$r/data" <<'PY'
+from pathlib import Path
+import sys
+Path(sys.argv[1]).write_bytes('line\n'.encode('utf-16-le'))
+PY
+  fixture_git "$r" add .gitattributes data; fixture_git "$r" commit -qm encoding
+  assert_wt_ok 'capture generated encoded bytes' new encoded --no-workspace -r "$r"
+  assert_eq 'encoded checkout bytes have a creation fingerprint' F "$(jq -r '.filtered_files.data[0:1]' "$r/.git/wt/encoded.json")"
+  assert_wt_ok 'unchanged generated encoding remains removable' rm encoded -r "$r"
+
+  r=$(new_repo raw-link)
+  ln -s target "$r/link"
+  fixture_git "$r" add link; fixture_git "$r" commit -qm link
+  fixture_git "$r" config core.symlinks false
+  assert_wt_ok 'create a regular-file symlink representation' new emulated --no-workspace -r "$r"
+  assert_eq 'symlink emulation retains the stored link text' target "$(cat "$r/.worktrees/emulated/link")"
+  assert_wt_ok 'canonical symlink emulation remains removable' rm emulated -r "$r"
+
+  r=$(new_repo raw-stat)
+  fixture_commit "$r" data 'old bytes'
+  assert_wt_ok 'create stat-cache fixture' new cached --no-workspace -r "$r"
+  p="$r/.worktrees/cached"
+  fixture_git "$p" config core.trustctime false
+  fixture_git "$p" config core.checkStat minimal
+  python3 - "$p/data" <<'PY'
+import os,sys
+os.utime(sys.argv[1],(1000000000,1000000000))
+PY
+  fixture_git "$p" update-index --refresh
+  printf 'new bytes\n' >"$p/data"
+  python3 - "$p/data" <<'PY'
+import os,sys
+os.utime(sys.argv[1],(1000000000,1000000000))
+PY
+  assert_eq 'minimal stat checks hide equal-length edits' '' "$(fixture_git "$p" status --porcelain)"
+  assert_eq 'ordinary index flags do not expose the edit' 'H data' "$(fixture_git "$p" ls-files -v data)"
+  assert_wt_fails 3 'cannot preserve raw tracked files' rm cached -r "$r"
+  assert_eq 'stat-cache refusal retains unique bytes' 'new bytes' "$(cat "$p/data")"
+  printf 'old bytes\n' >"$p/data"
+  assert_wt_ok 'raw index equality permits clean removal' rm cached -r "$r"
+
+  child=$(new_repo raw-module-child)
+  fixture_commit "$child" data 'old bytes'
+  r=$(new_repo raw-module-parent)
+  fixture_git "$r" -c protocol.file.allow=always submodule add -q "$child" child
+  fixture_git "$r" commit -qm module
+  assert_wt_ok 'uninitialized gitlinks can be created' new empty --no-workspace -r "$r"
+  assert_wt_ok 'empty uninitialized gitlinks remain removable' rm empty -r "$r"
+  assert_wt_ok 'create initialized module fixture' new module --no-workspace -r "$r"
+  p="$r/.worktrees/module"
+  fixture_git "$p" -c protocol.file.allow=always submodule update --init -q
+  original=$(fixture_git "$p/child" rev-parse HEAD)
+  fixture_git "$p/child" checkout -qb unfinished
+  fixture_commit "$p/child" unpublished.txt 'only nested branch bytes'
+  fixture_git "$p/child" checkout -q --detach "$original"
+  gitdir=$(fixture_git "$p/child" rev-parse --absolute-git-dir)
+  assert_eq 'a private nested branch leaves parent status clean' '' "$(fixture_git "$p" status --porcelain --ignore-submodules=none)"
+  assert_wt_fails 3 'submodule' rm module -r "$r"
+  assert_dir 'the nested object database remains intact' "$gitdir"
+  assert_branch "$p/child" unfinished yes
+  fixture_git "$p/child" config core.trustctime false
+  fixture_git "$p/child" config core.checkStat minimal
+  python3 - "$p/child/data" <<'PY'
+import os,sys
+os.utime(sys.argv[1],(1000000000,1000000000))
+PY
+  fixture_git "$p/child" update-index --refresh
+  printf 'new bytes\n' >"$p/child/data"
+  python3 - "$p/child/data" <<'PY'
+import os,sys
+os.utime(sys.argv[1],(1000000000,1000000000))
+PY
+  assert_eq 'child stat caching also hides parent dirt' '' "$(fixture_git "$p" status --porcelain --ignore-submodules=none)"
+  assert_wt_fails 3 'submodule' rm module -r "$r"
+  assert_eq 'the nested raw working copy remains intact' 'new bytes' "$(cat "$p/child/data")"
+  assert_branch "$r" wt/module yes
+  nested_tip=$(fixture_git "$gitdir" rev-parse unfinished)
+  printf 'old bytes\n' >"$p/child/data"
+  fixture_git "$p" submodule deinit -q child
+  assert_eq 'ordinary deinit empties the gitlink directory' '' "$(find "$p/child" -mindepth 1 -print)"
+  assert_wt_fails 3 'private submodule Git data' rm module -r "$r"
+  assert_eq 'deinit cannot hide a private branch' "$nested_tip" "$(fixture_git "$gitdir" rev-parse unfinished)"
+  fixture_git "$p" rm -q --cached child
+  fixture_git "$p" commit -qm 'remove gitlink'
+  fixture_git "$r" merge -q --squash wt/module
+  fixture_git "$r" commit -qm 'squash gitlink removal'
+  assert_eq 'removed gitlinks leave a clean task checkout' '' "$(fixture_git "$p" status --porcelain)"
+  assert_wt_fails 3 'private submodule Git data' rm module -r "$r"
+  assert_eq 'removed gitlinks retain private Git objects' "$nested_tip" "$(fixture_git "$gitdir" rev-parse unfinished)"
+  assert_wt_ok 'unrelated private module data does not block another task' new still-empty --no-workspace -r "$r"
+  assert_wt_ok 'an unrelated empty task remains removable' rm still-empty -r "$r"
+
+  r=$(new_repo module-recovery)
+  fixture_git "$r" -c protocol.file.allow=always submodule add -q "$child" child
+  fixture_git "$r" commit -qm module
+  assert_wt_ok 'create prepared registration fixture' new pending --no-workspace -r "$r"
+  shim="$TEST_ROOT/module-recovery-bin"; mkdir -p "$shim"
+  real_git=$(command -v git)
+  cat >"$shim/git" <<'SHIM'
+#!/bin/sh
+case "$*" in *'worktree remove --force'*) exit 1 ;; esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git")
+  assert_wt_fails 1 'git worktree remove failed' rm pending -r "$r"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  p="$r/.worktrees/pending"
+  fixture_git "$p" -c protocol.file.allow=always submodule update --init -q
+  original=$(fixture_git "$p/child" rev-parse HEAD)
+  fixture_git "$p/child" checkout -qb private-branch
+  fixture_commit "$p/child" only.txt 'private recovery objects'
+  nested_tip=$(fixture_git "$p/child" rev-parse HEAD)
+  fixture_git "$p/child" checkout -q --detach "$original"
+  gitdir=$(fixture_git "$p/child" rev-parse --absolute-git-dir)
+  guard_scratch_root "$p"; rm -rf "$p"
+  assert_wt_fails 1 'private submodule Git data' rm pending -r "$r"
+  assert_eq 'prepared recovery preserves nested refs after directory loss' "$nested_tip" "$(fixture_git "$r" --git-dir="$gitdir" --work-tree="$r" rev-parse private-branch)"
+  assert_branch "$r" wt/pending yes
+  assert_regular "$r" .git/wt/pending.json
+  assert_registered "$r" pending yes
+  assert_eq 'recovery retains its original prepared receipt' prepared "$(jq -r .stage "$r/.git/wt/teardown/pending.json")"
+
+  assert_wt_ok 'create missing-directory registration fixture' new missing --no-workspace -r "$r"
+  p="$r/.worktrees/missing"
+  fixture_git "$p" -c protocol.file.allow=always submodule update --init -q
+  gitdir=$(fixture_git "$p/child" rev-parse --absolute-git-dir)
+  guard_scratch_root "$p"; rm -rf "$p"
+  assert_wt_fails 3 'private submodule Git data' rm missing -r "$r"
+  assert_dir 'missing-directory removal retains the nested object database' "$gitdir"
+  assert_branch "$r" wt/missing yes
+  assert_registered "$r" missing yes
+  end_scenario
+}
+
+scenario_teardown_copy_schema() {
+  begin_scenario "$1" || return 0
+  local r p shape mac="$TEST_ROOT/copy-schema-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac; stub_cmux dead
+  r=$(new_repo copy-schema)
+  printf '.env\n' >"$r/.gitignore"
+  printf '.env\n' >"$r/.wt-include"
+  printf 'original private bytes\n' >"$r/.env"
+  fixture_git "$r" add .gitignore .wt-include; fixture_git "$r" commit -qm include
+  for shape in missing null string number object null-record invalid-record; do
+    assert_wt_ok 'create typed copy snapshot fixture' new "$shape" --no-workspace -r "$r"
+    p="$r/.worktrees/$shape"
+    jq --arg shape "$shape" '
+      if $shape == "missing" then del(.includes)
+      elif $shape == "null" then .includes=null
+      elif $shape == "string" then .includes=(.includes | join("\n"))
+      elif $shape == "number" then .includes=1
+      elif $shape == "object" then .includes={}
+      elif $shape == "null-record" then .includes=[null]
+      else .includes=[".env:invalid"] end' "$r/.git/wt/$shape.json" >"$r/.git/wt/$shape.new"
+    mv "$r/.git/wt/$shape.new" "$r/.git/wt/$shape.json"
+    printf 'unique private task bytes\n' >"$p/.env"
+  done
+  rm "$r/.wt-include"
+  for shape in missing null string number object null-record invalid-record; do
+    assert_wt_fails 1 'could not read' rm "$shape" -r "$r"
+    assert_eq 'invalid copy schema cannot erase durable protection' 'unique private task bytes' "$(cat "$r/.worktrees/$shape/.env")"
+    assert_branch "$r" "wt/$shape" yes
+    assert_absent "$r" ".git/wt/teardown/$shape.json"
+  done
+  r=$(new_repo copy-empty)
+  assert_wt_ok 'valid empty copy arrays remain accepted' new empty --no-workspace -r "$r"
+  assert_wt_ok 'a valid empty copy snapshot permits removal' rm empty -r "$r"
+  end_scenario
+}
+
+scenario_teardown_vm_boundary() {
+  begin_scenario "$1" || return 0
+  local r start shim="$TEST_ROOT/vm-boundary-bin" WT_PATH_PREFIX=''
+  mkdir -p "$shim"; stub_cmux dead
+  cat >"$shim/tmux" <<'SHIM'
+#!/bin/sh
+case "$1" in
+  has-session) exit 0 ;;
+  list-panes) echo /dev/pts/123 ;;
+  display-message) case "$5" in
+    '#{session_id}') echo '$101' ;; '#{session_created}') echo 12345 ;;
+    '#{socket_path}') echo /tmp/fixture-socket ;; '#{pid}') echo 900002 ;; *) exit 2 ;; esac ;;
+  *) exit 2 ;;
+esac
+SHIM
+  cat >"$shim/pgrep" <<'SHIM'
+#!/bin/sh
+n=$(cat "$OWNER_COUNTER" 2>/dev/null || echo 0)
+n=$((n+1)); echo "$n" >"$OWNER_COUNTER"
+[ "$n" -lt "$OWNER_START_AT" ] || { echo 900001; exit 0; }
+exit 1
+SHIM
+  cat >"$shim/ps" <<'SHIM'
+#!/bin/sh
+if [ "$1" = -t ]; then echo 900001; exit 0; fi
+case "$2" in 900001|900002)
+  case "$4" in
+    lstart=) echo 'fixed process identity' ;;
+    comm=) n=$(cat "$OWNER_COUNTER" 2>/dev/null || echo 0)
+      if [ "$n" -ge "$OWNER_START_AT" ]; then echo claude; else echo bash; fi ;;
+    ppid=) echo 1 ;; *) exit 1 ;;
+  esac
+  exit 0 ;;
+esac
+exec /bin/ps "$@"
+SHIM
+  chmod +x "$shim/"*
+  for start in 2 4 5 6; do
+    WT_PATH_PREFIX='' WT_RELAY_ENV=()
+    r=$(new_repo "vm-boundary-$start")
+    assert_wt_ok 'create controller-owned VM fixture' new target --no-workspace -r "$r"
+    WT_PATH_PREFIX=$shim
+    WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=fixture.invalid "OWNER_COUNTER=$r/counter" "OWNER_START_AT=$start")
+    if [[ $start -le 4 ]]; then
+      assert_wt_fails 1 'cannot record idle task pane processes' rm target --defer-close -r "$r"
+    else
+      assert_wt_fails 1 'idle tmux ownership changed after preflight' rm target --defer-close -r "$r"
+    fi
+    assert_eq 'the provider-start event occurred before refusal' yes "$([[ $(cat "$r/counter") -ge $start ]] && echo yes || echo no)"
+    assert_dir 'controller removal retains the worktree after ownership changes' "$r/.worktrees/target"
+    assert_branch "$r" wt/target yes
+    assert_regular "$r" .git/wt/target.json
+    assert_registered "$r" target yes
+    if [[ $start -le 4 ]]; then
+      assert_absent "$r" .git/wt/teardown/target.json
+    else
+      assert_eq 'deletion-boundary refusal retains prepared intent' prepared "$(jq -r .stage "$r/.git/wt/teardown/target.json")"
+    fi
+  done
   end_scenario
 }
 

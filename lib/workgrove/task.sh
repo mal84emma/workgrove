@@ -204,6 +204,14 @@ WT_META_FILTER='
   | if any(to_entries[]; .key == "" or (.key | index("\u0000") != null)
          or (.value | any(.. | strings; index("\u0000") != null)))
     then error("unsupported NUL or empty key") else . end
+  | if has("metadata_version") and (.metadata_version | IN(1,2,3) | not)
+    then error("unsupported metadata version") else . end
+  | if .metadata_version == 3 or has("includes_status") then
+      if (.includes | type) != "array" then error("invalid copy snapshot")
+      elif any(.includes[]; type != "string" or . == "" or index("\n") != null
+               or (test("^.+:(L?[0-9a-f]{64}|\\\\[0-9a-f]{64})$") | not))
+      then error("invalid copy snapshot record") else . end
+    else . end
   | ("", tojson, (to_entries[] | .key,
       (. as $entry | .value | if . == null then ""
         elif type == "string" then .
@@ -499,7 +507,9 @@ tmux_self_ownership() {
 # shellcheck disable=SC2034  # The removal caller saves this verified owner in its receipt.
 WT_TMUX_OWNER='null'
 tmux_idle_owner() {
-  local panes tty pids pid start command records='[]'
+  local panes tty pids pid start command records='[]' agent_rc=0
+  tmux_agent "$1" || agent_rc=$?
+  [[ $agent_rc == 1 ]] || return 1
   panes=$(tmux list-panes -s -t "=$1:" -F '#{pane_tty}') || return 1
   while IFS= read -r tty; do
     [[ $tty =~ ^/dev/(pts/[0-9]+|tty[[:alnum:]]+)$ ]] || return 1
@@ -511,6 +521,8 @@ tmux_idle_owner() {
       records=$(jq -c --arg pid "$pid" --arg start "$start" --arg command "$command" '. + [$ARGS.named]' <<<"$records")
     done <<<"$pids"
   done <<<"$panes"
+  agent_rc=0; tmux_agent "$1" || agent_rc=$?
+  [[ $agent_rc == 1 ]] || return 1
   jq -cn --argjson ancestors "$records" '{pid:"0",start:"",ancestors:$ancestors}'
 }
 
