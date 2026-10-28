@@ -304,7 +304,7 @@ These cases establish actual Claude tool and process cleanup, but do not establi
 Legacy VM transport, denial of approval, and interrupted cleanup retain fixture coverage and require separate live acceptance.
 
 An earlier shared-server probe caused tmux 3.2a to crash and closed three existing VM rows.
-Their task worktrees remained intact; teardown had not started.
+The two known task worktrees remained intact; teardown had not started.
 A dedicated-server reproduction confirmed that an unqualified pane target could trigger the crash.
 Task-scoped pane and window commands now use the qualified `=session:` target.
 A real Linux regression checks a colliding window name from another session on a private server.
