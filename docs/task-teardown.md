@@ -274,6 +274,8 @@ The entries were removed after acceptance; all other parsed settings remained un
 
 The observer confirmed absence of the worktree, registration, branch, branch configuration, sidecars, row, and recorded processes in all eight cases.
 The VM observer also confirmed task-session absence and survival of an independent sentinel session.
+Durable cmux-tui workspace records remained after terminal exit.
+Acceptance verified Mac row, provider, background-process, and tmux-session absence; it did not verify deletion of those records.
 The main-checkout ref and working status remained unchanged in every test repository.
 Observation-only acknowledgments completed receipts after independently verified row absence.
 The controller did not issue the initial removal for these passing cases.
