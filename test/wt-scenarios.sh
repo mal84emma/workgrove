@@ -41,6 +41,7 @@ wt_scenarios() {
   "$@" scenario_teardown_raw_tracked "8u. raw tracked bytes survive ident, stat caches, and initialized submodules"
   "$@" scenario_teardown_copy_schema "8v. invalid copy snapshot schemas retain private bytes without current patterns"
   "$@" scenario_teardown_vm_boundary "8w. controller VM removal rechecks ownership before deleting Git work"
+  "$@" scenario_teardown_command_completion "8x. command evidence remains mandatory for completion and task-name reuse"
   "$@" scenario_host_args "9. wt -H: the checks that happen before any ssh"
   "$@" scenario_connected_attach "10. wt -H attach checks connected clients and shell prompts"
   "$@" scenario_shared_helpers "11. bash startup, shared library loading, and tmux launch behavior"

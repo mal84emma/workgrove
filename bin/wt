@@ -217,10 +217,8 @@ cmd_new() {
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (kept by wt rm --keep-branch, or by a removal git would not call merged, or left behind by a worktree deleted outside wt); inspect it (git -C $REPO log $b), then delete it (git -C $REPO branch -D $b) or pick another name"
   if [[ -f $REPO/.git/wt/teardown/$name.json ]]; then
-    if [[ $(jq -r .stage "$REPO/.git/wt/teardown/$name.json") != complete ]]; then
-      (cmd_rm "$name" -r "$REPO" --observe-only) >/dev/null 2>&1 \
-        || die "cleanup remains pending for $name; retry wt rm $name before reusing this name"
-    fi
+    (cmd_rm "$name" -r "$REPO" --observe-only) >/dev/null 2>&1 \
+      || die "cleanup remains pending for $name; retry wt rm $name before reusing this name"
   fi
   check_identity "$name"
   if [[ $workspace -eq 1 ]] && is_remote; then   # the row request needs the host; fail before anything exists
@@ -737,11 +735,34 @@ cmd_rm() {
   fi
   if [[ $self_remote == 1 ]]; then self=remote; fi
   local remote=0; is_remote && remote=1
+  local previous_commands=null
+  if [[ -f $WT_TEARDOWN_FILE ]]; then
+    previous_commands=$(jq -c --arg generation "$generation" --arg repo "$REPO" --arg name "$name" \
+      'select(.generation == $generation and .repo == $repo and .name == $name) | if has("commands") then .commands else null end' "$WT_TEARDOWN_FILE") \
+      || die 'previous cleanup generation is unverified; kept its command evidence'
+    [[ -n $previous_commands ]] || die 'previous cleanup generation changed; kept its command evidence'
+  fi
+  if [[ $previous_commands != null ]]; then
+    teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/commands.py" validate "$generation" <<<"$previous_commands" \
+      || die 'previous task command evidence is invalid; kept the worktree'
+  fi
   WT_TEARDOWN_JSON=$(jq -cn --arg name "$name" --arg repo "$REPO" --arg path "$path" --arg branch "$branch" \
     --arg head "$verified_head" --arg metadata_hash "$verified_metadata" --arg base "$base" --arg base_object "$verified_base" --arg proof "$proof" \
     --argjson branch_config "$verified_branch_config" --argjson sidecars "$verified_sidecars" --arg generation "$generation" --arg agent "${WT_META[agent]-}" --argjson runtime "${WT_META[runtime]:-null}" --arg row "$row" --arg self "$self" --arg session "$session" \
-    --argjson tmux_identity "$tmux_identity" --argjson tmux_owner "$tmux_owner" --arg title "$title" --arg host "$host" --arg workspace "${WT_META[workspace]:-1}" --arg keep "$keep" --arg native "$native" --arg remote "$remote" '$ARGS.named')
+    --argjson commands "$previous_commands" --argjson tmux_identity "$tmux_identity" --argjson tmux_owner "$tmux_owner" --arg title "$title" --arg host "$host" --arg workspace "${WT_META[workspace]:-1}" --arg keep "$keep" --arg native "$native" --arg remote "$remote" '$ARGS.named')
   teardown_save prepared
+  if [[ $self == self ]]; then
+    local capture_row='' capture_self=''
+    cmux_require check_row_removal "$title" "$REPO" capture_row capture_self '' "$path"
+    [[ $capture_row == "$row" && $capture_self == self ]] || die 'self ownership changed before command cancellation'
+    teardown_commands_capture "$ROW_AGENT_PID" "$ROW_AGENT_START" || die 'task command cancellation is incomplete; kept the worktree'
+  elif [[ $self_remote == 1 ]]; then
+    tmux_self_ownership "$session" "$name" || die 'self ownership changed before command cancellation'
+    teardown_commands_capture "$(jq -r .pid <<<"$WT_TMUX_OWNER")" "$(jq -r .start <<<"$WT_TMUX_OWNER")" \
+      || die 'task command cancellation is incomplete; kept the worktree'
+  elif [[ $previous_commands != null ]]; then
+    teardown_commands_stop commands || die 'recorded task command cancellation is incomplete; kept the worktree'
+  fi
   if [[ $force == 0 ]]; then
     rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
     ((${#final_reasons[@]} == 0)) || die "work changed after preflight: ${final_reasons[*]}"

@@ -134,6 +134,8 @@ FAKE_BIN="$TEST_ROOT/bin"             # first on wt_run's PATH: the agent that `
 CMUX_LOG="$TEST_ROOT/cmux-calls.log"  # every argv that the cmux stub got, one per line
 AGENT_LOG="$TEST_ROOT/agent-argv.log" # the argv that `wt run` gave the agent
 mkdir -p "$SCRATCH_HOME" "$REPOS_DIR" "$FAKE_BIN"
+REAL_COMMANDS_PYTHON=$(command -v python3)
+ln -s "$REPO/test/fakes/commands-python.sh" "$FAKE_BIN/python3"
 
 # ---------------------------------------------------------------------------- assertions
 # describe, pass, fail, assert_eq, assert_grep, assert_link, assert_absent, assert_regular and
@@ -479,6 +481,7 @@ wt_run() {
            FAKE_CMUX_STATE="$FAKE_CMUX_STATE" CMUX_STUB_LOG="$CMUX_LOG" AGENT_ARGV_LOG="$AGENT_LOG" \
            CMUX_STUB_NONCE="$FAKE_CMUX_STATE/screen-append" \
            FAKE_VM_WT="$WT" FAKE_VM_REPO="$TEST_ROOT/vm/project" FAKE_VM_BIN="$TEST_ROOT/vm-bin" \
+           COMMANDS_REAL_PYTHON="$REAL_COMMANDS_PYTHON" \
            REMOTE_LOG="$TEST_ROOT/remote-log" TMUX_PANE=%1 SELF_TMUX_OWNER_PID="$$" \
            REMOTE_WT_STATE="$TEST_ROOT/remote-wt-state" \
            REMOTE_WT_SESSION="${REMOTE_WT_SESSION:-wt-project-task}" \
@@ -3486,6 +3489,8 @@ SHIM
   fixture_git "$r" worktree add -q -b quoted "$quoted_path"
   guard_scratch_root "$quoted_path"
   result=$(
+    # shellcheck source=lib/workgrove/safety.sh
+    source "$REPO/lib/workgrove/safety.sh"
     # shellcheck source=lib/workgrove/teardown.sh
     source "$REPO/lib/workgrove/teardown.sh"
     REPO="$r" teardown_remove_registration "$quoted_path"
@@ -4470,6 +4475,28 @@ SHIM
       assert_eq 'deletion-boundary refusal retains prepared intent' prepared "$(jq -r .stage "$r/.git/wt/teardown/target.json")"
     fi
   done
+  end_scenario
+}
+
+scenario_teardown_command_completion() {
+  begin_scenario "$1" || return 0
+  local r receipt invalid
+  r=$(new_repo command-completion); stub_cmux dead
+  assert_wt_ok 'create a command completion fixture' new completed --no-workspace -r "$r"
+  assert_wt_ok 'remove a task without a provider' rm completed -r "$r"
+  receipt=$(cat "$r/.git/wt/teardown/completed.json")
+  for invalid in false '{}' '[]'; do
+    printf '%s\n' "$receipt" | jq --argjson commands "$invalid" '.commands=$commands' >"$r/.git/wt/teardown/completed.json"
+    assert_wt_fails 1 'task commands remain active or unverified' rm completed -r "$r"
+    assert_wt_fails 1 'cleanup absence cannot be verified' rm completed --observe-only -r "$r"
+    assert_wt_fails 1 'cleanup remains pending' new completed --no-workspace -r "$r"
+    assert_gone 'invalid command evidence cannot reuse a completed task name' "$r/.worktrees/completed"
+    assert_branch "$r" wt/completed no
+  done
+  printf '%s\n' "$receipt" | jq '.self=null' >"$r/.git/wt/teardown/completed.json"
+  assert_wt_fails 1 'task commands remain active or unverified' rm completed -r "$r"
+  printf '%s\n' "$receipt" >"$r/.git/wt/teardown/completed.json"
+  assert_wt_ok 'valid headless completion remains repeatable' rm completed -r "$r"
   end_scenario
 }
 

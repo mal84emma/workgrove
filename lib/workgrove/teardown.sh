@@ -106,7 +106,8 @@ try:
         acquire()
     except BlockingIOError:
         sys.exit("wt: teardown already runs for " + name)
-    environment = dict(os.environ, WG_TEARDOWN_CONTROL_FD=str(worker.fileno()), WG_TEARDOWN_LOCK_PATH=path)
+    environment = dict(os.environ, WG_TEARDOWN_CONTROL_FD=str(worker.fileno()), WG_TEARDOWN_LOCK_PATH=path,
+                       WG_TEARDOWN_ORIGIN_PID=str(os.getppid()))
     if machine:
         environment["WT_MACHINE"] = machine
     child = subprocess.Popen([interpreter, "-c", "export WG_TEARDOWN_WORKER_PID=$BASHPID; exec \"$@\"", "worker",
@@ -239,7 +240,44 @@ teardown_preflight() { # teardown_preflight <worktree path>
   done
   location=$(physical_dir "$WG_LIB_DIR")
   path_within "$location" "$root" && die 'wt libraries are inside the target worktree; use an installation outside it'
+  teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/commands.py" probe || die 'kernel task command identities are unavailable; kept the task'
   return 0
+}
+
+teardown_commands_observe() {
+  local manifest generation self
+  manifest=$(jq -c 'if has("commands") then .commands else null end' <<<"$WT_TEARDOWN_JSON") || return 1
+  if [[ $manifest == null ]]; then
+    self=$(jq -r .self <<<"$WT_TEARDOWN_JSON")
+    [[ $self == '' ]]
+    return
+  fi
+  generation=$(jq -r .generation <<<"$WT_TEARDOWN_JSON")
+  teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/commands.py" observe "$generation" <<<"$manifest"
+}
+
+teardown_commands_stop() {
+  local manifest generation
+  manifest=$(jq -c 'if has("commands") then .commands else null end' <<<"$WT_TEARDOWN_JSON") || return 1
+  [[ $manifest != null ]] || { teardown_commands_observe; return; }
+  generation=$(jq -r .generation <<<"$WT_TEARDOWN_JSON")
+  teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/commands.py" stop "$generation" "$1" <<<"$manifest"
+}
+
+teardown_commands_capture() { # Stop proven task commands before the last work-preservation check.
+  local root=$1 start=$2 generation manifest refreshed attempt stage
+  generation=$(jq -r .generation <<<"$WT_TEARDOWN_JSON")
+  manifest=$(jq -c 'if has("commands") then .commands else null end' <<<"$WT_TEARDOWN_JSON") || return 1
+  stage=$(jq -r .stage <<<"$WT_TEARDOWN_JSON")
+  for ((attempt=0; attempt<3; attempt++)); do
+    refreshed=$(teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/commands.py" capture "$generation" "$root" "$start" "$WG_TEARDOWN_ORIGIN_PID" <<<"$manifest") || return 1
+    WT_TEARDOWN_JSON=$(jq -c --argjson commands "$refreshed" '.commands=$commands' <<<"$WT_TEARDOWN_JSON") || return 1
+    teardown_save "$stage"
+    teardown_commands_stop commands || return 1
+    [[ $refreshed != "$manifest" ]] || return 0
+    manifest=$refreshed
+  done
+  return 1
 }
 
 teardown_preservation() { # Recheck the frozen proof before deleting the remaining branch.
@@ -318,6 +356,7 @@ teardown_observe() { # Observe absence only; this function never closes a row or
   [[ ! -e $REPO/.git/wt/teardown/$name.branch-locks && ! -L $REPO/.git/wt/teardown/$name.branch-locks ]] || return 1
   [[ $(teardown_sidecars_snapshot "$name") == '{"metadata":"absent","prompt":"absent","started":"absent"}' ]] || return 1
   task_admin_preserved "$path" || return 1
+  teardown_commands_observe || return 1
   registrations=$(git -C "$REPO" worktree list --porcelain) || return 1
   ! grep -qxF "worktree $path" <<<"$registrations" || return 1
   if [[ $keep == 0 ]]; then
@@ -347,7 +386,10 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
     return 0
   fi
   if [[ ${row_closed:-0} == 1 && $remote != 1 ]]; then die 'row acknowledgment is only valid for VM cleanup'; fi
-  if [[ $stage == complete ]]; then printf 'teardown complete %s\n' "$name"; return 0; fi
+  if [[ $stage == complete ]]; then
+    teardown_commands_observe || die 'task commands remain active or unverified; cleanup is pending'
+    printf 'teardown complete %s\n' "$name"; return 0
+  fi
   task_admin_preserved "$path" || die 'private submodule Git data prevents cleanup; kept the task registration'
   if [[ $stage == prepared ]]; then
     # An interrupted removal may have deleted the directory before updating its receipt.
@@ -459,6 +501,8 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
       fi
       if [[ $identity_rc == 0 && $caller_session == "$session" ]] && process_descends "$BASHPID" "$pane_pid"; then
         tmux_self_ownership "$session" "$name" || die 'session ownership changed; cleanup remains pending'
+        teardown_commands_capture "$(jq -r .pid <<<"$WT_TMUX_OWNER")" "$(jq -r .start <<<"$WT_TMUX_OWNER")" \
+          || die 'task command cancellation is incomplete; session cleanup remains pending'
         if [[ $(jq -r '.mode // "agent"' <<<"$WT_TMUX_OWNER") == shell ]]; then
           local saved_owner saved_shell saved_start
           saved_owner=$(jq -c .tmux_owner <<<"$WT_TEARDOWN_JSON")
@@ -498,6 +542,10 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
       die 'saved row still exists with changed identity; cleanup remains pending'
     fi
     if [[ -n $checked_row ]]; then
+      if [[ $checked_self == self ]]; then
+        teardown_commands_capture "$ROW_AGENT_PID" "$ROW_AGENT_START" \
+          || die 'task command cancellation is incomplete; row cleanup remains pending'
+      fi
       close_row "$row" "$checked_self" || { warn "$CMUX_ERROR"; rc=1; }
       if [[ $rc == 0 ]]; then
         local rows
@@ -511,6 +559,8 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
     warn "receipt: $WT_TEARDOWN_FILE"
     return 1
   fi
+  teardown_commands_stop all || die 'Git and row cleanup completed, but task command cleanup remains pending'
+  teardown_commands_observe || die 'task runtime or command absence is unverified; cleanup remains pending'
   teardown_save complete
   printf 'teardown complete %s\n' "$name"
 }

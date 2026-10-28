@@ -351,6 +351,7 @@ row_agent_once() { # row_agent <row id> — sets ROW_AGENT: "self" for the calle
   # runs in the row, else "idle". A failed check returns a diagnostic in CMUX_ERROR.
   local state
   ROW_AGENT=busy
+  ROW_AGENT_PID='' ROW_AGENT_START=''
   state=$(cmux_call top --workspace "$1" --processes --json 2>/dev/null) \
     || { cmux_error "cannot check the agent in cmux row $1; kept the worktree"; return 1; }
   printf '%s' "$state" | jq -e '.coding_agents | type == "array"
@@ -438,6 +439,7 @@ row_agent_once() { # row_agent <row id> — sets ROW_AGENT: "self" for the calle
   done <<<"$row_pids"
   [[ $(LC_ALL=C ps -p "$root" -o lstart=) == "$root_start" ]] || { cmux_error 'requesting provider changed during ownership verification'; return 1; }
   ROW_AGENT=self
+  ROW_AGENT_PID=$root ROW_AGENT_START=$root_start
 }
 
 # cmux_rows_load <skip|stop|checked> [command...] sets CMUX_ROWS_JSON and CMUX_ROWS_FULL.

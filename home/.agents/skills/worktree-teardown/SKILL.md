@@ -41,6 +41,10 @@ wt prune                             # removes those worktrees
 
 **Warning:** `wt rm` removes your own cmux row, and that ends this agent session. Give the user the summary in step 2 **before** you run the command in step 4.
 
+Finish other tool calls before step 4.
+Submit teardown as the final, exclusive tool action.
+Do not start commands concurrently with removal.
+
 Do these steps in this order:
 
 1. Inspect the worktree with `wt show <name>`. Read its metadata with `wt show <name> --json`.
@@ -61,6 +65,7 @@ The sandbox can block the cmux and tmux sockets even after you change directorie
 `wt rm` verifies local ownership through cmux process attribution and operating-system process ancestry.
 Inherited cmux caller variables do not prove ownership.
 Unknown ownership keeps the worktree and reports the uncertainty.
+
 New Codex task launches use `--no-daemon` to keep their runtime in the task process tree.
 A generation-bound launcher record must also match the live process and target row or session.
 Older shared-server sessions can require a task-owned restart before teardown.
@@ -70,10 +75,15 @@ Never replace their caller variables with guessed row identifiers.
 That flag skips cmux's running-process confirmation. It does not discard Git work or waive `wt rm` safety checks.
 If Claude's automatic approval review rejects self-removal, report the rejection and leave the task intact.
 If `wt rm` refuses for another reason, the row stays open. Report the reason and leave the worktree.
+
 If row closure fails after removal, report that Git cleanup succeeded and session cleanup remains pending.
 Retry the same `wt rm` command with escalation when needed.
 The receipt under `<repo>/.git/wt/teardown/` retains the remaining cleanup operation.
 A completed receipt makes repeated removal harmless.
+
+Command cancellation requires proven ancestry and a saved kernel birth identity.
+Unknown process ownership or a changed executable leaves cleanup pending.
+Observation-only retries never signal processes.
 
 ### On a VM
 
@@ -91,6 +101,7 @@ If the session stays active after that wait, the cleanup is incomplete.
 The `removed` message confirms only worktree removal.
 In this case, report its warning and cleanup receipt.
 The command returns a failure status when the hook does not finish cleanup.
+
 Retry with `wt -H <vm> rm -r <repo> <name>` from the Mac.
 The controller confirms row absence and reconciles only the recorded session identity.
 Do not close another running agent during recovery.

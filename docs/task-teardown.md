@@ -10,6 +10,10 @@ A user's teardown request authorizes routine safe removal and closure of that ta
 Discarding work and closing another task's running agent still require explicit authorization.
 Operating-system approval remains separate from these checks.
 
+Finish other tool calls before removal.
+Submit teardown as the final, exclusive tool action.
+Do not start commands concurrently with removal.
+
 1. Inspect the task with `wt show <name> --json`.
 2. Report the branch, commits, test results, and removal scope before closure.
 3. Change directories outside the task, using an installation outside that task.
@@ -185,6 +189,33 @@ The qualified target also prevents same-named windows from hiding another sessio
 Exclusive ownership covers every window and pane, including independent commands.
 These fixtures do not establish real provider cancellation or terminal shutdown.
 
+## Stop task-owned commands
+
+Before its last preservation check, self-removal records the verified provider's live process tree.
+The receipt pins each command to its generation, boot, executable name, and kernel birth identity.
+Linux uses process start ticks; the Mac uses kernel process start seconds and microseconds.
+Unavailable kernel identities refuse removal; second-resolution status timestamps cannot authorize signals.
+The manifest records executable names, without task briefs or full command arguments.
+
+The cleanup command excludes its own finite worker subtree and waiting shell wrappers.
+Provider, app-server, exec-server, and related provider helpers remain protected before row closure.
+Their recorded absence is still required for completion.
+Sibling background commands receive bounded termination and, when needed, kill signals before the last work-preservation check.
+Fresh live-provider samples can extend the manifest before any new signal.
+Replacement identities and changed executables remain untouched.
+
+After independently verified row or session closure, ordinary recovery can stop remaining pinned runtime processes.
+Observation-only recovery never sends signals.
+Completed-receipt retries and task-name reuse also require recorded process absence.
+An older self-removal receipt without command evidence cannot prove process completion after its provider disappears.
+Workgrove does not adopt an orphan from its process ID, directory, name, environment, or process group.
+
+Repeated samples do not freeze concurrent forks.
+A new command launched after the final sample can escape the manifest when its parent exits.
+The exclusive-final-action requirement excludes that concurrent launch from the shutdown guarantee.
+Commands already orphaned before capture also lack ancestry proof and require separate inspection.
+No new daemon or service is added.
+
 ## Recover incomplete cleanup
 
 A per-task operating-system lock prevents cooperating removal commands from deleting the same generation concurrently.
@@ -293,7 +324,7 @@ The tests used this candidate without updating either installed workgrove copy.
 | Host | Provider | Ordinary squash | Stacked squash |
 |---|---|---|---|
 | The Mac | Claude 2.1.312 | Passed | Passed |
-| The Mac | Codex 0.164.0 | Passed | Passed |
+| The Mac | Codex 0.164.0 | Cancellation unproven | Cancellation unproven |
 | Ubuntu VM | Claude 2.1.306 | Passed | Passed |
 | Ubuntu VM | Codex 0.164.0 | Passed | Passed |
 
@@ -311,7 +342,7 @@ The temporary VM Codex installation included its matching official command host.
 The user authorized trust entries only for the four disposable Codex repositories.
 The entries were removed after acceptance; all other parsed settings remained unchanged.
 
-The observer confirmed absence of the worktree, registration, branch, branch configuration, sidecars, row, and recorded processes in all eight cases.
+The first matrix recorded absence of worktrees, registrations, branches, branch configuration, sidecars, rows, and sampled processes.
 The VM observer also confirmed task-session absence and survival of an independent sentinel session.
 
 Durable cmux-tui workspace records remained after terminal exit.
@@ -319,7 +350,13 @@ Acceptance verified Mac row, provider, background-process, and tmux-session abse
 
 The main-checkout ref and working status remained unchanged in every test repository.
 Observation-only acknowledgments completed receipts after independently verified row absence.
-The controller did not issue the initial removal for these passing cases.
+The controller did not issue the initial removal in these cases.
+
+The first Mac Codex background commands used a 600-second duration.
+Their final absence check occurred after that duration, so it did not prove cancellation.
+A repeat with 6000-second commands exposed orphaned commands after otherwise successful Git and row cleanup.
+Those Mac Codex cases failed shutdown acceptance.
+The runtime fix now adds explicit command cancellation and process predicates before completion.
 
 Claude used print mode with real Bash tools and automatic permission handling.
 These cases establish actual Claude tool and process cleanup, but do not establish interactive Claude terminal behavior.
