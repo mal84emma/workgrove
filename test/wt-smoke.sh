@@ -350,6 +350,7 @@ prepare_cmux() {
   local CMUX_STUB_FAIL_PING=0 CMUX_STUB_AGENTS=0 CMUX_STUB_CALLER=other-row CMUX_STUB_BUSY_ROWS=''
   local CMUX_STUB_FAIL_TOP=0 CMUX_STUB_BAD_TOP=0
   local CMUX_STUB_FAIL_LIST='' CMUX_STUB_EMPTY_LIST='' CMUX_STUB_FAIL_CLOSE=0
+  local CMUX_STUB_CONFIRM_CLOSE=0
   local CMUX_STUB_DIFF_STATUS=0
   for assignment in "${WT_RELAY_ENV[@]}"; do local "$assignment"; done
   rm -f "$FAKE_CMUX_STATE/fail/"* "$FAKE_CMUX_STATE/top/"*.json
@@ -373,7 +374,7 @@ prepare_cmux() {
   if [[ -n $CMUX_STUB_EMPTY_LIST ]]; then fake_queue "workspace-list--$CMUX_STUB_EMPTY_LIST" ''; fi
   if [[ $CMUX_STUB_FAIL_CLOSE == 1 ]]; then fake_failure workspace-close 1 'Error: socket access denied'; fi
   if [[ $CMUX_STUB_DIFF_STATUS != 0 ]]; then fake_failure diff "$CMUX_STUB_DIFF_STATUS"; fi
-  if ((CMUX_STUB_AGENTS > 0)); then
+  if ((CMUX_STUB_AGENTS > 0)) || [[ $CMUX_STUB_CONFIRM_CLOSE == 1 ]]; then
     printf 'Error: confirmation_required: Workspace has a running process; retry with --force\n' >"$FAKE_CMUX_STATE/close-confirmation"
   else rm -f "$FAKE_CMUX_STATE/close-confirmation"; fi
   if [[ -f $TEST_ROOT/cmux-send-fail ]]; then fake_failure send 1; fi
@@ -1159,6 +1160,188 @@ scenario_rm_refusals() {
   assert_has "…and says so in what it printed" "$WT_OUT" "removed kept (branch wt/kept kept)"
   assert_gone "…the worktree still goes" "$side"
   assert_branch "$r" wt/kept yes
+  end_scenario
+}
+
+# This investigation checks an alternative base without changing the child's sidecar.
+scenario_stacked_squash_base() {
+  begin_scenario "$1" || return 0
+  local r e child saved parent_head child_head probe rc=0 sidecar
+  local mac_bin="$TEST_ROOT/stack-mac-bin" WT_PATH_PREFIX=''
+  export GIT_ALLOW_PROTOCOL=file
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  WT_PATH_PREFIX=$mac_bin
+  r=$(new_repo stacked-base)
+  e=$(add_origin "$r")
+  stub_cmux dead
+  assert_wt_ok 'create parent' new parent --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/parent" parent.txt parent
+  fixture_git "$r/.worktrees/parent" push -q -u origin wt/parent
+  parent_head=$(fixture_git "$r" rev-parse wt/parent)
+  assert_wt_ok 'create child on local parent' new child -b wt/parent --no-workspace -r "$r"
+  child="$r/.worktrees/child"
+  fixture_commit "$child" child.txt child
+  fixture_git "$child" push -q -u origin wt/child
+  saved=$(cat "$r/.git/wt/child.json")
+  land_squash "$e" wt/parent 'parent squash'
+  assert_eq 'parent squash preserves the complete tree' \
+    "$(fixture_git "$r" rev-parse "$parent_head^{tree}")" "$(fixture_git "$e" rev-parse 'main^{tree}')"
+  assert_wt_ok 'ordinary squash teardown removes the parent' rm parent -r "$r"
+  assert_branch "$r" wt/parent no
+  assert_absent "$r" .git/wt/parent.json
+  assert_eq 'parent removal leaves child metadata intact' "$saved" "$(cat "$r/.git/wt/child.json")"
+  fixture_git "$child" merge -q --no-edit origin/main
+  fixture_git "$child" push -q origin wt/child
+  child_head=$(fixture_git "$r" rev-parse wt/child)
+  # The editor represents a retargeted PR. It merges into main, independent of the saved base.
+  land_squash "$e" wt/child 'child squash after PR retarget'
+  fixture_git "$r" fetch -q --prune origin
+  assert_eq 'child squash preserves the complete tree' \
+    "$(fixture_git "$r" rev-parse "$child_head^{tree}")" "$(fixture_git "$e" rev-parse 'main^{tree}')"
+  for probe in wt/parent wt/child; do
+    rc=0
+    fixture_git "$r" ls-remote --exit-code --heads origin "refs/heads/$probe" >/dev/null || rc=$?
+    assert_eq "$probe is absent on the fake remote" 2 "$rc"
+    rc=0
+    fixture_git "$r" show-ref --verify "refs/remotes/origin/$probe" >/dev/null 2>&1 || rc=$?
+    assert_eq "$probe has no remote-tracking ref" 128 "$rc"
+  done
+  assert_wt_ok 'JSON show reports an unknown comparison' show child --json -r "$r"
+  assert_eq 'show retains the deleted creation base' wt/parent "$(jq -r .base <<<"$WT_OUT")"
+  assert_eq 'show has no ahead count' null "$(jq -r .ahead <<<"$WT_OUT")"
+  assert_eq 'show cannot determine landing' '?' "$(jq -r .merged <<<"$WT_OUT")"
+  assert_wt_ok 'prune retains the child' prune --dry-run -r "$r"
+  assert_has 'prune names the missing parent' "$WT_OUT" "base 'wt/parent' cannot be compared"
+  assert_wt_fails 3 "base 'wt/parent' cannot be compared" rm child -r "$r"
+  assert_dir 'refusal preserves child worktree' "$child"
+  assert_branch "$r" wt/child yes
+  assert_eq 'refusal preserves child metadata' "$saved" "$(cat "$r/.git/wt/child.json")"
+  WT_SANDBOX=seatbelt
+  assert_wt_fails 3 "base 'wt/parent' cannot be compared" rm child -r "$r"
+  assert_lacks 'base refusal precedes the sandbox check' "$WT_OUT" 'rerun this command with escalation'
+  WT_SANDBOX=''
+  # Run the existing content check against a candidate. This does not select a production base.
+  sidecar=$(sha256_of "$r/.git/wt/child.json")
+  rc=0
+  # shellcheck disable=SC2016  # The child shell expands these expressions.
+  probe=$(env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT \
+    HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" "$BASH" -c '
+    source "$1/lib/workgrove/common.sh"
+    source "$1/lib/workgrove/safety.sh"
+    REPO=$2
+    why=""
+    branch_landed refs/heads/wt/child refs/remotes/origin/main why || { printf "%s" "$why"; exit 1; }
+    printf "%s" "$why"
+  ' _ "$REPO" "$r") || rc=$?
+  assert_eq 'the fetched default branch passes content validation' '' "$probe"
+  assert_eq 'content validation preserves the sidecar' "$sidecar" "$(sha256_of "$r/.git/wt/child.json")"
+  assert_eq 'content validation returned success' 0 "$rc"
+  fixture_commit "$child" unpublished.txt 'post-merge work'
+  rc=0
+  # shellcheck disable=SC2016  # The child shell expands these expressions.
+  probe=$(env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_COUNT \
+    HOME="$SCRATCH_HOME" XDG_CONFIG_HOME="$SCRATCH_HOME/.config" "$BASH" -c '
+    source "$1/lib/workgrove/common.sh"
+    source "$1/lib/workgrove/safety.sh"
+    REPO=$2
+    why=""
+    branch_landed refs/heads/wt/child refs/remotes/origin/main why && exit 0
+    printf "%s" "$why"
+    exit 1
+  ' _ "$REPO" "$r") || rc=$?
+  assert_eq 'content validation rejects a post-merge commit' 1 "$rc"
+  assert_has 'content validation identifies unpreserved content' "$probe" 'would still change 1 path(s)'
+  assert_dir 'the probe leaves the child intact' "$child"
+  end_scenario
+}
+
+# These dry runs record current limitations. They never authorize deletion.
+scenario_teardown_evidence_limits() {
+  begin_scenario "$1" || return 0
+  local r e initial head shim="$TEST_ROOT/comparison-error" real_git net_shim="$TEST_ROOT/net-comparison-error"
+  local WT_PATH_PREFIX=''
+  export GIT_ALLOW_PROTOCOL=file
+  r=$(new_repo remote-evidence)
+  e=$(add_origin "$r")
+  initial=$(fixture_git "$r" rev-parse main)
+  stub_cmux dead
+  assert_wt_ok 'create pushed task' new rewound --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/rewound" unique.txt 'unique work'
+  fixture_git "$r/.worktrees/rewound" push -q -u origin wt/rewound
+  head=$(fixture_git "$r" rev-parse wt/rewound)
+  fixture_git "$TEST_ROOT/origins/$(basename "$r").git" update-ref refs/heads/wt/rewound "$initial"
+  assert_eq 'local upstream still holds the old tip' "$head" "$(fixture_git "$r" rev-parse origin/wt/rewound)"
+  assert_eq 'remote head no longer holds that tip' "$initial" \
+    "$(fixture_git "$r" ls-remote --heads origin refs/heads/wt/rewound | cut -f1)"
+  assert_wt_ok 'inspect rewound remote without deletion' prune --dry-run -r "$r"
+  assert_has 'current pushed check accepts ref existence' "$WT_OUT" 'would remove rewound'
+  assert_dir 'dry run preserves unpublished content' "$r/.worktrees/rewound"
+
+  r=$(new_repo stale-evidence)
+  e=$(add_origin "$r")
+  assert_wt_ok 'create squash task' new stale --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/stale" landed.txt landed
+  fixture_git "$r/.worktrees/stale" push -q -u origin wt/stale
+  land_squash "$e" wt/stale 'squash before revert'
+  fixture_git "$r" fetch -q --prune origin
+  fixture_git "$e" revert --no-edit main >/dev/null
+  fixture_git "$e" push -q origin main
+  assert_wt_ok 'inspect cached positive comparison' prune --dry-run -r "$r"
+  assert_has 'a stale positive comparison skips the fetch' "$WT_OUT" 'would remove stale'
+  fixture_git "$r" fetch -q --prune origin
+  assert_wt_ok 'inspect the refreshed revert' prune --dry-run -r "$r"
+  assert_has 'the current base rejects the reverted squash' "$WT_OUT" 'keep stale ('
+  assert_dir 'both dry runs preserve the squash task' "$r/.worktrees/stale"
+
+  r=$(new_repo comparison-error)
+  assert_wt_ok 'create comparison failure task' new error --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/error" unique.txt 'unpublished work'
+  real_git=$(command -v git)
+  mkdir -p "$shim"
+  {
+    printf '#!/usr/bin/env bash\n'
+    # shellcheck disable=SC2016  # The generated script expands its arguments.
+    printf 'for arg in "$@"; do [[ $arg != rev-list ]] || exit 128; done\n'
+    printf 'exec %q "$@"\n' "$real_git"
+  } >"$shim/git"
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX=$shim
+  assert_wt_ok 'inspect comparison failure without deletion' prune --dry-run -r "$r"
+  assert_has 'current count errors become zero' "$WT_OUT" 'would remove error'
+  assert_dir 'the investigation preserves unpublished work' "$r/.worktrees/error"
+
+  WT_PATH_PREFIX=''
+  r=$(new_repo empty-net-error)
+  assert_wt_ok 'create empty-net comparison fixture' new empty --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/empty" transient.txt transient
+  fixture_git "$r/.worktrees/empty" rm -q transient.txt
+  fixture_git "$r/.worktrees/empty" commit -q -m 'undo transient change'
+  fixture_commit "$r" upstream.txt 'later base change'
+  head=$(fixture_git "$r" rev-parse wt/empty)
+  assert_wt_ok 'inspect an empty net change before comparison failure' prune --dry-run -r "$r"
+  assert_has 'the normal content guard keeps canceled commits' "$WT_OUT" 'keep empty ('
+  assert_has 'the normal content guard explains its refusal' "$WT_OUT" 'is empty, which proves nothing'
+  mkdir -p "$net_shim"
+  {
+    cat <<'GIT'
+#!/usr/bin/env bash
+diff_tree=0 quiet=0
+for argument in "$@"; do
+  case $argument in diff-tree) diff_tree=1 ;; --quiet) quiet=1 ;; esac
+done
+if ((diff_tree && quiet)); then exit 128; fi
+GIT
+    printf 'exec %q "$@"\n' "$real_git"
+  } >"$net_shim/git"
+  chmod +x "$net_shim/git"
+  WT_PATH_PREFIX=$net_shim
+  assert_wt_ok 'inspect an empty-net comparison failure without deletion' prune --dry-run -r "$r"
+  assert_has 'the unchecked empty-net comparison error permits a candidate' "$WT_OUT" 'would remove empty'
+  assert_dir 'the dry run preserves the empty-net worktree' "$r/.worktrees/empty"
+  assert_eq 'the dry run preserves canceled commit history' "$head" "$(fixture_git "$r" rev-parse wt/empty)"
+  assert_regular "$r" .git/wt/empty.json
   end_scenario
 }
 
@@ -2128,6 +2311,77 @@ STUB
   WT_RELAY_ENV=()
 
   stub_cmux dead
+  end_scenario
+}
+
+# A shared server can preserve another terminal's caller context.
+scenario_codex_caller_context() {
+  begin_scenario "$1" || return 0
+  local r id saved tip mac_bin="$TEST_ROOT/caller-mac-bin" WT_PATH_PREFIX=''
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  WT_PATH_PREFIX=$mac_bin
+  r=$(new_repo caller-context)
+  id=$(basename "$r")
+  stub_cmux alive
+  assert_wt_ok 'create requester task' new requester -a codex --no-workspace -r "$r"
+  fake_rows "$(fake_row requester-row requester "@local · $id")" >"$WT_ROWS"
+  saved=$(cat "$r/.git/wt/requester.json")
+  tip=$(fixture_git "$r" rev-parse wt/requester)
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_AGENTS=1" "CMUX_WORKSPACE_ID=seed-row")
+  assert_wt_fails 1 'another agent is running in cmux row requester-row; kept the worktree' rm requester -r "$r"
+  assert_dir 'caller mismatch preserves the worktree' "$r/.worktrees/requester"
+  assert_eq 'caller mismatch preserves the branch' "$tip" "$(fixture_git "$r" rev-parse wt/requester)"
+  assert_eq 'caller mismatch preserves the sidecar' "$saved" "$(cat "$r/.git/wt/requester.json")"
+  assert_registered "$r" requester yes
+  assert_lacks 'caller mismatch sends no close request' "$(cat "$CMUX_LOG")" 'workspace close'
+  WT_CWD=$r
+  assert_wt_fails 1 'another agent is running in cmux row requester-row' rm requester -r "$r"
+  assert_lacks 'changing directory cannot repair caller identity' "$(cat "$CMUX_LOG")" 'workspace close'
+  assert_wt_ok 'prune currently reports success despite the refusal' prune -r "$r"
+  assert_has 'prune retains its refused candidate' "$WT_OUT" 'keep requester (removal refused above)'
+  assert_dir 'prune did not remove the requesting task' "$r/.worktrees/requester"
+  assert_lacks 'prune sends no close request' "$(cat "$CMUX_LOG")" 'workspace close'
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=" "CMUX_STUB_AGENTS=1")
+  assert_wt_fails 1 'another agent is running in cmux row requester-row' rm requester -r "$r"
+  assert_dir 'missing caller identity also keeps the task' "$r/.worktrees/requester"
+  # This models corrected context. It does not prove a provider launch configuration fixes inheritance.
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=requester-row" "CMUX_STUB_AGENTS=1" "CMUX_WORKSPACE_ID=requester-row")
+  : >"$CMUX_LOG"
+  assert_wt_ok 'correct caller identity permits normal self-removal' rm requester -r "$r"
+  assert_has 'only verified self-close skips confirmation' "$(cat "$CMUX_LOG")" 'workspace close requester-row --force'
+  assert_gone 'corrected fixture removes its worktree' "$r/.worktrees/requester"
+  assert_branch "$r" wt/requester no
+  assert_absent "$r" .git/wt/requester.json
+  WT_RELAY_ENV=() WT_CWD=''
+  end_scenario
+}
+
+# Agent discovery and terminal-close confirmation use different observations.
+scenario_close_confirmation_failure() {
+  begin_scenario "$1" || return 0
+  local r id mac_bin="$TEST_ROOT/confirmation-mac-bin" WT_PATH_PREFIX=''
+  mkdir -p "$mac_bin"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
+  chmod +x "$mac_bin/uname"
+  WT_PATH_PREFIX=$mac_bin
+  r=$(new_repo close-confirmation)
+  id=$(basename "$r")
+  stub_cmux alive
+  assert_wt_ok 'create late confirmation fixture' new late --no-workspace -r "$r"
+  fake_rows "$(fake_row late-row late "@local · $id")" >"$WT_ROWS"
+  WT_RELAY_ENV=("CMUX_STUB_CALLER=seed-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_CONFIRM_CLOSE=1")
+  assert_wt_fails 1 'confirmation_required: Workspace has a running process; retry with --force' rm late -r "$r"
+  assert_has 'the earlier removed line remains in the failed command output' "$WT_OUT" 'removed late'
+  assert_has 'the close failure names the remaining row' "$WT_OUT" 'could not close cmux row late-row'
+  assert_has 'the failed close command does not claim self' "$(cat "$CMUX_LOG")" 'workspace close late-row'
+  assert_lacks 'an unknown caller never gets a forced close' "$(cat "$CMUX_LOG")" 'workspace close late-row --force'
+  assert_gone 'worktree removal finished before confirmation failed' "$r/.worktrees/late"
+  assert_branch "$r" wt/late no
+  assert_absent "$r" .git/wt/late.json
+  assert_wt_fails 1 "no worktree named 'late'" rm late -r "$r"
+  WT_RELAY_ENV=()
   end_scenario
 }
 
