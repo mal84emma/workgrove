@@ -809,7 +809,8 @@ See the [cmux compatibility log](docs/cmux-integration.md#cmux-compatibility-log
 `wt` and the Mac hook use `lib/workgrove/cmux.sh` to create SSH rows.
 The adapter reads the JSON window list before it looks for an existing row.
 If any window fails, it stops before creating a row.
-If `cmux ssh` prints no row ref, the adapter waits one second and makes one lookup.
+SSH creation requests JSON with explicit UUID formatting.
+The adapter validates the new row's UUID and host before it tags, selects, or closes that row.
 
 The second line identifies the row's host and repo.
 If the adapter cannot write it on a new row, it closes that row and reports the failure.

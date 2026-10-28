@@ -158,11 +158,11 @@ scenario_shared_creation() {
   record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"new-task"}'
   hook >/dev/null
   has "$CMUX_LOG" 'ssh test-vm --name new-task --no-focus --command'
-  has "$CMUX_LOG" 'workspace-action --workspace workspace:99 --action set-description --description @test-vm · repo'
+  has "$CMUX_LOG" 'workspace-action --workspace 00000000-0000-4000-8000-000000000099 --action set-description --description @test-vm · repo'
   has "$CMUX_LOG" 'dismiss-notification'
   record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"new-task"}'
   CMUX_TAG_FAIL=1 hook >/dev/null
-  has "$CMUX_LOG" 'workspace close workspace:99 --force'
+  has "$CMUX_LOG" 'workspace close 00000000-0000-4000-8000-000000000099 --force'
   lacks "$CMUX_LOG" 'dismiss-notification'
   record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
   CMUX_TAG_FAIL=1 hook >/dev/null
@@ -352,7 +352,7 @@ scenario_native_attach_close() {
   record wt-attach '{"host":"test-vm","repo":"/vm/repos/child","task":"child"}'
   hook >/dev/null
   has "$CMUX_LOG" 'ssh test-vm --name child --no-focus'
-  has "$CMUX_LOG" 'workspace-action --workspace workspace:99 --action set-description --description @test-vm · child'
+  has "$CMUX_LOG" 'workspace-action --workspace 00000000-0000-4000-8000-000000000099 --action set-description --description @test-vm · child'
   lacks "$CMUX_LOG" 'workspace select'
   has "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
   record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'

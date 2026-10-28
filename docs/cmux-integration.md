@@ -47,7 +47,7 @@ Angle brackets mark values supplied by the caller.
 | `cmux workspace create --name <repo-shell-title> --description <description> --cwd <repo>` | `cmd_task` in `bin/wt` creates a local repository shell through `cmux_create`. |
 | `cmux workspace select <id>` | `cmux_select` selects an existing row. |
 | `cmux workspace close <id> [--force]` | `close_row` uses `--force` for the caller's own row or a newly created row during failed setup. |
-| `cmux ssh <host> --name <title> --no-focus --command <command>` | `cmux_row_create_ssh` creates a VM row before tagging it. Requested selection follows the description update. |
+| `cmux ssh <host> --name <title> --no-focus --command <command> --json --id-format uuids` | `cmux_row_create_ssh` creates a VM row before tagging it. Requested selection follows the description update. |
 | `cmux workspace-action --workspace <id> --action set-description --description <description>` | `cmux_row_create_ssh` and `cmux_row_open_ssh` write the second line. |
 | `cmux top --workspace <id> --json` | `row_agent` reads the caller identity and agent process counts before removal. |
 | `cmux top --json` | `doctor_mac` in `doctor.sh` checks the response shape. |
@@ -71,10 +71,14 @@ The code prints additional repair commands without executing them.
 `hook_cmux_automation` in [automation.sh](../lib/workgrove/automation.sh) prints `cmux automation reload`.
 `install_configs` in [install.sh](../install.sh) prints `cmux hooks codex install --yes` or the VM provider status command.
 
-Creation output is text, not JSON.
-`cmux_ref` extracts the first `workspace:N` reference from local or SSH creation output.
-If SSH creation returns no reference, `cmux_row_create_ssh` waits one second and makes one lookup.
-That lookup excludes preexisting IDs and requires the requested title, host, and an absent repository description.
+Local creation returns text.
+`cmux_ref` extracts its first `workspace:N` reference.
+SSH creation requests JSON with explicit UUID formatting.
+`cmux_row_create_ssh` requires one response object with a valid `.workspace_id` and the requested remote host.
+It rejects disabled remote responses, preexisting IDs, and IDs that match the response's window or surface.
+It compares preexisting IDs without letter case.
+The adapter makes no discovery lookup after SSH creation.
+The earlier fallback waited one second because row discovery lagged creation.
 If a new row's description update fails, the adapter closes it and reports failure.
 An existing row's description update failure produces a diagnostic but preserves the row.
 SSH creation always uses `--no-focus`; explicit selection follows only when the caller requested focus.
@@ -108,6 +112,7 @@ Additional fields in captured fixtures do not establish additional runtime requi
 |---|---|---|
 | Window list | The outer value is an array. Each `.id` must be a universally unique identifier (UUID) string. | `cmux.sh`: `cmux_rows_load`. `doctor.sh`: `doctor_record`. |
 | Row list | Either an array or an object with `.workspaces` contains the rows. | `cmux.sh`: `cmux_rows_load`, `cmux_find_row`, `row_remote_field`, `from_row_on_host`. |
+| SSH creation | `.workspace_id` is a UUID string. `.remote.enabled` is true, and `.remote.destination` equals the requested host. | `cmux.sh`: `cmux_row_create_ssh`. |
 | Row identity | `.id` is a nonempty string. `.title` is a string. `.description` is null or a string. | `cmux.sh`: `cmux_rows_load`, `cmux_find_row`, `row_label`, `cmux_row_create_ssh`, and the `ROW_JQ` definitions. |
 | Remote identity | `.remote` is null or an object. `.remote.enabled` is null or boolean. `.remote.destination` is null or a string. | `cmux.sh`: `cmux_rows_load`, `ROW_JQ`, `from_row_on_host`. |
 | Native backend | `.remote.enabled` must be true. `.remote.backend` must equal `cmux-tui`. | [bin/cmux-hook](../bin/cmux-hook): the top-level `--event` handler. |
@@ -178,7 +183,7 @@ Adapter state such as `CMUX_ROWS_JSON` and `CMUX_RUN` is internal shell state, n
 | `WT_HOST`, `WT_REPOS_DIR` | `task.sh`: `wt_host`, repository search initialization. `doctor.sh`: `doctor_vm`. | The VM alias must be valid. The probe requires existing absolute folders separated by colons. |
 | `CODEX_SANDBOX` | `bin/wt`: `cmd_rm`. [task.sh](../lib/workgrove/task.sh): `open_code`. | A nonempty value blocks removal before socket cleanup and blocks direct VS Code launch. |
 | `WT_CLOSE_WAIT_SECONDS` | `bin/wt`: `cmd_rm`. | Relay teardown waits 22 seconds by default. Invalid values use the default. |
-| `WG_POLL_INTERVAL` | `common.sh`: `wg_sleep`. | Tests can replace the normal one-second lookup and recovery waits. |
+| `WG_POLL_INTERVAL` | `common.sh`: `wg_sleep`. | Tests can replace the normal one-second waits. |
 | `CMUX_CUSTOM_CODEX_PATH`, `CMUX_CUSTOM_CLAUDE_PATH`, `HOME` | [home/.zshenv](../home/.zshenv): top-level Darwin block. | Unset or empty overrides receive executable agent paths from `~/.local/bin`, which prevents wrapper recursion. |
 
 The [tmux environment contract](vm-protocol.md#the-tmux-session-environment) records the exact empty and removed-value rules.
@@ -192,7 +197,7 @@ They do not establish compatibility with an unverified release.
 | Recorded behavior | Source and implementation dependency |
 |---|---|
 | A row list covers one window. Window UUIDs remain stable when window indices change. | `cmux.sh`: comments and enumeration in `cmux_rows_load`. The [live verification](vm-open-relay.md#verification-on-cmux-0651) confirms cross-window lookup. |
-| Without a creation reference, the row list lags by about one second. | `cmux.sh`: the measured comment and single wait in `cmux_row_create_ssh`. |
+| Explicit JSON UUID formatting returns the new SSH row identity, including while it connects. | `cmux.sh`: response validation in `cmux_row_create_ssh`. See the [creation measurements](#ssh-creation-identity-on-0651). |
 | cmux 0.65 closes a newly created VM row without `--force`. | `cmux.sh`: the measured comment in `close_row`. The implementation still supplies `--force` during failed setup cleanup. |
 | Local agent rows require `--force` to close without confirmation. | `cmux.sh`: `close_row` supplies the flag only for self or new cleanup. |
 | Identical terminal, title, and body content is suppressed for five seconds, regardless of notification ID. | `cmux.sh`: the comment and random `request_id` generation in `cmux_notify`. |
@@ -235,7 +240,7 @@ Support does not include the removed cmux 0.64 TCP relay paths.
 
 | cmux version | Status | Verified on | Verified behavior |
 |---|---|---|---|
-| 0.65.1 (build 110, `8a853dcc9`) | Supported; native VM and cross-window checks passed | 2026-10-16 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. |
+| 0.65.1 (build 110, `8a853dcc9`) | Supported; native VM, cross-window, and SSH UUID checks passed | 2026-10-16; 2026-10-27 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. The [SSH creation measurements](#ssh-creation-identity-on-0651) verify UUID responses. |
 | 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
 
 [PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to cmux 0.65.0's row-closing behavior.
@@ -246,3 +251,59 @@ The earlier `0.64 or newer` requirement did not guarantee compatibility with the
 For each supported version, record the exact build, verified behavior, and remaining checks.
 [VM verification on cmux 0.65.1](vm-open-relay.md#verification-on-cmux-0651) records the current live checks.
 Codex VM status, combined states from several agents, and Esc interruption behavior remain unverified by that live session.
+
+### SSH creation identity on 0.65.1
+
+Measurements on 2026-10-27 used cmux 0.65.1 (110), commit `8a853dcc9`.
+Both `cmux --help` and `cmux ssh --help` returned status 0 with empty stderr.
+Global help advertises `--id-format uuids`.
+SSH help documents `--no-focus` and `--command`.
+The probes created disposable rows on the two supported VMs.
+Each command used a unique title, `--no-focus`, `StrictHostKeyChecking=yes`, and a harmless command with a bounded sleep.
+
+| Presentation flags | Position | Observed stdout | Status |
+|---|---|---|---|
+| None | None | Text with a row reference and a surface reference. | 0 |
+| `--json` | Before `ssh`, and after its arguments. | JSON with `.workspace_ref`; no `.workspace_id`. | 0 |
+| `--id-format uuids` | Before `ssh`, and after its arguments. | Text with two UUIDs; the first matched the new row. | 0 |
+| `--json --id-format uuids` | Before `ssh`, and after its arguments. | JSON with `.workspace_id` matching the new row. | 0 |
+
+All seven forms ran on one supported VM and returned empty stderr.
+The explicit JSON UUID form also passed on the second supported VM.
+JSON alone accepts the flag but does not provide the stable UUID.
+The explicit format identifies the row separately from the window and surface.
+One response reported `connecting`; the matching row later reported `connected`.
+Identity therefore does not require a wait for the connection.
+
+Complete snapshots confirmed that all eight UUIDs were new and matched the requested host and title.
+Creation preserved the selected row and the key-window flag.
+Ordinary cleanup returned status 0 for all eight rows.
+Some removals appeared after the close response.
+The final snapshot contained exactly the nine preexisting row UUIDs and no probe UUID.
+
+One initial short command exited before row validation.
+No row action used its unverified response.
+
+The changed adapter also passed one live creation check on each supported VM.
+Both rows received the requested second line without selection changes.
+Ordinary cleanup removed both rows and preserved the nine original rows.
+
+The private `wt doctor --record` capture succeeded.
+The complete doctor command returned status 1 because `top` reported a null caller.
+Four existing custom-hook warnings remained.
+
+The recorder reads contract snapshots and does not create SSH rows.
+The separate creation capture supplies only measured identity fields to [ssh.json](../test/fixtures/cmux-0.65.1/ssh.json).
+The capture uses the same [doctor sanitizer](../lib/workgrove/doctor-sanitize.jq).
+No unrelated row data enters that fixture.
+
+All eight observed rows retained their requested titles and reported `has_custom_title: true`.
+The [row projection](https://github.com/manaflow-ai/cmux/blob/8a853dcc97010c7e57f656b1e2f4050dc7582b41/Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Coordinator/Workspace/ControlCommandCoordinator%2BWorkspaceReads.swift#L22) defines this field from a nonblank custom title.
+It does not establish connection readiness, title provenance, or permanent title ownership.
+
+The [setting definition](https://github.com/manaflow-ai/cmux/blob/8a853dcc97010c7e57f656b1e2f4050dc7582b41/Packages/macOS/CmuxSettings/Sources/CmuxSettings/Keys/AutomationCatalogSection.swift#L34) describes `automation.workspaceAutoNaming` as agent-conversation summarization.
+The repository template enables this setting.
+The probes did not change it.
+The [title implementation](https://github.com/manaflow-ai/cmux/blob/8a853dcc97010c7e57f656b1e2f4050dc7582b41/Sources/Workspace%2BTitleOwnership.swift#L229) rejects automatic writes over existing user or remote titles.
+These source findings do not establish the cause of [#47](https://github.com/mal84emma/workgrove/issues/47).
+The probes did not exercise its first tmux reattachment trigger or reapply titles.
