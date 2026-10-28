@@ -713,12 +713,6 @@ cmd_rm() {
     fi
   fi
   local final_reasons=()
-  if [[ $force -eq 0 ]]; then
-    # shellcheck disable=SC2034  # fetch_base consumes this cache entry.
-    forget_base "$base" || die 'comparison base is no longer valid'
-    rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
-    ((${#final_reasons[@]} == 0)) || die "work changed during teardown: ${final_reasons[*]}"
-  fi
   [[ $(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed during teardown'
   [[ $(preservation_git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed during teardown'
   generation=${WT_META[generation]:-$verified_head}
@@ -761,7 +755,7 @@ cmd_rm() {
     local capture_row='' capture_self=''
     cmux_require check_row_removal "$title" "$REPO" capture_row capture_self '' "$path"
     [[ $capture_row == "$row" && $capture_self == self ]] || die 'self ownership changed before command cancellation'
-    teardown_commands_capture "$ROW_AGENT_PID" "$ROW_AGENT_START" || die 'task command cancellation is incomplete; kept the worktree'
+    teardown_commands_capture "$ROW_AGENT_PID" "$ROW_AGENT_START" "$ROW_AGENT_OBSERVERS" || die 'task command cancellation is incomplete; kept the worktree'
   elif [[ $self_remote == 1 ]]; then
     tmux_self_ownership "$session" "$name" || die 'self ownership changed before command cancellation'
     teardown_commands_capture "$(jq -r .pid <<<"$WT_TMUX_OWNER")" "$(jq -r .start <<<"$WT_TMUX_OWNER")" \
@@ -770,6 +764,7 @@ cmd_rm() {
     teardown_commands_stop commands || die 'recorded task command cancellation is incomplete; kept the worktree'
   fi
   if [[ $force == 0 ]]; then
+    forget_base "$base" || die 'comparison base is no longer valid'
     rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
     ((${#final_reasons[@]} == 0)) || die "work changed after preflight: ${final_reasons[*]}"
   fi

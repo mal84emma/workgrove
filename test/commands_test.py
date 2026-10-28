@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -103,6 +104,24 @@ class CommandTests(unittest.TestCase):
         self.assertNotEqual(refreshed, self.manifest)
         self.assertIn(90, {r['pid'] for r in refreshed['records']})
 
+    def test_verified_detached_observer_uses_existing_command_manifest(self):
+        observer = dict(pid=70, birth='ticks:70', comm='sleep', role='command')
+        with patch.object(commands.os, 'getppid', return_value=50):
+            manifest = commands.capture(self.backend, 'generation', 10, 'expected start', 30, None, [observer])
+        commands.stop(self.backend, manifest, 'generation', 'commands')
+        self.assertEqual(set(self.backend.sent), {(60, signal.SIGTERM), (70, signal.SIGTERM)})
+        self.assertIn(10, self.backend.nodes)
+
+    def test_changed_observer_is_never_adopted_or_signaled(self):
+        observer = dict(pid=70, birth='ticks:70', comm='sleep', role='command')
+        for changes in (dict(birth='ticks:999'), dict(comm='replacement'), dict(ppid=20)):
+            with self.subTest(changes=changes):
+                backend = FakeProcesses()
+                backend.nodes[70].update(changes)
+                with patch.object(commands.os, 'getppid', return_value=50), self.assertRaises(ValueError):
+                    commands.capture(backend, 'generation', 10, 'expected start', 30, None, [observer])
+                self.assertEqual(backend.sent, [])
+
     def test_saved_owner_validation_precedes_capture(self):
         import tempfile
         root = Path(__file__).resolve().parents[1]
@@ -156,7 +175,9 @@ teardown_finish
             for item, role in ((owner, 'runtime'), (owned, 'command')):
                 records.append(dict(pid=item['pid'], birth=item['birth'], comm=item['comm'], role=role))
             manifest = dict(version=1, generation='real', boot=backend.boot(), platform=backend.platform, records=records)
+            started = time.monotonic()
             commands.stop(backend, manifest, 'real', 'commands')
+            self.assertLess(time.monotonic() - started, 10)
             self.assertEqual(child.wait(timeout=5), -signal.SIGKILL)
             self.assertIsNone(independent.poll())
         finally:

@@ -45,6 +45,7 @@ workgrove/
 │       ├── recovery.sh        VM row recovery and task attachment
 │       ├── remote.sh          remote commands and result parsing
 │       ├── commands.py       generation-bound task command cancellation
+│       ├── cmux_monitor.py   detached native Codex monitor identity checks
 │       ├── filtered_files.py  raw tracked-file preservation checks
 │       ├── branch_config.py   frozen local branch configuration cleanup
 │       ├── safety.sh          worktree removal checks
@@ -136,6 +137,8 @@ workgrove/
 │   ├── cmux-ownership-smoke.sh  native parent snapshots and idle launch ownership
 │   ├── commands-smoke.sh    task command identity and owned-process cancellation checks
 │   ├── commands_test.py     fake process graphs and disposable detached children
+│   ├── cmux-monitor-smoke.sh  detached native monitor proof checks
+│   ├── cmux_monitor_test.py  native-shaped samples, observer binding, and kernel arguments
 │   ├── branch-config-smoke.sh  hard-interruption recovery for owned Git locks
 │   ├── branch_config_test.py  disposable branch configuration and lock fixtures
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh

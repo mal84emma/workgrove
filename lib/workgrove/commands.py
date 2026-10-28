@@ -105,7 +105,7 @@ def validate(manifest, generation):
     return manifest
 
 
-def capture(backend, generation, provider, expected_start, origin, previous):
+def capture(backend, generation, provider, expected_start, origin, previous, observers=()):
     table = backend.table()
     if provider not in table or table[provider]['start'].split() != expected_start.split():
         raise ValueError('verified provider identity changed before command capture')
@@ -151,6 +151,16 @@ def capture(backend, generation, provider, expected_start, origin, previous):
                      for name in ('claude', 'codex'))
         record['role'] = 'runtime' if pid in runtime or helper else 'command'
         records[(pid, actual['birth'])] = record
+    for record in observers:
+        if record.get('role') != 'command':
+            raise ValueError('invalid task observer role')
+        actual = backend.identity(record['pid'])
+        if actual is None:
+            continue
+        if (actual['birth'] != record['birth'] or actual['comm'] != record['comm']
+                or actual['ppid'] != 1 or actual['zombie']):
+            raise ValueError('verified task observer changed before capture')
+        records[(record['pid'], record['birth'])] = record
     if backend.identity(provider) != root_identity:
         raise ValueError('verified provider changed during command capture')
     return validate(dict(version=1, generation=generation, boot=boot, platform=backend.platform,
@@ -203,8 +213,9 @@ def main():
     manifest = json.load(sys.stdin)
     backend = Processes()
     if operation == 'capture':
-        provider, expected_start, origin = arguments
-        print(json.dumps(capture(backend, generation, int(provider), expected_start, int(origin), manifest), separators=(',', ':')))
+        provider, expected_start, origin, *observers = arguments
+        print(json.dumps(capture(backend, generation, int(provider), expected_start, int(origin), manifest,
+                                 json.loads(observers[0]) if observers else ()), separators=(',', ':')))
     elif operation == 'stop':
         stop(backend, manifest, generation, arguments[0])
     elif operation == 'observe':

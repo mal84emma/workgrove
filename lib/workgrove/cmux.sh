@@ -153,7 +153,7 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   # Refuse unreadable rows or another running agent. Without a host, the path names the local worktree.
   local -n __rm_row=$3 __rm_self=$4
   __rm_row=""; __rm_self=""
-  ROW_AGENT_PID='' ROW_AGENT_START=''
+  ROW_AGENT_PID='' ROW_AGENT_START='' ROW_AGENT_OBSERVERS='[]'
   local __err
   if ! cmux_bin >/dev/null; then
     [[ -z ${CMUX_WORKSPACE_ID:-} ]] || { cmux_error "cmux CLI not found; kept the worktree"; return 1; }
@@ -171,7 +171,7 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   # Refuse when another agent runs in any of them. Close only the first row that task_row finds, or the
   # caller's own row when the title matches it. A row found only by its directory may belong to anything,
   # such as the driver, so wt never closes it.
-  local __rows __checks=() __check __kind __id __dir __root="" __self_row="" __self_pid='' __self_start=''
+  local __rows __checks=() __check __kind __id __dir __root="" __self_row="" __self_pid='' __self_start='' __self_observers='[]'
   __rows=$(rows_json checked) || { cmux_error "cannot list cmux rows; kept the worktree"; return 1; }
   # One line for each row to check: "found <id>", "unclaimed <id>" or "dir <id> <current directory>". A
   # directory with a newline in it would split its line, so such a row is not checked by its directory.
@@ -197,7 +197,7 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
     local __task_path=${6:-}
     row_agent "$__id" "${__task_path##*/}" || return
     case $__kind/$ROW_AGENT in
-      found/self|unclaimed/self) __self_row=$__id; __self_pid=$ROW_AGENT_PID; __self_start=$ROW_AGENT_START ;;
+      found/self|unclaimed/self) __self_row=$__id; __self_pid=$ROW_AGENT_PID; __self_start=$ROW_AGENT_START; __self_observers=$ROW_AGENT_OBSERVERS ;;
       found/busy) cmux_error "another agent is running in cmux row $__id; kept the worktree${CMUX_ERROR:+; $CMUX_ERROR}"; return 1 ;;
       unclaimed/busy) cmux_error "an agent is running in cmux row $__id, titled '$1', whose second line wt did not write; kept the worktree. Stop that agent or close that row, then re-run"; return 1 ;;
       dir/busy) cmux_error "an agent is running in cmux row $__id, whose current directory is in this worktree; kept the worktree. Stop that agent or close that row, then re-run"; return 1 ;;
@@ -205,8 +205,8 @@ check_row_removal() { # check_row_removal <title> <repo> <row output> <self outp
   done
   if [[ -n "$__self_row" ]]; then
     __rm_row=$__self_row; __rm_self=self
-    ROW_AGENT_PID=$__self_pid ROW_AGENT_START=$__self_start
-  else ROW_AGENT_PID='' ROW_AGENT_START=''; fi
+    ROW_AGENT_PID=$__self_pid ROW_AGENT_START=$__self_start ROW_AGENT_OBSERVERS=$__self_observers
+  else ROW_AGENT_PID='' ROW_AGENT_START='' ROW_AGENT_OBSERVERS='[]'; fi
 }
 
 process_descends() { # process_descends <pid> <ancestor>; unreadable ancestry never proves ownership.
@@ -351,11 +351,25 @@ row_agent() {
   done
 }
 
+cmux_codex_monitor() { # A detached native observer must have independent row and process evidence.
+  local state=$1 row=$2 provider=$3 monitor=$4 task=$5 tree executable evidence
+  [[ -n $task && -n ${REPO:-} ]] || return 1
+  executable=$(cmux_bin) || return 1
+  tree=$(cmux_call --id-format uuids tree --all --json 2>/dev/null) || return 1
+  evidence=$(jq -cn --argjson top "$state" --argjson tree "$tree" '{top:$top,tree:$tree}') || return 1
+  (
+    # shellcheck source=lib/workgrove/vm/python-runtime.sh
+    source "$WG_VERSION_ROOT/lib/workgrove/vm/python-runtime.sh" || exit 1
+    wg_run_python "$WG_VERSION_ROOT/lib/workgrove/cmux_monitor.py" "$row" "$(wt_path "$task")" \
+      "$provider" "$monitor" "$executable" <<<"$evidence"
+  )
+}
+
 row_agent_once() { # row_agent <row id> — sets ROW_AGENT: "self" for the caller's own row, "busy" when an agent
   # runs in the row, else "idle". A failed check returns a diagnostic in CMUX_ERROR.
   local state
   ROW_AGENT=busy
-  ROW_AGENT_PID='' ROW_AGENT_START=''
+  ROW_AGENT_PID='' ROW_AGENT_START='' ROW_AGENT_OBSERVERS='[]'
   state=$(cmux_call top --workspace "$1" --processes --json 2>/dev/null) \
     || { cmux_error "cannot check the agent in cmux row $1; kept the worktree"; return 1; }
   printf '%s' "$state" | jq -e '.coding_agents | type == "array"
@@ -367,7 +381,7 @@ row_agent_once() { # row_agent <row id> — sets ROW_AGENT: "self" for the calle
     and (.resources.pids | unique | length) == (.resources.pids | length))' >/dev/null 2>&1 \
     || { cmux_error "cannot verify agent process data; kept the worktree"; return 1; }
   ROW_AGENT=busy
-  local pids row_pids extra_pids root='' root_start pid command provider declared_agent=''
+  local observer pids row_pids extra_pids root='' root_start pid command provider declared_agent=''
   if [[ -n ${2:-} && -f $(wt_meta "$2") ]]; then declared_agent=$(jq -r .agent "$(wt_meta "$2")");
   elif [[ -n ${WT_TEARDOWN_JSON:-} ]]; then declared_agent=$(jq -r .agent <<<"$WT_TEARDOWN_JSON"); fi
   # cmux caller fields echo environment hints. Use attributed PIDs and OS ancestry instead.
@@ -432,6 +446,10 @@ row_agent_once() { # row_agent <row id> — sets ROW_AGENT: "self" for the calle
   row_pids+="${extra_pids:+$'\n'$extra_pids}"
   while IFS= read -r pid; do
     if process_descends "$pid" "$root" || process_descends "$root" "$pid"; then continue; fi
+    if [[ $declared_agent == codex ]] && observer=$(cmux_codex_monitor "$state" "$1" "$root" "$pid" "${2:-}"); then
+      ROW_AGENT_OBSERVERS=$(jq -c --argjson observer "$observer" '. + [$observer]' <<<"$ROW_AGENT_OBSERVERS") || return 1
+      continue
+    fi
     if process_vanished "$pid"; then
       if sampled_process_descends "$state" "$1" "$pid" "$root"; then continue; fi
       CMUX_SAMPLE_RETRY=1

@@ -133,6 +133,7 @@ rc=0; tmux_agent target || rc=$?
 assert_eq 'a same-named window cannot hide the actual task provider' 0 "$rc"
 identity=$(task_tmux_identity target)
 assert_eq 'session identity uses a qualified pane target' "\$7" "$(jq -r .id <<<"$identity")"
+# shellcheck disable=SC2030,SC2031  # Each fixture keeps its provider state inside its own subshell.
 result=$(
   mkdir -p "$ROOT/task"
   cmux_bin() { printf /fake/cmux; }
@@ -143,14 +144,42 @@ result=$(
       {id:"aux-row",title:"auxiliary",description:"@local · repo",current_directory:$path}]}'
   }
   row_agent() {
-    ROW_AGENT_PID='' ROW_AGENT_START=''
-    if [[ $1 == owned-row ]]; then ROW_AGENT=self; ROW_AGENT_PID=100; ROW_AGENT_START=stable
+    ROW_AGENT_PID='' ROW_AGENT_START='' ROW_AGENT_OBSERVERS='[]'
+    if [[ $1 == owned-row ]]; then ROW_AGENT=self; ROW_AGENT_PID=100; ROW_AGENT_START=stable; ROW_AGENT_OBSERVERS='[{"pid":200}]'
     else ROW_AGENT=idle; fi
   }
   row='' self=''
   check_row_removal target repo row self '' "$ROOT/task"
-  printf '%s %s %s %s' "$row" "$self" "$ROW_AGENT_PID" "$ROW_AGENT_START"
+  printf '%s %s %s %s %s' "$row" "$self" "$ROW_AGENT_PID" "$ROW_AGENT_START" "$ROW_AGENT_OBSERVERS"
 )
-assert_eq 'an auxiliary idle row cannot overwrite the selected provider identity' 'owned-row self 100 stable' "$result"
+assert_eq 'an auxiliary idle row cannot overwrite the selected provider identity' 'owned-row self 100 stable [{"pid":200}]' "$result"
+# shellcheck disable=SC2030,SC2031  # Each fixture keeps its provider state inside its own subshell.
+result=$(
+  mkdir -p "$ROOT/repo/.git/wt"
+  printf '{"agent":"codex"}\n' >"$ROOT/repo/.git/wt/target.json"
+  REPO="$ROOT/repo"
+  codex_owned_launch() { return 0; }
+  process_descends() {
+    [[ $1 == "$2" || ( $1 == "$BASHPID" && $2 == 100 ) || ( $1 == 100 && $2 == 90 ) ]]
+  }
+  process_vanished() { return 1; }
+  ps() {
+    case ${4:-} in comm=|command=) echo codex ;; lstart=) echo stable ;; *) return 1 ;; esac
+  }
+  cat >"$STATE" <<'JSON'
+{"coding_agents":[{"resources":{"pids":[100],"process_count":1}}],"windows":[{"workspaces":[{"id":"target","resources":{"pids":[90,100,200],"process_count":3},"panes":[]}]}]}
+JSON
+  cmux_codex_monitor() {
+    [[ $1 == "$(cat "$STATE")" && $2 == target && $3 == 100 && $4 == 200 && $5 == target ]] || return 1
+    printf '%s' '{"pid":200,"birth":"bsd:1:1","comm":"cmux","role":"command"}'
+  }
+  row_agent target target
+  printf '%s %s %s\n' "$ROW_AGENT" "$ROW_AGENT_PID" "$ROW_AGENT_OBSERVERS"
+  cmux_codex_monitor() { return 1; }
+  row_agent target target
+  printf '%s %s\n' "$ROW_AGENT" "$ROW_AGENT_OBSERVERS"
+)
+assert_eq 'a verified observer permits self-removal and supplies cancellation evidence' \
+  $'self 100 [{"pid":200,"birth":"bsd:1:1","comm":"cmux","role":"command"}]\nbusy []' "$result"
 end_scenario
 lib_summary

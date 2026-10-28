@@ -2829,7 +2829,7 @@ GIT
   assert_wt_fails 3 'cannot enumerate included private files' rm private -r "$r"
   assert_eq 'failed enumeration preserves private bytes' 'private bytes' "$(cat "$r/.worktrees/private/.env")"
   rm "$r/.worktrees/private/.env" "$TEST_ROOT/include-count"
-  WT_RELAY_ENV[2]='INCLUDE_FAULT_AT=3'
+  WT_RELAY_ENV[2]='INCLUDE_FAULT_AT=2'
   assert_wt_fails 1 'cannot enumerate included private files' rm private -r "$r"
   assert_eq 'deletion-boundary failure preserves private bytes' 'private bytes' "$(cat "$r/.worktrees/private/.env")"
   assert_branch "$r" wt/private yes

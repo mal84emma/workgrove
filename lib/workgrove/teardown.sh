@@ -265,19 +265,15 @@ teardown_commands_stop() {
 }
 
 teardown_commands_capture() { # Stop proven task commands before the last work-preservation check.
-  local root=$1 start=$2 generation manifest refreshed attempt stage
+  local root=$1 start=$2 observers=${3:-[]} generation manifest refreshed stage
   generation=$(jq -r .generation <<<"$WT_TEARDOWN_JSON")
   manifest=$(jq -c 'if has("commands") then .commands else null end' <<<"$WT_TEARDOWN_JSON") || return 1
   stage=$(jq -r .stage <<<"$WT_TEARDOWN_JSON")
-  for ((attempt=0; attempt<3; attempt++)); do
-    refreshed=$(teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/commands.py" capture "$generation" "$root" "$start" "$WG_TEARDOWN_ORIGIN_PID" <<<"$manifest") || return 1
-    WT_TEARDOWN_JSON=$(jq -c --argjson commands "$refreshed" '.commands=$commands' <<<"$WT_TEARDOWN_JSON") || return 1
-    teardown_save "$stage"
-    teardown_commands_stop commands || return 1
-    [[ $refreshed != "$manifest" ]] || return 0
-    manifest=$refreshed
-  done
-  return 1
+  refreshed=$(teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/commands.py" capture "$generation" "$root" "$start" \
+    "$WG_TEARDOWN_ORIGIN_PID" "$observers" <<<"$manifest") || return 1
+  WT_TEARDOWN_JSON=$(jq -c --argjson commands "$refreshed" '.commands=$commands' <<<"$WT_TEARDOWN_JSON") || return 1
+  teardown_save "$stage"
+  teardown_commands_stop commands
 }
 
 teardown_preservation() { # Recheck the frozen proof before deleting the remaining branch.
@@ -546,7 +542,7 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
     fi
     if [[ -n $checked_row ]]; then
       if [[ $checked_self == self ]]; then
-        teardown_commands_capture "$ROW_AGENT_PID" "$ROW_AGENT_START" \
+        teardown_commands_capture "$ROW_AGENT_PID" "$ROW_AGENT_START" "$ROW_AGENT_OBSERVERS" \
           || die 'task command cancellation is incomplete; row cleanup remains pending'
       fi
       close_row "$row" "$checked_self" || { warn "$CMUX_ERROR"; rc=1; }

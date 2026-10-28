@@ -201,7 +201,9 @@ The cleanup command excludes its own finite worker subtree and waiting shell wra
 Provider, app-server, exec-server, and related provider helpers remain protected before row closure.
 Their recorded absence is still required for completion.
 Sibling background commands receive bounded termination and, when needed, kill signals before the last work-preservation check.
-Fresh live-provider samples can extend the manifest before any new signal.
+Each capture adds live commands to the existing manifest before signaling.
+Removal captures commands before its final preservation check and again before row closure.
+
 Detected replacement identities and changed executables remain untouched.
 
 After independently verified row or session closure, ordinary recovery can stop remaining pinned runtime processes.
@@ -209,6 +211,15 @@ Observation-only recovery never sends signals.
 Completed-receipt retries and task-name reuse also require recorded process absence.
 An older self-removal receipt without command evidence cannot prove process completion after its provider disappears.
 Workgrove does not adopt an orphan from its process ID, directory, name, environment, or process group.
+
+Cmux can detach its Codex transcript monitor from the provider process tree.
+A native provider tag and unique terminal surface must bind that observer to the requesting task.
+Kernel probes must identify the selected cmux executable and its exact monitor arguments.
+Workgrove rechecks the process identity, then records the observer in the existing command manifest.
+The same cancellation path stops the observer before Git deletion.
+
+Missing, changed, or ambiguous evidence refuses removal.
+No lease reader, separate monitor service, or additional receipt format is required.
 
 Kernel identity checks and signaling are separate operations.
 A process can exit between its check and signal; concurrent PID reuse is not atomically excluded.
@@ -317,7 +328,26 @@ The deletion-boundary checks narrow that race but cannot atomically exclude unco
 Stop task-owned writers before requesting teardown.
 No daemon, background service, unrelated process termination, or automatic remote-branch deletion is added.
 
-## Live acceptance on October 28, 2026
+## Current implementation and acceptance limits
+
+The final preservation check refreshes remote evidence after task commands stop.
+It checks raw files, the frozen task head, the landing object, and sidecar fingerprints before directory removal.
+Branch deletion separately rechecks its preservation anchor or landing object.
+Session closure requires fresh ownership evidence for the recorded row or tmux session.
+
+One initial capture and one capture before closure replace the repeated sampling loop.
+Repeated samples cannot prevent concurrent forks, so teardown remains the final exclusive tool action.
+The implementation keeps the receipt for partial cleanup and replacement-identity checks.
+The finite lock owner handles demonstrated worker interruptions and detached Git-hook children.
+The raw-file and branch-configuration helpers protect demonstrated work-loss and interrupted-cleanup cases.
+No additional coordinator or persistent process is introduced for the detached cmux observer.
+
+The historical results below concern earlier candidates.
+They do not establish live acceptance of the current implementation.
+Mac Codex most recently refused because its detached cmux monitor appeared independent.
+The current observer handling requires a separately authorized live repeat.
+
+## Earlier live acceptance on October 28, 2026
 
 The user authorized disposable live tasks on the Mac and one Ubuntu VM.
 Both hosts used cmux 0.65.1.
@@ -381,8 +411,8 @@ Disposable fixtures establish Git decisions, process-check branches, and cleanup
 Fixtures alone cannot establish real Codex cancellation, cmux terminal exit, or socket approval behavior.
 Use separately authorized disposable tasks for these checks:
 
-1. Launch local Claude and Codex tasks through the updated installation.
-2. Record their provider process trees and row identities from an independent terminal.
+1. Launch local Claude and Codex tasks through a temporary candidate copy outside their disposable worktrees.
+2. Record their provider process trees, row identities, and background commands from an independent terminal.
 3. Squash-merge a task and delete its remote branch.
 4. Request its safe teardown once and preserve its pre-close summary.
 5. Confirm absence of its directory, registration, branch, sidecars, provider processes, and row from the independent terminal.
@@ -393,4 +423,9 @@ Use separately authorized disposable tasks for these checks:
 10. Interrupt a cleanup, then verify recovery through its saved receipt.
 
 Confirm that a shared-server legacy session refuses uncertain ownership without stopping unrelated threads.
-Confirm that actual terminal closure cancels task-owned background work before claiming full shutdown acceptance.
+Use background commands with a 6000-second duration and record a deadline before starting teardown.
+Check cancellation within 30 seconds after closure, while those commands would otherwise still run.
+Verify the detached cmux observer's absence too.
+Stop each case after 60 seconds if teardown refuses or closure remains unverified.
+Keep the refused task intact and report the failed component.
+Confirm background-command cancellation before claiming full shutdown acceptance.
