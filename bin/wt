@@ -690,6 +690,7 @@ cmd_rm() {
         || die "this row predates native teardown; close and reopen this row on the Mac: wt -H $host attach -r $(shell_join "$REPO") $name, then retry"
       die "cannot find the Mac cmux relay in this session"
     fi
+    have cmux-tui || die 'legacy self-cleanup requires cmux-tui outside the task worktree'
   fi
   host=${host:-${WT_HOST:-}}
   local tmux_identity='null' tmux_owner='null'
@@ -715,9 +716,12 @@ cmd_rm() {
   generation=${WT_META[generation]:-$verified_head}
   if [[ $proof == published || $base =~ ^[0-9a-f]{40,64}$ ]]; then
     local retained=''
+    local anchor_rc=0
+    git -C "$REPO" symbolic-ref -q "refs/wt/preserved/$generation" >/dev/null 2>&1 || anchor_rc=$?
+    [[ $anchor_rc == 1 ]] || die 'preservation anchor must be a direct ref; kept the worktree'
     retained=$(git -C "$REPO" rev-parse -q --verify "refs/wt/preserved/$generation" 2>/dev/null || true)
     if [[ $retained != "$verified_head" ]]; then
-      git -C "$REPO" update-ref "refs/wt/preserved/$generation" "$verified_head" '' || die 'cannot retain preserved work'
+      git -C "$REPO" update-ref --no-deref "refs/wt/preserved/$generation" "$verified_head" '' || die 'cannot retain preserved work'
     fi
     warn "retained published commits at refs/wt/preserved/$generation"
   fi

@@ -111,6 +111,39 @@ close_row() { # close_row <row id> [self|new] — silent when the row is already
   }
 }
 
+remote_row_idle() { # Forced relay closure requires a complete sample containing only the SSH transport tree.
+  local row=$1 state pids pid root='' command start
+  state=$(cmux_call top --workspace "$row" --json) || { cmux_error 'cannot inspect relay row processes; kept the row'; return 1; }
+  jq -e --arg row "$row" '
+    [.windows[].workspaces[] | select(.id == $row)] as $rows
+    | ($rows | length) == 1 and ($rows[0].resources as $r
+      | ($r.pids | type == "array") and ($r.pids | length) == $r.process_count
+      and all($r.pids[]; type == "number" and . > 1 and floor == .)
+      and (($r.missing_pids // []) | length) == 0)
+    and (.coding_agents | type == "array")
+    and all(.coding_agents[]; (.resources as $r
+      | ($r.pids | type == "array") and ($r.pids | length) == $r.process_count
+      and all($r.pids[]; type == "number" and . > 1 and floor == .)))
+    and ([$rows[0].resources.pids[]] as $pids
+      | all(.coding_agents[].resources.pids[]; . as $pid | $pids | index($pid) == null))' <<<"$state" >/dev/null \
+    || { cmux_error 'relay row agent ownership is busy or unknown; kept the row'; return 1; }
+  pids=$(jq -r --arg row "$row" '.windows[].workspaces[] | select(.id == $row) | .resources.pids[]' <<<"$state") || return 1
+  [[ -n $pids ]] || return 0
+  while IFS= read -r pid; do
+    command=$(ps -p "$pid" -o comm=) || { cmux_error 'cannot inspect relay row process; kept the row'; return 1; }
+    if [[ ${command##*/} == ssh ]]; then
+      if [[ -z $root ]] || process_descends "$root" "$pid"; then root=$pid; fi
+    fi
+  done <<<"$pids"
+  [[ -n $root ]] || { cmux_error 'cannot identify relay SSH transport; kept the row'; return 1; }
+  start=$(LC_ALL=C ps -p "$root" -o lstart=) || return 1
+  while IFS= read -r pid; do
+    process_descends "$pid" "$root" || process_descends "$root" "$pid" \
+      || { cmux_error 'independent command in relay row; kept the row'; return 1; }
+  done <<<"$pids"
+  [[ $(LC_ALL=C ps -p "$root" -o lstart=) == "$start" ]]
+}
+
 check_row_removal() { # check_row_removal <title> <repo> <row output> <self output> [host] [worktree path]
   # Refuse unreadable rows or another running agent. Without a host, the path names the local worktree.
   local -n __rm_row=$3 __rm_self=$4

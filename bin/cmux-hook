@@ -178,6 +178,12 @@ case $t in
           :
         elif ! receiver=$(vm_wt "$h" version 2>/dev/null) || ! printf '%s' "$receiver" | wt_read_version | jq -e '.capabilities | index("teardown-receipts") != null' >/dev/null 2>&1; then
           log "VM teardown receiver lacks receipt support; update workgrove on $h before closing $ws"
+        elif ! vm_wt "$h" rm "$n" -r "$r" --defer-close >/dev/null 2>&1; then
+          log "recorded VM owner validation failed; kept row $ws"
+        elif ! ws_load fresh || ! from_row_on_host "$ws" "$h" || [[ $(row_by_title "$(row_title "$n")" "$id" "$h") != "$ws" ]]; then
+          log "relay row identity changed; kept row $ws"
+        elif ! remote_row_idle "$ws"; then
+          log "relay row ownership prevents closure: $CMUX_ERROR"
         elif close_row "$ws" self >/dev/null 2>&1; then
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))

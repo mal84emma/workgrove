@@ -128,8 +128,9 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   local -A result=()
   vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
   if [[ $rc != 0 && $err == *'cleanup remains pending for '* && -n ${opts[name]-} && -n $repo_request ]]; then
-    rows_json checked >/dev/null || return 1
-    if [[ -z $(cmux_row_field "$(row_title "${opts[name]}")" "$repo_request" id "$host" checked) ]] && \
+    local pending_row
+    pending_row=$(cmux_row_field "$(row_title "${opts[name]}")" "$repo_request" id "$host" checked) || return 1
+    if [[ -z $pending_row ]] && \
         remote_wt "$host" rm "${opts[name]}" -r "$repo_request" --observe-only --row-closed >/dev/null; then
       result_rc=0
       vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?

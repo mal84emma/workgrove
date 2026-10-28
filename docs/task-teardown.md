@@ -109,7 +109,9 @@ A finite coordinator holds the lock through Git cleanup.
 Only the coordinator holds its descriptor; Git commands and hooks inherit a control channel.
 Detached hook children cannot retain the lock after the coordinator exits.
 The coordinator isolates its command group and stops remaining commands before releasing the lock.
-The lock file records that group while Git cleanup runs.
+The lock file records that group and its process and boot identities while Git cleanup runs.
+Stale identities cannot block an unrelated group after process reuse or restart.
+Malformed lock records refuse recovery before mutation.
 After unexpected coordinator death, retries refuse while its command group remains active.
 The coordinator releases it before an independent session-cleanup callback runs.
 Later receipt writes acquire the lock and reject a different generation.
@@ -124,6 +126,8 @@ Only the most recent receipt for each task name is retained.
 A completed receipt can be replaced when another generation finishes.
 
 Removal rechecks work, refs, metadata fingerprints, and local row ownership after preflight.
+Branch deletion rechecks the frozen landing object or a direct preservation anchor.
+Changed preservation evidence retains the branch and metadata.
 It deletes the branch with its verified old object as the expected value.
 A changed branch, branch-deletion failure, or changed sidecar retains the remaining state and reports incomplete cleanup.
 Use `--keep-branch` during recovery to preserve a branch that changed after directory removal.
@@ -132,6 +136,8 @@ It does not silently discard the unexpected object or metadata.
 The `removed` message confirms Git worktree removal, not complete session cleanup.
 Local row absence must be confirmed before `teardown complete` is reported.
 Self-closure can terminate the caller after the durable `close_requested` stage and before its final response.
+Preflight checks directly invoked cleanup utilities and their selected paths before removal.
+A task-local executable path refuses removal even when its symlink target is outside the task.
 A surviving caller reports failure when row closure fails.
 
 Repeat the original `wt rm` command to resume pending cleanup after the worktree registration is gone.
@@ -143,7 +149,10 @@ Otherwise, pending cleanup blocks reuse of the task name.
 
 Mac-controlled removal defers session cleanup until it confirms row closure.
 The controller then acknowledges row absence to the VM, which validates and stops only the recorded session and its original process owners.
-Legacy hooks use the same acknowledgment after closing their authenticated requesting row.
+Legacy hooks validate the recorded VM owner before closing their authenticated requesting row.
+They refresh row identity and require a complete local process sample containing only the SSH transport tree.
+Local agents, independent commands, and uncertain samples prevent forced closure.
+The hooks use the same acknowledgment after row closure.
 They require the VM's `teardown-receipts` capability before closing it.
 A failed acknowledgment remains pending and can be retried from the Mac.
 Recovery can finish the recorded original agent after a lost callback.

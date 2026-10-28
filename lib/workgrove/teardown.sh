@@ -58,20 +58,40 @@ def group_inactive(group):
         if int(pgid) == group and not state.startswith("Z"):
             return False
     return True
+def process_start(pid):
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], text=True, stdout=subprocess.PIPE, env=dict(os.environ, LC_ALL="C"))
+    if result.returncode not in (0, 1):
+        raise RuntimeError("cannot inspect recorded teardown process")
+    return result.stdout.strip()
+boot = process_start(1)
+if not boot:
+    sys.exit("wt: cannot identify the current boot")
 def acquire():
     global held
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     previous = os.pread(fd, 4096, 0)
     if previous:
-        group = json.loads(previous)["group"]
-        if not group_inactive(group):
+        owner = json.loads(previous)
+        if not isinstance(owner, dict) or type(owner.get("group")) is not int or owner["group"] <= 1:
+            raise ValueError("invalid teardown lock owner")
+        for key in ("start", "boot"):
+            if key in owner and (not isinstance(owner[key], str) or not owner[key].strip() or "\n" in owner[key]):
+                raise ValueError("invalid teardown lock owner")
+        group = owner["group"]
+        start = process_start(group)
+        same_boot = owner.get("boot", boot) == boot
+        same_owner = not start or "start" not in owner or owner["start"] == start
+        if same_boot and same_owner and not group_inactive(group):
             fcntl.flock(fd, fcntl.LOCK_UN)
             raise ValueError("previous teardown commands are still running")
     held = True
 def record(group=None):
     os.ftruncate(fd, 0)
     if group is not None:
-        os.pwrite(fd, json.dumps({"group":group}).encode(), 0)
+        start = process_start(group)
+        if not start:
+            raise RuntimeError("cannot identify teardown command group")
+        os.pwrite(fd, json.dumps({"group":group,"start":start,"boot":boot}).encode(), 0)
     os.fsync(fd)
 def stop_worker():
     if not group_inactive(child.pid):
@@ -189,7 +209,9 @@ finally:
 }
 
 teardown_preflight() { # teardown_preflight <worktree path>
-  local executable location root target hops commands=(git jq "$BASH")
+  local executable location root target parent hops commands=(git jq "$BASH" rm ps uname env cat grep basename dirname sed tr readlink mktemp pgrep sleep awk od)
+  if have shasum; then commands+=(shasum); elif have sha256sum; then commands+=(sha256sum); fi
+  if have cmux-tui; then commands+=(cmux-tui); fi
   wg_select_python || die 'teardown requires Python 3.9 or later'
   commands+=("${wg_python}")
   if is_remote; then commands+=(tmux); else
@@ -199,6 +221,11 @@ teardown_preflight() { # teardown_preflight <worktree path>
   root=$(physical_dir "$1")
   for executable in "${commands[@]}"; do
     location=$(type -P "$executable") || die "teardown requires $executable"
+    path_within "$location" "$root" && die "$executable is inside the worktree; use an installation outside it"
+    parent=${location%/*}; [[ $parent != "$location" ]] || parent=.
+    target=$(cd "$parent" && printf '%s/%s' "$(pwd -P)" "${location##*/}")
+    path_within "$target" "$root" && die "$executable is inside the worktree; use an installation outside it"
+    location=$target
     hops=0
     while [[ -L $location && $hops -lt 32 ]]; do
       target=$(readlink "$location") || die "cannot resolve $executable"
@@ -206,12 +233,38 @@ teardown_preflight() { # teardown_preflight <worktree path>
       hops=$((hops + 1))
     done
     [[ ! -L $location ]] || die "cannot resolve $executable"
-    location=$(cd "$(dirname "$location")" && printf '%s/%s' "$(pwd -P)" "${location##*/}")
+    parent=${location%/*}; [[ $parent != "$location" ]] || parent=.
+    location=$(cd "$parent" && printf '%s/%s' "$(pwd -P)" "${location##*/}")
     path_within "$location" "$root" && die "$executable is inside the worktree; use an installation outside it"
   done
   location=$(physical_dir "$WG_LIB_DIR")
   path_within "$location" "$root" && die 'wt libraries are inside the target worktree; use an installation outside it'
   return 0
+}
+
+teardown_preservation() { # Recheck the frozen proof before deleting the remaining branch.
+  local name=$1 branch=$2 head=$3 proof base expected current canonical='' rc=0 retained
+  proof=$(jq -r .proof <<<"$WT_TEARDOWN_JSON")
+  base=$(jq -r .base <<<"$WT_TEARDOWN_JSON")
+  [[ $proof != discard ]] || return 0
+  case $proof in ancestry|content|published) ;; *) return 1 ;; esac
+  if [[ $proof == published || $base =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+    retained="refs/wt/preserved/$(jq -r .generation <<<"$WT_TEARDOWN_JSON")"
+    git -C "$REPO" check-ref-format "$retained" >/dev/null 2>&1 || return 1
+    git -C "$REPO" symbolic-ref -q "$retained" >/dev/null 2>&1 && return 1
+    [[ $? == 1 ]] || return 1
+    current=$(git -C "$REPO" rev-parse -q --verify "$retained^{commit}") || return 1
+    [[ $current == "$head" ]]
+    return
+  fi
+  meta_require "$name"
+  comparison_ref "$base" "$branch" canonical || return 1
+  forget_base "$base" || return 1
+  fetch_base "$base" || rc=$?
+  [[ $rc != 1 ]] || return 1
+  expected=$(jq -r .base_object <<<"$WT_TEARDOWN_JSON")
+  current=$(git -C "$REPO" rev-parse -q --verify "$canonical^{commit}") || return 1
+  [[ $current == "$expected" ]]
 }
 
 teardown_observe() { # Observe absence only; this function never closes a row or deletes Git work.
@@ -266,6 +319,9 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
       local registrations
       registrations=$(git -C "$REPO" worktree list --porcelain) || die 'cannot check branch registrations'
       if grep -qxF "branch refs/heads/$branch" <<<"$registrations"; then die "branch $branch is checked out elsewhere; kept it"; fi
+      teardown_preservation "$name" "$branch" "$head" || die 'preservation evidence changed; kept branch and metadata (retry with --keep-branch to preserve it)'
+      [[ $(metadata_fingerprint "$(wt_meta "$name")") == $(jq -r .metadata_hash <<<"$WT_TEARDOWN_JSON") ]] \
+        || die 'task metadata changed before branch removal; kept the branch and metadata'
       teardown_control check || die 'teardown coordinator exited before branch removal'
       git -C "$REPO" update-ref --no-deref -d "refs/heads/$branch" "$head" || die "worktree removed, but branch deletion failed; retry wt rm $name -r $(shell_join "$REPO")"
     fi

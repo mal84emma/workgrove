@@ -2955,6 +2955,20 @@ SHIM
   )
   assert_has 'a live recorded owner reaches receiver recovery' "$controller_output" '--defer-close'
   assert_has 'the controller acknowledges closure only after receiver checks' "$controller_output" '--row-closed'
+  # shellcheck disable=SC2329,SC2030  # host_new invokes these isolated controller replacements.
+  controller_output=$(
+    # shellcheck source=lib/workgrove/remote.sh
+    source "$REPO/lib/workgrove/remote.sh"
+    cmux_ok() { return 0; }
+    host_new_preflight() { return 0; }
+    vm_result() { echo creation-attempt; printf -v "$5" '%s' 'cleanup remains pending for pending'; printf -v "$6" '%s' 1; }
+    cmux_row_field() { return 1; }
+    remote_wt() { echo false-absence-acknowledgment; }
+    host_new test.invalid pending -r /scratch/repo || echo refused-query
+  )
+  assert_has 'failed row query refuses name reconciliation' "$controller_output" refused-query
+  assert_lacks 'failed row query cannot acknowledge absence' "$controller_output" false-absence-acknowledgment
+  assert_eq 'failed row query never retries creation' 1 "$(grep -c creation-attempt <<<"$controller_output")"
   end_scenario
 }
 
@@ -3014,6 +3028,7 @@ SHIM
   chmod +x "$shim/git"
   WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("PAUSE_ROOT=$r" "REAL_FIXTURE_GIT=$real_git")
   (wt_run rm interrupted -r "$r"; printf '%s\n' "$WT_RC" >"$r/owner-result") &
+  # shellcheck disable=SC2031  # The controller fixture changes only its subshell's output variables.
   local interrupted_runner_pid=$!
   for ((attempt=0; attempt<1000; attempt++)); do [[ ! -f $r/command-ready ]] || break; sleep 0.01; done
   kill -KILL "$(cat "$r/worker-pid")"
@@ -3025,6 +3040,167 @@ SHIM
   WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
   assert_wt_ok 'recovery acquires the lock after interrupted commands stop' rm interrupted -r "$r"
   WT_RELAY_ENV=()
+  end_scenario
+}
+
+scenario_teardown_coordinator_death() {
+  begin_scenario "$1" || return 0
+  local r shim real_git attempt coordinator interrupted_runner_pid helper mac="$TEST_ROOT/coordinator-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  r=$(new_repo coordinator-death)
+  assert_wt_ok 'create coordinator interruption fixture' new pending --no-workspace -r "$r"
+  shim="$TEST_ROOT/coordinator-bin"; mkdir -p "$shim"
+  real_git=$(command -v git)
+  cat >"$shim/git" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *'worktree remove --force'*)
+    ps -p "$WG_TEARDOWN_WORKER_PID" -o ppid= | tr -d ' ' >"$PAUSE_ROOT/coordinator-pid"
+    touch "$PAUSE_ROOT/ready"
+    while [[ ! -f $PAUSE_ROOT/release ]]; do sleep 0.01; done ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("PAUSE_ROOT=$r" "REAL_FIXTURE_GIT=$real_git")
+  (wt_run rm pending -r "$r"; printf '%s\n' "$WT_RC" >"$r/owner-result") &
+  # shellcheck disable=SC2031  # The controller fixture changes only its subshell's output variables.
+  interrupted_runner_pid=$!
+  for ((attempt=0; attempt<1000; attempt++)); do [[ ! -f $r/ready ]] || break; sleep 0.01; done
+  coordinator=$(cat "$r/coordinator-pid")
+  kill -KILL "$coordinator"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+  cp "$r/.git/wt/teardown/pending.lock" "$r/original-owner"
+  local mutation
+  for mutation in '.group |= tostring' '.group=true' '.group=null' 'del(.group)' '.group=0' '.start=[]' '.boot=false'; do
+    jq "$mutation" "$r/original-owner" >"$r/.git/wt/teardown/pending.lock"
+    assert_wt_fails 1 'invalid teardown lock owner' rm pending -r "$r"
+    assert_dir 'a malformed marker cannot admit a competing remover' "$r/.worktrees/pending"
+  done
+  cp "$r/original-owner" "$r/.git/wt/teardown/pending.lock"
+  assert_wt_fails 1 'previous teardown commands are still running' rm pending -r "$r"
+  assert_dir 'a competing remover leaves an active original command intact' "$r/.worktrees/pending"
+  touch "$r/release"
+  wait "$interrupted_runner_pid"
+  assert_eq 'coordinator death reports failure' 137 "$(cat "$r/owner-result")"
+  assert_wt_ok 'recorded partial removal recovers after original commands exit' rm pending -r "$r"
+  assert_branch "$r" wt/pending no
+
+  python3 -c '
+import os, pathlib, sys, time
+os.setsid()
+root = pathlib.Path(sys.argv[1])
+(root / "helper-pid").write_text(str(os.getpid()))
+while not (root / "helper-release").exists():
+    time.sleep(0.01)
+' "$r" &
+  # shellcheck disable=SC2031  # This is the new test-owned helper PID.
+  helper=$!
+  for ((attempt=0; attempt<500; attempt++)); do [[ ! -f $r/helper-pid ]] || break; sleep 0.01; done
+  local mode start boot
+  start=$(LC_ALL=C ps -p "$helper" -o lstart= | sed 's/^ *//;s/ *$//')
+  boot=$(LC_ALL=C ps -p 1 -o lstart= | sed 's/^ *//;s/ *$//')
+  for mode in reboot reused; do
+    assert_wt_ok "create stale $mode marker fixture" new "$mode" --no-workspace -r "$r"
+    if [[ $mode == reboot ]]; then
+      jq -cn --argjson group "$helper" --arg start "$start" '{group:$group,start:$start,boot:"previous boot"}' >"$r/.git/wt/teardown/$mode.lock"
+    else
+      jq -cn --argjson group "$helper" --arg boot "$boot" '{group:$group,start:"previous process",boot:$boot}' >"$r/.git/wt/teardown/$mode.lock"
+    fi
+    assert_wt_ok "a stale $mode identity cannot block unrelated cleanup" rm "$mode" -r "$r"
+    assert_eq 'stale identity inspection never signals an unrelated group' live "$(kill -0 "$helper" 2>/dev/null && echo live)"
+  done
+  touch "$r/helper-release"
+  wait "$helper"
+  end_scenario
+}
+
+scenario_teardown_final_proof() {
+  begin_scenario "$1" || return 0
+  local r initial head mode shim real_git tool mac="$TEST_ROOT/final-proof-mac" WT_PATH_PREFIX=''
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  real_git=$(command -v git)
+  shim="$TEST_ROOT/final-proof-bin"; mkdir -p "$shim"
+  cat >"$shim/git" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *'worktree remove --force'*)
+    "$REAL_FIXTURE_GIT" "$@" || exit $?
+    if [[ $PROOF_MODE == content || $PROOF_MODE == ancestry ]]; then
+      "$REAL_FIXTURE_GIT" -C "$PROOF_REPO" update-ref refs/heads/landing "$PROOF_INITIAL"
+    else
+      generation=$(jq -r .generation "$PROOF_REPO/.git/wt/target.json")
+      if [[ $PROOF_MODE == published-alias ]]; then
+        "$REAL_FIXTURE_GIT" -C "$PROOF_REPO" symbolic-ref "refs/wt/preserved/$generation" refs/heads/wt/target
+      else "$REAL_FIXTURE_GIT" -C "$PROOF_REPO" update-ref -d "refs/wt/preserved/$generation"; fi
+    fi
+    exit $? ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git"
+  for mode in content ancestry published published-alias pinned; do
+    WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+    r=$(new_repo "proof-$mode")
+    initial=$(fixture_git "$r" rev-parse main)
+    if [[ $mode == published* ]]; then add_origin "$r" >/dev/null; fi
+    assert_wt_ok "create $mode proof fixture" new target --no-workspace -r "$r"
+    if [[ $mode != pinned ]]; then fixture_commit "$r/.worktrees/target" unique 'unique task content'; fi
+    head=$(fixture_git "$r" rev-parse wt/target)
+    case $mode in
+      content)
+        fixture_git "$r" merge -q --squash wt/target
+        fixture_git "$r" commit -q -m squash
+        fixture_git "$r" branch landing main
+        fixture_git "$r" reset -q --hard "$initial"
+        fixture_git "$r" config wt.landingRef landing ;;
+      ancestry)
+        fixture_git "$r" branch landing wt/target
+        fixture_git "$r" config wt.landingRef landing ;;
+      published*)
+        fixture_git "$r" push -q -u origin wt/target ;;
+      pinned) fixture_git "$r" config wt.landingRef "$initial" ;;
+    esac
+    WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git" "PROOF_REPO=$r" "PROOF_MODE=$mode" "PROOF_INITIAL=$initial")
+    assert_wt_fails 1 'preservation evidence changed' rm target -r "$r"
+    assert_gone 'the evidence race follows directory removal' "$r/.worktrees/target"
+    assert_eq 'the frozen task tip remains reachable' "$head" "$(fixture_git "$r" rev-parse wt/target)"
+    assert_regular "$r" .git/wt/target.json
+    WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+    assert_wt_fails 1 'preservation evidence changed' rm target -r "$r"
+    assert_wt_ok 'recovery can preserve the task branch explicitly' rm target --keep-branch -r "$r"
+    assert_eq 'keep-branch recovery retains the task tip' "$head" "$(fixture_git "$r" rev-parse wt/target)"
+  done
+  r=$(new_repo initial-anchor)
+  add_origin "$r" >/dev/null
+  assert_wt_ok 'create existing symbolic anchor fixture' new target --no-workspace -r "$r"
+  fixture_commit "$r/.worktrees/target" unique 'published content'
+  fixture_git "$r" push -q -u origin wt/target
+  local generation
+  generation=$(jq -r .generation "$r/.git/wt/target.json")
+  fixture_git "$r" symbolic-ref "refs/wt/preserved/$generation" refs/heads/wt/target
+  assert_wt_fails 1 'preservation anchor must be a direct ref' rm target -r "$r"
+  assert_dir 'an existing symbolic anchor refuses before directory removal' "$r/.worktrees/target"
+  assert_branch "$r" wt/target yes
+
+  r=$(new_repo tool-preflight)
+  assert_wt_ok 'create cleanup executable fixture' new tools --no-workspace -r "$r"
+  mkdir -p "$r/.worktrees/tools/bin"
+  for tool in rm ps; do
+    ln -s "$(command -v "$tool")" "$r/.worktrees/tools/bin/$tool"
+    WT_PATH_PREFIX="$r/.worktrees/tools/bin:$mac"
+    assert_wt_fails 1 "$tool is inside the worktree" rm tools -r "$r"
+    assert_dir 'a disappearing cleanup tool refuses before removal' "$r/.worktrees/tools"
+    assert_branch "$r" wt/tools yes
+    rm "$r/.worktrees/tools/bin/$tool"
+  done
+  WT_PATH_PREFIX=$mac
   end_scenario
 }
 

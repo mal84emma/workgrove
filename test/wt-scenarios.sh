@@ -27,6 +27,8 @@ wt_scenarios() {
   "$@" scenario_teardown_review_ownership "8g. shared servers and other tmux windows never grant exclusive ownership"
   "$@" scenario_teardown_review_preservation "8h. unusual private paths and metadata races preserve work"
   "$@" scenario_teardown_hook_lock "8i. detached Git hooks cannot retain the teardown lock"
+  "$@" scenario_teardown_coordinator_death "8j. interrupted coordinators retain active command evidence without blocking stale identities"
+  "$@" scenario_teardown_final_proof "8k. branch deletion retains preservation evidence and stable cleanup tools"
   "$@" scenario_host_args "9. wt -H: the checks that happen before any ssh"
   "$@" scenario_connected_attach "10. wt -H attach checks connected clients and shell prompts"
   "$@" scenario_shared_helpers "11. bash startup, shared library loading, and tmux launch behavior"
