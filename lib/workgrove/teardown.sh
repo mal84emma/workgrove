@@ -511,7 +511,7 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
           WT_TEARDOWN_JSON=$(jq -c --argjson owner "$WT_TMUX_OWNER" '.tmux_owner=$owner' <<<"$WT_TEARDOWN_JSON")
           teardown_save close_requested
         else
-          [[ $(jq -c '[.pid,.start]' <<<"$WT_TMUX_OWNER") == $(jq -c '.tmux_owner | [.pid,.start]' <<<"$WT_TEARDOWN_JSON") ]] \
+          [[ $(jq -c '[.pid,.start]' <<<"$WT_TMUX_OWNER") == "$(jq -c '.tmux_owner | [.pid,.start]' <<<"$WT_TEARDOWN_JSON")" ]] \
             || die 'recorded task provider changed; cleanup remains pending'
         fi
         teardown_commands_capture "$(jq -r .pid <<<"$WT_TMUX_OWNER")" "$(jq -r .start <<<"$WT_TMUX_OWNER")" \

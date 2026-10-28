@@ -103,7 +103,7 @@ class CommandTests(unittest.TestCase):
         self.assertNotEqual(refreshed, self.manifest)
         self.assertIn(90, {r['pid'] for r in refreshed['records']})
 
-    def test_replacement_owner_refuses_before_capture(self):
+    def test_saved_owner_validation_precedes_capture(self):
         import tempfile
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory(prefix='wt-command-owner-') as directory:
@@ -121,18 +121,25 @@ teardown_release() { return 0; }
 task_tmux_identity() { printf '%s' '{"id":"$1"}'; }
 process_descends() { return 0; }
 tmux() { case "$*" in *pane_pid*) echo 222 ;; *'#S'*) echo target ;; *) return 1 ;; esac; }
-tmux_self_ownership() { WT_TMUX_OWNER=$(jq -nc --arg mode "$OWNER_MODE" '{mode:$mode,pid:"222",start:"new",ancestors:[]}'); }
-teardown_commands_capture() { touch "$TEST_ROOT/captured"; }
+tmux_self_ownership() { WT_TMUX_OWNER=$(jq -nc --arg mode "$OWNER_MODE" --arg pid "${OWNER_PID:-222}" --arg start "${OWNER_START:-new}" '{mode:$mode,pid:$pid,start:$start,ancestors:[]}'); }
+teardown_commands_capture() { touch "$TEST_ROOT/captured"; return 1; }
 export TMUX=fixture TMUX_PANE=%1
 teardown_finish
 """
             for mode in ('shell', 'agent'):
                 with self.subTest(mode=mode):
-                    environment = dict(os.environ, HOME=directory, SOURCE_REPO=str(root), TEST_ROOT=directory, OWNER_MODE=mode)
+                    environment = dict(os.environ, HOME=directory, SOURCE_REPO=str(root), TEST_ROOT=directory,
+                                       OWNER_MODE=mode, OWNER_PID='222', OWNER_START='new')
                     result = subprocess.run(['bash', '-c', script], env=environment, capture_output=True, text=True)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn('recorded task ' + ('shell' if mode == 'shell' else 'provider') + ' changed', result.stderr)
                     self.assertFalse(marker.exists())
+                    environment.update(OWNER_PID='111', OWNER_START='old')
+                    result = subprocess.run(['bash', '-c', script], env=environment, capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('task command cancellation is incomplete', result.stderr)
+                    self.assertTrue(marker.exists())
+                    marker.unlink()
 
     def test_real_owned_detached_child_ignores_term_and_is_reaped(self):
         backend = commands.Processes()
