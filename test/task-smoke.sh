@@ -55,6 +55,7 @@ scenario_task_signal() {
   git init -qb main "$TEST_ROOT/project"
   git -C "$TEST_ROOT/project" -c user.name=Test -c user.email=test@example.com commit -qm initial --allow-empty
   printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/bin/fzf"
+  printf '#!/bin/sh\necho --no-daemon\n' >"$TEST_ROOT/bin/codex"
   # shellcheck disable=SC2016  # the stub reads its own argument
   printf '#!/bin/sh\n[ "$1" = -s ] && echo Darwin\n' >"$TEST_ROOT/bin/uname"
   cat >"$TEST_ROOT/bin/mv" <<'MV'

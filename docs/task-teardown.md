@@ -132,6 +132,10 @@ Newly created ignored files depend on the current `.wt-include` patterns.
 ## Verify the requesting session
 
 Codex task launches on the Mac and VMs require command-line interface (CLI) support for `--no-daemon`.
+Doctor warns when the effective Codex command lacks this capability.
+Update Codex before starting a Codex task.
+`wt new -a codex` checks this requirement before creating a worktree or row on the Mac or a VM.
+`wt run` repeats the same check before launch.
 This mode keeps the runtime beneath the task's foreground process instead of reusing another terminal's shared server.
 Workgrove preserves model, brief, profile arguments, sandbox settings, and approval settings.
 It refuses explicit remote-server arguments for this local task mode.
