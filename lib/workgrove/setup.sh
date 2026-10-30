@@ -91,3 +91,10 @@ cmd_environment_doctor() {
   wg_select_python || { wg_python_readiness_error; return 1; }
   wg_run_python "$WG_LIB_DIR/portable.py" doctor "${args[@]}"
 }
+
+# Use the launch capability check for task creation and contract diagnostics too.
+check_codex() {
+  # shellcheck source=lib/workgrove/vm/python-runtime.sh
+  source "$WG_LIB_DIR/vm/python-runtime.sh"
+  wg_run_python "$WG_LIB_DIR/portable.py" check-codex
+}

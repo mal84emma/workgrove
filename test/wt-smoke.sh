@@ -2776,6 +2776,10 @@ scenario_codex_owned_launch() {
   stub_cmux dead
   assert_wt_ok 'create Codex launch fixture' new owned -a codex -m test-model -p 'the brief' --no-workspace -r "$r"
   WT_RELAY_ENV=(FAKE_AGENT_HELP_UNSUPPORTED=1)
+  assert_wt_fails 1 'update Codex' new unsupported -a codex -r "$r"
+  assert_absent "$r" .worktrees/unsupported
+  assert_branch "$r" wt/unsupported no
+  assert_wt_ok 'old Codex does not block Claude creation' new claude-ok -a claude --no-workspace -r "$r"
   assert_wt_fails 1 'Codex lacks --no-daemon' run owned -r "$r"
   assert_absent "$r" .git/wt/owned.started
   WT_RELAY_ENV=()
