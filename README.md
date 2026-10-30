@@ -268,6 +268,7 @@ The refresh removes the retired commands, including extra groups that contain on
 Mixed groups keep their other commands and settings.
 On classic installs, check the backup and complete the install summary's follow-ups.
 Then restart the agents.
+
 Other changed commands remain foreign unless the policy names their exact retired forms.
 
 Both installers read [the agent configuration policy](lib/workgrove/agent-config-policy.json).
