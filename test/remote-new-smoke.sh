@@ -169,6 +169,7 @@ TMUX
 for tool in claude codex; do
   printf '#!/bin/sh\necho --no-daemon\n' >"$TEST_ROOT/remote/.local/bin/$tool"
 done
+printf '#!/bin/sh\necho --no-daemon\n' >"$TEST_ROOT/local/bin/codex"
 printf '#!/bin/sh\nexit 1\n' >"$TEST_ROOT/local/bin/fzf"   # wt task needs fzf only for the pickers that --where and -a skip
 cat >"$TEST_ROOT/local/bin/code" <<'CODE'
 #!/bin/sh
