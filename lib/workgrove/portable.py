@@ -1509,6 +1509,37 @@ def bootstrap(args):
     os.execv(sys.executable, command)
 
 
+def codex_no_daemon(command, environment=None):
+    """Check the task-owned runtime capability without starting an agent session."""
+    try:
+        result = subprocess.run([command, "--help"], env=environment, capture_output=True, timeout=10)
+        return result.returncode == 0 and b"--no-daemon" in result.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def agent_environment(profile=None):
+    environment = os.environ.copy()
+    home_bin = str(Path.home() / ".local/bin")
+    path = environment.get("PATH", "")
+    if profile:
+        path = str(Path(profile["root"]) / ".local/bin") + ":" + home_bin + ":" + path
+        environment["CODEX_HOME"] = profile["agent_roots"]["codex"]
+    elif home_bin not in path.split(":"):
+        path = home_bin + ":" + path
+    environment["PATH"] = path
+    return environment
+
+
+def check_codex(args):
+    environment = agent_environment()
+    command = shutil.which("codex", path=environment["PATH"])
+    if command and codex_no_daemon(command, environment):
+        return 0
+    print("workgrove: Codex lacks --no-daemon; update Codex before launching a task", file=sys.stderr)
+    return 1
+
+
 def _readiness(root=None):
     if root is None and os.environ.get("WT_REMOTE_ROOT"):
         root = os.environ["WT_REMOTE_ROOT"]
@@ -1546,9 +1577,8 @@ def _readiness(root=None):
     except (Refusal, OSError, ValueError, RuntimeError, UnicodeError) as error:
         code = str(error) if isinstance(error, Refusal) else "profile-unreadable"
         issues.append("portable-profile-missing" if root and code == "profile-missing" else code)
-    environment = os.environ.copy()
+    environment = agent_environment(profile)
     if profile:
-        environment["PATH"] = str(Path(profile["root"]) / ".local/bin") + ":" + environment.get("PATH", "")
         environment["GIT_CONFIG_GLOBAL"] = str(Path(profile["root"]) / ".config/workgrove/git/global")
     tools = {name: shutil.which(name, path=environment.get("PATH")) is not None
              for name in ("bash", "git", "tmux", "jq", "python3", "rsync", "ps", "timeout", "infocmp")}
@@ -1585,7 +1615,11 @@ def _readiness(root=None):
         if not all(terminals.values()):
             issues.append("terminfo-missing")
     agents = {name: shutil.which(name, path=environment.get("PATH")) is not None for name in ("claude", "codex")}
+    command = shutil.which("codex", path=environment["PATH"])
+    capabilities = {"codex_no_daemon": codex_no_daemon(command, environment) if command else None}
     warnings = []
+    if capabilities["codex_no_daemon"] is False:
+        warnings.append("codex-no-daemon-unsupported")
     if profile and any(command is not None and not (os.path.isfile(command) and os.access(command, os.X_OK))
                        for command in profile["agent_commands"].values()):
         warnings.append("agent-command-unavailable")
@@ -1608,7 +1642,7 @@ def _readiness(root=None):
     legacy = profile is None and issues == ["profile-missing"]
     return {"schema": 1, "status": "legacy" if legacy else "incomplete" if issues else "ready",
             "ready": None if legacy else not issues, "issues": sorted(set(issues)), "warnings": warnings, "tools": tools,
-            "agents": agents, "git_identity": bool(git_identity), "worktree_exclusion": exclusions,
+            "agents": agents, "agent_capabilities": capabilities, "git_identity": bool(git_identity), "worktree_exclusion": exclusions,
             "storage_permission_policy": ("trusted-personal-volume" if profile["trust_personal_volume"]
                                           else "strict") if profile else None,
             "storage_permission_warnings": ["unix-mode-checks-relaxed"] if profile and profile["trust_personal_volume"] else [],
@@ -1621,6 +1655,7 @@ def readiness(root=None):
     except (Refusal, OSError, ValueError, RuntimeError, UnicodeError, TypeError, AttributeError):
         return {"schema": 1, "status": "incomplete", "ready": False,
                 "issues": ["readiness-probe-failed"], "warnings": [], "tools": {}, "agents": {},
+                "agent_capabilities": {"codex_no_daemon": None},
                 "git_identity": None, "worktree_exclusion": None, "terminfo": {},
                 "storage_permission_policy": None, "storage_permission_warnings": [],
                 "native_hooks": {}, "native_relay": "requires-row-check"}
@@ -1680,6 +1715,8 @@ def doctor(args):
             print("  " + issue)
         for warning in result["warnings"]:
             print("  " + warning)
+        if "codex-no-daemon-unsupported" in result["warnings"]:
+            print("  Fix: update Codex before launching a task")
         print("native relay and hook trust require a separate native-row check")
     if {"profile-missing", "remote-wt-missing"}.issubset(result["issues"]):
         print(root_recovery_hint(args.host, result["root_discovery"]),
@@ -1714,6 +1751,8 @@ def main():
     command = commands.add_parser("reinstall-flags")
     command.add_argument("flags", nargs="*")
     command.set_defaults(run=reinstall_flags, reinstall_parser=reinstall_parser)
+    command = commands.add_parser("check-codex")
+    command.set_defaults(run=check_codex)
     command = commands.add_parser("doctor")
     command.add_argument("--root")
     command.add_argument("--host")

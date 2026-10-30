@@ -451,7 +451,7 @@ class PortableTests(unittest.TestCase):
             (self.tools / command).symlink_to(target)
         for command in ("tmux", "rsync", "timeout", "infocmp", "claude", "codex"):
             tool = self.tools / command
-            tool.write_text("#!/bin/sh\nexit 0\n")
+            tool.write_text('#!/bin/sh\n[ "$1" != --help ] || echo --no-daemon\nexit 0\n')
             tool.chmod(0o700)
         self.env = dict(HOME=str(self.home), PATH=str(self.tools) + ":/usr/bin:/bin", GIT_CONFIG_NOSYSTEM="1",
                         PYTHONPYCACHEPREFIX=str(self.bytecode),
@@ -2042,20 +2042,87 @@ sys.exit(module["main"]())
         self.assertEqual(self.profile()["agent_commands"], dict(claude=None, codex=None))
         self.assertEqual(json.loads(self.command("doctor", "--json").stdout)["warnings"], [])
 
+    def test_doctor_warns_for_old_codex_without_blocking_claude(self):
+        command = self.tools / "codex"
+        command.write_text("#!/bin/sh\necho 'Usage: codex'\n")
+        command.chmod(0o700)
+        self.install()
+        report = json.loads(self.command("doctor", "--json").stdout)
+        self.assertTrue(report["agents"]["codex"])
+        self.assertTrue(report["ready"])
+        self.assertEqual(report["issues"], [])
+        self.assertEqual(report["warnings"], ["codex-no-daemon-unsupported"])
+        self.assertFalse(report["agent_capabilities"]["codex_no_daemon"])
+        self.assertIn("update Codex", self.command("doctor").stdout)
+
+    def test_saved_codex_command_controls_doctor_creation_and_run(self):
+        directory = self.root / "agent-tools"
+        directory.mkdir()
+        command = directory / "codex"
+        command.write_text("#!/bin/sh\necho --no-daemon\n")
+        command.chmod(0o700)
+        self.env["PATH"] = str(directory) + ":" + self.env["PATH"]
+        self.install()
+        self.assertEqual(self.profile()["agent_commands"]["codex"], str(command))
+        # A supported PATH fallback must not hide the old saved command.
+        self.env["PATH"] = str(self.tools) + ":/usr/bin:/bin"
+        command.write_text("#!/bin/sh\necho 'Usage: codex'\n")
+        environment = self.transport()
+        project = self.root / "project"
+        self.git("init", "-q", str(project))
+        self.git("-C", str(project), "commit", "--allow-empty", "-qm", "Create fixture")
+        result = self.remote(environment, "new", "old-codex", "-r", str(project), "-a", "codex", ok=False)
+        self.assertIn("update Codex", result.stderr)
+        report = json.loads(self.command("doctor", "--json").stdout)
+        self.assertFalse(report["agent_capabilities"]["codex_no_daemon"])
+        self.assertFalse((project / ".worktrees/old-codex").exists())
+        self.assertEqual(json.loads((Path(environment["FAKE_CMUX_STATE"]) / "rows.json").read_text())["workspaces"], [])
+        self.remote(environment, "new", "claude-ok", "-r", str(project), "-a", "claude", "--no-workspace")
+        command.write_text("#!/bin/sh\necho --no-daemon\n")
+        self.remote(environment, "new", "codex-ok", "-r", str(project), "-a", "codex", "--no-workspace")
+        command.write_text("#!/bin/sh\necho 'Usage: codex'\n")
+        result = subprocess.run([str(self.tools / "bash"), str(self.home / ".local/bin/wt"), "run", "codex-ok",
+                                 "-r", str(project)], env=dict(self.env, CMUX_SSH_ATTEMPT_ID="fixture"),
+                                capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("update Codex before launching a task", result.stderr)
+        self.assertNotIn("local task", result.stderr)
+        self.assertFalse((project / ".git/wt/codex-ok.started").exists())
+        command.write_text("#!/bin/sh\necho --no-daemon\n")
+        (self.tools / "codex").write_text("#!/bin/sh\necho 'Usage: codex'\n")
+        report = json.loads(self.command("doctor", "--json").stdout)
+        self.assertTrue(report["agent_capabilities"]["codex_no_daemon"])
+        self.assertEqual(report["warnings"], [])
+
+    def test_codex_capability_refuses_failed_help_timeout_and_missing_binary(self):
+        command = self.tools / "codex"
+        command.write_text("#!/bin/sh\necho --no-daemon\nexit 1\n")
+        self.assertFalse(portable.codex_no_daemon(str(command), self.env))
+        command.unlink()
+        self.assertFalse(portable.codex_no_daemon(str(command), self.env))
+        with patch.object(portable.subprocess, "run", side_effect=subprocess.TimeoutExpired("codex", 10)):
+            self.assertFalse(portable.codex_no_daemon(str(command), self.env))
+        self.install()
+        report = json.loads(self.command("doctor", "--json").stdout)
+        self.assertFalse(report["agents"]["codex"])
+        self.assertIsNone(report["agent_capabilities"]["codex_no_daemon"])
+        self.assertEqual(report["warnings"], [])
+
     def test_readiness_fallback_has_warnings(self):
         with patch.object(portable, "_readiness", side_effect=OSError):
             report = portable.readiness()
         self.assertEqual(report["issues"], ["readiness-probe-failed"])
+        self.assertEqual(report["agent_capabilities"], {"codex_no_daemon": None})
         self.assertEqual(report["warnings"], [])
 
-    def test_doctor_checks_saved_agent_commands_without_running_them(self):
+    def test_doctor_checks_saved_agent_commands_without_starting_sessions(self):
         directory = self.root / "agent-tools"
         directory.mkdir()
         marker = self.base / "agent-ran"
         targets = []
         for agent in ("claude", "codex"):
             target = directory / (agent + "-target")
-            target.write_text("#!/bin/sh\ntouch " + shlex.quote(str(marker)) + "\n")
+            target.write_text('#!/bin/sh\nif [ "$1" = --help ]; then echo --no-daemon; exit 0; fi\ntouch ' + shlex.quote(str(marker)) + "\n")
             target.chmod(0o700)
             (directory / agent).symlink_to(target.name)
             targets.append(target)
@@ -2099,7 +2166,7 @@ sys.exit(module["main"]())
         directory = self.root / "agent-tools"
         directory.mkdir()
         command = directory / "codex"
-        command.write_text("#!/bin/sh\nexit 0\n")
+        command.write_text('#!/bin/sh\necho --no-daemon\n')
         command.chmod(0o700)
         self.env["PATH"] = str(directory) + ":" + self.env["PATH"]
         self.install()
@@ -2117,7 +2184,7 @@ sys.exit(module["main"]())
             self.assertTrue(probe.stdout.startswith("readiness\t"))
             self.assertEqual(json.loads(probe.stdout.split("\t", 1)[1])["warnings"],
                              ["agent-command-unavailable"])
-            command.write_text("#!/bin/sh\nexit 0\n")
+            command.write_text("#!/bin/sh\necho --no-daemon\n")
             command.chmod(0o700)
 
     def test_replaced_home_doctor_explains_explicit_root_recovery(self):
@@ -3483,6 +3550,7 @@ sys.exit(1)
         result = client_command("doctor", "--json")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(json.loads(result.stdout)["issues"], ["python-3.9-required"])
+        self.assertEqual(json.loads(result.stdout)["agent_capabilities"], {"codex_no_daemon": None})
         direct = subprocess.run([str(self.tools / "bash"), str(client / "bin/wt"), "doctor", "--json"],
                                 env=self.env, capture_output=True, text=True, timeout=30)
         self.assertNotEqual(direct.returncode, 0)
