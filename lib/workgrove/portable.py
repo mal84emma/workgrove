@@ -979,12 +979,14 @@ def replace_block(text, label, contents, first=False):
     return text + ("\n" if text and not text.endswith("\n") else "") + managed
 
 
-def merge_hooks(existing, base):
+def merge_hooks(existing, base, policy=None):
     require(isinstance(existing, dict), "invalid-agent-json")
     hooks = existing.get("hooks", {})
     require(isinstance(hooks, dict), "invalid-agent-json")
     commands = {hook["command"] for groups in base.get("hooks", {}).values()
                 for group in groups for hook in group["hooks"] if isinstance(hook.get("command"), str)}
+    if policy is not None:
+        commands.update(old for old, replacement in policy["retired_hook_commands"].items() if replacement in commands)
     merged = {event: [dict(group, hooks=list(group["hooks"])) for group in groups]
               for event, groups in base.get("hooks", {}).items()}
     for event, groups in hooks.items():
@@ -1301,7 +1303,7 @@ def install_files(profile, restoring=False, instruction_copies=None, restore_fil
         current = json.loads(read(path)) if exists else dict(base)
         if agent == "claude":
             agent_settings(current, policy, existing=exists)
-        merged = merge_hooks(current, base)
+        merged = merge_hooks(current, base, policy)
         write(path, json.dumps(merged, indent=2) + "\n")
     path = Path(profile["agent_roots"]["codex"]) / "config.toml"
     if not path.exists():

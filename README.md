@@ -251,17 +251,24 @@ The summary includes both flags because the existing copy cannot remember the re
 | Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Both installers create them from the versioned `.base` files with the shared policy below. The apps write local state into them. A classic install keeps existing copies unless you specify `--refresh-config`. Portable setup preserves personal settings and merges hooks on every full setup. Both hook merges preserve foreign commands and their group settings. |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides. The linked files source or include them, but `~/.zshrc.local` only when `~/.zshrc` is one of the linked files. |
 
-A foreign hook command is an existing command string absent from the new `.base` file.
+A foreign hook command matches neither a base command nor a retired form whose replacement is in the base.
 A refresh keeps each foreign command with its matcher and other group settings.
 For a mixed group, it keeps only the foreign commands.
 Commands present in the base use the base's groups and matchers.
 The comparison uses the complete command string, including its arguments.
 
-When a base command changes, refresh preserves its previous command string as foreign.
-Remove obsolete entries from machine-local copies after you review the backup.
-This release changes bare `agent-notify` commands to `~/.local/bin/agent-notify`.
-A refresh keeps the old bare commands alongside the new commands.
-After you check the backup, remove the old bare commands from both JSON files to prevent duplicate notifications.
+The shared policy maps two exact retired commands to their replacements:
+`AGENT_NOTIFY_SOURCE='Claude Code' agent-notify` and `AGENT_NOTIFY_SOURCE=Codex agent-notify`.
+A refresh replaces these commands with the base groups that call `~/.local/bin/agent-notify`.
+It keeps commands with different arguments, source assignments, or wrappers.
+
+If an earlier refresh kept both forms, run `install.sh --refresh-config` again on the Mac.
+For a VM, run `wt -H <vm> update --refresh-config`.
+The refresh removes the retired commands, including extra groups that contain only those commands.
+Mixed groups keep their other commands and settings.
+On classic installs, check the backup and complete the install summary's follow-ups.
+Then restart the agents.
+Other changed commands remain foreign unless the policy names their exact retired forms.
 
 Both installers read [the agent configuration policy](lib/workgrove/agent-config-policy.json).
 The ordered `settings` rows define deletions and values for new Claude copies.
