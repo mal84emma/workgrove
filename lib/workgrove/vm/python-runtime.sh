@@ -19,7 +19,7 @@ wg_capabilities_error() {
 }
 
 wg_readiness_error() {
-  printf '{"schema":1,"status":"incomplete","ready":false,"issues":["%s"],"warnings":[],"tools":{},"agents":{},"git_identity":null,"worktree_exclusion":null,"storage_permission_policy":null,"storage_permission_warnings":[],"terminfo":{},"native_hooks":{},"native_relay":"requires-row-check"}\n' "$1"
+  printf '{"schema":1,"status":"incomplete","ready":false,"issues":["%s"],"warnings":[],"tools":{},"agents":{},"agent_capabilities":{"codex_no_daemon":null},"git_identity":null,"worktree_exclusion":null,"storage_permission_policy":null,"storage_permission_warnings":[],"terminfo":{},"native_hooks":{},"native_relay":"requires-row-check"}\n' "$1"
 }
 
 wg_run_python() {
