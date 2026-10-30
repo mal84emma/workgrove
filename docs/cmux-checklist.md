@@ -31,9 +31,53 @@ The VM checks require a reachable VM and a task with a running agent.
    Repeat this check with Claude and Codex.
 7. From the Mac, run `wt -H <vm> attach cmux-check -r <repo> --reattach`.
    Confirm that the task resumes and its status returns to Idle after another turn.
-8. Stop the agent and keep the disposable worktree clean.
-   From a separate VM shell, run `wt rm cmux-check -r <repo>`.
-   Confirm that the task row closes and its tmux session ends.
+8. Check both removal cases below with clean, disposable tasks.
+   Use an installed `wt` outside the worktree that you remove.
+   In the expected output, `<task>` names the target task and `<repo>` is its absolute repository path.
+   Output examples use placeholders; personal details are redacted.
+   For a remote base, expect this fetch notice once per command:
+
+   ```text
+   wt: fetching <base> from <remote> to verify current landing content
+   ```
+
+   - Remove the task from its own session.
+     Stop the agent in `cmux-check` and keep its worktree clean.
+     In that task's VM shell, run `cd <repo>`, then `wt rm cmux-check -r <repo>`.
+     Confirm that the task row closes and its tmux session ends.
+     The command prints this line before session cleanup:
+
+     ```text
+     removed <task>
+     ```
+
+     Self-closure can end the command before it returns or prints a completion line.
+     Its receipt can remain at `close_requested` until independent observation confirms closure.
+
+   - Remove another task from a separate VM shell.
+     From the Mac, create it with `wt -H <test-vm> new cmux-check-other -r <repo>`.
+     Stop its agent and keep its worktree clean.
+     From a separate VM shell, run `wt rm cmux-check-other -r <repo>`.
+     Confirm that the worktree and branch are absent, while the row and tmux session remain open.
+     The command exits nonzero and prints these lines:
+
+     ```text
+     removed <task>
+     wt: worktree removed, but its Mac row or tmux session is still open or unverified
+     wt: on the Mac: wt -H <test-vm> rm <task> -r <repo>
+     wt: Git cleanup completed; session cleanup is pending. Retry: wt rm <task> -r <repo>
+     wt: receipt: <repo>/.git/wt/teardown/<task>.json
+     ```
+
+     On the Mac, run the printed retry: `wt -H <test-vm> rm <task> -r <repo>`.
+     Expect these lines:
+
+     ```text
+     Git cleanup complete; Mac controller must finish session cleanup
+     teardown complete <task>
+     ```
+
+     Confirm that the task row closes and its tmux session ends.
 9. On the Mac, run `wt doctor --record test/fixtures`.
    The command writes redacted responses below `test/fixtures/cmux-<version>/`.
    It reads one retained `notification.created` event without sending a notification.

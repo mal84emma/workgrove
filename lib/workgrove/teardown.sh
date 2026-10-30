@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: CMUX_ERROR, REPO, WG_LIB_DIR, WG_MACHINE_RESULT, WG_TEARDOWN_CONTROL_FD, WG_TEARDOWN_WORKER_PID,
-#   WG_TEARDOWN_LOCK_PATH, WT_TEARDOWN_FILE, WT_TEARDOWN_JSON.
+#   WG_TEARDOWN_LOCK_PATH, WT_BASE_FETCH_NOTIFIED, WT_TEARDOWN_FILE, WT_TEARDOWN_JSON.
 # Receipts survive the task directory and distinguish Git removal from session cleanup.
 WT_TEARDOWN_FILE='' WT_TEARDOWN_JSON='' WG_TEARDOWN_CLOSE_PHASE=0
 teardown_interpreter() {
@@ -34,7 +34,7 @@ teardown_lock() { # Only the finite coordinator holds the lock descriptor; comma
   fi
   local rc=0
   # shellcheck disable=SC2016  # The worker shell expands its own PID and arguments.
-  teardown_interpreter -c '
+  WT_BASE_FETCH_NOTIFIED=$WT_BASE_FETCH_NOTIFIED teardown_interpreter -c '
 import fcntl, json, os, select, signal, socket, subprocess, sys, time
 path, name, interpreter, script, machine = sys.argv[1:6]
 prior = os.environ.get("WG_TEARDOWN_CONTROL_FD", "")

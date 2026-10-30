@@ -1280,6 +1280,44 @@ scenario_stacked_squash_base() {
   end_scenario
 }
 
+scenario_rm_fetch_notice() {
+  begin_scenario "$1" || return 0
+  local r mode shim="$TEST_ROOT/rm-fetch-bin" real_git WT_PATH_PREFIX=''
+  real_git=$(command -v git)
+  mkdir -p "$shim"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$shim/uname"
+  cat >"$shim/git" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *'fetch -q --no-tags origin +refs/heads/main:refs/remotes/origin/main')
+    printf 'fetch\n' >>"$FETCH_LOG"
+    if [[ $FETCH_MODE == fail && $(wc -l <"$FETCH_LOG") -eq 3 ]]; then exit 128; fi ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git" "$shim/uname"
+  stub_cmux dead
+  for mode in success fail; do
+    r=$(new_repo "rm-fetch-$mode")
+    add_origin "$r" >/dev/null
+    WT_PATH_PREFIX='' WT_RELAY_ENV=()
+    assert_wt_ok 'create remote comparison task' new notice --no-workspace -r "$r"
+    WT_PATH_PREFIX=$shim
+    WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git" "FETCH_LOG=$r/fetch.log" "FETCH_MODE=$mode")
+    if [[ $mode == success ]]; then
+      assert_wt_ok 'remove a task with fresh remote evidence' rm notice -r "$r"
+      assert_branch "$r" wt/notice no
+    else
+      assert_wt_fails 1 'preservation evidence changed' rm notice -r "$r"
+      assert_branch "$r" wt/notice yes
+      assert_regular "$r" .git/wt/notice.json
+    fi
+    assert_eq 'one removal prints one fetch notice' 1 "$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main from origin to verify current landing content')"
+    assert_eq 'every deletion boundary still refreshes remote evidence' 3 "$(wc -l <"$r/fetch.log" | tr -d ' ')"
+  done
+  end_scenario
+}
+
 # These dry runs record current limitations. They never authorize deletion.
 scenario_teardown_evidence_limits() {
   begin_scenario "$1" || return 0
@@ -1573,9 +1611,7 @@ scenario_squash_merge() {
 
   # The real prune removes landed or pushed branches and their worktrees.
   assert_wt_ok "wt prune" prune -r "$r"
-  local required_fetches=11 actual_fetches; [[ $hunks != yes ]] || required_fetches=13
-  actual_fetches=$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main')
-  assert_eq "prune refreshes the base before each final removal" 1 "$((actual_fetches >= required_fetches))"
+  assert_eq 'prune prints one notice for the shared base' 1 "$(printf '%s\n' "$WT_OUT" | grep -c 'fetching origin/main')"
   for n in sq sq2 picked stack pushed; do
     assert_gone "prune removed $n" "$r/.worktrees/$n"
     assert_branch "$r" "wt/$n" no

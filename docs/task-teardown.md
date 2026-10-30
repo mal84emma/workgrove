@@ -65,6 +65,7 @@ Pinned object bases also retain a recovery ref.
 Creation object fields are audit metadata, rather than independent preservation proofs or garbage-collection anchors.
 
 Remote comparisons refresh before accepting cached success and again before deletion.
+Each command prints the fetch notice once, including when later safety checks refresh remote refs again.
 Failed fetches and invalid counts refuse removal.
 Failed comparisons, unrelated histories, and ambiguous merge bases cannot establish content preservation.
 An ancestry-check error refuses removal even when the reported ahead count is zero.
@@ -290,6 +291,12 @@ A task-local executable path refuses removal even when its symlink target is out
 A surviving caller reports failure when row closure fails.
 
 Repeat the original `wt rm` command to resume pending cleanup after the worktree registration is gone.
+For VM-side removal of another task, use the printed Mac retry instead.
+That VM command removes the worktree and branch, then leaves session cleanup pending with a nonzero exit status.
+It does not close the other task's row or tmux session.
+Run `wt -H <test-vm> rm <task> -r <repo>` on the Mac to finish that cleanup.
+[Checklist step 8](cmux-checklist.md) tests both self-removal and this Mac retry.
+
 Recovery rechecks row identity and running-agent ownership before closing anything.
 A completed receipt makes another retry harmless.
 Creation can reconcile already-absent local rows without closing anything.
