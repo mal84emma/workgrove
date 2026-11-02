@@ -226,7 +226,7 @@ scenario_shapes_and_hooks() {
 
 scenario_retired_hooks() {
   begin_scenario 'doctor reports exact retired commands and refresh repairs on both machines' || return 0
-  local file old command platform
+  local file old command platform kind
   local -x WT_HOST=test-vm WT_REPOS_DIR="$TEST_ROOT/repos"
   mkdir -p "$HOME/.local/share/cmux-tui/bin"
   cp "$HOME/.local/bin/cmux-hook" "$HOME/.local/share/cmux-tui/bin/cmux-tui-hook"
@@ -295,6 +295,27 @@ scenario_retired_hooks() {
   CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude" CODEX_HOME="$TEST_ROOT/custom-codex" invoke doctor
   assert_grep 'Mac custom roots name a file repair' "$TEST_ROOT/output" "Fix: vi $TEST_ROOT/custom-claude/settings.json"
   printf '#!/bin/sh\necho Linux\n' >"$TEST_ROOT/bin/uname"
+  for kind in symlink hardlink; do
+    rm "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"
+    for file in claude codex; do
+      command=hooks
+      [[ $file != claude ]] || command=settings
+      if [[ $kind == symlink ]]; then
+        ln -s "$TEST_ROOT/custom-$file/$command.json" "$HOME/.$file/$command.json"
+      else
+        ln "$TEST_ROOT/custom-$file/$command.json" "$HOME/.$file/$command.json"
+      fi
+    done
+    CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude" CODEX_HOME="$TEST_ROOT/custom-codex" invoke doctor
+    for file in claude codex; do
+      command=hooks
+      [[ $file != claude ]] || command=settings
+      assert_grep "$kind targets need a custom file repair" "$TEST_ROOT/output" "Fix: vi $TEST_ROOT/custom-$file/$command.json"
+    done
+  done
+  rm "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"
+  cp "$TEST_ROOT/retired-claude.json" "$HOME/.claude/settings.json"
+  cp "$TEST_ROOT/retired-codex.json" "$HOME/.codex/hooks.json"
   mkdir -p "$HOME/.config/workgrove"
   printf 'export CLAUDE_CONFIG_DIR=%q\nexport CODEX_HOME=%q\n' \
     "$TEST_ROOT/custom-claude" "$TEST_ROOT/custom-codex" >"$HOME/.config/workgrove/env.sh"

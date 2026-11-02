@@ -182,8 +182,7 @@ doctor_retired_hooks() {
   }
   for file in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "${CODEX_HOME:-$HOME/.codex}/hooks.json"; do
     rc=0 fix=$repair
-    if [[ $portable == 0 && $file != "$HOME/.claude/settings.json" && $file != "$HOME/.codex/hooks.json"
-        && ! $file -ef $HOME/.claude/settings.json && ! $file -ef $HOME/.codex/hooks.json ]]; then
+    if [[ $portable == 0 && $file != "$HOME/.claude/settings.json" && $file != "$HOME/.codex/hooks.json" ]]; then
       fix="vi $(shell_join "$file") # keep the replacement once per event; remove the reported retired command"
     fi
     commands=$(jq -esc 'if length == 1 then .[0] else error("invalid hook file") end
