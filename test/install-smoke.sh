@@ -1891,6 +1891,12 @@ scenario_refresh_foreign_hooks() {
       sed -n '/^Install summary:/,$p' "$log" >"$summary"
       assert_eq "$platform: follow-up appears once in summary" 1 "$(count_matches "$summary" "    Run: $command")"
       assert_eq "$platform: follow-up appears only in summary" 1 "$(count_matches "$log" "$command")"
+      if [[ $platform == Linux ]]; then
+        assert_grep 'Linux: summary names the partial hook repair' "$summary" \
+          'If a provider shows absent or partial, run: cmux-tui agent hook install claude codex'
+        assert_grep 'Linux: summary names the Codex trust review' "$summary" \
+          'Review and trust the Codex hooks with /hooks, then restart the agent.'
+      fi
       RUN_EXTRA_ENV=("FORCE_OS=$platform")
       if assert_install_ok "$h" "$log.2" --refresh-config; then
         for rel in .claude/settings .codex/hooks; do

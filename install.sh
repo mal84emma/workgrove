@@ -568,6 +568,8 @@ install_configs() {
       SUMMARY_ACTIONS+=("Run: cmux hooks codex install --yes")
     else
       SUMMARY_ACTIONS+=("Run: cmux-tui agent hook status claude codex")
+      SUMMARY_ACTIONS+=("If a provider shows absent or partial, run: cmux-tui agent hook install claude codex")
+      SUMMARY_ACTIONS+=("Review and trust the Codex hooks with /hooks, then restart the agent.")
     fi
   fi
 }

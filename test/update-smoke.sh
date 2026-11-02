@@ -32,7 +32,7 @@ if [[ ${SSH_FAIL_AFTER_UPDATE:-0} != 0 && $cmd == *' version' && -e $TEST_ROOT/u
   esac
 fi
 [[ ${SSH_FAIL:-0} == 0 ]] || exit "$SSH_FAIL"
-HOME="$TEST_ROOT/vm" fake_ssh_run "$cmd"
+HOME="${REFRESH_HOME:-$TEST_ROOT/vm}" fake_ssh_run "$cmd"
 rc=$?
 if [[ ${SSH_FAIL_AFTER_UPDATE:-0} != 0 && $rc == 0 && $cmd == *' update'* ]]; then : >"$TEST_ROOT/updated"; fi
 exit "$rc"
@@ -268,4 +268,30 @@ scenario_remote_pull() {
   end_scenario
 }
 scenario_remote_pull
+
+scenario_refresh_summary() {
+  begin_scenario 'remote classic refresh delivers the hook repair summary' || return 0
+  local source="$TEST_ROOT/refresh-source" clone="$TEST_ROOT/refresh-clone" output
+  local -x REFRESH_HOME="$TEST_ROOT/refresh-home"
+  mkdir -p "$source" "$REFRESH_HOME/.local/bin" "$REFRESH_HOME/.codex"
+  cp -R "$REPO/bin" "$REPO/lib" "$REPO/home" "$REPO/install.sh" "$source/"
+  git init -q "$source"
+  git -C "$source" add .
+  git -C "$source" commit -qm 'Create refresh fixture'
+  git clone -q "$source" "$clone"
+  ln -s "$clone/bin/wt" "$REFRESH_HOME/.local/bin/wt"
+  printf '[user]\n name = Test User\n email = test@example.invalid\n' >"$REFRESH_HOME/.gitconfig.local"
+  printf '[hooks.state]\nsynthetic_trust = true\n' >"$REFRESH_HOME/.codex/config.toml"
+  output=$(GIT_CONFIG_GLOBAL="$REFRESH_HOME/.gitconfig" XDG_CONFIG_HOME="$REFRESH_HOME/.config" \
+    FORCE_OS=Linux WT_HOST=test-vm run_wt -H fixture update --refresh-config)
+  printf '%s\n' "$output" >"$TEST_ROOT/refresh-output"
+  assert_grep 'remote refresh names the partial hook repair' "$TEST_ROOT/refresh-output" \
+    'If a provider shows absent or partial, run: cmux-tui agent hook install claude codex'
+  assert_grep 'remote refresh names the Codex trust review' "$TEST_ROOT/refresh-output" \
+    'Review and trust the Codex hooks with /hooks, then restart the agent.'
+  assert_eq 'classic refresh drops the previous trust table' 0 \
+    "$(grep -c synthetic_trust "$REFRESH_HOME/.codex/config.toml" || true)"
+  end_scenario
+}
+scenario_refresh_summary
 lib_summary
