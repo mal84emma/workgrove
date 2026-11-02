@@ -1547,10 +1547,11 @@ def agent_environment(profile=None):
     if profile:
         path = str(Path(profile["root"]) / ".local/bin") + ":" + home_bin + ":" + path
         environment["CODEX_HOME"] = profile["agent_roots"]["codex"]
-        if profile["claude_config_dir"] is None:
+        configured = claude_directory(profile["agent_roots"], profile["persist_agents"], profile)
+        if configured is None:
             environment.pop("CLAUDE_CONFIG_DIR", None)
         else:
-            environment["CLAUDE_CONFIG_DIR"] = profile["claude_config_dir"]
+            environment["CLAUDE_CONFIG_DIR"] = configured
     elif home_bin not in path.split(":"):
         path = home_bin + ":" + path
     environment["PATH"] = path
