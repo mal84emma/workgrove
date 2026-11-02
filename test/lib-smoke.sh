@@ -317,6 +317,12 @@ scenario_doctor_results() {
   assert_eq 'doctor record is valid' 0 "$rc"
   assert_eq 'doctor checks decode as JSON' 'check|PASS|wt update' \
     "$(jq -r '.[] | [.name,.status,.repair] | join("|")' <<<"${fields[checks]:-[]}")"
+  local warning
+  warning=$(jq -c '.checks[0].status="WARN"' <<<"${record#*$'\t'}")
+  rc=0
+  wt_read_result "$(printf 'WT_RESULT\t%s' "$warning")" doctor >/dev/null || rc=$?
+  assert_eq 'a nonblocking warning permits a passing doctor result' 0 "$rc"
+
   for sample in warn fail empty missing nested unknown control duplicate duplicate-array duplicate-empty status inconsistent newer; do
     rc=0
     case $sample in

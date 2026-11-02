@@ -224,6 +224,97 @@ scenario_shapes_and_hooks() {
   end_scenario
 }
 
+scenario_retired_hooks() {
+  begin_scenario 'doctor reports exact retired commands and refresh repairs on both machines' || return 0
+  local file old command platform
+  local -x WT_HOST=test-vm WT_REPOS_DIR="$TEST_ROOT/repos"
+  mkdir -p "$HOME/.local/share/cmux-tui/bin"
+  cp "$HOME/.local/bin/cmux-hook" "$HOME/.local/share/cmux-tui/bin/cmux-tui-hook"
+  fake_cmux_init "$TEST_ROOT/retired-cmux-state"
+  ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/bin/cmux-tui"
+  printf '#!/bin/sh\nprintf "tmux 3.2a\\n"\n' >"$TEST_ROOT/bin/tmux"
+  chmod +x "$TEST_ROOT/bin/tmux"
+  cp "$HOME/.claude/settings.json" "$TEST_ROOT/retired-claude.json"
+  cp "$HOME/.codex/hooks.json" "$TEST_ROOT/retired-codex.json"
+  printf '#!/bin/sh\nexit 99\n' >"$TEST_ROOT/bin/agent-notify"
+  chmod +x "$TEST_ROOT/bin/agent-notify"
+  for platform in Darwin Linux; do
+    printf '#!/bin/sh\necho %s\n' "$platform" >"$TEST_ROOT/bin/uname"
+    for file in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"; do
+      old=$(jq -r '.retired_hook_commands | keys[]' "$REPO/lib/workgrove/agent-config-policy.json" | head -1)
+      jq -n --arg old "$old" '{hooks:{Stop:[{hooks:[{type:"command",command:$old}]}]}}' \
+        >"$file"
+    done
+    invoke doctor
+    assert_grep "$platform reports the retired Claude command" "$TEST_ROOT/output" "WARN retired hook command $HOME/.claude/settings.json: $old"
+    assert_grep "$platform reports the retired Codex command" "$TEST_ROOT/output" "WARN retired hook command $HOME/.codex/hooks.json: $old"
+    if [[ $platform == Darwin ]]; then
+      assert_eq 'retired commands do not fail Mac readiness' 0 "$STATUS"
+      assert_grep 'Mac repair names the installer' "$TEST_ROOT/output" 'install.sh --refresh-config'
+    else
+      assert_grep 'VM repair runs on the VM' "$TEST_ROOT/output" 'Fix: wt update --refresh-config'
+    fi
+    for old in "$(jq -r '.retired_hook_commands | keys[0]' "$REPO/lib/workgrove/agent-config-policy.json")" \
+        "$(jq -r '.retired_hook_commands | keys[1]' "$REPO/lib/workgrove/agent-config-policy.json")"; do
+      for command in "$old --custom" "EXTRA=1 $old" "env $old" 'AGENT_NOTIFY_SOURCE=Personal agent-notify'; do
+        jq -n --arg command "$command" '{hooks:{Stop:[{hooks:[{type:"command",command:$command}]}]}}' \
+          >"$HOME/.claude/settings.json"
+        cp "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"
+        invoke doctor
+        assert_grep 'foreign Claude command has no retirement warning' "$TEST_ROOT/output" "PASS retired hook commands absent $HOME/.claude/settings.json"
+        assert_grep 'foreign Codex command has no retirement warning' "$TEST_ROOT/output" "PASS retired hook commands absent $HOME/.codex/hooks.json"
+      done
+    done
+    for file in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"; do
+      for command in '{broken' '{"hooks":[]}' '{"hooks":{"Stop":[{"hooks":null}]}}' '{} {}'; do
+        printf '%s\n' "$command" >"$file"
+        invoke doctor
+        assert_grep 'invalid JSON cannot certify cleanup' "$TEST_ROOT/output" "FAIL retired hook configuration $file"
+      done
+      rm "$file"
+      invoke doctor
+      assert_grep 'missing JSON cannot certify cleanup' "$TEST_ROOT/output" "FAIL retired hook configuration $file"
+      printf '{"hooks":{}}\n' >"$file"
+    done
+  done
+  mkdir -p "$TEST_ROOT/custom-claude" "$TEST_ROOT/custom-codex"
+  for file in "$TEST_ROOT/custom-claude/settings.json" "$TEST_ROOT/custom-codex/hooks.json"; do
+    jq -n --slurpfile policy "$REPO/lib/workgrove/agent-config-policy.json" \
+      '{hooks:{Stop:[{hooks:[$policy[0].retired_hook_commands | keys[] | {type:"command",command:.}]}]}}' >"$file"
+  done
+  WT_MACHINE=1 CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude" CODEX_HOME="$TEST_ROOT/custom-codex" invoke doctor
+  assert_eq 'retirement warnings do not fail VM readiness' 0 "$STATUS"
+  assert_grep 'custom Claude root is checked' "$TEST_ROOT/output" "WARN retired hook command $TEST_ROOT/custom-claude/settings.json:"
+  assert_grep 'custom Codex root is checked' "$TEST_ROOT/output" "WARN retired hook command $TEST_ROOT/custom-codex/hooks.json:"
+  local record
+  record=$(sed -n $'s/^WT_RESULT\t//p' "$TEST_ROOT/output")
+  assert_eq 'VM records retain nonblocking warnings' true "$(jq '.status == "PASS" and ([.checks[] | select(.status == "WARN" and (.name | startswith("retired hook command")))] | length == 4)' <<<"$record")"
+  make_fake_ssh "$TEST_ROOT/bin/ssh"
+  CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude" CODEX_HOME="$TEST_ROOT/custom-codex" invoke -H test-vm doctor
+  assert_eq 'the Mac accepts VM retirement warnings' 0 "$STATUS"
+  assert_grep 'the remote check reports configured roots' "$TEST_ROOT/output" "WARN retired hook command $TEST_ROOT/custom-codex/hooks.json:"
+  assert_grep 'the remote repair names the VM command' "$TEST_ROOT/output" 'Fix: wt update --refresh-config'
+  rm "$TEST_ROOT/bin/ssh"
+  mkdir -p "$TEST_ROOT/policy-install/bin" "$TEST_ROOT/policy-install/lib"
+  cp "$REPO/bin/wt" "$TEST_ROOT/policy-install/bin/"
+  cp -R "$REPO/lib/workgrove" "$TEST_ROOT/policy-install/lib/"
+  rm "$TEST_ROOT/policy-install/lib/workgrove/agent-config-policy.json"
+  STATUS=0
+  bash "$TEST_ROOT/policy-install/bin/wt" doctor >"$TEST_ROOT/output" 2>&1 || STATUS=$?
+  assert_eq 'missing policy fails verification' 1 "$STATUS"
+  assert_grep 'missing policy names the failed check' "$TEST_ROOT/output" 'FAIL retired hook policy unavailable'
+  printf '{}\n' >"$TEST_ROOT/policy-install/lib/workgrove/agent-config-policy.json"
+  STATUS=0
+  bash "$TEST_ROOT/policy-install/bin/wt" doctor >"$TEST_ROOT/output" 2>&1 || STATUS=$?
+  assert_grep 'invalid policy names the failed check' "$TEST_ROOT/output" 'FAIL retired hook policy unavailable'
+  printf '#!/bin/sh\necho Darwin\n' >"$TEST_ROOT/bin/uname"
+  mv "$TEST_ROOT/retired-claude.json" "$HOME/.claude/settings.json"
+  mv "$TEST_ROOT/retired-codex.json" "$HOME/.codex/hooks.json"
+  rm "$TEST_ROOT/bin/cmux-tui" "$TEST_ROOT/bin/tmux"
+  unset FAKE_CMUX_STATE
+  end_scenario
+}
+
 scenario_reference_redaction() {
   begin_scenario 'redaction preserves synthetic reference relationships' || return 0
   local sanitized
@@ -314,7 +405,7 @@ TMUX
   record=$(sed -n $'s/^WT_RESULT\t//p' "$TEST_ROOT/output")
   assert_eq 'machine doctor reports every check' true "$(jq '
     .version == 1 and .command == "doctor" and .status == "PASS"
-    and (.checks | length == 9 and all(.[]; .status == "PASS"
+    and (.checks | length == 11 and all(.[]; .status == "PASS"
       and (.name | type == "string") and (.repair | type == "string")))' <<<"$record")"
   WT_MACHINE=1 FAKE_CODEX_OLD=1 invoke doctor
   assert_eq 'old VM Codex leaves Claude readiness successful' 0 "$STATUS"
@@ -468,5 +559,6 @@ scenario_shapes_and_hooks
 scenario_record
 scenario_recorded_contract
 scenario_reference_redaction
+scenario_retired_hooks
 scenario_vm
 lib_summary

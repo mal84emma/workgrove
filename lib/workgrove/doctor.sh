@@ -166,6 +166,41 @@ doctor_hooks() {
   done
 }
 
+# Retirement warnings do not block tasks. Unreadable inputs cannot certify cleanup.
+doctor_retired_hooks() {
+  local policy file commands command rc repair
+  if is_remote; then repair='wt update --refresh-config'
+  else repair="bash $(shell_join "$WG_VERSION_ROOT/install.sh") --refresh-config"; fi
+  policy=$(jq -esc 'if length == 1 then .[0] else error("invalid policy file") end
+    | .retired_hook_commands | if type == "object" and all(.[]; type == "string")
+    then keys else error("invalid retired hook policy") end' "$WG_LIB_DIR/agent-config-policy.json" 2>/dev/null) || {
+    doctor_result 1 'retired hook policy unavailable' 'wt update'
+    return
+  }
+  for file in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "${CODEX_HOME:-$HOME/.codex}/hooks.json"; do
+    rc=0
+    commands=$(jq -esc 'if length == 1 then .[0] else error("invalid hook file") end
+      | if type == "object" and (.hooks | type == "object") then
+      [.hooks[][].hooks[] | select(.type == "command") | .command
+        | if type == "string" then . else error("invalid command") end]
+      else error("invalid hooks") end' "$file" 2>/dev/null) || rc=1
+    if [[ $rc != 0 ]]; then
+      doctor_result 1 "retired hook configuration $file" "check the JSON file; $repair"
+      continue
+    fi
+    commands=$(jq -c --argjson retired "$policy" '[.[] | select(. as $command | $retired | index($command))] | unique' <<<"$commands")
+    if [[ $commands == '[]' ]]; then
+      doctor_result 0 "retired hook commands absent $file" "$repair"
+    else
+      while IFS= read -r -d '' command; do
+        rc=$DOCTOR_FAILED
+        doctor_result 1 "retired hook command $file: $command" "$repair" WARN
+        DOCTOR_FAILED=$rc
+      done < <(jq -j '.[] | ., "\u0000"' <<<"$commands")
+    fi
+  done
+}
+
 doctor_codex() {
   # A Codex warning must not fail host readiness for Claude.
   local DOCTOR_FAILED=0 rc=0
@@ -265,6 +300,7 @@ cmd_contract_doctor() {
     [[ ! -v opts[record] ]] || die 'doctor: --record runs on the Mac'
     doctor_vm
   else doctor_mac; fi
+  doctor_retired_hooks
   doctor_codex
   version=$(wt_version | wt_read_version 2>/dev/null) || rc=1
   doctor_result "$rc" "wt version ${version:-unavailable}" 'wt update'
