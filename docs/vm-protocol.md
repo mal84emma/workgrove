@@ -134,8 +134,13 @@ Its exception fallback and `wg_readiness_error` retain all keys with empty or nu
 | `storage_permission_policy` | String or null | `strict`, `trusted-personal-volume`, or null without a profile. |
 | `storage_permission_warnings` | Array of strings | Storage policy warnings. |
 | `terminfo` | Object of booleans | Availability of each checked terminal definition. |
-| `native_hooks` | Object of booleans | Hook configuration for each checked agent. |
+| `native_hooks` | Object of booleans | `true` only when cmux-tui verifies the provider state as `installed`, including stored Codex trust. |
 | `native_relay` | String | Always `requires-row-check`; the probe cannot verify the native relay. |
+
+The native-hook probe runs `cmux-tui --json agent hook status claude codex` with a ten-second timeout.
+It uses the selected agent roots through `CLAUDE_CONFIG_DIR` and `CODEX_HOME`.
+Missing commands, failed commands, timeouts, and invalid responses report `false` for unverified providers.
+The `native_hooks` result does not change `ready` or the exit status.
 
 The reader accepts older readiness records without the diagnostic fields after `issues`.
 It uses only `schema`, `status`, `ready`, and `issues` for the inventory.

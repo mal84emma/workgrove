@@ -1466,6 +1466,9 @@ sys.exit(module["main"]())
 
     def test_hook_refresh_retires_old_commands_and_repairs_duplicates(self):
         self.install()
+        config = Path(self.profile()["agent_roots"]["codex"]) / "config.toml"
+        config.write_text(config.read_text() + '\n[hooks.state]\nsynthetic_trust = true\n')
+        trusted = config.read_bytes()
         for duplicated in (False, True):
             expected = {}
             for agent, filename, old in (
@@ -1493,6 +1496,7 @@ sys.exit(module["main"]())
                 expected[path]["Stop"].append(foreign)
             for attempt in range(2):
                 self.command("reinstall", "--source", str(self.source), "--refresh-config")
+                self.assertEqual(config.read_bytes(), trusted)
                 for path, hooks in expected.items():
                     with self.subTest(duplicated=duplicated, attempt=attempt, agent=path.parent.name):
                         actual = json.loads(path.read_text())
@@ -2041,6 +2045,109 @@ sys.exit(module["main"]())
         self.install()
         self.assertEqual(self.profile()["agent_commands"], dict(claude=None, codex=None))
         self.assertEqual(json.loads(self.command("doctor", "--json").stdout)["warnings"], [])
+
+    def hook_status_fixture(self):
+        state = self.base / "cmux-state"
+        state.mkdir()
+        self.env["FAKE_CMUX_STATE"] = str(state)
+        (self.tools / "cmux-tui").symlink_to(REPO / "test/fakes/cmux")
+        return state / "agent-hook-status.json"
+
+    def test_doctor_native_hooks_requires_installed_status(self):
+        self.install()
+        for agent, filename in (("claude", "settings.json"), ("codex", "hooks.json")):
+            path = Path(self.profile()["agent_roots"][agent]) / filename
+            path.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"command": '"$CMUX_TUI_HOOK"'}]}]}}))
+        response = self.hook_status_fixture()
+        installed = dict(errors=[], providers=[dict(provider=name, state="installed") for name in ("claude", "codex")])
+        for state in ("installed", "partial", "absent", "unknown"):
+            for agent in ("claude", "codex"):
+                document = json.loads(json.dumps(installed))
+                next(item for item in document["providers"] if item["provider"] == agent)["state"] = state
+                response.write_text(json.dumps(document))
+                with self.subTest(agent=agent, state=state):
+                    report = json.loads(self.command("doctor", "--json").stdout)
+                    self.assertEqual(report["native_hooks"], {name: name != agent or state == "installed"
+                                                            for name in ("claude", "codex")})
+                    self.assertTrue(report["ready"])
+                    self.assertEqual(report["issues"], [])
+        for document in (dict(installed, providers=installed["providers"][:1]),
+                         dict(installed, providers=installed["providers"] + [installed["providers"][1]])):
+            response.write_text(json.dumps(document))
+            self.assertEqual(json.loads(self.command("doctor", "--json").stdout)["native_hooks"],
+                             dict(claude=True, codex=False))
+
+    def test_doctor_native_hooks_refuses_unverifiable_status(self):
+        self.install()
+        # Hook commands alone cannot establish installation or Codex trust.
+        for agent, filename in (("claude", "settings.json"), ("codex", "hooks.json")):
+            path = Path(self.profile()["agent_roots"][agent]) / filename
+            path.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"command": '"$CMUX_TUI_HOOK"'}]}]}}))
+        expected = dict(claude=False, codex=False)
+        self.assertEqual(json.loads(self.command("doctor", "--json").stdout)["native_hooks"], expected)
+        response = self.hook_status_fixture()
+        installed = dict(errors=[], providers=[dict(provider=name, state="installed") for name in expected])
+        for document in ("not JSON", "[]", "null", json.dumps(dict(installed, errors=["probe failed"])),
+                         json.dumps(dict(installed, errors=None)), json.dumps(dict(installed, providers={})),
+                         json.dumps(dict(installed, providers=[None])), "{}", "{\"providers\": []}"):
+            response.write_text(document)
+            with self.subTest(document=document):
+                report = json.loads(self.command("doctor", "--json").stdout)
+                self.assertEqual(report["native_hooks"], expected)
+                self.assertTrue(report["ready"])
+        response.write_text(json.dumps(installed))
+        failures = response.parent / "fail"
+        failures.mkdir()
+        (failures / "agent-hook-status").write_text("1\nprobe failed\n")
+        self.assertEqual(json.loads(self.command("doctor", "--json").stdout)["native_hooks"], expected)
+        original_run = portable.subprocess.run
+        timeout_calls = []
+
+        def timeout(command, **kwargs):
+            if command[0] == "cmux-tui":
+                self.assertEqual(kwargs["timeout"], 10)
+                timeout_calls.append(command)
+                raise subprocess.TimeoutExpired(command, 10)
+            return original_run(command, **kwargs)
+
+        with patch.dict(os.environ, self.env, clear=True), patch.object(portable.subprocess, "run", side_effect=timeout):
+            report = portable.readiness(str(self.root))
+        self.assertEqual(report["native_hooks"], expected)
+        self.assertTrue(report["ready"])
+        self.assertEqual(len(timeout_calls), 1)
+
+    def test_doctor_native_hooks_uses_selected_agent_roots(self):
+        selected = {name: str(self.root / (name + " configuration")) for name in ("claude", "codex")}
+        self.env.update(CLAUDE_CONFIG_DIR=selected["claude"], CODEX_HOME=selected["codex"])
+        self.install()
+        response = self.hook_status_fixture()
+        response.write_text(json.dumps(dict(errors=[], providers=[dict(provider=name, state="installed")
+                                                                  for name in selected])))
+        (self.tools / "cmux-tui").unlink()
+        wrapper = self.tools / "cmux-tui"
+        wrapper.write_text('#!/bin/sh\nprintf "%s\\n%s\\n" "${CLAUDE_CONFIG_DIR-unset}" "$CODEX_HOME" > ' +
+                           shlex.quote(str(self.base / "selected-roots")) + "\nexec " +
+                           shlex.quote(str(REPO / "test/fakes/cmux")) + ' "$@"\n')
+        wrapper.chmod(0o700)
+        for profiled in (True, False):
+            if profiled:
+                self.env.update(CLAUDE_CONFIG_DIR=str(self.base / "stale-claude"), CODEX_HOME=str(self.base / "stale-codex"))
+                arguments = ["--root", str(self.root)]
+            else:
+                self.env.update(CLAUDE_CONFIG_DIR=selected["claude"], CODEX_HOME=selected["codex"])
+                (self.home / ".config/workgrove/profile.json").unlink()
+                arguments = []
+            report = json.loads(self.command("doctor", "--json", *arguments, ok=profiled).stdout)
+            self.assertEqual(report["native_hooks"], dict(claude=True, codex=True))
+            self.assertEqual((self.base / "selected-roots").read_text().splitlines(),
+                             [selected["claude"], selected["codex"]])
+        profile = self.profile()
+        profile["agent_roots"]["claude"] = str(self.home / ".claude")
+        profile["claude_config_dir"] = None
+        (self.home / ".claude").mkdir()
+        (self.root / ".config/workgrove/profile.json").write_text(json.dumps(profile))
+        self.command("doctor", "--json", "--root", str(self.root), ok=False)
+        self.assertEqual((self.base / "selected-roots").read_text().splitlines(), ["unset", selected["codex"]])
 
     def test_doctor_warns_for_old_codex_without_blocking_claude(self):
         command = self.tools / "codex"

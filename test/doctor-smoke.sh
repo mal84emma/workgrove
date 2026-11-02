@@ -399,6 +399,15 @@ TMUX
   export CMUX_SSH_ATTEMPT_ID=doctor-test WT_HOST=test-vm WT_REPOS_DIR="$TEST_ROOT/repos"
   invoke doctor
   assert_eq 'VM checks pass' 0 "$STATUS"
+  invoke doctor --environment --json
+  assert_eq 'JSON hook checks agree with installed text checks' true \
+    "$(jq '.native_hooks == {claude:true,codex:true}' "$TEST_ROOT/output")"
+  TUI_CODEX_STATUS=partial invoke doctor
+  assert_eq 'partial Codex hook fails text checks' 1 "$STATUS"
+  assert_grep 'partial hook repair' "$TEST_ROOT/output" 'Fix: cmux-tui agent hook install claude codex'
+  TUI_CODEX_STATUS=partial invoke doctor --environment --json
+  assert_eq 'JSON hook checks reject partial Codex installation' true \
+    "$(jq '.native_hooks == {claude:true,codex:false}' "$TEST_ROOT/output")"
   WT_MACHINE=1 invoke doctor
   assert_eq 'machine doctor passes' 0 "$STATUS"
   local record
