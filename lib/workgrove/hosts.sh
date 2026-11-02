@@ -23,7 +23,8 @@ WG_PROBE_END
 }
 
 probe_host() { # one SSH login proves remote-command access and gathers Linux hardware
-  local out_file err_file ssh_pid rc=0 tick timeout=${WG_HOST_PROBE_TIMEOUT:-20}
+  # Allow the native-hook diagnostic ten seconds beyond the existing probe budget.
+  local out_file err_file ssh_pid rc=0 tick timeout=${WG_HOST_PROBE_TIMEOUT:-30}
   # Ten ticks per second must fit in signed 64-bit arithmetic.
   local timeout_max=922337203685477580
   # Compare decimal strings before arithmetic, so an oversized value cannot overflow.

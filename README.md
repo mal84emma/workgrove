@@ -667,7 +667,7 @@ This table lists configuration variables, test overrides, and repository setting
 | `WT_AGENT_ARGS` | Empty. Adds shell-split agent arguments. |
 | `WT_MACHINE` | Unset. The highest accepted record version enables versioned results for supported commands. The Mac sets it for VM requests. |
 | `WG_POLL_INTERVAL` | `1` second. Passes directly to `sleep` for poll waits. Tests can set `0`; invalid values produce a sleep error. |
-| `WG_HOST_PROBE_TIMEOUT` | `20` seconds. Limits the Mac's SSH host probe. Accepts decimal integers from 1 through 922337203685477580, without leading zeros. Invalid values return 1; timeouts return 124. |
+| `WG_HOST_PROBE_TIMEOUT` | `30` seconds. Limits the Mac's SSH host probe. Accepts decimal integers from 1 through 922337203685477580, without leading zeros. Invalid values return 1; timeouts return 124. |
 | `WG_DEBUG` | Unset. `1` adds tracebacks for unexpected errors in `portable.py`, including calls through `install.sh`. Set it in the host process environment. `wt -H <host> setup` does not forward the Mac's value. Expected refusals keep their usual output. |
 | `WT_CLOSE_WAIT_SECONDS` | `22`. Sets the wait for older VM rows to close during self-removal. |
 | `WT_STATUS_LEASE_SECONDS` | Retired with the TCP status paths. Current code ignores it. |
@@ -752,7 +752,7 @@ Probes run concurrently. Each probe uses a noninteractive SSH login with these s
 
 - A five-second connection timeout.
 - SSH keepalives.
-- A 20-second client deadline.
+- A 30-second client deadline.
 - Strict host key checking.
 
 A failed SSH probe includes a short error reason. `available` means that a remote shell command succeeded.

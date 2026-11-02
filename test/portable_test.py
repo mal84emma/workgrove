@@ -2149,6 +2149,33 @@ sys.exit(module["main"]())
         self.command("doctor", "--json", "--root", str(self.root), ok=False)
         self.assertEqual((self.base / "selected-roots").read_text().splitlines(), ["unset", selected["codex"]])
 
+    def test_inventory_deadline_allows_native_hook_timeout_after_slow_probes(self):
+        self.install()
+        for agent, filename in (("claude", "settings.json"), ("codex", "hooks.json")):
+            path = Path(self.profile()["agent_roots"][agent]) / filename
+            path.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"command": '"$CMUX_TUI_HOOK"'}]}]}}))
+        (self.tools / "codex").write_text('#!/bin/sh\n/bin/sleep 5\necho --no-daemon\n')
+        hook = self.tools / "cmux-tui"
+        hook.write_text('#!/bin/sh\nexec /bin/sleep 60\n')
+        hook.chmod(0o700)
+        environment = self.transport()
+        result = subprocess.run([str(self.tools / "bash"), "-c", '''
+            source "$1/lib/workgrove/common.sh"
+            source "$1/lib/workgrove/hosts.sh"
+            unset WG_HOST_PROBE_TIMEOUT
+            fixture_python=$2 fixture_script=$3
+            host_probe_source() {
+                printf '/bin/sleep 12\\n'
+                printf 'exec %q -I -B %q doctor --probe\\n' "$fixture_python" "$fixture_script"
+            }
+            probe_host test-host
+        ''', "fixture", str(REPO), sys.executable, str(self.script)],
+            env=environment, capture_output=True, text=True, timeout=40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout.removeprefix("readiness\t"))
+        self.assertTrue(report["ready"])
+        self.assertEqual(report["native_hooks"], dict(claude=False, codex=False))
+
     def test_doctor_warns_for_old_codex_without_blocking_claude(self):
         command = self.tools / "codex"
         command.write_text("#!/bin/sh\necho 'Usage: codex'\n")
