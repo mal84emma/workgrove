@@ -220,6 +220,7 @@ cmd_new() {
     (cmd_rm "$name" -r "$REPO" --observe-only) >/dev/null 2>&1 \
       || die "cleanup remains pending for $name; retry wt rm $name before reusing this name"
   fi
+  [[ $agent != codex ]] || check_codex || return 1
   check_identity "$name"
   if [[ $workspace -eq 1 ]] && is_remote; then   # the row request needs the host; fail before anything exists
     wt_host >/dev/null
@@ -359,8 +360,7 @@ cmd_run() { # run the task's agent here; cmux types this into the row's shell, w
     args=(-- "$brief")                           # Codex always restarts from the brief
   fi
   if [[ $agent == codex ]]; then
-    "$agent" --help 2>/dev/null | grep -- '--no-daemon' >/dev/null \
-      || die 'Codex lacks --no-daemon; update Codex before launching a local task'
+    check_codex || return 1
     local owned_mode=0
     for f in "${extra[@]}"; do
       case $f in

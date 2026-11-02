@@ -167,8 +167,9 @@ fi
 if [ "$1" = has-session ]; then echo 'no server running on /tmp/fake' >&2; exit 1; fi
 TMUX
 for tool in claude codex; do
-  printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/remote/.local/bin/$tool"
+  printf '#!/bin/sh\necho --no-daemon\n' >"$TEST_ROOT/remote/.local/bin/$tool"
 done
+printf '#!/bin/sh\necho --no-daemon\n' >"$TEST_ROOT/local/bin/codex"
 printf '#!/bin/sh\nexit 1\n' >"$TEST_ROOT/local/bin/fzf"   # wt task needs fzf only for the pickers that --where and -a skip
 cat >"$TEST_ROOT/local/bin/code" <<'CODE'
 #!/bin/sh

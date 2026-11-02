@@ -166,6 +166,13 @@ doctor_hooks() {
   done
 }
 
+doctor_codex() {
+  # A Codex warning must not fail host readiness for Claude.
+  local DOCTOR_FAILED=0 rc=0
+  check_codex 2>/dev/null || rc=1
+  doctor_result "$rc" 'Codex --no-daemon support' 'update Codex before launching a task' WARN
+}
+
 doctor_mac() {
   local version='' raw='' methods='' method rc repair automation
   local installer="https://github.com/manaflow-ai/cmux/releases/download/v$WG_CMUX_SUPPORTED/cmux-macos.dmg"
@@ -258,6 +265,7 @@ cmd_contract_doctor() {
     [[ ! -v opts[record] ]] || die 'doctor: --record runs on the Mac'
     doctor_vm
   else doctor_mac; fi
+  doctor_codex
   version=$(wt_version | wt_read_version 2>/dev/null) || rc=1
   doctor_result "$rc" "wt version ${version:-unavailable}" 'wt update'
   if [[ -v opts[record] ]]; then doctor_record "${opts[record]}" || DOCTOR_FAILED=1; fi

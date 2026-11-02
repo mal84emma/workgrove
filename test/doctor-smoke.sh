@@ -21,6 +21,11 @@ printf '#!/bin/sh\necho Darwin\n' >"$TEST_ROOT/bin/uname"
 printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/cmux-hook"
 printf '#!/bin/sh\nexit 99\n' >"$HOME/.local/bin/a hook"
 chmod +x "$TEST_ROOT/bin/uname" "$HOME/.local/bin/"*
+cat >"$TEST_ROOT/bin/codex" <<'CODEX'
+#!/bin/sh
+[ "${FAKE_CODEX_OLD:-0}" = 1 ] || echo --no-daemon
+CODEX
+chmod +x "$TEST_ROOT/bin/codex"
 ln -s "$REPO/bin/wt" "$HOME/.local/bin/wt"
 for config in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"; do
   cat >"$config" <<'JSON'
@@ -110,6 +115,15 @@ scenario_mac() {
   assert_eq 'a missing method fails' 1 "$STATUS"
   assert_grep 'missing method is named' "$TEST_ROOT/output" 'FAIL cmux method workspace.list'
   assert_grep 'later checks still run' "$TEST_ROOT/output" 'PASS wt version'
+  end_scenario
+}
+
+scenario_old_codex() {
+  begin_scenario 'Mac doctor warns about old Codex without blocking Claude' || return 0
+  FAKE_CODEX_OLD=1 invoke doctor
+  assert_eq 'old Codex does not fail host readiness' 0 "$STATUS"
+  assert_grep 'old Codex warning' "$TEST_ROOT/output" 'WARN Codex --no-daemon support'
+  assert_grep 'old Codex repair' "$TEST_ROOT/output" 'Fix: update Codex'
   end_scenario
 }
 
@@ -300,8 +314,15 @@ TMUX
   record=$(sed -n $'s/^WT_RESULT\t//p' "$TEST_ROOT/output")
   assert_eq 'machine doctor reports every check' true "$(jq '
     .version == 1 and .command == "doctor" and .status == "PASS"
-    and (.checks | length == 8 and all(.[]; .status == "PASS"
+    and (.checks | length == 9 and all(.[]; .status == "PASS"
       and (.name | type == "string") and (.repair | type == "string")))' <<<"$record")"
+  WT_MACHINE=1 FAKE_CODEX_OLD=1 invoke doctor
+  assert_eq 'old VM Codex leaves Claude readiness successful' 0 "$STATUS"
+  assert_grep 'old VM Codex warning' "$TEST_ROOT/output" 'WARN Codex --no-daemon support'
+  assert_grep 'old VM Codex repair' "$TEST_ROOT/output" 'Fix: update Codex'
+  record=$(sed -n $'s/^WT_RESULT\t//p' "$TEST_ROOT/output")
+  assert_eq 'machine warning retains successful host status' true "$(jq '
+    .status == "PASS" and any(.checks[]; .name == "Codex --no-daemon support" and .status == "WARN")' <<<"$record")"
   WT_MACHINE=1 TUI_CODEX_STATUS=absent invoke doctor
   record=$(sed -n $'s/^WT_RESULT\t//p' "$TEST_ROOT/output")
   assert_eq 'machine doctor retains failed check and repair' true "$(jq '
@@ -442,6 +463,7 @@ SSH
 
 scenario_readiness_dispatch
 scenario_mac
+scenario_old_codex
 scenario_shapes_and_hooks
 scenario_record
 scenario_recorded_contract

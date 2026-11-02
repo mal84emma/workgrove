@@ -147,9 +147,23 @@ Its `ready` value excludes separate personal sign-ins, native relay verification
 `warnings` is an array of codes that do not change `ready`, `status`, `issues`, or the exit status.
 It contains `agent-command-unavailable` when a saved, non-null `agent_commands` path does not resolve to an executable regular file.
 A missing target, dangling symbolic link, directory, or non-executable file causes this warning.
-Doctor checks the saved path without using PATH or running the command.
+Doctor checks saved path availability without using PATH.
 The warning contains no path.
-Saved paths with executable regular-file targets, null entries, and a missing profile cause no warning.
+Saved paths with executable regular-file targets, null entries, and a missing profile cause no availability warning.
+
+`agents` retains Boolean executable-presence values for Claude and Codex.
+`agent_capabilities.codex_no_daemon` reports whether the effective Codex launch command supports `--no-daemon`.
+Its value is true or false when Codex is available, or null when Codex or the probe is unavailable.
+The command comes from the launch PATH, including portable profile command links before other PATH entries.
+The check runs `codex --help` with a ten-second timeout.
+A failed help command or timeout counts as unsupported.
+
+`codex-no-daemon-unsupported` appears in `warnings` when the available Codex command fails this check.
+Update Codex before creating or launching a Codex task.
+This warning leaves Claude readiness, `ready`, `status`, `issues`, and the exit status unchanged.
+Bare doctor reports the same condition as `WARN` on the Mac and VMs.
+`wt new -a codex` refuses before creating a worktree or row, including with `-H` and `--no-workspace`.
+`wt run` repeats the check before launching Codex.
 
 Text output prints each warning, and the `--probe` readiness line includes `warnings`.
 The `wt hosts --json` fields remain unchanged.

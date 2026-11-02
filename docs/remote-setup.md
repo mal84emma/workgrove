@@ -347,8 +347,15 @@ Use `wt -H <host> doctor --root <root> --json` when the home profile link was lo
 Doctor reports `agent-command-unavailable` in `warnings` when a saved agent command does not resolve to an executable regular file.
 This warning does not change readiness or the exit status.
 It contains no path.
-Doctor does not run the command.
+The availability check does not run the saved command.
 If doctor reports this warning, report it to the user and stop before starting or restarting a task.
+
+Doctor also checks the effective Codex command with `--help` for `--no-daemon` support.
+An unsupported Codex produces `codex-no-daemon-unsupported` in `warnings` without changing readiness or the exit status.
+Update Codex before creating or launching a Codex task.
+`wt new -a codex` refuses before creating a worktree or row when this check fails.
+Claude tasks remain available.
+See [the JSON fields](wt-json.md#read-effective-host-capacity-and-readiness) for the capability report.
 
 A host whose home folder was replaced looks new without its root.
 When doctor reports `profile-missing` and `remote-wt-missing` together, it prints recovery instructions.
