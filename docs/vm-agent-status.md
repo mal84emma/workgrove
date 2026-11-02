@@ -89,10 +89,13 @@ An Esc interruption on a cmux 0.65 row was not tested.
 
 The cmux-tui hooks must be installed on the VM.
 `install.sh --refresh-config` preserves foreign hook commands in both JSON files, including the cmux-tui hooks.
-Its install summary prints the status check below.
+A classic refresh rewrites `~/.codex/config.toml` and drops Codex hook trust and folder trust.
+Codex can then show `partial` even when its cmux-tui hook groups remain in `hooks.json`.
+The install summary names the status check, the repair, and the Codex `/hooks` review.
+
 To check them, run `cmux-tui agent hook status claude codex` on the VM.
 Make sure that the `claude` and `codex` providers show `installed`.
-If a provider shows `absent`, run `cmux-tui agent hook install claude codex`.
+If a provider shows `absent` or `partial`, run `cmux-tui agent hook install claude codex`.
 In Codex, review and trust the hooks with `/hooks`.
 Then restart the agent.
 

@@ -74,7 +74,7 @@ It reads CPU count and memory in KiB, then converts memory to MiB.
 `host_record` validates these fields and reports unknown values as null or `unknown`.
 The [JSON contracts](wt-json.md) define the public inventory and task-status objects.
 
-`probe_host` in `hosts.sh` reads `WG_HOST_PROBE_TIMEOUT` for the Mac's SSH client deadline, which defaults to 20 seconds.
+`probe_host` in `hosts.sh` reads `WG_HOST_PROBE_TIMEOUT` for the Mac's SSH client deadline, which defaults to 30 seconds.
 The value must match `^[1-9][0-9]*$` and cannot exceed `922337203685477580`.
 An invalid value returns 1; an exceeded deadline returns 124.
 `host_record` converts either failure into an unavailable host record with an error message.
@@ -134,8 +134,13 @@ Its exception fallback and `wg_readiness_error` retain all keys with empty or nu
 | `storage_permission_policy` | String or null | `strict`, `trusted-personal-volume`, or null without a profile. |
 | `storage_permission_warnings` | Array of strings | Storage policy warnings. |
 | `terminfo` | Object of booleans | Availability of each checked terminal definition. |
-| `native_hooks` | Object of booleans | Hook configuration for each checked agent. |
+| `native_hooks` | Object of booleans | `true` only when cmux-tui verifies the provider state as `installed`, including stored Codex trust. |
 | `native_relay` | String | Always `requires-row-check`; the probe cannot verify the native relay. |
+
+The native-hook probe runs `cmux-tui --json agent hook status claude codex` with a ten-second timeout.
+It uses the selected agent roots through `CLAUDE_CONFIG_DIR` and `CODEX_HOME`.
+Missing commands, failed commands, timeouts, and invalid responses report `false` for unverified providers.
+The `native_hooks` result does not change `ready` or the exit status.
 
 The reader accepts older readiness records without the diagnostic fields after `issues`.
 It uses only `schema`, `status`, `ready`, and `issues` for the inventory.

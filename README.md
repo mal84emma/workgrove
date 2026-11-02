@@ -655,7 +655,7 @@ This table lists configuration variables, test overrides, and repository setting
 | `WT_AGENT_ARGS` | Empty. Adds shell-split agent arguments. |
 | `WT_MACHINE` | Unset. The highest accepted record version enables versioned results for supported commands. The Mac sets it for VM requests. |
 | `WG_POLL_INTERVAL` | `1` second. Passes directly to `sleep` for poll waits. Tests can set `0`; invalid values produce a sleep error. |
-| `WG_HOST_PROBE_TIMEOUT` | `20` seconds. Limits the Mac's SSH host probe. Accepts decimal integers from 1 through 922337203685477580, without leading zeros. Invalid values return 1; timeouts return 124. |
+| `WG_HOST_PROBE_TIMEOUT` | `30` seconds. Limits the Mac's SSH host probe. Accepts decimal integers from 1 through 922337203685477580, without leading zeros. Invalid values return 1; timeouts return 124. |
 | `WG_DEBUG` | Unset. `1` adds tracebacks for unexpected errors in `portable.py`, including calls through `install.sh`. Set it in the host process environment. `wt -H <host> setup` does not forward the Mac's value. Expected refusals keep their usual output. |
 | `WT_CLOSE_WAIT_SECONDS` | `22`. Sets the wait for older VM rows to close during self-removal. |
 | `WT_STATUS_LEASE_SECONDS` | Retired with the TCP status paths. Current code ignores it. |
@@ -740,7 +740,7 @@ Probes run concurrently. Each probe uses a noninteractive SSH login with these s
 
 - A five-second connection timeout.
 - SSH keepalives.
-- A 20-second client deadline.
+- A 30-second client deadline.
 - Strict host key checking.
 
 A failed SSH probe includes a short error reason. `available` means that a remote shell command succeeded.
@@ -893,7 +893,7 @@ Do these steps to turn on VM status for an existing VM. Do them in this order.
 
 1. Update workgrove on the Mac and VM.
 2. On the VM, run `cmux-tui agent hook status claude codex`.
-   If a provider shows `absent`, run `cmux-tui agent hook install claude codex`.
+   If a provider shows `absent` or `partial`, run `cmux-tui agent hook install claude codex`.
    Both providers must show `installed` before you continue.
    In Codex on the VM, review and trust the hooks with `/hooks`.
    A config refresh keeps existing foreign hooks, including cmux-tui's hooks.
@@ -927,7 +927,7 @@ These rules apply:
 | Change | Mac | VM |
 |---|---|---|
 | Edit `AGENTS.md`, a skill, `wt` | Skills apply at once. `AGENTS.md` applies at the next session. Commit. | `wt -H <vm> update` |
-| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. Portable hosts merge hooks and preserve existing settings and trust data. Classic VMs rewrite `~/.codex/config.toml` from the `.base` file and drop Codex's hook trust hashes and folder trust. The refresh keeps existing cmux-tui hooks. On the VM, run `cmux-tui agent hook status claude codex`. If a provider shows `absent`, run `cmux-tui agent hook install claude codex`. Re-trust the hooks in `/hooks`, then restart the agent with `wt -H <vm> attach --restart-agent -r <repo> <name>` from the Mac. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
+| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. Portable hosts merge hooks and preserve existing settings and trust data. Classic VMs rewrite `~/.codex/config.toml` from the `.base` file and drop Codex's hook trust hashes and folder trust. The refresh keeps existing cmux-tui hooks. On the VM, run `cmux-tui agent hook status claude codex`. If a provider shows `absent` or `partial`, run `cmux-tui agent hook install claude codex`. Re-trust the hooks in `/hooks`, then restart the agent with `wt -H <vm> attach --restart-agent -r <repo> <name>` from the Mac. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
 | Update cmux, or repair local Codex state tracking | Back up the live (machine-local) `config.toml` and `hooks.json`. Run `cmux hooks codex install --yes`. Check that one turn returns to `idle`. | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit. | `wt -H <vm> update` |
 | Change `cmux.json` or the Ghostty config | The change applies after cmux reloads its config or relaunches (see Hotkeys and configuration). A Ghostty config change applies after `cmux reload-config`. Commit. | n/a |

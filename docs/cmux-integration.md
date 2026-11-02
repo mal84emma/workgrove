@@ -65,13 +65,20 @@ Angle brackets mark values supplied by the caller.
 | `cmux automation show wt-native-relay` | `doctor_mac` in `doctor.sh` compares the returned rule with the repository rule. |
 | `cmux events --after 0 --name notification.created --limit 1 --timeout 3 --no-ack --no-heartbeat` | `doctor_record` in `doctor.sh` reads one retained event without acknowledging it or emitting heartbeats. |
 | `cmux-tui --socket <path> notify --surface <terminal-id> --title <title> --body <json>` | `cmux_notify` sends native VM requests. It never supplies `--workspace`, because terminal IDs differ from Mac row UUIDs. |
-| `cmux-tui --json agent hook status claude codex` | `doctor_vm` in `doctor.sh` checks both providers. |
+| `cmux-tui --json agent hook status claude codex` | `doctor_vm` in `doctor.sh` and readiness in `portable.py` require `installed` for both providers. |
 
 The code prints additional repair commands without executing them.
 `doctor_mac` prints `cmux automation enable wt-native-relay` and `cmux automation reload`.
 `doctor_vm` prints `cmux ssh <vm>` and `cmux-tui agent hook install claude codex`.
 `hook_cmux_automation` in [automation.sh](../lib/workgrove/automation.sh) prints `cmux automation reload`.
-`install_configs` in [install.sh](../install.sh) prints `cmux hooks codex install --yes` or the VM provider status command.
+
+After a refresh, `install_configs` in [install.sh](../install.sh) prints `cmux hooks codex install --yes` on the Mac.
+On Linux, it prints the VM provider status command and the repair for `absent` or `partial`.
+The repair is `cmux-tui agent hook install claude codex`.
+Review and trust the Codex hooks with `/hooks`, then restart the agent.
+
+Both VM checks honor `CLAUDE_CONFIG_DIR` and `CODEX_HOME`.
+The readiness probe uses the profile's selected roots when a portable profile exists.
 
 Local creation returns text.
 `cmux_ref` extracts its first `workspace:N` reference.
