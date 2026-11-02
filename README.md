@@ -275,6 +275,9 @@ These warnings do not block tasks.
 
 After the repair, expect `PASS retired hook commands absent` for both agent files.
 Portable installations use the configured agent roots.
+Classic refreshes manage only the default roots.
+For custom classic roots, doctor names the file to edit and the replacement command to keep.
+
 Missing or invalid hook files fail this check.
 The portable readiness report (`--environment` or `--json`) does not include this cleanup check.
 

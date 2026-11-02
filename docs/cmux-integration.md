@@ -28,6 +28,8 @@ The probe does not create rows, execute agent hooks, or verify the complete user
 Retired hook commands produce warnings without changing the exit status.
 Doctor names `install.sh --refresh-config` on the Mac and `wt update --refresh-config` on the VM.
 The Mac tells readers to run VM repairs on the VM.
+Classic refreshes manage only the default roots.
+For custom classic roots, doctor names the file to edit and the replacement command to keep.
 
 Doctor reads the installed policy beside `doctor.sh` and uses the configured agent roots.
 Missing policy files and missing or invalid hook files fail the cleanup check.

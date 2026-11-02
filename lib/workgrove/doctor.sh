@@ -168,33 +168,45 @@ doctor_hooks() {
 
 # Retirement warnings do not block tasks. Unreadable inputs cannot certify cleanup.
 doctor_retired_hooks() {
-  local policy file commands command rc repair
+  local policy file commands command rc repair fix detail portable=0
+  # shellcheck source=lib/workgrove/vm/python-runtime.sh
+  source "$WG_LIB_DIR/vm/python-runtime.sh"
+  if wg_has_portable_profile "$WG_VERSION_ROOT/.."; then portable=1; fi
   if is_remote; then repair='wt update --refresh-config'
   else repair="bash $(shell_join "$WG_VERSION_ROOT/install.sh") --refresh-config"; fi
   policy=$(jq -esc 'if length == 1 then .[0] else error("invalid policy file") end
     | .retired_hook_commands | if type == "object" and all(.[]; type == "string")
-    then keys else error("invalid retired hook policy") end' "$WG_LIB_DIR/agent-config-policy.json" 2>/dev/null) || {
+    then . else error("invalid retired hook policy") end' "$WG_LIB_DIR/agent-config-policy.json" 2>/dev/null) || {
     doctor_result 1 'retired hook policy unavailable' 'wt update'
     return
   }
   for file in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "${CODEX_HOME:-$HOME/.codex}/hooks.json"; do
-    rc=0
+    rc=0 fix=$repair
+    if [[ $portable == 0 && $file != "$HOME/.claude/settings.json" && $file != "$HOME/.codex/hooks.json"
+        && ! $file -ef $HOME/.claude/settings.json && ! $file -ef $HOME/.codex/hooks.json ]]; then
+      fix="vi $(shell_join "$file") # keep the replacement once per event; remove the reported retired command"
+    fi
     commands=$(jq -esc 'if length == 1 then .[0] else error("invalid hook file") end
-      | if type == "object" and (.hooks | type == "object") then
+      | if type == "object" and (.hooks | type == "object")
+        and all(.hooks[]; type == "array" and all(.[];
+          type == "object" and (.hooks | type == "array") and all(.hooks[]; type == "object"))) then
       [.hooks[][].hooks[] | select(.type == "command") | .command
         | if type == "string" then . else error("invalid command") end]
       else error("invalid hooks") end' "$file" 2>/dev/null) || rc=1
     if [[ $rc != 0 ]]; then
-      doctor_result 1 "retired hook configuration $file" "check the JSON file; $repair"
+      doctor_result 1 "retired hook configuration $file" "check the JSON file; $fix"
       continue
     fi
-    commands=$(jq -c --argjson retired "$policy" '[.[] | select(. as $command | $retired | index($command))] | unique' <<<"$commands")
+    commands=$(jq -c --argjson retired "$policy" '[.[] | select(. as $command | $retired | has($command))] | unique' <<<"$commands")
     if [[ $commands == '[]' ]]; then
-      doctor_result 0 "retired hook commands absent $file" "$repair"
+      doctor_result 0 "retired hook commands absent $file" "$fix"
     else
       while IFS= read -r -d '' command; do
-        rc=$DOCTOR_FAILED
-        doctor_result 1 "retired hook command $file: $command" "$repair" WARN
+        rc=$DOCTOR_FAILED detail=''
+        if [[ $fix != "$repair" ]]; then
+          detail="Classic refresh does not manage this root. Use this replacement once per event: $(jq -r --arg command "$command" '.[$command]' <<<"$policy")"
+        fi
+        doctor_result 1 "retired hook command $file: $command" "$fix" WARN "$detail"
         DOCTOR_FAILED=$rc
       done < <(jq -j '.[] | ., "\u0000"' <<<"$commands")
     fi

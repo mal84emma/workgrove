@@ -266,7 +266,8 @@ scenario_retired_hooks() {
       done
     done
     for file in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"; do
-      for command in '{broken' '{"hooks":[]}' '{"hooks":{"Stop":[{"hooks":null}]}}' '{} {}'; do
+      for command in '{broken' '{"hooks":[]}' '{"hooks":{"Stop":[{"hooks":null}]}}' '{} {}' \
+          '{"hooks":{"Stop":{}}}' '{"hooks":{"Stop":[{"hooks":{}}]}}'; do
         printf '%s\n' "$command" >"$file"
         invoke doctor
         assert_grep 'invalid JSON cannot certify cleanup' "$TEST_ROOT/output" "FAIL retired hook configuration $file"
@@ -282,7 +283,23 @@ scenario_retired_hooks() {
     jq -n --slurpfile policy "$REPO/lib/workgrove/agent-config-policy.json" \
       '{hooks:{Stop:[{hooks:[$policy[0].retired_hook_commands | keys[] | {type:"command",command:.}]}]}}' >"$file"
   done
+  cp "$TEST_ROOT/retired-claude.json" "$HOME/.claude/settings.json"
+  cp "$TEST_ROOT/retired-codex.json" "$HOME/.codex/hooks.json"
   WT_MACHINE=1 CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude" CODEX_HOME="$TEST_ROOT/custom-codex" invoke doctor
+  assert_grep 'classic custom roots name a file repair' "$TEST_ROOT/output" "Fix: vi $TEST_ROOT/custom-codex/hooks.json"
+  assert_grep 'classic custom roots explain the refresh limit' "$TEST_ROOT/output" 'Classic refresh does not manage this root.'
+  while IFS= read -r command; do
+    assert_grep 'custom repairs name each policy replacement' "$TEST_ROOT/output" "Use this replacement once per event: $command"
+  done < <(jq -r '.retired_hook_commands[]' "$REPO/lib/workgrove/agent-config-policy.json")
+  printf '#!/bin/sh\necho Darwin\n' >"$TEST_ROOT/bin/uname"
+  CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude" CODEX_HOME="$TEST_ROOT/custom-codex" invoke doctor
+  assert_grep 'Mac custom roots name a file repair' "$TEST_ROOT/output" "Fix: vi $TEST_ROOT/custom-claude/settings.json"
+  printf '#!/bin/sh\necho Linux\n' >"$TEST_ROOT/bin/uname"
+  mkdir -p "$HOME/.config/workgrove"
+  printf 'export CLAUDE_CONFIG_DIR=%q\nexport CODEX_HOME=%q\n' \
+    "$TEST_ROOT/custom-claude" "$TEST_ROOT/custom-codex" >"$HOME/.config/workgrove/env.sh"
+  WT_MACHINE=1 invoke doctor
+  assert_grep 'portable custom roots keep the refresh repair' "$TEST_ROOT/output" 'Fix: wt update --refresh-config'
   assert_eq 'retirement warnings do not fail VM readiness' 0 "$STATUS"
   assert_grep 'custom Claude root is checked' "$TEST_ROOT/output" "WARN retired hook command $TEST_ROOT/custom-claude/settings.json:"
   assert_grep 'custom Codex root is checked' "$TEST_ROOT/output" "WARN retired hook command $TEST_ROOT/custom-codex/hooks.json:"
@@ -310,7 +327,7 @@ scenario_retired_hooks() {
   printf '#!/bin/sh\necho Darwin\n' >"$TEST_ROOT/bin/uname"
   mv "$TEST_ROOT/retired-claude.json" "$HOME/.claude/settings.json"
   mv "$TEST_ROOT/retired-codex.json" "$HOME/.codex/hooks.json"
-  rm "$TEST_ROOT/bin/cmux-tui" "$TEST_ROOT/bin/tmux"
+  rm "$TEST_ROOT/bin/cmux-tui" "$TEST_ROOT/bin/tmux" "$HOME/.config/workgrove/env.sh"
   unset FAKE_CMUX_STATE
   end_scenario
 }
