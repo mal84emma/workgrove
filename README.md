@@ -269,6 +269,15 @@ Mixed groups keep their other commands and settings.
 On classic installs, check the backup and complete the install summary's follow-ups.
 Then restart the agents.
 
+Run `wt doctor` on the Mac, and run `wt -H <vm> doctor` for each VM.
+Doctor warns about each exact retired command that remains and names the refresh repair.
+These warnings do not block tasks.
+
+After the repair, expect `PASS retired hook commands absent` for both agent files.
+Portable installations use the configured agent roots.
+Missing or invalid hook files fail this check.
+The portable readiness report (`--environment` or `--json`) does not include this cleanup check.
+
 Other changed commands remain foreign unless the policy names their exact retired forms.
 
 Both installers read [the agent configuration policy](lib/workgrove/agent-config-policy.json).
@@ -454,8 +463,8 @@ Use `bash bin/wt help` for the grouped option reference. This table summarizes t
 | `wt driver` | Open or select the `driver` row |
 | `wt update [--refresh-config] [--opinionated-config] [--with-*]` | Pull this repo with `git pull --ff-only`, then re-run `install.sh`. Portable hosts accept only `--refresh-config` and `--with-tmux-conf`. |
 | `wt repos [<name>] [--porcelain\|--table]` | List every repo (name, task count, location on a terminal; `name<TAB>path` when piped), or print one repo's path |
-| `wt doctor [--record DIR]` | Check cmux contracts and hook paths. Save redacted fixtures below `DIR/cmux-<version>/` |
-| `wt -H <vm> doctor` | Check VM tools, cmux-tui hooks, folders, and the protocol against the Mac |
+| `wt doctor [--record DIR]` | Check cmux contracts, hook paths, and retired commands. Save redacted fixtures below `DIR/cmux-<version>/` |
+| `wt -H <vm> doctor` | Check VM tools, cmux-tui hooks, retired commands, folders, and the protocol against the Mac |
 | `wt hosts [--json]` | Probe the Mac's configured SSH aliases for remote-command access and installed CPU, RAM and GPU hardware |
 | `wt path <name>`, `wt current`, `wt diff <name>`, `wt help` | Small helpers |
 | `wt -H <host> <sub> …` | Run a subcommand on a VM through ssh while the cmux row stays local. `show`, `rm`, `path`, `open` and `attach` need `-r <repo>` |

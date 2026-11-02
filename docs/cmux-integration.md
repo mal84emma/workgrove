@@ -20,9 +20,19 @@ The probe does not create rows, execute agent hooks, or verify the complete user
 | Agent and notification JSON | `doctor_mac` validates `top --json` and `--json list-notifications`. |
 | The native automation | `doctor_mac` compares `automation show wt-native-relay` with the complete repository rule. It checks that `~/.local/bin/cmux-hook` is executable. |
 | Configured hook commands | `doctor_hooks` reads `.hooks`, `.type == "command"`, and `.command` in the Claude and Codex JSON files. |
+| Retired hook commands | `doctor_retired_hooks` compares complete commands with the shared policy on the Mac and VMs. |
 | Static hook paths | `doctor_hook_path`, `doctor_words`, and `doctor_simple_hook` check syntax and files without executing commands. Dynamic syntax produces a warning. |
 | VM tools and configuration | `doctor_vm` checks cmux-tui, both installed provider hooks, the executable helper, tmux 3.2 minimum, `WT_HOST`, and `WT_REPOS_DIR` folders. |
 | The workgrove version | `cmd_doctor` validates `wt version`. `host_doctor` compares the VM protocol with the Mac protocol. |
+
+Retired hook commands produce warnings without changing the exit status.
+Doctor names `install.sh --refresh-config` on the Mac and `wt update --refresh-config` on the VM.
+The Mac tells readers to run VM repairs on the VM.
+
+Doctor reads the installed policy beside `doctor.sh` and uses the configured agent roots.
+Missing policy files and missing or invalid hook files fail the cleanup check.
+After cleanup, each agent file reports `PASS retired hook commands absent`.
+The portable readiness report does not include this check.
 
 `workspace.remote.reconnect` is not required because workgrove does not call that method.
 The Mac reads VM check results from a [doctor result record](vm-protocol.md#result-records-and-versions).

@@ -187,7 +187,11 @@ Each entry has `name`, `status`, and `repair` strings.
 The check status is `PASS`, `FAIL`, or `WARN`.
 The `repair` field contains the repair command, including for passing checks.
 
-The overall `status` is `PASS` only when every check passes; failures and warnings produce `FAIL`.
+The overall `status` is `FAIL` when a check fails.
+Warnings can produce `PASS` or `FAIL`, as the producer specifies.
+Retired hook warnings do not fail the overall result.
+An overall `PASS` cannot contain a failed check.
+An overall `FAIL` must contain a failure or warning.
 The record uses empty `name`, `repo`, `session`, and `state` fields.
 These additional fields keep protocol version 1.
 
