@@ -1518,6 +1518,28 @@ def codex_no_daemon(command, environment=None):
         return False
 
 
+def native_hooks(environment):
+    """Require verified cmux-tui installation state for each provider."""
+    hooks = dict(claude=False, codex=False)
+    try:
+        result = subprocess.run(["cmux-tui", "--json", "agent", "hook", "status", "claude", "codex"],
+                                env=environment, capture_output=True, timeout=10)
+        if result.returncode != 0:
+            return hooks
+        status = json.loads(result.stdout)
+        if not isinstance(status, dict) or status.get("errors") != []:
+            return hooks
+        providers = status.get("providers")
+        if not isinstance(providers, list) or not all(isinstance(item, dict) for item in providers):
+            return hooks
+        for agent in hooks:
+            matches = [item for item in providers if item.get("provider") == agent]
+            hooks[agent] = len(matches) == 1 and matches[0].get("state") == "installed"
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return hooks
+
+
 def agent_environment(profile=None):
     environment = os.environ.copy()
     home_bin = str(Path.home() / ".local/bin")
@@ -1525,6 +1547,10 @@ def agent_environment(profile=None):
     if profile:
         path = str(Path(profile["root"]) / ".local/bin") + ":" + home_bin + ":" + path
         environment["CODEX_HOME"] = profile["agent_roots"]["codex"]
+        if profile["claude_config_dir"] is None:
+            environment.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            environment["CLAUDE_CONFIG_DIR"] = profile["claude_config_dir"]
     elif home_bin not in path.split(":"):
         path = home_bin + ":" + path
     environment["PATH"] = path
@@ -1623,17 +1649,7 @@ def _readiness(root=None):
     if profile and any(command is not None and not (os.path.isfile(command) and os.access(command, os.X_OK))
                        for command in profile["agent_commands"].values()):
         warnings.append("agent-command-unavailable")
-    hooks = {}
-    for agent in ("claude", "codex"):
-        configured = Path(profile["agent_roots"][agent]) if profile else Path.home() / ("." + agent)
-        path = configured / ("settings.json" if agent == "claude" else "hooks.json")
-        try:
-            config = json.loads(read(path))
-            hooks[agent] = any("CMUX_TUI_HOOK" in hook.get("command", "")
-                               for groups in config.get("hooks", {}).values()
-                               for group in groups for hook in group.get("hooks", []))
-        except (Refusal, OSError, ValueError, TypeError, AttributeError):
-            hooks[agent] = False
+    hooks = native_hooks(environment)
     evidence = any(path.exists() or path.is_symlink() for path in (
         Path.home() / ".config/workgrove/profile.json", Path.home() / ".config/workgrove/env.sh"))
     if evidence and "profile-missing" in issues:
