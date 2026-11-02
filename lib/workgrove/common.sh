@@ -166,7 +166,8 @@ wt_read_result() {
             keys == ["name", "repair", "status"]
             and all(.[]; type == "string" and (explode | all(. >= 32 and . != 127)))
             and (.status | IN("PASS", "FAIL", "WARN"))))
-          and (.status == (if all(.checks[]; .status == "PASS") then "PASS" else "FAIL" end))
+          and (if .status == "PASS" then all(.checks[]; .status != "FAIL")
+            else any(.checks[]; .status != "PASS") end)
           else true end)
       then . else error("invalid wt result") end' <<<"$parsed" 2>/dev/null || return 1
 }
