@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WG_VERSION_ROOT, WT_BASE_FETCHES, WT_DIRNAME, WT_MERGE_TREE, WT_META, WT_TMPFILES.
+# Reads globals: GIT_SSH_COMMAND, REPO, TMPDIR, WG_VERSION_ROOT, WT_BASE_FETCHES, WT_BASE_FETCH_NOTIFIED, WT_DIRNAME, WT_MERGE_TREE, WT_META, WT_TMPFILES.
 preservation_git() { # Virtual history rewrites cannot establish preservation of the original objects.
   GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git -c advice.graftFileDeprecated=false "$@"
 }
@@ -395,6 +395,8 @@ comparison_remote() { # Return 2 for local refs and 1 for an unknown or ambiguou
 }
 
 declare -A WT_BASE_FETCHES=()
+# The coordinator preserves notice state when prune starts isolated removal workers.
+WT_BASE_FETCH_NOTIFIED=${WT_BASE_FETCH_NOTIFIED:-0}
 fetch_base() { # Refresh the canonical remote ref. Return 2 for local evidence and 3 for an already refreshed ref.
   local base=$1 full='' remote='' rc=0 branch
   comparison_ref "$base" '' full || return 1
@@ -403,7 +405,11 @@ fetch_base() { # Refresh the canonical remote ref. Return 2 for local evidence a
   [[ $rc == 0 ]] || return 1
   case "${WT_BASE_FETCHES[$full]:-}" in ok) return 3 ;; failed) return 1 ;; esac
   branch=${full#refs/remotes/"$remote"/}
-  warn "fetching $base from $remote to verify current landing content"
+  # Freshness checks can clear fetch results; keep the notice separate for this command.
+  if [[ $WT_BASE_FETCH_NOTIFIED == 0 ]]; then
+    warn "fetching $base from $remote to verify current landing content"
+    WT_BASE_FETCH_NOTIFIED=1
+  fi
   if GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=5}" \
       preservation_git -C "$REPO" fetch -q --no-tags "$remote" "+refs/heads/$branch:$full" >/dev/null 2>&1; then
     WT_BASE_FETCHES[$full]=ok; return 0

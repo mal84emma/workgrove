@@ -16,6 +16,7 @@ wt_scenarios() {
   "$@" scenario_teardown_evidence_limits "6d. teardown rejects stale remote evidence and failed comparisons"
   "$@" scenario_teardown_destinations "6e. teardown validates local, renamed, and ambiguous landing destinations"
   "$@" scenario_teardown_review_git "6f. review regressions preserve work under aliases, remote ambiguity, and enumeration errors"
+  "$@" scenario_rm_fetch_notice "6g. removal reports one fetch notice while refreshing deletion evidence"
   "$@" scenario_prune_agrees "7. wt prune --dry-run keeps exactly what wt rm refuses"
   "$@" scenario_self_rm_vm "7b. a VM task can remove itself after changing to its main checkout"
   "$@" scenario_cmux "8. a cmux that is not running, and one that is"
