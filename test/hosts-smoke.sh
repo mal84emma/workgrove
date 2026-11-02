@@ -254,9 +254,9 @@ scenario_probe_cleanup() {
   rc=0
   run_stubbed_probe running '' >"$TEST_ROOT/probe-out" 2>"$TEST_ROOT/probe-err" || rc=$?
   assert_eq 'default deadline times out' 124 "$rc"
-  assert_eq 'default deadline remains twenty seconds' 200 \
+  assert_eq 'default deadline includes the hook probe budget' 300 \
     "$(awk '$1 == "sleep" {n++} END {print n+0}' "$TEST_ROOT/probe-calls")"
-  assert_grep 'default deadline reports twenty seconds' "$TEST_ROOT/probe-err" 'timed out after 20 seconds'
+  assert_grep 'default deadline reports thirty seconds' "$TEST_ROOT/probe-err" 'timed out after 30 seconds'
 
   local status
   for status in 0 42 255; do

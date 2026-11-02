@@ -288,7 +288,7 @@ Other suites keep the default one-second interval for checks that need real wait
 `WG_POLL_INTERVAL` passes directly to `sleep`. Invalid values produce a sleep error; no fallback interval replaces them.
 An unset or empty value uses one second.
 
-The host probe defaults to 20 seconds. `WG_HOST_PROBE_TIMEOUT` accepts decimal integers from 1 through 922337203685477580 seconds.
+The host probe defaults to 30 seconds. `WG_HOST_PROBE_TIMEOUT` accepts decimal integers from 1 through 922337203685477580 seconds.
 Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for its deadline check.
 
 - **`bash test/install-smoke.sh`** checks installation across eighteen scenario groups.
