@@ -373,7 +373,7 @@ refresh_config_action() {
 # copy_config finishes the new file before it stashes the old one. A filter failure leaves the destination untouched.
 # JSON hook refreshes start with the base and keep existing commands absent from that base.
 # A mixed group keeps only its foreign commands, with its matcher and other group settings.
-# Base commands use the base's groups, even when an existing group has a different matcher.
+# Base commands and their exact retired forms use the base's groups and matchers.
 # Other settings come from the base. A refreshed .codex/config.toml loses Codex's hook trust and folder trust.
 # The backup still holds those tables. Use /hooks to trust the hooks again.
 copy_config() {
@@ -440,12 +440,15 @@ copy_config() {
     json_merge "$dst" 'true' '
       $base[0]
       | [.hooks[][]?.hooks[]?.command | select(type == "string")] as $commands
+      | ($commands + [$policy[0].retired_hook_commands | to_entries[]
+          | select(.value as $replacement | $commands | index($replacement)) | .key]) as $commands
       | reduce (($existing[0].hooks // {}) | to_entries[]) as $event (.;
           reduce ($event.value[]
             | .hooks |= map(select(.command as $command | $commands | index($command) | not))
             | select(.hooks | length > 0)) as $group (.;
               .hooks[$event.key] += [$group]))
-    ' --null-input --slurpfile base "$tmp" --slurpfile existing "$dst" || die "jq failed on $2"
+    ' --null-input --slurpfile base "$tmp" --slurpfile existing "$dst" \
+      --slurpfile policy "$R/lib/workgrove/agent-config-policy.json" || die "jq failed on $2"
   else
     install_replace "$tmp" "$dst"
   fi

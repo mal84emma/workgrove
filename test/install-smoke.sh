@@ -1902,41 +1902,60 @@ scenario_refresh_foreign_hooks() {
   end_scenario
 }
 
-# Old bare commands remain foreign under the complete-command comparison.
+# Refreshes repair old commands and files that already contain both command forms.
 scenario_refresh_hook_upgrade() {
-  begin_scenario "refresh preserves previous bare hook commands beside the new base" || return 0
-  local platform h log rel base attempt
+  begin_scenario "refresh replaces retired notify commands and repairs duplicate groups" || return 0
+  local platform kind h log rel base attempt old
   for platform in Darwin Linux; do
-    h="$(new_home)"
-    guard_scratch_home "$h"
-    log="$h.log"
-    mkdir -p "$h/.claude" "$h/.codex"
-    for rel in .claude/settings .codex/hooks; do
-      jq '
-        .hooks |= with_entries(.value |= map(.hooks |= map(
-          if .command | endswith(" ~/.local/bin/agent-notify") then
-            .command |= sub(" ~/.local/bin/agent-notify$"; " agent-notify")
-          else . end)))
-        | .hooks.Stop += [{matcher: "foreign", hooks: [{type: "command", command: "foreign-helper"}]}]
-      ' "$REPO/home/$rel.base.json" >"$h/$rel.json"
-      cp "$h/$rel.json" "$h/${rel##*/}.old"
-    done
-    for attempt in 1 2; do
-      RUN_EXTRA_ENV=("FORCE_OS=$platform")
-      if assert_install_ok "$h" "$log.$attempt" --refresh-config; then
-        for rel in .claude/settings .codex/hooks; do
-          base="$REPO/home/$rel.base.json"
-          if jq -e --slurpfile base "$base" --slurpfile old "$h/${rel##*/}.old" '
-            .hooks == (reduce ($old[0].hooks | to_entries[]) as $event ($base[0].hooks;
-              .[$event.key] += [$event.value[] | select(any(.hooks[];
-                .command != "~/.local/bin/github-guard" and .command != "~/.local/bin/github-guard --codex"))]))
-          ' "$h/$rel.json" >/dev/null; then
-            pass
-          else
-            fail "$platform: $rel upgrade $attempt lost or duplicated hook groups"
-          fi
-        done
-      fi
+    for kind in old duplicated; do
+      h="$(new_home)"
+      guard_scratch_home "$h"
+      log="$h.log"
+      mkdir -p "$h/.claude" "$h/.codex"
+      for rel in .claude/settings .codex/hooks; do
+        if [[ $rel == .claude/settings ]]; then
+          old="AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+        else
+          old='AGENT_NOTIFY_SOURCE=Codex agent-notify'
+        fi
+        jq --arg old "$old" --arg kind "$kind" '
+          .hooks |= with_entries(.value |= (
+            if $kind == "duplicated" then . + map(.hooks |= map(
+              if .command | endswith(" ~/.local/bin/agent-notify") then .command = $old else . end))
+            else map(.hooks |= map(
+              if .command | endswith(" ~/.local/bin/agent-notify") then .command = $old else . end)) end))
+          | .hooks.Stop += [{matcher: "mixed", timeout: 42, hooks: [
+              {type: "command", command: $old},
+              {type: "command", command: "foreign-helper", timeout: 7},
+              {type: "command", command: "AGENT_NOTIFY_SOURCE=Personal agent-notify"},
+              {type: "command", command: ($old + " --custom")},
+              {type: "command", command: ("echo " + $old)}]}]
+        ' "$REPO/home/$rel.base.json" >"$h/$rel.json"
+      done
+      for attempt in 1 2; do
+        RUN_EXTRA_ENV=("FORCE_OS=$platform")
+        if assert_install_ok "$h" "$log.$attempt" --refresh-config; then
+          for rel in .claude/settings .codex/hooks; do
+            base="$REPO/home/$rel.base.json"
+            if [[ $rel == .claude/settings ]]; then
+              old="AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
+            else
+              old='AGENT_NOTIFY_SOURCE=Codex agent-notify'
+            fi
+            if jq -e --slurpfile base "$base" --arg old "$old" '
+              .hooks == ($base[0].hooks | .Stop += [{matcher: "mixed", timeout: 42, hooks: [
+                {type: "command", command: "foreign-helper", timeout: 7},
+                {type: "command", command: "AGENT_NOTIFY_SOURCE=Personal agent-notify"},
+                {type: "command", command: ($old + " --custom")},
+                {type: "command", command: ("echo " + $old)}]}])
+            ' "$h/$rel.json" >/dev/null; then
+              pass
+            else
+              fail "$platform: $rel $kind upgrade $attempt lost or duplicated hook groups"
+            fi
+          done
+        fi
+      done
     done
   done
   end_scenario

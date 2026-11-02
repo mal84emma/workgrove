@@ -1464,6 +1464,41 @@ sys.exit(module["main"]())
         self.assertEqual(before, [(self.home / name).read_bytes()
                                   for name in (".claude/settings.json", ".codex/hooks.json")])
 
+    def test_hook_refresh_retires_old_commands_and_repairs_duplicates(self):
+        self.install()
+        for duplicated in (False, True):
+            expected = {}
+            for agent, filename, old in (
+                    ("claude", "settings.json", "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"),
+                    ("codex", "hooks.json", "AGENT_NOTIFY_SOURCE=Codex agent-notify")):
+                template = "settings.base.json" if agent == "claude" else "hooks.base.json"
+                base = json.loads((self.source / "home" / ("." + agent) / template).read_text())
+                hooks = json.loads(json.dumps(base["hooks"]))
+                for event, groups in hooks.items():
+                    for group in groups:
+                        for hook in group["hooks"]:
+                            if hook["command"].endswith(" ~/.local/bin/agent-notify"):
+                                hook["command"] = old
+                    if duplicated:
+                        groups.extend(base["hooks"][event])
+                foreign = {"matcher": "mixed", "timeout": 42, "hooks": [
+                    {"type": "command", "command": "foreign-helper", "timeout": 7},
+                    {"type": "command", "command": "AGENT_NOTIFY_SOURCE=Personal agent-notify"},
+                    {"type": "command", "command": old + " --custom"},
+                    {"type": "command", "command": "echo " + old}]}
+                hooks["Stop"].append(dict(foreign, hooks=[{"type": "command", "command": old}] + foreign["hooks"]))
+                path = self.home / ("." + agent) / filename
+                path.write_text(json.dumps({"personal": True, "hooks": hooks}))
+                expected[path] = base["hooks"]
+                expected[path]["Stop"].append(foreign)
+            for attempt in range(2):
+                self.command("reinstall", "--source", str(self.source), "--refresh-config")
+                for path, hooks in expected.items():
+                    with self.subTest(duplicated=duplicated, attempt=attempt, agent=path.parent.name):
+                        actual = json.loads(path.read_text())
+                        self.assertEqual(actual["hooks"], hooks)
+                        self.assertTrue(actual["personal"])
+
     def test_fullscreen_default_preserves_personal_ui_settings(self):
         self.install()
         path = Path(self.profile()["agent_roots"]["claude"]) / "settings.json"
