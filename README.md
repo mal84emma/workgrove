@@ -893,7 +893,7 @@ Do these steps to turn on VM status for an existing VM. Do them in this order.
 
 1. Update workgrove on the Mac and VM.
 2. On the VM, run `cmux-tui agent hook status claude codex`.
-   If a provider shows `absent`, run `cmux-tui agent hook install claude codex`.
+   If a provider shows `absent` or `partial`, run `cmux-tui agent hook install claude codex`.
    Both providers must show `installed` before you continue.
    In Codex on the VM, review and trust the hooks with `/hooks`.
    A config refresh keeps existing foreign hooks, including cmux-tui's hooks.
@@ -927,7 +927,7 @@ These rules apply:
 | Change | Mac | VM |
 |---|---|---|
 | Edit `AGENTS.md`, a skill, `wt` | Skills apply at once. `AGENTS.md` applies at the next session. Commit. | `wt -H <vm> update` |
-| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. Portable hosts merge hooks and preserve existing settings and trust data. Classic VMs rewrite `~/.codex/config.toml` from the `.base` file and drop Codex's hook trust hashes and folder trust. The refresh keeps existing cmux-tui hooks. On the VM, run `cmux-tui agent hook status claude codex`. If a provider shows `absent`, run `cmux-tui agent hook install claude codex`. Re-trust the hooks in `/hooks`, then restart the agent with `wt -H <vm> attach --restart-agent -r <repo> <name>` from the Mac. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
+| Change Claude or Codex settings, or the portable hooks | Edit the `.base` file. Then run `bash ~/repos/workgrove/install.sh --refresh-config && cmux hooks codex install --yes`. Review the portable hooks with Codex `/hooks`. Commit. | Run `wt -H <vm> update --refresh-config`. Portable hosts merge hooks and preserve existing settings and trust data. Classic VMs rewrite `~/.codex/config.toml` from the `.base` file and drop Codex's hook trust hashes and folder trust. The refresh keeps existing cmux-tui hooks. On the VM, run `cmux-tui agent hook status claude codex`. If a provider shows `absent` or `partial`, run `cmux-tui agent hook install claude codex`. Re-trust the hooks in `/hooks`, then restart the agent with `wt -H <vm> attach --restart-agent -r <repo> <name>` from the Mac. Do **not** run the cmux installer (`cmux hooks codex install --yes`) on the VM. |
 | Update cmux, or repair local Codex state tracking | Back up the live (machine-local) `config.toml` and `hooks.json`. Run `cmux hooks codex install --yes`. Check that one turn returns to `idle`. | n/a |
 | Add a file (skill, script) | Edit, `bash install.sh`, commit. | `wt -H <vm> update` |
 | Change `cmux.json` or the Ghostty config | The change applies after cmux reloads its config or relaunches (see Hotkeys and configuration). A Ghostty config change applies after `cmux reload-config`. Commit. | n/a |

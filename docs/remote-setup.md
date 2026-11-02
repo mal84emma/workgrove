@@ -404,14 +404,19 @@ Missing selected external agent directories also require explicit repair.
 An unavailable or unsupported Python runtime produces a fixed JSON issue.
 Task creation refuses an existing portable installation when Python cannot validate it.
 
-Agent executable availability and native-hook presence have separate fields.
-An SSH-only probe cannot verify native-row relay behavior or the user's hook trust decisions.
+Agent executable availability and native-hook installation state have separate fields.
+`native_hooks` requires the cmux-tui state `installed`, including stored Codex trust.
+An SSH-only probe cannot verify native-row relay behavior or runtime hook execution.
 Those checks remain separate from `ready`.
 A legacy installation can report `status: "legacy"` with `ready: null`.
 
 From an authorized native SSH row, check the relay and both agent hook providers.
 Use the [agent status procedure](vm-agent-status.md) with the actual selected configuration roots.
-Install missing native hooks through `cmux-tui agent hook install claude codex`, then review Codex hook trust through `/hooks`.
+Run `cmux-tui agent hook status claude codex` with those selected configuration roots.
+If a provider shows `absent` or `partial`, run `cmux-tui agent hook install claude codex`.
+In Codex, review and trust the hooks with `/hooks`.
+Then restart the agent.
+
 Follow [VM open relay verification](vm-open-relay.md) for editor requests.
 Successful ordinary SSH does not establish either behavior.
 
