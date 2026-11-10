@@ -310,7 +310,7 @@ Run `wt -H <test-vm> rm <task> -r <repo>` on the Mac to finish that cleanup.
 [Checklist step 8](cmux-checklist.md) tests both self-removal and this Mac retry.
 
 Recovery rechecks row identity and running-agent ownership before closing anything.
-Retries of completed receipts repeat the absence checks and cannot close a replacement row or session.
+Initial completion and retries repeat the absence checks and cannot close a replacement row or session.
 Local observation checks the saved row ID and current matching or ambiguous rows, including receipts that recorded no row.
 Creation can reconcile already-absent local rows without closing anything.
 The Mac can reconcile an absent VM row and session before retrying a requested task name.

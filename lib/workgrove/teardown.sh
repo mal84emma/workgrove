@@ -460,6 +460,6 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
   fi
   teardown_commands_stop all || die 'Git and row cleanup completed, but task command cleanup remains pending'
   teardown_commands_observe || die 'task runtime or command absence is unverified; cleanup remains pending'
-  teardown_save complete
+  teardown_observe "$name" "$path" "$branch" "$keep" "$row" "$remote" || die 'cleanup absence cannot be verified'
   printf 'teardown complete %s\n' "$name"
 }

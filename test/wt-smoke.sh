@@ -4654,6 +4654,51 @@ scenario_teardown_completed_rows() {
   end_scenario
 }
 
+scenario_teardown_pending_rows() {
+  begin_scenario "$1" || return 0
+  local r mode receipt mac="$TEST_ROOT/pending-row-mac" original replacement unrelated
+  mkdir -p "$mac"
+  printf '#!/bin/sh\necho Darwin\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  for mode in matching unclaimed headless; do
+    stub_cmux dead
+    r=$(new_repo "pending-row-$mode")
+    assert_wt_ok 'create a pending local row fixture' new task --no-workspace -r "$r"
+    stub_cmux alive
+    touch "$FAKE_CMUX_STATE/mutate-close"
+    original=$(fake_row old-row task "@local · $(basename "$r")")
+    replacement=$(fake_row replacement-row task "@local · $(basename "$r")")
+    unrelated=$(fake_row unrelated-row notes '@local · unrelated')
+    if [[ $mode != matching ]]; then replacement=$(jq '.description="custom description"' <<<"$replacement"); fi
+    if [[ $mode == headless ]]; then
+      fake_rows "$replacement" "$unrelated" >"$WT_ROWS"
+    else
+      fake_rows "$original" "$replacement" "$unrelated" >"$WT_ROWS"
+    fi
+    : >"$CMUX_LOG"
+    assert_wt_fails 1 'cleanup absence cannot be verified' rm task -r "$r"
+    assert_lacks "$mode cannot announce complete teardown" "$WT_OUT" 'teardown complete'
+    receipt="$r/.git/wt/teardown/task.json"
+    assert_eq "$mode keeps its receipt pending" close_requested "$(jq -r .stage "$receipt")"
+    if [[ $mode == headless ]]; then
+      assert_eq 'headless pending cleanup records no closeable row' '' "$(jq -r .row "$receipt")"
+    fi
+    assert_eq "$mode preserves replacement and unrelated rows" 2 "$(jq '.workspaces | length' "$WT_ROWS")"
+    assert_lacks "$mode never closes the replacement row" "$(cat "$CMUX_LOG")" 'workspace close replacement-row'
+    assert_lacks "$mode never closes the unrelated row" "$(cat "$CMUX_LOG")" 'workspace close unrelated-row'
+    assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
+    assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    assert_gone "$mode leaves Git cleanup complete" "$r/.worktrees/task"
+    assert_branch "$r" wt/task no
+    fake_rows "$unrelated" >"$WT_ROWS"
+    assert_wt_ok 'independent candidate absence completes pending cleanup' rm task -r "$r"
+    assert_eq 'verified absence records completion' complete "$(jq -r .stage "$receipt")"
+    assert_eq 'the unrelated row survives completion' unrelated-row "$(jq -r '.workspaces[0].id' "$WT_ROWS")"
+  done
+  WT_PATH_PREFIX=''
+  end_scenario
+}
+
 # ---------------------------------------------------------------------------- main
 
 # shellcheck disable=SC2016   # $BASH_VERSION below is for the OTHER bash to expand, not this one
