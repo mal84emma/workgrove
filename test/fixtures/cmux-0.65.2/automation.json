@@ -1,0 +1,17 @@
+{
+  "id": "wt-native-relay",
+  "rate_limit": {
+    "interval_seconds": 0.001,
+    "maximum": 1024
+  },
+  "then": [
+    {
+      "action": "run",
+      "command": "~/.local/bin/cmux-hook --event",
+      "timeout_seconds": 20
+    }
+  ],
+  "when": {
+    "event": "notification.created"
+  }
+}
