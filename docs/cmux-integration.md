@@ -264,13 +264,13 @@ Run `wt doctor` after an update, then follow the [cmux update checklist](cmux-ch
 `WG_CMUX_SUPPORTED` in `lib/workgrove/cmux.sh` selects the single verified version for the probe.
 
 workgrove supports cmux 0.65.2 until a newer release passes verification.
-Version 0.65.2 passed the Mac checks. Its VM checks remain; see [Mac checks on 0.65.2](#mac-checks-on-0652).
+Version 0.65.2 passed the Mac checks and most VM checks; see [Mac checks on 0.65.2](#mac-checks-on-0652) and [VM checks on 0.65.2](#vm-checks-on-0652).
 The log has one supported version at a time. Older rows record historical verification.
 Support does not include the removed cmux 0.64 TCP relay paths.
 
 | cmux version | Status | Verified on | Verified behavior |
 |---|---|---|---|
-| 0.65.2 (build 113, `12023d89f`) | Supported; Mac checks passed, VM checks remaining | 2026-11-10 | `wt doctor` passed every cmux method and JSON check. The test suite passed. Recorded contract fields and kept values match 0.65.1. The flags that workgrove passes remain documented. |
+| 0.65.2 (build 113, `12023d89f`) | Supported; Mac checks and VM checks passed, except two `wt attach` checks | 2026-11-10 | `wt doctor` passed every cmux method and JSON check. The test suite passed. Recorded contract fields and kept values match 0.65.1. VM doctor, task creation, VM-side `wt open`, Claude and Codex status, both removal cases, and SSH UUID responses passed. Self-removal failed once before passing. Rows created in quick succession can lose their requested titles. |
 | 0.65.1 (build 110, `8a853dcc9`) | Historical; native VM, cross-window, and SSH UUID checks passed | 2026-10-16; 2026-10-27 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. The [SSH creation measurements](#ssh-creation-identity-on-0651) verify UUID responses. |
 | 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
 
@@ -324,18 +324,57 @@ Three release changes touch areas that workgrove uses:
 - [#19163](https://github.com/manaflow-ai/cmux/pull/19163) changes Claude hook routing on macOS remote hosts only.
 - [#18792](https://github.com/manaflow-ai/cmux/pull/18792) changes Codex status in remote SSH rows. The VM status check covers it.
 
-The checks did not create an SSH row, so `ssh.json` was not measured again.
+The Mac checks did not create an SSH row. The [VM checks](#vm-checks-on-0652) measured SSH creation without recording a new `ssh.json`.
 The fake cmux reads the [0.65.1 SSH creation capture](../test/fixtures/cmux-0.65.1/ssh.json) for every release.
+
+### VM checks on 0.65.2
+
+Checks on 2026-11-10 used one supported VM, `<test-vm>`, and a disposable repository without a remote.
+The second supported VM was unreachable.
+The VM ran installed workgrove commit `d51439f`, five commits behind the Mac's `8a34620`.
+`wt update` refuses to apply commits without an interactive terminal, so the VM was not updated.
+
+| Checklist step | Result |
+|---|---|
+| 2. `wt -H <test-vm> doctor` | Passed with status 0. Both cmux-tui hooks were installed, and the protocols matched. |
+| 3. Create `cmux-check` with Claude | Passed. Its row showed `@<test-vm> · <repo>` on the second line. Selection did not change. |
+| 4. VM-side `wt open` | Passed. The task's agent ran `wt open`, which returned 0. The Mac hook logged `handled wt-open`, and VS Code listed the task's SSH window. |
+| 5. `wt attach` from a separate VM shell | Not run. It is interactive. |
+| 6. Running and Idle | Passed. The Claude row showed Running for 29 seconds, then Idle. The Codex row showed Running for 25 seconds, then Idle. |
+| 7. `wt -H <test-vm> attach … --reattach` | Not run. It stays with the user. |
+| 8. Self-removal | Passed on the second attempt. See below. |
+| 8. Removal from a separate VM shell | Passed. The output matched the checklist, and the Mac retry printed `teardown complete <task>` and closed the row and session. |
+
+The first self-removal ran about 15 seconds after Claude exited.
+It removed nothing and returned status 1:
+
+```text
+wt: tmux ownership changed after preflight
+```
+
+The cause is unknown.
+A second attempt a few minutes later closed the row, ended the tmux session, and removed the worktree and branch.
+Before its session ended, it printed the pending-cleanup lines that the checklist expects only for the separate-shell case.
+Its receipt remained at `close_requested` until a later `wt -H <test-vm> rm` from the Mac completed it.
+An unrelated VM row and its tmux session remained open throughout.
+
+SSH creation measurements repeated the seven presentation forms of the [0.65.1 measurements](#ssh-creation-identity-on-0651).
+All 12 rows returned status 0 with empty stderr.
+JSON alone returned `.workspace_ref`, and `--json --id-format uuids` returned `.workspace_id` for the new row.
+Creation preserved the selected row and the key-window flag.
+Ordinary cleanup closed all 12 rows and restored the original row list.
+
+Five of those 12 rows lost their requested titles and showed generated names such as `workspace-3`.
+They were the first two or three rows of each burst, in every presentation form, including the form that workgrove uses.
+Three single creations, 15 seconds apart, kept their titles for 30 seconds.
+`cmux_row_create_ssh` does not check the title after creation, and workgrove finds rows by title.
+A driver that creates several VM rows in quick succession can therefore leave rows that workgrove cannot find.
 
 These checks remain:
 
-- From the Mac, run `wt -H <vm> doctor` on each supported VM.
-- Create a disposable VM task, and confirm its second line and VM-side `wt open`.
-- From a separate VM shell, run `wt attach`, and confirm that cmux selects the existing row.
-- Confirm Running and Idle states with Claude and with Codex in a VM row.
-- From the Mac, run `wt -H <vm> attach <task> -r <repo> --reattach`, and confirm the status after another turn.
-- Check both removal cases in step 8 of the [cmux update checklist](cmux-checklist.md).
-- Measure the SSH creation identity again with the four presentation flag forms.
+- Run checklist steps 5 and 7 on a VM.
+- Repeat the VM checks after `wt -H <test-vm> update`.
+- Find the cause of the failed first self-removal.
 - Close a local row in which an agent runs, to confirm that `workspace close --force` still bypasses the new agent warning.
 
 ### SSH creation identity on 0.65.1
