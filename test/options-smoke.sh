@@ -175,7 +175,10 @@ remote_wt() {
 }
 host_rm example.invalid task --repo='repo name' --note='a value' --keep-branch
 mapfile -t forwarded <"$TEST_ROOT/forwarded"
-assert_eq 'rm forwards complete argv' $'example.invalid\nrm\n-r\n/repos/repo name\n--note\na value\n--keep-branch\ntask\n--row-closed' "$(printf '%s\n' "${forwarded[@]}")"
+assert_eq 'rm forwards complete argv' $'example.invalid\nrm\n--row-closed\n-r\n/repos/repo name\n--row-host\nexample.invalid\n--note\na value\n--keep-branch\ntask' "$(printf '%s\n' "${forwarded[@]}")"
+host_rm example.invalid --repo='repo name' -- --task
+mapfile -t forwarded <"$TEST_ROOT/forwarded"
+assert_eq 'controller arguments precede the positional delimiter' $'example.invalid\nrm\n--row-closed\n-r\n/repos/repo name\n--row-host\nexample.invalid\n--\n--task' "$(printf '%s\n' "${forwarded[@]}")"
 end_scenario
 
 begin_scenario 'one table row and one function make a command dispatchable'

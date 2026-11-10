@@ -847,12 +847,12 @@ class PortableTests(unittest.TestCase):
             options = ["--keep-branch", "--defer-close"] if command == "rm" else []
             result = subprocess.run([str(self.tools / "bash"), str(self.source / "bin/wt"),
                                      command, "accidental", "-r", str(self.source), *options],
-                                    cwd=self.root, env=dict(self.env, CMUX_SSH_ATTEMPT_ID="test"),
+                                    cwd=self.root, env=dict(self.env, CMUX_SSH_ATTEMPT_ID="test", WT_HOST="test-host"),
                                     capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
         completed = subprocess.run([str(self.tools / "bash"), str(self.source / "bin/wt"), "rm", "accidental",
-                                    "-r", str(self.source), "--keep-branch", "--row-closed"],
-                                   cwd=self.root, env=dict(self.env, CMUX_SSH_ATTEMPT_ID="test"),
+                                    "-r", str(self.source), "--keep-branch", "--row-closed", "--row-host", "test-host"],
+                                   cwd=self.root, env=dict(self.env, CMUX_SSH_ATTEMPT_ID="test", WT_HOST="test-host"),
                                    capture_output=True, text=True, timeout=30)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertFalse(task.exists())

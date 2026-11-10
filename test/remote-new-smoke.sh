@@ -864,7 +864,7 @@ commands = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(commands)
 p = pathlib.Path(sys.argv[2])
 data = json.loads(p.read_text())
-data.update(self='remote', workspace='1')
+data.update(self='remote', workspace='1', host='fakevm')
 data['commands'] = dict(version=1, generation=data['generation'], boot=commands.Processes().boot(), platform=sys.platform,
                         records=[dict(pid=99999999, birth='bsd:1:1' if sys.platform == 'darwin' else 'ticks:1',
                                       comm='fixture-provider', role='runtime')])
@@ -898,6 +898,25 @@ PY
     "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
   check "$(if ! grep -qF 'workspace close' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'a failed lookup closed the row'
   check "$(if ! grep -qF ' rm ' "$TEST_ROOT/ssh.log"; then echo yes; fi)" 'a failed lookup requested VM removal'
+  for mode in new rm; do
+    : >"$TEST_ROOT/cmux.log"
+    if [[ $mode == new ]]; then
+      invoke_wt -H alternatevm new task -r wt-demo -a none --no-workspace
+    else
+      invoke_wt -H alternatevm rm task -r wt-demo
+    fi
+    assert_eq "another SSH alias cannot confirm $mode closure" 1 "$WT_RC"
+    assert_eq 'another alias leaves the receipt pending' close_requested "$(jq -r .stage "$receipt")"
+    assert_absent "$r" .worktrees/task
+    assert_eq 'another alias preserves the original row' 1 \
+      "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
+    check "$(if ! grep -qF 'workspace close' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'another alias closed the original row'
+  done
+  jq 'del(.host)' "$saved" >"$receipt"
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
+  assert_eq 'an unknown original self-removal host blocks confirmation' 1 "$WT_RC"
+  assert_eq 'unknown original host stays pending' close_requested "$(jq -r .stage "$receipt")"
+  cp "$saved" "$receipt"
   : >"$TEST_ROOT/ssh.log"; : >"$TEST_ROOT/cmux.log"
   invoke_wt -H fakevm rm task -r wt-demo
   assert_eq 'independent Mac confirmation completes cleanup' 0 "$WT_RC"
@@ -919,7 +938,7 @@ PY
   CMUX_MODE=alive
   status=0; output=$(remote_task new task -r "$r" -a none --no-workspace 2>&1) || status=$?
   assert_eq 'a complete stage alone cannot acknowledge the current Mac row' 1 "$status"
-  output=$(remote_task rm task -r "$r" --observe-only --row-closed)
+  output=$(remote_task rm task -r "$r" --observe-only --row-closed --row-host fakevm)
   digest=${output#closed receipt }
   cp "$receipt" "$saved"
   for mode in generation identity; do
@@ -928,7 +947,7 @@ PY
     else
       jq '.tmux_identity={id:"$202",created:"new",socket:"/tmp/replacement",server:"1",start:"new"}' "$saved" >"$receipt"
     fi
-    status=0; output=$(remote_task new task -r "$r" -a none --no-workspace --closed-receipt "$digest" 2>&1) || status=$?
+    status=0; output=$(remote_task new task -r "$r" -a none --no-workspace --closed-receipt "$digest" --row-host fakevm 2>&1) || status=$?
     assert_eq "changed $mode rejects the old acknowledgment" 1 "$status"
     assert_absent "$r" .worktrees/task
   done
@@ -939,7 +958,7 @@ PY
   assert_grep 'the retry uses the resolved repository path' "$TEST_ROOT/remote-new.args" "$r"
   check "$([[ -d $r/.worktrees/task ]] && echo yes)" 'the replacement task is absent'
   printf 'unrelated work\n' >"$r/.worktrees/task/private.txt"
-  status=0; output=$(remote_task rm task -r "$r" --observe-only --row-closed --closed-receipt "$digest" 2>&1) || status=$?
+  status=0; output=$(remote_task rm task -r "$r" --observe-only --row-closed --row-host fakevm --closed-receipt "$digest" 2>&1) || status=$?
   assert_eq 'old closure evidence cannot remove a replacement task' 1 "$status"
   assert_eq 'replacement private work survives stale evidence' 'unrelated work' "$(cat "$r/.worktrees/task/private.txt")"
   unset -f remote_task

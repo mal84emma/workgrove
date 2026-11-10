@@ -12,6 +12,7 @@
 #                                                             create a worktree and a cmux row that runs `wt run`.
 #                                                             --no-workspace leaves the worktree ready for `wt attach`
 #                                                             --closed-receipt DIGEST carries Mac confirmation for a matching VM receipt.
+#                                                             --row-host HOST binds that confirmation to the recorded SSH alias.
 #   wt run  <name> [-r PATH]                                  run the worktree's agent with its brief (cmux runs this)
 #   wt list [--all] [--json] [-r PATH]                        list worktrees (--all: every repo in $WT_REPOS_DIR)
 #                                                             --json prints task status for scripts.
@@ -43,6 +44,7 @@
 #                                                             --row-closed acknowledges its verified row closure.
 #                                                             --observe-only verifies completed cleanup without deleting or closing anything.
 #                                                             --closed-receipt DIGEST limits row-acknowledged observation to that receipt.
+#                                                             --row-host HOST identifies the SSH alias whose row absence was verified.
 #   wt prune [--dry-run] [-r PATH]                           remove worktrees whose branch is merged (by ancestry or
 #                                                             as a squash) and whose tree is clean
 #   wt repos [<name>] [--porcelain|--table]                   list every git repo in $WT_REPOS_DIR.
@@ -219,11 +221,13 @@ cmd_new() {
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (kept by wt rm --keep-branch, or by a removal git would not call merged, or left behind by a worktree deleted outside wt); inspect it (git -C $REPO log $b), then delete it (git -C $REPO branch -D $b) or pick another name"
   local closure_args=()
+  [[ ! -v opts[row_host] || -v opts[closed_receipt] ]] || die 'a row host requires a closed receipt for creation'
   if [[ -v opts[closed_receipt] ]]; then
     is_remote || die 'closed receipts are only valid for VM creation'
     [[ ${opts[closed_receipt]} =~ ^[0-9a-f]{64}$ && -f $REPO/.git/wt/teardown/$name.json ]] \
       || die 'invalid closed receipt for task creation'
-    closure_args=(--row-closed --closed-receipt "${opts[closed_receipt]}")
+    valid_host "${opts[row_host]:-}" || die 'a closed receipt requires its verified Mac row host'
+    closure_args=(--row-closed --row-host "${opts[row_host]}" --closed-receipt "${opts[closed_receipt]}")
   fi
   if [[ -f $REPO/.git/wt/teardown/$name.json ]]; then
     (cmd_rm "$name" -r "$REPO" --observe-only "${closure_args[@]}") >/dev/null 2>&1 \
@@ -598,7 +602,7 @@ cmd_pr() {
 }
 
 cmd_rm() {
-  local discard_commits=0 defer_close=0 row_closed=0 observe_only=0
+  local discard_commits=0 defer_close=0 row_closed=0 observe_only=0 row_host=''
   local name="" force=0 keep=0 repo="" self_remote=0 host="" session="" title="" native=0
   local -A opts=()
   wt_opts "$(wt_spec rm)" opts "$@"
@@ -607,11 +611,13 @@ cmd_rm() {
   keep=${opts[keep]-$keep}
   discard_commits=${opts[discard_commits]-$discard_commits}
   defer_close=${opts[defer_close]:-0} row_closed=${opts[row_closed]:-0} observe_only=${opts[observe_only]:-0}
+  row_host=${opts[row_host]:-}
   repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "rm: worktree name required"
   resolve_repo "$repo"; local path branch
   valid_name "$name" || die "invalid worktree name: $name"
-  [[ $row_closed == 0 ]] || is_remote || die 'row acknowledgment is only valid for VM cleanup'
+  [[ $row_closed == 0 && -z $row_host ]] || is_remote || die 'row acknowledgment is only valid for VM cleanup'
+  [[ ! -v opts[row_host] ]] || valid_host "$row_host" || die 'invalid Mac row host'
   [[ -z "${CODEX_SANDBOX:-}" ]] || die 'the Codex sandbox can block cmux or tmux cleanup; rerun this command with escalation'
   teardown_lock "$name" "$@"
   WT_TEARDOWN_FILE="$REPO/.git/wt/teardown/$name.json"
@@ -633,6 +639,8 @@ cmd_rm() {
       teardown_finish; return
     fi
   fi
+  [[ -z $row_host || -z ${WT_HOST:-} || $row_host == "$WT_HOST" ]] \
+    || die 'Mac row host changed; use the original SSH alias for cleanup'
   [[ $observe_only == 0 && ( $row_closed == 0 || $defer_close == 1 ) ]] || die 'no pending cleanup receipt for this absent task'
   require_wt "$name" path branch "rm"
   teardown_preflight "$path"
@@ -705,9 +713,9 @@ cmd_rm() {
   else
     cmux_require check_row_removal "$title" "$REPO" row self "" "$(wt_path "$name")"
   fi
+  if [[ $self_remote -eq 1 ]]; then host=$(wt_host); fi
   if [[ $self_remote -eq 1 && $native -eq 0 ]]; then
     # Check the relay setup only after the reasons above, while the worktree is still intact.
-    host=$(wt_host)
     hook_ok_repo || die "cannot request Mac row cleanup for $REPO"
     local _ident=() _tui_socket _tui_terminal
     if ! relay_env _ident _tui_socket _tui_terminal; then

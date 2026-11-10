@@ -1821,6 +1821,8 @@ STUB
   assert_wt_fails 3 "1 uncommitted change(s)" rm self -r "$r"
   assert_dir "dirty refusal takes precedence over missing host" "$r/.worktrees/self"
   guard_scratch_root "$r/.worktrees/self"; rm -f "$r/.worktrees/self/scratch.txt"
+  assert_wt_fails 1 'WT_HOST' rm self -r "$r"
+  assert_dir 'missing host preserves the native worktree' "$r/.worktrees/self"
   WT_RELAY_ENV[0]="WT_HOST=test-vm"
   WT_RELAY_ENV[4]="SELF_TMUX_SESSION=wt-$(basename "$r")-sandboxed"
   WT_SANDBOX=seatbelt
@@ -1916,19 +1918,19 @@ STUB
   : >"$TEST_ROOT/self-tmux.log"
   assert_wt_fails 1 'cleanup is pending' rm self -r "$r"
   assert_lacks 'outside-session retry does not kill a session by its reused name' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
-  assert_wt_ok 'Mac absence acknowledgment completes native cleanup' rm self --row-closed -r "$r"
+  assert_wt_ok 'Mac absence acknowledgment completes native cleanup' rm self --row-closed --row-host test-vm -r "$r"
   grep -vxF "$session" "$TEST_ROOT/self-tmux.log.closed" >"$TEST_ROOT/reopened-sessions" || true
   mv "$TEST_ROOT/reopened-sessions" "$TEST_ROOT/self-tmux.log.closed"
   WT_RELAY_ENV+=("SELF_TMUX_INSTANCE=\$202" "SELF_TMUX_PROBE=idle")
   : >"$TEST_ROOT/self-tmux.log"
-  assert_wt_fails 1 'cleanup absence cannot be verified' rm self --observe-only --row-closed -r "$r"
-  assert_wt_fails 1 'cleanup absence cannot be verified' rm self --row-closed -r "$r"
+  assert_wt_fails 1 'cleanup absence cannot be verified' rm self --observe-only --row-closed --row-host test-vm -r "$r"
+  assert_wt_fails 1 'cleanup absence cannot be verified' rm self --row-closed --row-host test-vm -r "$r"
   assert_lacks 'a completed receipt cannot close a replacement session' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
   local legacy_session
   legacy_session="wt-$(basename "$r")-unmarked"
   printf '%s\n' "$legacy_session" >>"$TEST_ROOT/self-tmux.log.closed"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$legacy_session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
-  assert_wt_ok 'Mac absence acknowledgment completes legacy cleanup without its old relay' rm unmarked --row-closed -r "$r"
+  assert_wt_ok 'Mac absence acknowledgment completes legacy cleanup without its old relay' rm unmarked --row-closed --row-host test-vm -r "$r"
   assert_eq 'legacy receipt becomes complete' complete "$(jq -r .stage "$r/.git/wt/teardown/unmarked.json")"
   local replacement
   replacement="wt-$(basename "$r")-sandboxed"
@@ -1943,13 +1945,13 @@ STUB
   assert_lacks 'another running agent prevents recovery closure' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$replacement" "SELF_TMUX_INSTANCE=\$202" "SELF_TMUX_PROBE=idle" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
   : >"$TEST_ROOT/self-tmux.log"
-  assert_wt_fails 1 'identity changed' rm sandboxed --row-closed -r "$r"
+  assert_wt_fails 1 'identity changed' rm sandboxed --row-closed --row-host test-vm -r "$r"
   assert_lacks 'replacement idle session survives receipt recovery' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
   local callback_session
   callback_session="wt-$(basename "$r")-callback"
   {
     printf '#!/bin/sh\n'
-    printf 'exec env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_CONTROL_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed -r %s\n' \
+    printf 'exec env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_CONTROL_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed --row-host test-vm -r %s\n' \
       "$(shell_join "$WT_BASH")" "$(shell_join "$WT")" "$(shell_join "$r")"
   } >"$FAKE_CMUX_STATE/notify-callback"
   chmod +x "$FAKE_CMUX_STATE/notify-callback"
@@ -3777,12 +3779,14 @@ SHIM
   if [[ $OS == Darwin ]]; then
     assert_wt_ok 'verified sidecar absence retains legacy removal' rm no-sidecar -r "$r"
   else
+    WT_RELAY_ENV=(WT_HOST=fixture.invalid)
     # Missing legacy metadata cannot establish VM row absence.
     assert_wt_fails 1 'cleanup is pending' rm no-sidecar -r "$r"
     assert_gone 'legacy VM removal completes Git cleanup' "$r/.worktrees/no-sidecar"
     assert_eq 'unknown VM row remains pending' close_requested "$(jq -r .stage "$r/.git/wt/teardown/no-sidecar.json")"
     # This fixture controller knows that no row or tmux session was created.
-    assert_wt_ok 'observed absence completes legacy VM cleanup' rm no-sidecar -r "$r" --observe-only --row-closed
+    assert_wt_ok 'observed absence completes legacy VM cleanup' rm no-sidecar -r "$r" --observe-only --row-closed --row-host fixture.invalid
+    WT_RELAY_ENV=()
   fi
   assert_eq 'legacy removal finishes with a complete receipt' complete "$(jq -r .stage "$r/.git/wt/teardown/no-sidecar.json")"
   end_scenario
@@ -4600,6 +4604,49 @@ scenario_teardown_command_completion() {
   assert_wt_ok 'valid headless completion remains repeatable' rm completed -r "$r"
   assert_wt_ok 'verified completion permits a new generation' new completed --no-workspace -r "$r"
   assert_wt_ok 'the new generation removes without adopting old command evidence' rm completed -r "$r"
+  end_scenario
+}
+
+scenario_teardown_completed_rows() {
+  begin_scenario "$1" || return 0
+  local r mac="$TEST_ROOT/complete-row-mac" receipt variant row
+  mkdir -p "$mac"
+  printf '#!/bin/sh\necho Darwin\n' >"$mac/uname"; chmod +x "$mac/uname"
+  WT_PATH_PREFIX=$mac
+  stub_cmux dead
+  r=$(new_repo complete-row)
+  assert_wt_ok 'create a local completion fixture' new task --no-workspace -r "$r"
+  stub_cmux alive
+  touch "$FAKE_CMUX_STATE/mutate-close"
+  fake_rows "$(fake_row old-row task "@local · $(basename "$r")")" >"$WT_ROWS"
+  assert_wt_ok 'remove the fixture and its original row' rm task -r "$r"
+  receipt="$r/.git/wt/teardown/task.json"
+  assert_eq 'original row closure completes the receipt' complete "$(jq -r .stage "$receipt")"
+  for variant in matching unclaimed directory saved-id headless; do
+    row=$(fake_row replacement-row task "@local · $(basename "$r")")
+    case $variant in
+      unclaimed) row=$(jq '.description="custom description"' <<<"$row") ;;
+      directory) row=$(jq --arg path "$r/.worktrees/task/subdir" '.title="notes" | .description="@local" | .current_directory=$path' <<<"$row") ;;
+      saved-id) row=$(fake_row old-row notes "@local") ;;
+      headless) jq '.row="" | .workspace="0"' "$receipt" >"$receipt.next"; mv "$receipt.next" "$receipt" ;;
+    esac
+    fake_rows "$row" >"$WT_ROWS"
+    : >"$CMUX_LOG"
+    assert_wt_fails 1 'cleanup absence cannot be verified' rm task -r "$r"
+    assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
+    assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    assert_eq "$variant preserves the replacement row" 1 "$(jq '.workspaces | length' "$WT_ROWS")"
+    assert_lacks "$variant sends no row-close request" "$(cat "$CMUX_LOG")" 'workspace close'
+    assert_eq "$variant leaves the journal intact" complete "$(jq -r .stage "$receipt")"
+    assert_gone "$variant cannot recreate the worktree" "$r/.worktrees/task"
+    assert_branch "$r" wt/task no
+  done
+  fake_rows >"$WT_ROWS"
+  WT_RELAY_ENV=(CMUX_STUB_FAIL_LIST=all)
+  assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
+  WT_RELAY_ENV=()
+  assert_wt_ok 'fresh absence permits local name reuse' new task --no-workspace -r "$r"
+  WT_PATH_PREFIX=''
   end_scenario
 }
 

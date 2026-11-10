@@ -117,7 +117,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   # read nothing locally and pipe an empty prompt into ssh. The VM would then create the task with no brief.
   local -A opts=()
   wt_opts "$(wt_spec new remote)" opts "$@"
-  [[ ! -v opts[closed_receipt] ]] || die 'closed receipts must come from independent Mac confirmation'
+  [[ ! -v opts[closed_receipt] && ! -v opts[row_host] ]] || die 'closed receipts must come from independent Mac confirmation'
   local i
   for ((i=0; i<${opts[@count]}; i++)); do
     case ${opts[@key:$i]} in
@@ -146,7 +146,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
     valid_name "$pending_name" || return 1
     pending_row=$(cmux_row_field "$(row_title "$pending_name")" "$pending_repo" id "$host" checked) || return 1
     if [[ -z $pending_row ]] && \
-        closure=$(remote_wt "$host" rm "$pending_name" -r "$pending_repo" --observe-only --row-closed); then
+        closure=$(remote_wt "$host" rm "$pending_name" -r "$pending_repo" --observe-only --row-closed --row-host "$host"); then
       if [[ $closure =~ ^closed\ receipt\ ([0-9a-f]{64})$ ]]; then
         local digest=${BASH_REMATCH[1]}
         # Bind a fresh Mac observation to the receipt that the VM just verified.
@@ -154,7 +154,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
         if [[ -z $pending_row ]]; then
           result_rc=0
           wt_opt_args opts retry_args prompt stdin_prompt workspace repo
-          vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin --closed-receipt "$digest" \
+          vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin --closed-receipt "$digest" --row-host "$host" \
             -r "$pending_repo" "${retry_args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
         fi
       fi
@@ -218,14 +218,15 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   name=${opts[name]-$name}
   repo=${opts[repo]-$repo}
   need_r "$host" rm "$@"
+  [[ ! -v opts[row_host] || ${opts[row_host]} == "$host" ]] || die 'Mac row host must match the requested SSH alias'
   [[ -n "$name" ]] || die "rm: worktree name required (wt -H $host rm -r <repo> <name>)"
   # A discovery alias can have another basename than the main checkout.
   local session title; title=$(row_title "$name")
   local _row _self
   repo=$(host_repo_path "$host" "$repo") || return 1
   session=$(wt_session "$name" "$repo")
-  wt_opt_args opts args repo
-  args=(-r "$repo" "${args[@]}")
+  wt_opt_args opts args repo row_host
+  args=(-r "$repo" --row-host "$host" "${args[@]}")
   cmux_require check_row_removal "$title" "$repo" _row _self "$host"
   local agent_rc=0
   agent_on_vm "$host" "$session" || agent_rc=$?
@@ -236,12 +237,12 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   esac
   if [[ ${opts[observe_only]:-0} == 1 ]]; then
     [[ -z $_row ]] || die 'VM row is still present; observation did not close it'
-    remote_wt "$host" rm "${args[@]}" --row-closed
+    remote_wt "$host" rm --row-closed "${args[@]}"
     return
   fi
   local acknowledgment=()
   [[ -n $_row ]] || acknowledgment=(--row-closed)
-  remote_wt "$host" rm "${args[@]}" --defer-close "${acknowledgment[@]}" || return $?
+  remote_wt "$host" rm --defer-close "${acknowledgment[@]}" "${args[@]}" || return $?
   # shellcheck disable=SC2034  # The checked helper also returns caller ownership.
   local checked_row='' checked_self='' rows
   cmux_require check_row_removal "$title" "$repo" checked_row checked_self "$host"
@@ -251,7 +252,7 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
   if [[ -n $checked_row ]] && jq -e --arg id "$checked_row" 'any(.workspaces[]; .id == $id)' <<<"$rows" >/dev/null; then
     die 'VM row remains open; session cleanup is pending'
   fi
-  remote_wt "$host" rm "${args[@]}" --row-closed
+  remote_wt "$host" rm --row-closed "${args[@]}"
 }
 
 host_list() {

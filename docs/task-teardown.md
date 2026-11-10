@@ -311,13 +311,17 @@ Run `wt -H <test-vm> rm <task> -r <repo>` on the Mac to finish that cleanup.
 
 Recovery rechecks row identity and running-agent ownership before closing anything.
 Retries of completed receipts repeat the absence checks and cannot close a replacement row or session.
+Local observation checks the saved row ID and current matching or ambiguous rows, including receipts that recorded no row.
 Creation can reconcile already-absent local rows without closing anything.
 The Mac can reconcile an absent VM row and session before retrying a requested task name.
 The controller resolves repository aliases before checking Mac rows and binds later VM operations to that resolved path.
 The VM returns a digest of the verified receipt after row-acknowledged observation.
 The Mac checks row absence again, then supplies that digest to the creation retry through `--closed-receipt`.
 The VM checks the digest under the teardown lock and repeats observation before creating the task.
-The digest binds the acknowledgment to the complete receipt, including its generation and session identity.
+The digest binds the acknowledgment to the complete receipt, including its generation, original SSH alias, and session identity.
+The controller supplies that alias through `--row-host`; a different alias cannot confirm the original row's absence.
+An old self-removal receipt without its original alias remains pending.
+Native and legacy self-removal require `WT_HOST` before Git cleanup, so the receipt and confirmation command identify the original alias.
 A changed receipt, replacement session, active recorded process, or uncertain sample blocks reuse.
 A completed stage alone cannot establish absence.
 Otherwise, pending cleanup blocks reuse of the task name.
@@ -346,9 +350,11 @@ The controller flags are narrow cleanup operations:
 - `--defer-close` completes Git cleanup while leaving session cleanup to the Mac.
 - `--row-closed` acknowledges independently observed Mac row absence and validates the recorded VM session.
 - `--observe-only` reconciles verified absence without deleting Git work or closing sessions.
+- `--row-host <host>` binds Mac row confirmation to the original SSH alias recorded in the receipt.
 - `--closed-receipt <digest>` binds row-acknowledged observation to one receipt during the controller's creation retry.
 
 These flags never waive work-preservation checks or authorize another running agent's closure.
+Update workgrove on both machines before using receipt-bound confirmation; an older receiver refuses unknown controller flags.
 
 A lock does not exclude arbitrary editors, external Git writers, or independent process starts.
 The deletion-boundary checks narrow that race but cannot atomically exclude uncooperative filesystem changes.

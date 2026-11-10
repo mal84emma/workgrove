@@ -49,7 +49,7 @@ case "$*" in
     printf 'WT_RESULT\t%s\n' '{"version":1,"command":"path","status":"missing","name":"task","repo":"/vm/repos/repo","session":"","state":""}' >&2
     echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
     exit 1 ;;
-  *' rm task -r /vm/repos/repo --defer-close')
+  *' rm task -r /vm/repos/repo --defer-close --row-host test-vm')
     if [ "${REMOTE_RETARGET:-0}" = 1 ]; then
       jq '.workspaces[0].remote.destination="other-vm"' "$FAKE_CMUX_STATE/rows.json" >"$FAKE_CMUX_STATE/retarget.json"
       mv "$FAKE_CMUX_STATE/retarget.json" "$FAKE_CMUX_STATE/rows.json"
@@ -496,6 +496,7 @@ scenario_native_attach_close() {
   hook >/dev/null
   has "$CMUX_LOG" "workspace close $ROW_ID --force"
   has "$SSH_CALL_LOG" '--row-closed'
+  has "$SSH_CALL_LOG" '--row-host test-vm'
   lacks "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
   rm "$FAKE_CMUX_STATE/mutate-close"
   record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
