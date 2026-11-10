@@ -13,7 +13,7 @@ The probe does not create rows, execute agent hooks, or verify the complete user
 
 | Check | Reader and required result |
 |---|---|
-| The cmux version | `doctor_mac` parses `cmux version` and compares it with `WG_CMUX_SUPPORTED` in [cmux.sh](../lib/workgrove/cmux.sh), currently `0.65.1`. |
+| The cmux version | `doctor_mac` parses `cmux version` and compares it with `WG_CMUX_SUPPORTED` in [cmux.sh](../lib/workgrove/cmux.sh), currently `0.65.2`. |
 | Available methods | `doctor_mac` requires `workspace.list`, `workspace.create`, `workspace.action`, `workspace.close`, and `workspace.select` in `.methods`. |
 | Other methods | `doctor_mac` also requires `notification.list`, `notification.dismiss`, `system.top`, and `surface.read_text`. |
 | Window and row JSON | `doctor_mac` calls `cmux_rows_load checked` in `cmux.sh`. The next tables define the fields. |
@@ -263,13 +263,15 @@ Run `cmux version` to check your installed version.
 Run `wt doctor` after an update, then follow the [cmux update checklist](cmux-checklist.md).
 `WG_CMUX_SUPPORTED` in `lib/workgrove/cmux.sh` selects the single verified version for the probe.
 
-workgrove supports cmux 0.65.1 until a newer release passes verification. Version 0.65.2 is unverified.
+workgrove supports cmux 0.65.2 until a newer release passes verification.
+Version 0.65.2 passed the Mac checks. Its VM checks remain; see [Mac checks on 0.65.2](#mac-checks-on-0652).
 The log has one supported version at a time. Older rows record historical verification.
 Support does not include the removed cmux 0.64 TCP relay paths.
 
 | cmux version | Status | Verified on | Verified behavior |
 |---|---|---|---|
-| 0.65.1 (build 110, `8a853dcc9`) | Supported; native VM, cross-window, and SSH UUID checks passed | 2026-10-16; 2026-10-27 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. The [SSH creation measurements](#ssh-creation-identity-on-0651) verify UUID responses. |
+| 0.65.2 (build 113, `12023d89f`) | Supported; Mac checks passed, VM checks remaining | 2026-11-10 | `wt doctor` passed every cmux method and JSON check. The test suite passed. Recorded contract fields and kept values match 0.65.1. The flags that workgrove passes remain documented. |
+| 0.65.1 (build 110, `8a853dcc9`) | Historical; native VM, cross-window, and SSH UUID checks passed | 2026-10-16; 2026-10-27 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. The [SSH creation measurements](#ssh-creation-identity-on-0651) verify UUID responses. |
 | 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
 
 [PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to cmux 0.65.0's row-closing behavior.
@@ -278,8 +280,63 @@ Native VM rows exit with their task's tmux session.
 The earlier `0.64 or newer` requirement did not guarantee compatibility with these changes.
 
 For each supported version, record the exact build, verified behavior, and remaining checks.
-[VM verification on cmux 0.65.1](vm-open-relay.md#verification-on-cmux-0651) records the current live checks.
+[VM verification on cmux 0.65.1](vm-open-relay.md#verification-on-cmux-0651) records the latest live VM checks.
 Codex VM status, combined states from several agents, and Esc interruption behavior remain unverified by that live session.
+
+### Mac checks on 0.65.2
+
+Checks on 2026-11-10 used cmux 0.65.2 (113), commit `12023d89f`, on the Mac.
+They did not create, select, or close any row.
+
+`wt doctor` passed all nine method checks and the window, row, top, and notification JSON checks.
+It also passed the `wt-native-relay` automation check.
+It returned status 1 for three reasons that are unrelated to cmux contracts:
+
+- The version warning named 0.65.1, which was then the verified release.
+- Four existing custom Claude hooks need static helper files.
+- `~/.codex/hooks.json` still contains the retired `agent-notify` command.
+
+After `WG_CMUX_SUPPORTED` changed to 0.65.2, `wt doctor --record` also passed the version check.
+Only the custom-hook and retired-hook warnings remained.
+
+`test/run.sh` passed under bash 5.3 before the version change, and again with the 0.65.2 fixtures:
+
+```text
+total wall time: 397.121 s; 110 tasks, 0 failed
+total wall time: 409.407 s; 110 tasks, 0 failed
+```
+
+`wt doctor --record test/fixtures` wrote [the 0.65.2 fixtures](../test/fixtures/cmux-0.65.2/).
+Their public field names, types, and kept values match the 0.65.1 fixtures.
+Capabilities list 512 methods instead of 507, and every method that workgrove calls remains.
+Other differences reflect the open rows and retained notifications at capture time, not contract changes.
+
+`cmux --help` and `cmux ssh --help` returned status 0 with empty stderr.
+Global help still documents `--id-format uuids`.
+SSH help still documents `--name`, `--no-focus`, `--command`, and `--window`.
+Its help source for these flags is identical at the `v0.65.1` and `v0.65.2` tags.
+workgrove always passes `--no-focus`, so the default focus rule in SSH help does not affect it.
+`cmux workspace --help` lists the `list`, `create`, `close`, and `select` subcommands that workgrove calls.
+
+Three release changes touch areas that workgrove uses:
+
+- [#17430](https://github.com/manaflow-ai/cmux/pull/17430) adds a separate close warning for an agent that is mid-turn. It changes the app's close dialogs, not the CLI.
+- [#19163](https://github.com/manaflow-ai/cmux/pull/19163) changes Claude hook routing on macOS remote hosts only.
+- [#18792](https://github.com/manaflow-ai/cmux/pull/18792) changes Codex status in remote SSH rows. The VM status check covers it.
+
+The checks did not create an SSH row, so `ssh.json` was not measured again.
+The fake cmux reads the [0.65.1 SSH creation capture](../test/fixtures/cmux-0.65.1/ssh.json) for every release.
+
+These checks remain:
+
+- From the Mac, run `wt -H <vm> doctor` on each supported VM.
+- Create a disposable VM task, and confirm its second line and VM-side `wt open`.
+- From a separate VM shell, run `wt attach`, and confirm that cmux selects the existing row.
+- Confirm Running and Idle states with Claude and with Codex in a VM row.
+- From the Mac, run `wt -H <vm> attach <task> -r <repo> --reattach`, and confirm the status after another turn.
+- Check both removal cases in step 8 of the [cmux update checklist](cmux-checklist.md).
+- Measure the SSH creation identity again with the four presentation flag forms.
+- Close a local row in which an agent runs, to confirm that `workspace close --force` still bypasses the new agent warning.
 
 ### SSH creation identity on 0.65.1
 

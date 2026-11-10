@@ -369,7 +369,7 @@ The documentation check compares marker counts for each file and function, inclu
 It scans the tracked files selected by `git grep -n WT_COMPAT bin lib install.sh`.
 
 Group A supported cmux without `--json list-windows`.
-The supported cmux release, 0.65.1, provides that command, so this branch and its fallback tests are removed.
+The supported cmux release, 0.65.2, provides that command, so this branch and its fallback tests are removed.
 When enumeration fails, `skip` returns an empty row list and status 0.
 `stop` preserves the failing command's status; `checked` returns status 1.
 When enumeration prints a non-list or invalid window IDs, `skip` returns an empty list; the other policies return status 1.

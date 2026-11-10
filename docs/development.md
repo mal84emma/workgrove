@@ -120,18 +120,19 @@ workgrove/
 │   │   ├── rows.sh           builds scenario data from recorded responses
 │   │   └── tmux              supplies the fake VM's session, pane, and client answers
 │   ├── fixtures/
-│   │   └── cmux-0.65.1/      redacted responses recorded from real cmux
-│   │       ├── REDACTED.txt   redaction notice
-│   │       ├── automation.json
-│   │       ├── capabilities.json
-│   │       ├── event.json
-│   │       ├── notifications.json
-│   │       ├── rows.json
-│   │       ├── rows_by_window.json
-│   │       ├── ssh.json
-│   │       ├── top.json
-│   │       ├── version.txt
-│   │       └── windows.json
+│   │   ├── cmux-0.65.1/      redacted responses recorded from real cmux, and the SSH creation capture
+│   │   │   ├── REDACTED.txt   redaction notice
+│   │   │   ├── automation.json
+│   │   │   ├── capabilities.json
+│   │   │   ├── event.json
+│   │   │   ├── notifications.json
+│   │   │   ├── rows.json
+│   │   │   ├── rows_by_window.json
+│   │   │   ├── ssh.json
+│   │   │   ├── top.json
+│   │   │   ├── version.txt
+│   │   │   └── windows.json
+│   │   └── cmux-0.65.2/      the same recorded responses without ssh.json
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
 │   ├── tmux-target-smoke.sh  real Linux tmux parsing on a private server
 │   ├── cmux-ownership-smoke.sh  native parent snapshots and idle launch ownership
@@ -179,7 +180,10 @@ workgrove/
 ### Tests
 
 Every cmux suite uses `test/fakes/cmux` and the helpers in `test/fakes/rows.sh`.
-The fake reads recorded cmux 0.65.1 responses from `test/fixtures/cmux-0.65.1/`.
+The fake reads the responses recorded from the release that `WG_CMUX_SUPPORTED` names, in `test/fixtures/cmux-<version>/`.
+`wt doctor --record` does not create SSH rows, so the fake reads the SSH creation response from `test/fixtures/cmux-0.65.1/ssh.json`.
+`test/doctor-smoke.sh` fails when the verified release has no fixture folder.
+It also checks that each fixture folder has `REDACTED.txt`, names its version, and contains no personal paths.
 `wt doctor --record test/fixtures` captures these responses and removes private values.
 Sanitization keeps workspace and window refs consistent while replacing their original numbers.
 
