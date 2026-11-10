@@ -39,12 +39,14 @@ max_workers() {
 scenario_scheduling() {
   begin_scenario 'runner bounds workers and executes each task once' || return 0
   local jobs name
-  for jobs in 1 2; do
+  for jobs in 1 2 8 999999999999999999999999; do
     : >"$TEST_ROOT/events"
     RUNNER_JOBS=$jobs capture_runner "$TEST_ROOT/suites with spaces/first.sh" \
       "$TEST_ROOT/suites with spaces/second.sh" "$TEST_ROOT/suites with spaces/third.sh"
     assert_eq "$jobs worker run succeeds" 0 "$RUNNER_RC"
-    assert_eq "$jobs worker limit holds" "$jobs" "$(max_workers)"
+    local expected=$jobs
+    [[ $jobs == 1 || $jobs == 2 ]] || expected=3
+    assert_eq "$jobs worker limit holds" "$expected" "$(max_workers)"
     assert_eq 'each task starts once' 3 "$(awk '$1 == "start" {n++} END {print n+0}' "$TEST_ROOT/events")"
     assert_eq 'each task finishes once' 3 "$(awk '$1 == "end" {n++} END {print n+0}' "$TEST_ROOT/events")"
     for name in first.sh second.sh third.sh; do
@@ -134,7 +136,7 @@ scenario_malformed_status
 scenario_invalid_input() {
   begin_scenario 'runner rejects invalid workers and missing suites' || return 0
   local jobs
-  for jobs in 0 -1 invalid 1.5 08; do
+  for jobs in 0 -1 invalid 1.5 08 ' 2' '2 ' '+2'; do
     RUNNER_JOBS=$jobs capture_runner "$TEST_ROOT/suites with spaces/first.sh"
     assert_eq "$jobs is not a positive decimal worker count" 2 "$RUNNER_RC"
   done
@@ -146,6 +148,122 @@ scenario_invalid_input() {
   end_scenario
 }
 scenario_invalid_input
+
+scenario_default_jobs() {
+  begin_scenario 'worker defaults respect small allocations and cap large hosts' || return 0
+  local rc=0
+  python3 -B - "$REPO/test/runner-jobs.py" <<'PYTHON' || rc=$?
+import importlib.util
+import subprocess
+import sys
+from unittest.mock import Mock, patch
+
+spec = importlib.util.spec_from_file_location("runner_jobs", sys.argv[1])
+jobs = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(jobs)
+for count, expected in (("1", 1), ("2", 2), ("11", 8), ("128", 8), ("0", 1)):
+    with patch.object(jobs.sys, "platform", "darwin"), patch.object(
+            jobs.subprocess, "check_output", return_value=count):
+        assert jobs.default_jobs() == expected
+for error in (OSError(), subprocess.CalledProcessError(1, "sysctl"), ValueError()):
+    with patch.object(jobs.sys, "platform", "darwin"), patch.object(
+            jobs.subprocess, "check_output", side_effect=error):
+        assert jobs.default_jobs() == 1
+capacity = Mock()
+module_spec = Mock()
+for count, expected in ((0, 1), (1, 1), (2, 2), (16, 8), (None, 2)):
+    capacity.effective.return_value = {"observed_cpu_logical": count}
+    with patch.object(jobs.sys, "platform", "linux"), patch.object(
+            jobs.importlib.util, "spec_from_file_location", return_value=module_spec), patch.object(
+            jobs.importlib.util, "module_from_spec", return_value=capacity), patch.object(
+            jobs.os, "sched_getaffinity", return_value={0, 1}, create=True):
+        assert jobs.default_jobs() == expected
+PYTHON
+  assert_eq 'physical cores, quotas, affinity, unknown counts, and the cap select bounded workers' 0 "$rc"
+  RUNNER_RC=0
+  RUNNER_OUT=$(JOBS='' "$BASH" "$REPO/test/run.sh" "$TEST_ROOT/suites with spaces/first.sh" 2>&1) || RUNNER_RC=$?
+  assert_eq 'an explicit empty worker override is invalid' 2 "$RUNNER_RC"
+  end_scenario
+}
+scenario_default_jobs
+
+scenario_default_scheduling() {
+  begin_scenario 'runner applies detected defaults before dispatching workers' || return 0
+  cat >"$TEST_ROOT/default-env" <<'SHIM'
+python3() {
+  if [[ $1 == -B && ${2:-} == */test/runner-jobs.py ]]; then
+    printf '%s\n' "$RUNNER_TEST_ALLOCATION"
+  else
+    command python3 "$@"
+  fi
+}
+SHIM
+  local allocation rc
+  for allocation in 1 2; do
+    : >"$TEST_ROOT/events"
+    rc=0
+    env -u JOBS -u ONLY -u GITHUB_ACTIONS BASH_ENV="$TEST_ROOT/default-env" RUNNER_TEST_ALLOCATION=$allocation \
+      "$BASH" "$REPO/test/run.sh" "$TEST_ROOT/suites with spaces/first.sh" \
+      "$TEST_ROOT/suites with spaces/second.sh" "$TEST_ROOT/suites with spaces/third.sh" \
+      >"$TEST_ROOT/default.log" 2>&1 || rc=$?
+    assert_eq 'the detected worker default succeeds' 0 "$rc"
+    assert_eq 'the detected allocation bounds concurrent workers' "$allocation" "$(max_workers)"
+  done
+  end_scenario
+}
+scenario_default_scheduling
+
+scenario_tiers() {
+  begin_scenario 'fast selection is explicit and cannot replace CI discovery' || return 0
+  local fixture="$TEST_ROOT/runner-copy" suite output rc=0
+  mkdir -p "$fixture/test"
+  cp "$REPO/test/run.sh" "$REPO/test/lib.sh" "$REPO/test/runner-git.sh" "$fixture/test/"
+  local fast=(bash5 branch-config capacity cmux-monitor cmux-ownership commands docs hook-wiring
+    lib metadata named-outputs options python-runtime runner-git runner)
+  for suite in "${fast[@]}" wt remote-new portable ssh-host install added; do
+    cat >"$fixture/test/$suite-smoke.sh" <<'SUITE'
+#!/usr/bin/env bash
+if [[ ${1:-} == --list-scenarios ]]; then printf 'case\tfixture case\n'; exit; fi
+printf '%s\n' "${0##*/}" >>"$RUNNER_TEST_STATE/tier-events"
+SUITE
+  done
+  : >"$TEST_ROOT/tier-events"
+  output=$(env -u ONLY -u GITHUB_ACTIONS JOBS=2 "$BASH" "$fixture/test/run.sh" --fast 2>&1) || rc=$?
+  assert_eq 'the fast tier succeeds' 0 "$rc"
+  assert_eq 'the fast tier executes each included suite once' "${#fast[@]}" "$(wc -l <"$TEST_ROOT/tier-events" | tr -d ' ')"
+  for suite in "${fast[@]}"; do assert_grep 'fast coverage includes its listed suite' "$TEST_ROOT/tier-events" "$suite-smoke.sh"; done
+  assert_eq 'fast coverage excludes end-to-end and newly discovered suites' '' \
+    "$(grep -E '^(wt|remote-new|portable|ssh-host|install|added)-' "$TEST_ROOT/tier-events" || true)"
+  check_contains 'the fast tier reports excluded coverage' "$output" 'checks are excluded.'
+  : >"$TEST_ROOT/tier-events"
+  rc=0
+  env -u ONLY -u GITHUB_ACTIONS JOBS=2 "$BASH" "$fixture/test/run.sh" >"$TEST_ROOT/full-tier.log" 2>&1 || rc=$?
+  assert_eq 'the default tier succeeds' 0 "$rc"
+  assert_eq 'full discovery includes every suite' 21 "$(wc -l <"$TEST_ROOT/tier-events" | tr -d ' ')"
+  assert_grep 'new suites join the full tier automatically' "$TEST_ROOT/tier-events" added-smoke.sh
+  for suite in wt remote-new portable ssh-host install; do
+    assert_grep 'the full tier retains end-to-end coverage' "$TEST_ROOT/tier-events" "$suite-smoke.sh"
+  done
+  printf 'exit 7\n' >>"$fixture/test/options-smoke.sh"
+  rc=0
+  env -u ONLY -u GITHUB_ACTIONS JOBS=2 "$BASH" "$fixture/test/run.sh" --fast >"$TEST_ROOT/fast-failure.log" 2>&1 || rc=$?
+  assert_eq 'fast failures propagate' 1 "$rc"
+  assert_grep 'fast failures retain the task exit status' "$TEST_ROOT/fast-failure.log" '(exit 7)'
+  local logs
+  logs=$(sed -n 's/^runner logs kept in //p' "$TEST_ROOT/fast-failure.log")
+  [[ ! -d $logs ]] || rm -rf "$logs"
+  rc=0
+  GITHUB_ACTIONS=true JOBS=1 "$BASH" "$fixture/test/run.sh" --fast >"$TEST_ROOT/ci-fast.log" 2>&1 || rc=$?
+  assert_eq 'CI cannot request the fast tier' 2 "$rc"
+  rc=0
+  JOBS=1 "$BASH" "$fixture/test/run.sh" --fast "$fixture/test/added-smoke.sh" >/dev/null 2>&1 || rc=$?
+  assert_eq 'fast selection rejects explicit suites' 2 "$rc"
+  rc=0
+  ONLY=fixture JOBS=1 "$BASH" "$fixture/test/run.sh" --fast >/dev/null 2>&1 || rc=$?
+  assert_eq 'fast selection rejects ONLY' 2 "$rc"
+  end_scenario
+}
+scenario_tiers
 
 scenario_discovery() {
   begin_scenario 'wt scenario discovery skips fixtures and tool checks' || return 0
