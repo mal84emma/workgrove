@@ -254,7 +254,7 @@ The coordinator releases it before an independent session-cleanup callback runs.
 Later receipt writes acquire the lock and reject a different generation.
 Process exit also releases the lock, including interrupted self-closure.
 Signal handlers queue cancellation without starting subprocesses.
-The coordinator retries a process probe interrupted by `SIGHUP` up to three times.
+The coordinator makes at most three attempts when `SIGHUP` interrupts a process probe.
 Failed, empty, or invalid group samples cannot prove process absence.
 If group shutdown remains unverified, the lock file retains its owner record for recovery.
 
