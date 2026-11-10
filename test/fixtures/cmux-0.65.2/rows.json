@@ -12,11 +12,28 @@
         "destination": null,
         "state": "disconnected",
         "persistent_daemon_slot": null,
-        "terminal_transport": null
+        "terminal_transport": null,
+        "active_terminal_sessions": 0
       }
     },
     {
       "id": "00000000-0000-4000-8000-000000000001",
+      "ref": "workspace:4",
+      "title": "<title>",
+      "description": "@<test-vm> · <repo>",
+      "current_directory": "<path>",
+      "has_custom_title": true,
+      "remote": {
+        "enabled": false,
+        "destination": null,
+        "state": "disconnected",
+        "persistent_daemon_slot": null,
+        "terminal_transport": null,
+        "active_terminal_sessions": 0
+      }
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
       "ref": "workspace:3",
       "title": "<title>",
       "description": "@<test-vm> · <repo>",
@@ -27,11 +44,12 @@
         "destination": null,
         "state": "disconnected",
         "persistent_daemon_slot": null,
-        "terminal_transport": null
+        "terminal_transport": null,
+        "active_terminal_sessions": 0
       }
     },
     {
-      "id": "00000000-0000-4000-8000-000000000003",
+      "id": "00000000-0000-4000-8000-000000000004",
       "ref": "workspace:2",
       "title": "<title>",
       "description": "@<test-vm> · <repo>",
@@ -42,7 +60,9 @@
         "destination": "<test-vm>",
         "state": "connected",
         "backend": "cmux-tui",
-        "terminal_transport": "<redacted>"
+        "terminal_transport": "<redacted>",
+        "remote_workspace_id": "<redacted>",
+        "active_terminal_sessions": 1
       }
     }
   ]

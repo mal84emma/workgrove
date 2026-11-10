@@ -399,7 +399,11 @@ doctor_record() {
       and (.payload.notification_id | type == "string")' || rc=1
   fi
   if [[ $rc == 0 ]]; then
-    bundle=$(python3 "$WG_LIB_DIR/doctor_fixtures.py" <<<"$bundle") || rc=1
+    bundle=$(
+      # shellcheck source=lib/workgrove/vm/python-runtime.sh
+      source "$WG_LIB_DIR/vm/python-runtime.sh" || exit 1
+      wg_run_python "$WG_LIB_DIR/doctor_fixtures.py" <<<"$bundle"
+    ) || rc=1
   fi
   if [[ $rc == 0 ]]; then
     bundle=$(jq -f "$WG_LIB_DIR/doctor-sanitize.jq" <<<"$bundle") || rc=1

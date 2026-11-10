@@ -9,10 +9,10 @@ def public_keys: [
   "rate_limit","interval_seconds","maximum","methods","access_mode","redacted_fields",
   "body_length","title_length","subtitle_length","delivery","replaced_notification_ids",
   "ref","window_ref","workspace_ref","has_custom_title","terminal_transport","selected_workspace_id","workspace_count",
-  "pids","missing_pids"
+  "pids","missing_pids","remote_workspace_id","active_terminal_sessions"
 ];
 def public_value($key; $value):
-  {backend:["cmux-tui"], state:["connected","disconnected","suspended","connecting"],
+  {backend:["cmux-tui"], state:["connected","disconnected","suspended","connecting","reconnecting"],
    type:["event"], name:["notification.created"], event:["notification.created"],
    id:["wt-native-relay"], rule_id:["wt-native-relay"], action:["run"], delivery:["store"],
    redacted_fields:["title","subtitle","body"], command:["~/.local/bin/cmux-hook --event"]}
@@ -49,7 +49,8 @@ def methods: ["workspace.list","workspace.create","workspace.action","workspace.
     elif type == "array" then map(scrub($key; $full))
     elif type == "string" then
       . as $value
-      | if $key == "destination" then "<test-vm>"
+      | if $value == "" then .
+        elif $key == "destination" then "<test-vm>"
         elif $key == "description" then "@<test-vm> · <repo>"
         elif $key == "title" then "<title>"
         elif $key == "body" or $key == "subtitle" then "<redacted>"

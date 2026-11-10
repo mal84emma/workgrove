@@ -85,6 +85,8 @@ fake_row() {
     | .current_directory="" | .has_custom_title=true
     | .remote.enabled=($host != "") | .remote.destination=(if $host == "" then null else $host end)
     | .remote.state=(if $host == "" then "disconnected" else $state end)
+    | .remote.remote_workspace_id=(if $host == "" then null else "remote-" + $id end)
+    | .remote.active_terminal_sessions=(if $host == "" then 0 else 1 end)
     | .remote.backend=(if $host == "" then null else $backend end)
     | .remote.persistent_daemon_slot=$slot' "$FAKE_CMUX_FIXTURES/rows.json"
 }

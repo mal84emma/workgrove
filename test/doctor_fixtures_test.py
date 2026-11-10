@@ -28,6 +28,7 @@ class FixtureTests(unittest.TestCase):
 
     def test_retention_and_unknown_nested_fields(self):
         original = fixtures.project(self.bundle)
+        self.assertEqual(original, self.bundle)
         changed = copy.deepcopy(self.bundle)
         changed['private-map-key'] = {'command': 'private command'}
         changed['rows']['workspaces'][0]['remote']['unknown'] = {'body': 'private body'}
@@ -46,10 +47,15 @@ class FixtureTests(unittest.TestCase):
                          self.bundle['top']['coding_agents'][0]['resources'])
 
     def test_required_field_mutations(self):
+        remote_index = next(i for i, r in enumerate(self.bundle['rows']['workspaces']) if r['remote']['enabled'])
         paths = [
             ('rows', 'workspaces', 0, key) for key in fixtures.ROW
         ] + [
-            ('rows', 'workspaces', 0, 'remote', key) for key in ('enabled', 'destination', 'state', 'terminal_transport')
+            ('rows', 'workspaces', 0, 'remote', key) for key in (
+                'enabled', 'destination', 'state', 'terminal_transport',
+                'active_terminal_sessions')
+        ] + [
+            ('rows', 'workspaces', remote_index, 'remote', key) for key in ('backend', 'remote_workspace_id')
         ] + [
             ('windows', 0, key) for key in fixtures.WINDOW
         ] + [
@@ -198,6 +204,8 @@ class FixtureTests(unittest.TestCase):
     def test_bad_identity_bindings_fail(self):
         for path, value in [
             (('top', 'caller', 'workspace_ref'), 'workspace:999'),
+            (('top', 'caller', 'window_ref'), 'window:999'),
+            (('top', 'windows', 0, 'ref'), 'window:999'),
             (('top', 'windows', 0, 'workspaces', 0, 'ref'), 'workspace:999'),
             (('windows', 0, 'workspace_count'), 999),
         ]:
@@ -206,6 +214,32 @@ class FixtureTests(unittest.TestCase):
             for part in path[:-1]:
                 current = current[part]
             current[path[-1]] = value
+            self.reject(changed)
+
+    def test_empty_strings_do_not_become_ready_values(self):
+        changed = copy.deepcopy(self.bundle)
+        for document in [changed['rows'], *changed['rows_by_window'].values()]:
+            for current in document['workspaces']:
+                current['remote']['remote_workspace_id'] = ''
+                current['current_directory'] = ''
+        result = self.scrub(fixtures.project(changed))
+        for current in result['rows']['workspaces']:
+            self.assertEqual(current['remote']['remote_workspace_id'], '')
+            self.assertEqual(current['current_directory'], '')
+
+    def test_resource_counts_and_pid_relationships(self):
+        for resource in (self.bundle['top']['coding_agents'][0]['resources'],
+                         self.bundle['top']['windows'][0]['workspaces'][0]['resources']):
+            resource['pids'] = [10001, 20002]
+            resource['process_count'] = 2
+        result = self.scrub(fixtures.project(self.bundle))
+        agents = result['top']['coding_agents'][0]['resources']
+        row = result['top']['windows'][0]['workspaces'][0]['resources']
+        self.assertEqual(agents['pids'], row['pids'])
+        self.assertTrue(set(agents['pids']).isdisjoint({10001, 20002}))
+        for pids, count in [([3], 2), ([3, 3], 2), ([True], 1), (['3'], 1)]:
+            changed = copy.deepcopy(self.bundle)
+            changed['top']['coding_agents'].append({'resources': {'pids': pids, 'process_count': count}})
             self.reject(changed)
 
 

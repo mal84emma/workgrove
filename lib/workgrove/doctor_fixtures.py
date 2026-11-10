@@ -10,7 +10,8 @@ METHODS = (
     'surface.read_text',
 )
 ROW = ('id', 'ref', 'title', 'description', 'current_directory', 'has_custom_title', 'remote')
-REMOTE = ('enabled', 'destination', 'state', 'backend', 'persistent_daemon_slot', 'terminal_transport')
+REMOTE = ('enabled', 'destination', 'state', 'backend', 'persistent_daemon_slot', 'terminal_transport',
+          'remote_workspace_id', 'active_terminal_sessions')
 WINDOW = ('id', 'index', 'key', 'selected_workspace_id', 'workspace_count')
 RESOURCES = ('process_count', 'pids', 'missing_pids')
 
@@ -75,14 +76,17 @@ def row(value):
     require(type(value['has_custom_title']) is bool)
     remote = object_(value['remote'])
     require(type(remote['enabled']) is bool)
-    for field in ('destination', 'backend', 'terminal_transport'):
+    for field in ('destination', 'backend', 'terminal_transport', 'remote_workspace_id'):
         if field in remote:
             require(remote[field] is None or type(remote[field]) is str)
     string(remote['state'])
     require('destination' in remote and 'terminal_transport' in remote)
+    integer(remote['active_terminal_sessions'])
     if remote['enabled']:
         string(remote['destination'])
         string(remote['backend'])
+        if remote['state'] == 'connected':
+            require('remote_workspace_id' in remote)
     if 'persistent_daemon_slot' in remote and remote['persistent_daemon_slot'] is not None:
         integer(remote['persistent_daemon_slot'])
     result = keep(value, ROW)
@@ -115,7 +119,7 @@ def project(bundle):
         require(window['id'] in scoped)
     require(set(scoped) == {w['id'] for w in windows})
     require(len({w['id'] for w in windows}) == len(windows))
-    # Separate calls can race. Reject conflicting bindings rather than concealing them.
+    # Separate calls can race. Reject conflicting bindings.
     by_id, by_ref = {}, {}
     for document in [rows, *scoped.values()]:
         ids = [r['id'] for r in document['workspaces']]
@@ -134,6 +138,10 @@ def project(bundle):
         require(window['workspace_count'] == len(members))
         require(window['selected_workspace_id'] is None or
                 window['selected_workspace_id'] in {r['id'] for r in members})
+    window_refs = {r['id']: d['window_ref'] for d in scoped.values() if 'window_ref' in d
+                   for r in d['workspaces']}
+    scoped_refs = [d['window_ref'] for d in scoped.values() if 'window_ref' in d]
+    require(len(set(scoped_refs)) == len(scoped_refs))
     top = object_(bundle['top'])
     caller = object_(top['caller'])
     if caller['workspace_id'] is not None:
@@ -143,21 +151,29 @@ def project(bundle):
             reference(caller[field], kind)
     if caller.get('workspace_ref') is not None and caller['workspace_id'] in by_id:
         require(caller['workspace_ref'] == by_id[caller['workspace_id']])
+    if caller.get('window_ref') is not None and caller['workspace_id'] in window_refs:
+        require(caller['window_ref'] == window_refs[caller['workspace_id']])
     agents = []
     for agent in array(top['coding_agents']):
         agents.append({'resources': resources(object_(agent)['resources'])})
     top_windows = []
+    top_ids = []
     for window in array(top['windows']):
         if 'ref' in window:
             reference(window['ref'], 'window')
         members = []
         for current in array(window['workspaces']):
             identifier(current['id'])
+            top_ids.append(current['id'])
             if 'ref' in current:
                 reference(current['ref'], 'workspace')
                 require(by_id.get(current['id'], current['ref']) == current['ref'])
+                require(by_ref.get(current['ref'], current['id']) == current['id'])
+            if 'ref' in window and current['id'] in window_refs:
+                require(window['ref'] == window_refs[current['id']])
             members.append(dict(keep(current, ('id', 'ref')), resources=resources(current['resources'])))
         top_windows.append(dict(keep(window, ('ref',)), workspaces=members))
+    require(len(set(top_ids)) == len(top_ids))
     notifications = array(bundle['notifications'])
     for notification in notifications:
         identifier(notification['id'])

@@ -195,7 +195,7 @@ Sanitization keeps workspace and window refs consistent while replacing their or
 It also replaces process identifiers consistently within the capture.
 
 The recorder validates every captured object before it selects examples.
-Missing fields, changed field names, invalid types, and missing required methods fail recording.
+Missing required fields, changed field names, invalid types, and missing required methods fail recording.
 Unknown fields disappear, including their nested contents.
 The complete automation remains because doctor compares its full structure.
 Unknown automation keys receive placeholders so differences remain observable without disclosing private text.
@@ -213,7 +213,7 @@ These fields form the recorded contract inventory:
 | Object | Retained fields and types | Consumers |
 |---|---|---|
 | Row | UUID `id`; workspace `ref`; string `title` and `current_directory`; nullable string `description`; boolean `has_custom_title`; object `remote` | Adapter lookup, title repair, hook, removal, and `fake_row` |
-| Row remote data | Boolean `enabled`; nullable string `destination` and `terminal_transport`; string `state`; optional nullable string `backend`; optional nullable integer `persistent_daemon_slot` | Remote adapter, hook, and `fake_row`; enabled rows require string destination and backend |
+| Row remote data | Boolean `enabled`; nullable string `destination` and `terminal_transport`; optional nullable string `remote_workspace_id`; integer `active_terminal_sessions`; string `state`; optional nullable string `backend`; optional nullable integer `persistent_daemon_slot` | Remote adapter, title repair, hook, and `fake_row`; enabled rows require string destination and backend; connected remote rows require `remote_workspace_id` |
 | Window | UUID `id`; integer `index` and `workspace_count`; boolean `key`; nullable UUID `selected_workspace_id` | Window enumeration and fake window state |
 | Scoped row response | Array `workspaces`; optional window `window_ref`; UUID map key | Adapter enumeration and fake replay |
 | Top caller | Nullable UUID `workspace_id`; optional nullable workspace `workspace_ref` and window `window_ref` | Doctor and `fake_top`; caller hints do not prove ownership |
