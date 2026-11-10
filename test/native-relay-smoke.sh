@@ -228,6 +228,44 @@ scenario_title_repair() {
 }
 scenario_title_repair
 
+scenario_hook_reattachment() {
+  begin_scenario 'the Mac hook repairs the first reattachment after original row closure' || return 0
+  record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"reattach"}'
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  local original first repaired out had_close=0
+  [[ ! -f $FAKE_CMUX_STATE/mutate-close ]] || had_close=1
+  touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
+  printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  original=$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'the original hook row opens successfully' true "$(jq '.effects.desktop == false' <<<"$out")"
+  first=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows.json")
+  lacks "$CMUX_LOG" '--action rename'
+  "$REPO/test/fakes/cmux" workspace close "$first"
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'the hook reattaches after closure' true "$(jq '.effects.desktop == false' <<<"$out")"
+  repaired=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows.json")
+  for _ in 1 2 3; do "$REPO/test/fakes/cmux" workspace list --json >/dev/null; done
+  assert_eq 'the hook receives a new row UUID' true "$([[ $repaired != "$first" ]] && echo true || echo false)"
+  has "$CMUX_LOG" "workspace-action --workspace $repaired --action rename --title reattach"
+  assert_eq 'the hook restores the requested title and description' 'reattach|@test-vm · repo' "$(jq -r '.workspaces[-1] | [.title,.description] | join("|")' "$FAKE_CMUX_STATE/rows.json")"
+  lacks "$CMUX_LOG" 'workspace select'
+  lacks "$CMUX_LOG" 'workspace close'
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'later hook attach succeeds' true "$(jq '.effects.desktop == false' <<<"$out")"
+  lacks "$CMUX_LOG" 'ssh test-vm'
+  has "$CMUX_LOG" "workspace select $repaired"
+  assert_eq 'later hook attach creates no duplicate' 2 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'reattachment preserves the sending row' "$original" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")"
+  rm "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/ssh-connect-after"
+  if [[ $had_close == 0 ]]; then rm "$FAKE_CMUX_STATE/mutate-close"; fi
+  end_scenario
+}
+scenario_hook_reattachment
+
 scenario_title_budget() {
   begin_scenario 'title verification reserves the Mac hook budget for remaining operations' || return 0
   fake_cmux_clock

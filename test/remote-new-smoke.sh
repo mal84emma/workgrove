@@ -163,11 +163,29 @@ WT
 printf '#!/bin/sh\necho Linux\n' >"$TEST_ROOT/remote/.local/bin/uname"
 cat >"$TEST_ROOT/remote/.local/bin/tmux" <<'TMUX'
 #!/bin/sh
+if [ -n "${REMOTE_SESSION_STATE:-}" ]; then
+  printf '%s\n' "$*" >>"$REMOTE_SESSION_STATE/calls.log"
+  target=''; previous=''
+  for argument do
+    if [ "$previous" = -t ]; then target=${argument#=}; target=${target%:}; fi
+    previous=$argument
+  done
+  case $1 in
+    kill-session) rm -f "$REMOTE_SESSION_STATE/$target"; exit 0 ;;
+    kill-server) rm -f "$REMOTE_SESSION_STATE/"wt-*; exit 0 ;;
+  esac
+fi
 if [ "${REMOTE_OUTPUT_MODE:-}" = running ]; then
   case $1 in list-panes) echo /dev/pts/123 ;; list-clients) ;; esac
   exit 0
 fi
-if [ "$1" = has-session ]; then echo 'no server running on /tmp/fake' >&2; exit 1; fi
+if [ "$1" = has-session ]; then
+  if [ -n "${REMOTE_SESSION_STATE:-}" ]; then
+    [ ! -f "$REMOTE_SESSION_STATE/$target" ] || exit 0
+    printf "can't find session: %s\n" "$3" >&2
+  else echo 'no server running on /tmp/fake' >&2; fi
+  exit 1
+fi
 TMUX
 for tool in claude codex; do
   printf '#!/bin/sh\necho --no-daemon\n' >"$TEST_ROOT/remote/.local/bin/$tool"
@@ -240,6 +258,9 @@ scenario_row_titles() {
   rm "$FAKE_CMUX_STATE/ssh.json"
   touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
   printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  local -x REMOTE_SESSION_STATE="$TEST_ROOT/title-sessions"
+  mkdir -p "$REMOTE_SESSION_STATE"
+  printf 'unrelated session state\n' >"$REMOTE_SESSION_STATE/wt-other-notes"
   local window=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC first repaired title
   local unrelated; unrelated=$(fake_row DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD notes '@other-vm · other' other-vm)
   fake_rows "$unrelated" >"$FAKE_CMUX_STATE/rows.json"
@@ -272,6 +293,8 @@ scenario_row_titles() {
   assert_grep 'removal closes the repaired UUID' "$TEST_ROOT/cmux.log" "workspace close $repaired"
   assert_eq 'removal leaves only the unrelated row' 1 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$window.json")"
   assert_eq 'removal preserves the unrelated row' "$unrelated" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows/$window.json")"
+  assert_eq 'removal preserves the unrelated session state' 'unrelated session state' "$(cat "$REMOTE_SESSION_STATE/wt-other-notes")"
+  check "$(if ! grep -Eq '^kill-(session|server)' "$REMOTE_SESSION_STATE/calls.log"; then echo yes; fi)" 'removal killed a session after the task session had exited'
   rm "$FAKE_CMUX_STATE/ssh-reset-first-reattach"
   touch "$FAKE_CMUX_STATE/ssh-reset-burst"
   printf 1 >"$FAKE_CMUX_STATE/next-row"
@@ -284,6 +307,7 @@ scenario_row_titles() {
   assert_eq 'the first three burst rows require repair' 3 "$(grep -c -- '--action rename' "$TEST_ROOT/cmux.log")"
   check "$(if ! grep -q '^workspace select' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'burst creation changed focus'
   assert_eq 'the unrelated row retains its title and description' "$unrelated" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows/$window.json")"
+  assert_eq 'burst creation preserves the unrelated session state' 'unrelated session state' "$(cat "$REMOTE_SESSION_STATE/wt-other-notes")"
   end_scenario
 }
 
