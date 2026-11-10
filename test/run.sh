@@ -14,20 +14,47 @@ source "$REPO/test/lib.sh"
 # shellcheck source=test/runner-git.sh
 source "$REPO/test/runner-git.sh"
 
-JOBS=${JOBS:-4}
-[[ $JOBS =~ ^[1-9][0-9]*$ ]] || { echo 'JOBS must be a positive integer' >&2; exit 2; }
 if [[ ${1:-} == -h || ${1:-} == --help ]]; then
-  echo 'usage: JOBS=4 bash test/run.sh [suite.sh ...]'
+  echo 'usage: bash test/run.sh [--full | --fast] [suite.sh ...]'
+  echo 'Full discovery is the default and required before merging. --fast is a local subset.'
+  echo 'JOBS overrides the CPU-aware default (1 to 8 workers). Use a positive decimal integer.'
   echo 'Use ONLY with one selected suite. KEEP=1 preserves all runner logs.'
   exit 0
 fi
+TIER=full
+if [[ ${1:-} == --fast || ${1:-} == --full ]]; then TIER=${1#--}; shift; fi
+if [[ $TIER == fast ]]; then
+  if (($# > 0)) || [[ -n ${ONLY:-} ]]; then
+    echo '--fast cannot be combined with suite arguments or ONLY' >&2
+    exit 2
+  fi
+  if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+    echo '--fast is local only; CI must run the full suite' >&2
+    exit 2
+  fi
+fi
+if [[ ! ${JOBS+x} ]]; then JOBS=$(python3 -B "$REPO/test/runner-jobs.py"); fi
+[[ $JOBS =~ ^[1-9][0-9]*$ ]] || { echo 'JOBS must be a positive integer' >&2; exit 2; }
 if [[ -n ${ONLY:-} && $# -ne 1 ]]; then
   echo 'ONLY requires one suite argument; for example: ONLY="11.*" bash test/run.sh test/wt-smoke.sh' >&2
   exit 2
 fi
 SUITES=("$@")
 # Discover every smoke suite, including docs-smoke.sh, for local and CI runs.
-if ((${#SUITES[@]} == 0)); then SUITES=("$REPO"/test/*-smoke.sh); fi
+if [[ $TIER == fast ]]; then
+  # This allowlist excludes repository teardown, installation, portable recovery, and remote creation.
+  FAST_SUITES=(bash5 branch-config capacity cmux-monitor cmux-ownership commands docs hook-wiring
+    lib metadata named-outputs options python-runtime runner-git runner)
+  for suite in "${FAST_SUITES[@]}"; do SUITES+=("$REPO/test/$suite-smoke.sh"); done
+  echo 'Fast tier: unit checks, command fakes, metadata, CPU limits, runtime, docs, and runner checks.'
+  echo 'Full end-to-end teardown, installation, portable recovery, and remote creation checks are excluded.'
+  printf 'Included suites:'; printf ' %s' "${FAST_SUITES[@]}"; printf '\n'
+elif ((${#SUITES[@]} == 0)); then
+  SUITES=("$REPO"/test/*-smoke.sh)
+  echo 'Full tier: every discovered smoke suite (required for CI and before merging).'
+else
+  echo 'Selected suites: a partial check; run the full suite before merging.'
+fi
 for suite in "${SUITES[@]}"; do
   [[ -f $suite ]] || { printf 'suite not found: %s\n' "$suite" >&2; exit 2; }
 done
@@ -88,18 +115,35 @@ fi
 
 queue_task() {
   local suite=$1 id=$2 name=$3 suite_index=$4 priority=5
-  # Estimates in seconds come from JOBS=4 task times. Add new long tasks here after measuring them.
+  # Re-measure with JOBS=4 KEEP=1 and use the reported task times. See docs/development.md.
   case ${suite##*/}:$id in
-    remote-new-smoke.sh:scenario_preflight_recovery) priority=60 ;;
-    wt-smoke.sh:scenario_connected_attach) priority=55 ;;
-    install-smoke.sh:) priority=45 ;;
-    native-relay-smoke.sh:) priority=40 ;;
-    wt-smoke.sh:scenario_cmux) priority=35 ;;
-    doctor-smoke.sh:) priority=30 ;;
-    wt-smoke.sh:scenario_squash_merge) priority=25 ;;
-    github-guard-smoke.sh:) priority=20 ;;
-    portable-smoke.sh:*) priority=15 ;;
-    ssh-host-smoke.sh:*|wt-smoke.sh:scenario_self_rm_vm|remote-new-smoke.sh:scenario_result_versions) priority=12 ;;
+    wt-smoke.sh:scenario_cmux) priority=149 ;;
+    wt-smoke.sh:scenario_self_rm_vm) priority=107 ;;
+    wt-smoke.sh:scenario_squash_merge) priority=106 ;;
+    wt-smoke.sh:scenario_rm_refusals) priority=73 ;;
+    wt-smoke.sh:scenario_teardown_raw_tracked) priority=68 ;;
+    wt-smoke.sh:scenario_teardown_destinations) priority=63 ;;
+    doctor-smoke.sh:) priority=58 ;;
+    wt-smoke.sh:scenario_teardown_recovery_edges) priority=52 ;;
+    wt-smoke.sh:scenario_teardown_final_proof) priority=51 ;;
+    wt-smoke.sh:scenario_teardown_astra_sidecars) priority=46 ;;
+    wt-smoke.sh:scenario_teardown_review_git) priority=38 ;;
+    portable-smoke.sh:python-9) priority=35 ;;
+    remote-new-smoke.sh:scenario_preflight_recovery) priority=33 ;;
+    native-relay-smoke.sh:) priority=32 ;;
+    install-smoke.sh:|wt-smoke.sh:scenario_teardown_astra_files) priority=30 ;;
+    metadata-smoke.sh:|wt-smoke.sh:scenario_teardown_branch_configuration) priority=28 ;;
+    wt-smoke.sh:scenario_connected_attach|wt-smoke.sh:scenario_prune_agrees) priority=26 ;;
+    wt-smoke.sh:scenario_teardown_coordinator_death|wt-smoke.sh:scenario_codex_caller_context) priority=25 ;;
+    wt-smoke.sh:scenario_include_and_setup) priority=24 ;;
+    wt-smoke.sh:scenario_teardown_command_completion) priority=23 ;;
+    wt-smoke.sh:scenario_teardown_hook_lock|wt-smoke.sh:scenario_teardown_raw_filters) priority=22 ;;
+    wt-smoke.sh:scenario_stacked_squash_base|wt-smoke.sh:scenario_rm_fetch_notice|wt-smoke.sh:scenario_teardown_astra_hashes) priority=20 ;;
+    wt-smoke.sh:scenario_teardown_review_preservation) priority=19 ;;
+    wt-smoke.sh:scenario_teardown_copy_schema) priority=18 ;;
+    github-guard-smoke.sh:|wt-smoke.sh:scenario_teardown_astra_registrations) priority=17 ;;
+    wt-smoke.sh:scenario_close_confirmation_failure|lib-smoke.sh:) priority=15 ;;
+    portable-smoke.sh:*|ssh-host-smoke.sh:*|remote-new-smoke.sh:scenario_result_versions) priority=12 ;;
     wt-smoke.sh:*|remote-new-smoke.sh:*|hosts-smoke.sh:|update-smoke.sh:) priority=8 ;;
     capacity-smoke.sh:*|docs-smoke.sh:) priority=1 ;;
   esac
