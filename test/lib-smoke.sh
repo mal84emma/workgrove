@@ -293,6 +293,7 @@ scenario_title_poll_deadline() {
       connecting) row=$(jq '.remote.state="connecting"' <<<"$row") ;;
       binding) row=$(jq '.remote.remote_workspace_id=null' <<<"$row") ;;
       terminal) row=$(jq '.remote.active_terminal_sessions=0' <<<"$row") ;;
+      ready) row=$(jq '.fake_remote_title="workspace-99"' <<<"$row") ;;
     esac
     fake_rows "$row" >"$FAKE_CMUX_STATE/rows.json"
     fake_queue ssh "$(fake_ssh_response "$id" test-vm)"
@@ -330,7 +331,7 @@ now=$(cat "$TITLE_CLOCK")
 printf '%s' "$((now + 1))" >"$TITLE_CLOCK"
 CLOCK
   chmod +x "$TEST_ROOT/title-clock/"*
-  for mode in reset late-reset retained rename-fail ineffective late-ineffective delayed timeout exhausted missing malformed wrong-host wrong-uuid window surface disconnected invalid closed verify-host verify-state; do
+  for mode in reset late-reset retained rename-fail ineffective late-ineffective delayed-rename delayed timeout exhausted missing malformed catalog-fail catalog-malformed catalog-missing catalog-machine catalog-id catalog-duplicate catalog-stale catalog-cursor catalog-pending refresh-host refresh-binding refresh-machine refresh-closed refresh-state wrong-host wrong-uuid window surface disconnected invalid closed verify-host verify-state; do
     FAKE_CMUX_STATE="$TEST_ROOT/title-$mode"
     fake_cmux_init "$FAKE_CMUX_STATE"
     touch "$FAKE_CMUX_STATE/materialize-ssh"
@@ -338,24 +339,18 @@ CLOCK
     DEADLINE=115; CMUX_ERROR=''; CMUX_ROWS_JSON='{"workspaces":[]}'
     rc=0
     case $mode in
-      retained) ;;
+      retained|catalog-pending) ;;
       *) touch "$FAKE_CMUX_STATE/ssh-reset-title" ;;
     esac
     case $mode in
-      late-reset) fake_queue workspace-list "$(fake_rows "$(fake_row "$id" task '' test-vm)")" ;;
+      late-reset) printf 6 >"$FAKE_CMUX_STATE/ssh-publish-after" ;;
       delayed) printf 3 >"$FAKE_CMUX_STATE/ssh-connect-after" ;;
       timeout) printf 100 >"$FAKE_CMUX_STATE/ssh-connect-after" ;;
       exhausted) DEADLINE=102 ;;
       rename-fail) fake_failure workspace-rename 1 'rename refused' ;;
       ineffective) fake_queue workspace-rename '{}' ;;
-      late-ineffective)
-        local pending final
-        pending=$(fake_rows "$(fake_row "$id" workspace-99 '' test-vm)")
-        final=$(fake_rows "$(fake_row "$id" task '' test-vm)")
-        for _ in 1 2 3; do fake_queue workspace-list "$pending"; done
-        fake_queue workspace-rename '{}'
-        fake_queue workspace-list "$final"
-        ;;
+      late-ineffective) printf 100 >"$FAKE_CMUX_STATE/rename-publish-after" ;;
+      delayed-rename) printf 2 >"$FAKE_CMUX_STATE/rename-publish-after" ;;
       missing) fake_queue workspace-list '{"workspaces":[]}' ;;
       malformed) fake_queue workspace-list '{broken' ;;
       wrong-host|wrong-uuid|window|surface|disconnected|invalid|closed|verify-host|verify-state)
@@ -374,14 +369,50 @@ CLOCK
           valid=$(fake_rows "$(fake_row "$id" workspace-99 '' test-vm)")
           fake_queue workspace-list "$valid"
           fake_queue workspace-list "$valid"
-          fake_queue workspace-list "$valid"
+          printf '%s' "$valid" >"$TEST_ROOT/catalog-row.json"
+          fake_queue surface-catalog "$(fake_surface_catalog ssh:test-vm "$TEST_ROOT/catalog-row.json")"
         fi
         fake_queue workspace-list "$(fake_rows "$row")" ;;
+    esac
+    case $mode in
+      catalog-*)
+        local graph
+        fake_rows "$(fake_row "$id" task '' test-vm)" >"$TEST_ROOT/catalog-row.json"
+        graph=$(fake_surface_catalog ssh:test-vm "$TEST_ROOT/catalog-row.json")
+        case $mode in
+          catalog-fail) fake_failure surface-catalog 1 'catalog unavailable' ;;
+          catalog-malformed) graph='{broken' ;;
+          catalog-missing) graph='{}' ;;
+          catalog-machine) graph=$(jq '.cloud_states[0].machine="ssh:other"' <<<"$graph") ;;
+          catalog-id) graph=$(jq '.cloud_states[0].workspaces[0].id="another-remote-id"' <<<"$graph") ;;
+          catalog-duplicate) graph=$(jq '.cloud_states += .cloud_states' <<<"$graph") ;;
+          catalog-stale) graph=$(jq '.cloud_states[0].freshness="stale"' <<<"$graph") ;;
+          catalog-cursor) graph=$(jq '.cloud_states[0].cursor=null' <<<"$graph") ;;
+          catalog-pending) graph=$(jq '.cloud_states[0].workspaces[0].name="workspace-99"' <<<"$graph") ;;
+        esac
+        printf '%s' "$graph" >"$FAKE_CMUX_STATE/surface-catalog.json" ;;
+    esac
+    case $mode in
+      refresh-*)
+        local before_refresh after_refresh
+        before_refresh=$(fake_rows "$(fake_row "$id" workspace-99 '' test-vm)")
+        after_refresh=$before_refresh
+        case $mode in
+          refresh-host) after_refresh=$(jq '.workspaces[0].remote.destination="other-vm"' <<<"$after_refresh") ;;
+          refresh-binding) after_refresh=$(jq '.workspaces[0].remote.remote_workspace_id="another-id"' <<<"$after_refresh") ;;
+          refresh-machine) after_refresh=$(jq '.workspaces[0].remote.machine="ssh:other"' <<<"$after_refresh") ;;
+          refresh-closed) after_refresh='{"workspaces":[]}' ;;
+          refresh-state) after_refresh=$(jq '.workspaces[0].remote.state="disconnected"' <<<"$after_refresh") ;;
+        esac
+        fake_queue workspace-list "$before_refresh"
+        fake_queue workspace-list "$after_refresh"
+        printf '%s' "$before_refresh" >"$TEST_ROOT/catalog-row.json"
+        fake_queue surface-catalog "$(fake_surface_catalog ssh:test-vm "$TEST_ROOT/catalog-row.json")" ;;
     esac
     cmux_row_create_ssh test-vm task '@test-vm · repo' true --no-focus || rc=$?
     calls=$(cat "$FAKE_CMUX_STATE/calls.log")
     case $mode in
-      reset|late-reset|retained|delayed)
+      reset|late-reset|retained|delayed|delayed-rename)
         assert_eq "$mode completes creation" 0 "$rc"
         assert_eq "$mode keeps the requested title" task "$(jq -r '.workspaces[0].title' "$FAKE_CMUX_STATE/rows.json")"
         assert_eq "$mode keeps the description" '@test-vm · repo' "$(jq -r '.workspaces[0].description' "$FAKE_CMUX_STATE/rows.json")"
@@ -983,6 +1014,7 @@ scenario_fake_command_validation() {
   fake_cmux_init "$FAKE_CMUX_STATE"
   printf '{}\n' >"$FAKE_CMUX_STATE/agent-hook-status.json"
   for command in 'events --invalid-option' 'automation show wrong-rule' '--json agent completely-invalid' \
+    'surface ls --json ssh:test-vm' 'surface ls --json --refresh ssh:test-vm --invalid' \
     'top --jsno' 'workspace list --jsno' '--json list-windows --nonsense' '--json list-notifications --nonsense'; do
     read -r -a args <<<"$command"
     rc=0

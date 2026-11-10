@@ -60,6 +60,7 @@ Angle brackets mark values supplied by the caller.
 | `cmux workspace select <id>` | `cmux_select` selects an existing row. |
 | `cmux workspace close <id> [--force]` | `close_row` uses `--force` for the caller's own row or a newly created row during failed setup. |
 | `cmux ssh <host> --name <title> --no-focus --command <command> --json --id-format uuids` | `cmux_row_create_ssh` creates a VM row before tagging it. Requested selection follows description setup and title verification. |
+| `cmux surface ls --json --refresh <machine>` | `cmux_row_check_ssh_title` reads the accepted VM name for the row's remote identity. |
 | `cmux workspace-action --workspace <uuid> --action rename --title <title>` | `cmux_row_check_ssh_title` repairs a changed title after connection and reads it again. |
 | `cmux workspace-action --workspace <id> --action set-description --description <description>` | `cmux_row_create_ssh` and `cmux_row_open_ssh` write the second line. |
 | `cmux top --workspace <id> --json` | `cmd_run` checks launch attribution; `remote_row_idle` checks SSH transport ownership. |
@@ -138,10 +139,11 @@ Additional fields in captured fixtures do not establish additional runtime requi
 | Row identity | `.id` is a nonempty string. `.title` is a string. `.description` is null or a string. | `cmux.sh`: `cmux_rows_load`, `cmux_find_row`, `row_label`, `cmux_row_create_ssh`, and the `ROW_JQ` definitions. |
 | Remote identity | `.remote` is null or an object. `.remote.enabled` is null or boolean. `.remote.destination` is null or a string. | `cmux.sh`: `cmux_rows_load`, `ROW_JQ`, `from_row_on_host`. |
 | Native backend | `.remote.enabled` must be true. `.remote.backend` must equal `cmux-tui`. | [bin/cmux-hook](../bin/cmux-hook): the top-level `--event` handler. |
-| SSH title readiness | `.remote.state == "connected"`, nonempty `.remote.remote_workspace_id`, and positive integer `.remote.active_terminal_sessions`. | `cmux.sh`: `cmux_row_check_ssh_title`. |
+| SSH title readiness | `.remote.state == "connected"`, nonempty `.remote.machine` and `.remote.remote_workspace_id`, and positive integer `.remote.active_terminal_sessions`. | `cmux.sh`: `cmux_row_check_ssh_title`. |
 | Remote state | `.remote.state` must equal `connected` for automatic input or client replacement. | `cmux.sh`: `row_remote_field`. `recovery.sh`: `reattach_shell_row`, `reinit_task_client`. |
 | Row directory | `.current_directory` identifies local rows that might hold the target worktree. | `cmux.sh`: `check_row_removal`. [task.sh](../lib/workgrove/task.sh): `check_identity`. |
 | Agent status | `.caller.workspace_id` identifies the reported caller row. `.coding_agents[].resources.process_count` must be nonnegative numbers. | `cmux.sh`: `row_agent` validates live process ancestry and, for Codex, the saved launcher identity. `doctor.sh`: `doctor_mac` also checks `.caller` as an object. |
+| Published VM title | One matching `.cloud_states[]` with current freshness, journaled sync, a versioned cursor, and the bound remote workspace's name. | `cmux.sh`: `cmux_row_check_ssh_title`. |
 | Notifications | The outer value is an array. `.id` and `.workspace_id` identify a record. `.title` and `.body` must be strings. | `cmux.sh`: `cmux_notifications`. `doctor.sh`: `doctor_mac`. `bin/cmux-hook`: the `--event` handler. |
 | Automation event | `.name == "notification.created"`, `.workspace_id`, and `.payload.notification_id` identify the request. The hook requires UUIDs for both IDs. | `bin/cmux-hook`: the `--event` handler. `doctor.sh`: `doctor_record`. |
 | Capabilities | `.methods` is an array with every method in the probe table. | `doctor.sh`: `doctor_mac`. |
@@ -243,10 +245,14 @@ The rule gives a hook 20 seconds.
 The close handler uses 12 seconds before closing, then five seconds for session cleanup.
 `cmux_row_create_ssh` adds three seconds for cleanup if the description update fails.
 The capped runner requires Perl and stops without executing the command if Perl is unavailable.
-Title verification uses at most eight seconds and reserves two seconds of the caller's deadline for remaining operations.
+Title verification reserves two seconds of the caller's deadline for remaining operations.
+Without a caller deadline, it uses a 30-second budget with the same reserve.
 The same deadline caps polling sleeps, including intervals set through `WG_POLL_INTERVAL`.
-It observes the row again at least one second after readiness before accepting or repairing the title.
-After a rename, it repeats that observation interval before accepting the result.
+It forces a catalog refresh to read the accepted VM title, then checks the local row again by UUID.
+Both titles must match the requested title before verification succeeds.
+A pending publication can keep the local title optimistic, so a matching local title alone cannot complete verification.
+A changed local title receives one UUID-targeted rename.
+Verification then waits for both titles to match, within the same deadline.
 A failed repair leaves the tagged row open and reports its UUID and a manual rename command.
 
 cmux 0.65.2's [SSH status projection](https://github.com/manaflow-ai/cmux/blob/12023d89feb5425c766ba05e8d8e4cfc176e3991/Sources/RemoteTui/Workspace%2BSSHTuiStatus.swift)
@@ -256,7 +262,11 @@ The [SSH coordinator](https://github.com/manaflow-ai/cmux/blob/12023d89feb5425c7
 creates an unnamed remote row, publishes the requested title, and binds its terminal asynchronously.
 The [CLI](https://github.com/manaflow-ai/cmux/blob/12023d89feb5425c766ba05e8d8e4cfc176e3991/CLI/cmux.swift)
 accepts a row UUID with `workspace-action --action rename --title`.
-These source contracts inform the bounded check; they do not establish live acceptance for [#196](https://github.com/mal84emma/workgrove/issues/196).
+The [catalog export](https://github.com/manaflow-ai/cmux/blob/12023d89feb5425c766ba05e8d8e4cfc176e3991/Sources/Surfaces/SurfaceCatalog%2BSnapshot.swift#L180)
+keeps accepted daemon names separate from optimistic local titles.
+The [surface payload](https://github.com/manaflow-ai/cmux/blob/12023d89feb5425c766ba05e8d8e4cfc176e3991/Sources/Surfaces/SurfaceSocketCommands.swift#L1256)
+exposes each graph's freshness, cursor, and workspace names.
+[PR #206](https://github.com/mal84emma/workgrove/pull/206#issuecomment-6777579241) records publication conflicts and the limits of fixed observation intervals.
 
 The [relay investigation](vm-open-relay.md#fix) records additional upstream limits.
 The automation default admits one event per second; the repository rule uses a 0.001-second interval and maximum 1024.
