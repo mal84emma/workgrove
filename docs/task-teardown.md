@@ -315,6 +315,8 @@ Local observation checks the saved row ID and current matching or ambiguous rows
 Creation can reconcile already-absent local rows without closing anything.
 The Mac can reconcile an absent VM row and session before retrying a requested task name.
 Mac confirmation requires absence of matching and ambiguous task rows, including rows with edited descriptions and remaining duplicate rows.
+A same-host, same-repository row with a generated `workspace-N` title also blocks confirmation.
+A failed title publication can leave that row's task identity unresolved; observation never renames or closes it.
 The controller resolves repository aliases before checking Mac rows and binds later VM operations to that resolved path.
 The VM returns a digest of the verified receipt after row-acknowledged observation.
 The Mac checks row absence again, then supplies that digest to the creation retry through `--closed-receipt`.

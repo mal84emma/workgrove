@@ -68,13 +68,16 @@ cmux_row_field() {
 }
 
 # A task row can reconnect even when ownership rules prevent its closure.
+# Failed publication can leave a same-repository row with a generated workspace-N title.
 # Return 0 for absence, 1 for a candidate row, and 2 for uncertain evidence.
 check_task_row_absence() {
   local rows rc=0
   rows=$(rows_json checked) || { CMUX_ERROR='cannot confirm task row absence'; return 2; }
   jq -e --arg title "$1" --arg repo "$(repo_id "$2")" --arg host "$3" --arg row "${4:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
     any(.workspaces[]; ($row != "" and .id == $row) or task_row($title; $repo; $host; $sep)
-      or unclaimed_row($title; $host; $sep))' <<<"$rows" >/dev/null || rc=$?
+      or unclaimed_row($title; $host; $sep)
+      or ($host != "" and on_host($host; $sep) and (desc($sep)[1:] | join($sep)) == $repo
+        and (.title | test("^workspace-[0-9]+$"))))' <<<"$rows" >/dev/null || rc=$?
   case $rc in
     1) return 0 ;;
     0) cmux_error 'task row absence is unverified; a matching, ambiguous, or original row remains' ;;

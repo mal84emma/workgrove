@@ -20,6 +20,7 @@ lib_register_scenario scenario_prompt_order "remote briefs preserve explicit and
 lib_register_scenario scenario_interrupted_setup "interrupted setup retains the brief, agent and model"
 lib_register_scenario scenario_nested_commands "machine requests do not reach setup hooks or nested commands"
 lib_register_scenario scenario_vm_failures "VM failures name the command, host, status, signal, and recovery command"
+lib_register_scenario scenario_unresolved_title "unresolved retained VM titles cannot authorize cleanup or name reuse"
 lib_register_scenario scenario_row_host_identity "task generations retain their original controller alias"
 lib_register_scenario scenario_remote_confirmation "VM creation metadata cannot waive Mac confirmation"
 lib_register_scenario scenario_self_removal_reuse "self-removed VM names need receipt-bound Mac confirmation"
@@ -848,6 +849,70 @@ scenario_vm_failures() {
   invoke_wt -H fakevm version
   assert_eq 'successful VM commands keep their status' 0 "$WT_RC"
   assert_eq 'successful VM commands add no diagnostic' '' "$WT_STDERR"
+  end_scenario
+}
+
+scenario_unresolved_title() {
+  begin_scenario "$1" || return 0
+  local r="$TEST_ROOT/remote/repo" receipt="$TEST_ROOT/remote/repo/.git/wt/teardown/task.json"
+  local window=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC row_id=00000000-0000-4000-8000-000000000123 unrelated option
+  unresolved_task() {
+    env -u CODEX_SANDBOX -u TMUX -u TMUX_PANE WT_HOST=fakevm \
+      HOME="$TEST_ROOT/remote" PATH="$TEST_ROOT/remote/.local/bin:/usr/bin:/bin" \
+      CMUX_SSH_ATTEMPT_ID=fixture "$REPO/bin/wt" "$@"
+  }
+  CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  rm -f "$TEST_ROOT/remote-new"
+  prepare_cmux
+  CMUX_MODE="title-lifecycle"
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  unrelated=$(fake_rows "$(fake_row other-repo-row workspace-888 '@fakevm · other' fakevm)" \
+    "$(fake_row other-host-row workspace-999 '@other-vm · repo' other-vm)")
+  printf '%s' "$unrelated" >"$FAKE_CMUX_STATE/rows.json"
+  printf '%s' "$unrelated" >"$FAKE_CMUX_STATE/rows/$window.json"
+  fake_top other 0 | jq --arg id "$row_id" '.windows[0].workspaces=[{id:$id,resources:{pids:[],process_count:0}}]' >"$FAKE_CMUX_STATE/top.json"
+  touch "$FAKE_CMUX_STATE/ssh-reset-title" "$FAKE_CMUX_STATE/mutate-close"
+  fake_failure workspace-rename 1 'title publication failed'
+  : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm new task -r "$r" -a none
+  assert_eq 'failed title publication retains its newly created task' 1 "$WT_RC"
+  check "$([[ -d $r/.worktrees/task ]] && echo yes)" 'title failure removed Git work'
+  assert_eq 'failed publication leaves a generated title on the known UUID' true \
+    "$(jq --arg id "$row_id" 'any(.workspaces[]; .id == $id and (.title | test("^workspace-[0-9]+$")) and .description == "@fakevm · repo")' "$FAKE_CMUX_STATE/rows/$window.json")"
+  check "$(if ! grep -qF 'workspace close' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'title failure closed its retained row'
+  unresolved_task rm task -r "$r" --defer-close >/dev/null
+  assert_eq 'Git cleanup preserves its pending receipt' close_requested "$(jq -r .stage "$receipt")"
+  for option in observe normal new; do
+    : >"$TEST_ROOT/cmux.log"
+    case $option in
+      observe) invoke_wt -H fakevm rm task -r "$r" --observe-only ;;
+      normal) invoke_wt -H fakevm rm task -r "$r" ;;
+      new) invoke_wt -H fakevm new task -r "$r" -a none --no-workspace ;;
+    esac
+    assert_eq "$option cannot confirm an unresolved task row" 1 "$WT_RC"
+    assert_eq "$option keeps cleanup pending" close_requested "$(jq -r .stage "$receipt")"
+    assert_absent "$r" .worktrees/task
+    assert_eq "$option preserves every original row" 3 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$window.json")"
+    check "$(if ! grep -Eq 'workspace close|--action rename' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'unresolved confirmation changed a row'
+  done
+  rm "$FAKE_CMUX_STATE/fail/workspace-rename"
+  "$REPO/test/fakes/cmux" workspace-action --workspace "$row_id" --action rename --title task >/dev/null
+  invoke_wt -H fakevm rm task -r "$r" --observe-only
+  assert_eq 'observation still refuses the repaired but present row' 1 "$WT_RC"
+  invoke_wt -H fakevm rm task -r "$r"
+  assert_eq 'verified original-row cleanup permits completion after repair' 0 "$WT_RC"
+  assert_eq 'verified cleanup records completion' complete "$(jq -r .stage "$receipt")"
+  assert_eq 'other hosts and repositories retain their generated rows' "$(jq -c .workspaces <<<"$unrelated")" "$(jq -c .workspaces "$FAKE_CMUX_STATE/rows/$window.json")"
+  invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+  assert_eq 'unrelated generated rows do not block verified name reuse' 0 "$WT_RC"
+  unresolved_task rm task -r "$r" --defer-close >/dev/null
+  invoke_wt -H fakevm rm task -r "$r"
+  assert_eq 'replacement cleanup also preserves unrelated generated rows' 0 "$WT_RC"
+  rm -f "$FAKE_CMUX_STATE/ssh-reset-title" "$TEST_ROOT/remote-new"
+  : >"$TEST_ROOT/cmux.log"
+  unset -f unresolved_task
+  CMUX_MODE=alive
   end_scenario
 }
 
