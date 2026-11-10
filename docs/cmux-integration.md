@@ -45,7 +45,7 @@ The hook path checks reject changes to `PATH`, `HOME`, `ENV`, `BASH_ENV`, `ZDOTD
 
 Unless a row names another file, each reader below is in [cmux.sh](../lib/workgrove/cmux.sh).
 `cmux_call` runs the selected command-line interface (CLI), records failures, and normally sets `CMUX_QUIET=1`.
-The Mac hook supplies its `capped` runner instead.
+The Mac hook supplies the shared `cmux_capped` runner instead.
 Angle brackets mark values supplied by the caller.
 
 | Command and flags | Reader and use |
@@ -59,7 +59,8 @@ Angle brackets mark values supplied by the caller.
 | `cmux workspace create --name <repo-shell-title> --description <description> --cwd <repo>` | `cmd_task` in `bin/wt` creates a local repository shell through `cmux_create`. |
 | `cmux workspace select <id>` | `cmux_select` selects an existing row. |
 | `cmux workspace close <id> [--force]` | `close_row` uses `--force` for the caller's own row or a newly created row during failed setup. |
-| `cmux ssh <host> --name <title> --no-focus --command <command> --json --id-format uuids` | `cmux_row_create_ssh` creates a VM row before tagging it. Requested selection follows the description update. |
+| `cmux ssh <host> --name <title> --no-focus --command <command> --json --id-format uuids` | `cmux_row_create_ssh` creates a VM row before tagging it. Requested selection follows description setup and title verification. |
+| `cmux workspace-action --workspace <uuid> --action rename --title <title>` | `cmux_row_check_ssh_title` repairs a changed title after connection and reads it again. |
 | `cmux workspace-action --workspace <id> --action set-description --description <description>` | `cmux_row_create_ssh` and `cmux_row_open_ssh` write the second line. |
 | `cmux top --workspace <id> --json` | `cmd_run` checks launch attribution; `remote_row_idle` checks SSH transport ownership. |
 | `cmux top --workspace <id> --processes --json` | `row_agent` checks caller identity, provider ownership, and sampled process ancestry before removal. |
@@ -137,6 +138,7 @@ Additional fields in captured fixtures do not establish additional runtime requi
 | Row identity | `.id` is a nonempty string. `.title` is a string. `.description` is null or a string. | `cmux.sh`: `cmux_rows_load`, `cmux_find_row`, `row_label`, `cmux_row_create_ssh`, and the `ROW_JQ` definitions. |
 | Remote identity | `.remote` is null or an object. `.remote.enabled` is null or boolean. `.remote.destination` is null or a string. | `cmux.sh`: `cmux_rows_load`, `ROW_JQ`, `from_row_on_host`. |
 | Native backend | `.remote.enabled` must be true. `.remote.backend` must equal `cmux-tui`. | [bin/cmux-hook](../bin/cmux-hook): the top-level `--event` handler. |
+| SSH title readiness | `.remote.state == "connected"`, nonempty `.remote.remote_workspace_id`, and positive integer `.remote.active_terminal_sessions`. | `cmux.sh`: `cmux_row_check_ssh_title`. |
 | Remote state | `.remote.state` must equal `connected` for automatic input or client replacement. | `cmux.sh`: `row_remote_field`. `recovery.sh`: `reattach_shell_row`, `reinit_task_client`. |
 | Row directory | `.current_directory` identifies local rows that might hold the target worktree. | `cmux.sh`: `check_row_removal`. [task.sh](../lib/workgrove/task.sh): `check_identity`. |
 | Agent status | `.caller.workspace_id` identifies the reported caller row. `.coding_agents[].resources.process_count` must be nonnegative numbers. | `cmux.sh`: `row_agent` validates live process ancestry and, for Codex, the saved launcher identity. `doctor.sh`: `doctor_mac` also checks `.caller` as an object. |
@@ -230,17 +232,29 @@ They do not establish compatibility with an unverified release.
 | cmux 0.65 closes a newly created VM row without `--force`. | `cmux.sh`: the measured comment in `close_row`. The implementation still supplies `--force` during failed setup cleanup. |
 | Local agent rows require `--force` to close without confirmation. | `cmux.sh`: `close_row` supplies the flag only for self or new cleanup. |
 | Identical terminal, title, and body content is suppressed for five seconds, regardless of notification ID. | `cmux.sh`: the comment and random `request_id` generation in `cmux_notify`. |
-| Row listing takes about 0.02 seconds; SSH creation takes about four seconds. Painting takes 1.2–2.9 seconds afterward. | `bin/cmux-hook`: the recorded timings in `capped` explain its 15-second call budget. |
+| Row listing takes about 0.02 seconds; SSH creation takes about four seconds. Painting takes 1.2–2.9 seconds afterward. | `cmux.sh`: `cmux_capped` enforces the Mac hook's 15-second call budget. |
 | The VS Code CLI normally exits within one second. | `bin/cmux-hook`: the `wt-open` handler waits once. A running process or zero exit permits request dismissal. |
 | A background child loses cmux socket authorization when the hook exits. | `bin/cmux-hook`: the `wt-attach` handler calls `attach_row` synchronously to preserve process ancestry. |
 | A new tmux pane can inherit another row's identity from the server's global environment. A reattach changes only session values. | `cmux-tui-hook.sh`: comments and session refresh before helper execution. `common.sh`: `relay_env` refreshes before requests. |
 | Native terminal exit closes the Mac row. An open SSH row can reconnect and recreate a killed session. | `common.sh`: `tmux_cmd` executes the tmux client. `bin/cmux-hook`: `wt-close` closes the row before killing the session. |
 
 The rule gives a hook 20 seconds.
-`capped` in `bin/cmux-hook` normally shares a 15-second deadline between calls.
+`cmux_capped` in `lib/workgrove/cmux.sh` shares the Mac hook's 15-second deadline between calls.
 The close handler uses 12 seconds before closing, then five seconds for session cleanup.
 `cmux_row_create_ssh` adds three seconds for cleanup if the description update fails.
-If Perl is unavailable, `capped` runs calls without its process-group timeout.
+The capped runner requires Perl and stops without executing the command if Perl is unavailable.
+Title verification uses at most eight seconds and reserves two seconds of the caller's deadline for remaining operations.
+It observes the row again at least one second after readiness before accepting or repairing the title.
+A failed repair leaves the tagged row open and reports its UUID and a manual rename command.
+
+cmux 0.65.2's [SSH status projection](https://github.com/manaflow-ai/cmux/blob/12023d89feb5425c766ba05e8d8e4cfc176e3991/Sources/RemoteTui/Workspace%2BSSHTuiStatus.swift)
+reports the shared host link's state separately from the row's remote binding and terminal count.
+A connected host alone therefore cannot establish that a new row has finished attaching.
+The [SSH coordinator](https://github.com/manaflow-ai/cmux/blob/12023d89feb5425c766ba05e8d8e4cfc176e3991/Sources/RemoteTui/SSHTuiWorkspaceCoordinator.swift)
+creates an unnamed remote row, publishes the requested title, and binds its terminal asynchronously.
+The [CLI](https://github.com/manaflow-ai/cmux/blob/12023d89feb5425c766ba05e8d8e4cfc176e3991/CLI/cmux.swift)
+accepts a row UUID with `workspace-action --action rename --title`.
+These source contracts inform the bounded check; they do not establish live acceptance for [#196](https://github.com/mal84emma/workgrove/issues/196).
 
 The [relay investigation](vm-open-relay.md#fix) records additional upstream limits.
 The automation default admits one event per second; the repository rule uses a 0.001-second interval and maximum 1024.

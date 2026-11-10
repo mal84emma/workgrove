@@ -634,6 +634,62 @@ cmux_notify() {
   fi
 }
 
+# Bound CLI calls by the caller's absolute deadline, including their child processes.
+cmux_capped() {
+  local left=$(( DEADLINE - $(date +%s) )) perl
+  ((left > 0)) || return 142
+  perl=$(command -v perl) || return 127
+  # shellcheck disable=SC2016  # Perl expands its own variables.
+  "$perl" -e 'my $t = shift; my $p = fork; defined $p or exit 127;
+    unless ($p) { setpgrp(0, 0); exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill 9, -$p; waitpid $p, 0; exit 142 };
+    alarm $t; waitpid $p, 0; my $s = $?; exit(($s & 127) ? 128 + ($s & 127) : ($s >> 8))' "$left" "$@"
+}
+
+# Check only the UUID returned by creation. Leave two seconds for selection and hook dismissal.
+cmux_row_check_ssh_title() {
+  local id=$1 host=$2 title=$3 now limit row state ready_at=0 renamed=0
+  now=$(date +%s); limit=$((now + 8))
+  if [[ -n ${DEADLINE:-} ]] && ((DEADLINE - 2 < limit)); then limit=$((DEADLINE - 2)); fi
+  local DEADLINE=$limit
+  # Resolve the direct CLI before wrapping it. The hook already supplies its capped runner.
+  if ((${#CMUX_RUN[@]} == 0)); then
+    local c; c=$(cmux_bin) || return 1
+    CMUX_RUN=(env CMUX_QUIET=1 "$c")
+  fi
+  if [[ ${CMUX_RUN[0]} != cmux_capped ]]; then
+    local CMUX_RUN=(cmux_capped "${CMUX_RUN[@]}")
+  fi
+  while (( $(date +%s) < DEADLINE )); do
+    cmux_rows_load checked || return 1
+    row=$(jq -ec --arg id "${id,,}" --arg host "$host" '
+      [.workspaces[] | select((.id | ascii_downcase) == $id)]
+      | select(length == 1) | .[0]
+      | select(.remote.enabled == true and .remote.destination == $host)
+      | select(.remote.state | type == "string")' <<<"$CMUX_ROWS_JSON") || return 1
+    state=$(jq -r '.remote.state' <<<"$row")
+    case $state in
+      connected)
+        # The host link connects before this row binds its remote terminal.
+        jq -e '.remote.remote_workspace_id | type == "string" and length > 0' <<<"$row" >/dev/null || { ready_at=0; wg_sleep; continue; }
+        jq -e '.remote.active_terminal_sessions | type == "number" and . > 0 and floor == .' <<<"$row" >/dev/null || { ready_at=0; wg_sleep; continue; }
+        now=$(date +%s)
+        # Observe again after readiness: title projection can follow the connection snapshot.
+        if ((ready_at == 0)); then ready_at=$((now + 2)); fi
+        if ((now < ready_at)); then wg_sleep; continue; fi
+        ((now < DEADLINE)) || return 1
+        if jq -e --arg title "$title" '.title == $title' <<<"$row" >/dev/null; then return 0; fi
+        ((renamed == 0)) || return 1
+        cmux_call workspace-action --workspace "$id" --action rename --title "$title" >/dev/null 2>&1 || return 1
+        renamed=1
+        ;;
+      connecting|reconnecting) ready_at=0; wg_sleep ;;
+      *) return 1 ;;
+    esac
+  done
+  return 1
+}
+
 # cmux_row_create_ssh <host> <title> <description> <command> [--no-focus]
 # The caller must provide a complete CMUX_ROWS_JSON snapshot from before creation.
 cmux_row_create_ssh() {
@@ -665,6 +721,10 @@ cmux_row_create_ssh() {
     return 1;
   }
   if cmux_call workspace-action --workspace "$ref" --action set-description --description "$description" >/dev/null 2>&1; then
+    if ! cmux_row_check_ssh_title "$ref" "$host" "$title"; then
+      cmux_error "could not verify the connected title for cmux row $ref; kept the row open. On the Mac: $(shell_join cmux workspace-action --workspace "$ref" --action rename --title "$title")"
+      return 1
+    fi
     if ((focus)); then cmux_select "$ref" || return; fi
     return 0
   fi

@@ -20,6 +20,7 @@ lib_register_scenario scenario_prompt_order "remote briefs preserve explicit and
 lib_register_scenario scenario_interrupted_setup "interrupted setup retains the brief, agent and model"
 lib_register_scenario scenario_nested_commands "machine requests do not reach setup hooks or nested commands"
 lib_register_scenario scenario_vm_failures "VM failures name the command, host, status, signal, and recovery command"
+lib_register_scenario scenario_row_titles "VM row titles survive first reattachment and burst creation"
 lib_scenario_discovery
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/wt-remote-new.XXXXXX")
 TEST_ROOT=$(cd "$TEST_ROOT" && pwd -P)
@@ -38,10 +39,12 @@ UNAME
 source "$REPO/test/fakes/rows.sh"
 fake_cmux_init "$TEST_ROOT/cmux-state"
 ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/local/bin/cmux"
+touch "$FAKE_CMUX_STATE/materialize-ssh"
 rm "$FAKE_CMUX_STATE/calls.log"
 ln -s "$TEST_ROOT/cmux.log" "$FAKE_CMUX_STATE/calls.log"
 
 prepare_cmux() {
+  [[ $CMUX_MODE != title-lifecycle ]] || return 0
   local before after
   rm -rf "$FAKE_CMUX_STATE/fail" "$FAKE_CMUX_STATE/queue" "$FAKE_CMUX_STATE/after"
   mkdir -p "$FAKE_CMUX_STATE/fail" "$FAKE_CMUX_STATE/queue"
@@ -227,6 +230,60 @@ run_wt() {
   invoke_wt "${args[@]}"
 }
 check() { if [[ "$1" ]]; then pass; else fail "$2; output: $WT_OUT"; fi; }
+
+scenario_row_titles() {
+  begin_scenario "$1" || return 0
+  prepare_cmux
+  CMUX_MODE="title-lifecycle"
+  rm "$FAKE_CMUX_STATE/ssh.json"
+  touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
+  printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  local window=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC first repaired title
+  local unrelated; unrelated=$(fake_row DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD notes '@other-vm · other' other-vm)
+  fake_rows "$unrelated" >"$FAKE_CMUX_STATE/rows.json"
+  fake_rows "$unrelated" >"$FAKE_CMUX_STATE/rows/$window.json"
+  fake_top other 0 >"$FAKE_CMUX_STATE/top.json"
+  invoke_wt -H fakevm new task -a none -r "$TEST_ROOT/remote/repo"
+  assert_eq 'the original row opens' 0 "$WT_RC"
+  first=$(jq -r '.workspaces[] | select(.title == "task") | .id' "$FAKE_CMUX_STATE/rows/$window.json")
+  check "$(if ! grep -q -- '--action rename' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'the original row was renamed'
+  "$REPO/test/fakes/cmux" workspace close "$first"
+  : >"$TEST_ROOT/cmux.log"
+  REMOTE_OUTPUT_MODE=running
+  invoke_wt -H fakevm attach task -r "$TEST_ROOT/remote/repo"
+  assert_eq 'the first reattachment opens a repaired row' 0 "$WT_RC"
+  repaired=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows/$window.json")
+  # Advance pending projections before later attach, as a live connection does without wt polling.
+  for _ in 1 2 3; do "$REPO/test/fakes/cmux" workspace list --json --window "$window" >/dev/null; done
+  assert_eq 'the connected row retains the requested title' task "$(jq -r '.workspaces[-1].title' "$FAKE_CMUX_STATE/rows/$window.json")"
+  assert_eq 'reattachment creates a distinct row UUID' true "$([[ -n $repaired && $repaired != "$first" ]] && echo true || echo false)"
+  assert_grep 'the first reattachment repairs its UUID' "$TEST_ROOT/cmux.log" "workspace-action --workspace $repaired --action rename --title task"
+  assert_grep 'direct attach selects only the repaired UUID' "$TEST_ROOT/cmux.log" "workspace select $repaired"
+  : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm attach task -r "$TEST_ROOT/remote/repo"
+  check "$([[ $WT_RC == 0 ]] && echo yes)" 'later attach did not find the repaired row'
+  check "$(if ! grep -q '^ssh fakevm' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'later attach created a duplicate'
+  assert_eq 'later attach keeps exactly one task row' 2 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$window.json")"
+  REMOTE_OUTPUT_MODE=normal
+  invoke_wt -H fakevm rm task -r "$TEST_ROOT/remote/repo"
+  check "$([[ $WT_RC == 0 ]] && echo yes)" 'removal did not find the repaired row'
+  assert_grep 'removal closes the repaired UUID' "$TEST_ROOT/cmux.log" "workspace close $repaired"
+  assert_eq 'removal leaves only the unrelated row' 1 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$window.json")"
+  assert_eq 'removal preserves the unrelated row' "$unrelated" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows/$window.json")"
+  rm "$FAKE_CMUX_STATE/ssh-reset-first-reattach"
+  touch "$FAKE_CMUX_STATE/ssh-reset-burst"
+  printf 1 >"$FAKE_CMUX_STATE/next-row"
+  : >"$TEST_ROOT/cmux.log"
+  for title in burst1 burst2 burst3 burst4 burst5; do
+    invoke_wt -H fakevm new "$title" -a none -r "$TEST_ROOT/remote/repo"
+    assert_eq "$title opens with its requested title" 0 "$WT_RC"
+    assert_eq "$title remains findable" 1 "$(jq --arg title "$title" '[.workspaces[] | select(.title == $title and .description == "@fakevm · repo")] | length' "$FAKE_CMUX_STATE/rows/$window.json")"
+  done
+  assert_eq 'the first three burst rows require repair' 3 "$(grep -c -- '--action rename' "$TEST_ROOT/cmux.log")"
+  check "$(if ! grep -q '^workspace select' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'burst creation changed focus'
+  assert_eq 'the unrelated row retains its title and description' "$unrelated" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows/$window.json")"
+  end_scenario
+}
 
 scenario_installation_preflight() {
   begin_scenario "$1" || return 0
