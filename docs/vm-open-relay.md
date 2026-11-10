@@ -20,9 +20,7 @@ It stopped before sending a notification:
 wt: no cmux relay socket in this session; run the line below on the Mac
 ```
 
-The VM at `<test-vm>` had an older installed `wt`, from workgrove commit `c58eebfa69ff0fc1073e224100e020fc85ee20f0`.
-The task branch had the same TCP-only sender check.
-The installed VM script's SHA-256 was `d395fd696834e05c0dd1f3882555214be6cc22c1e7a0286d6e502c368ae98279`.
+The [original diagnostic evidence](https://github.com/mal84emma/workgrove/pull/20#issuecomment-6775483639) identifies the installed TCP-only sender and its checksum.
 
 Sending through `cmux-tui notify` reaches the Mac's notification list.
 However, that delivery path bypasses `notifications.hooks` in cmux 0.65.
@@ -36,7 +34,6 @@ The hook's event names and configuration did not cause this failure.
 
 A second identity problem occurs when tmux starts new panes from an existing server.
 The pane can inherit another row's `CMUX_TUI_TERMINAL_ID`.
-The first direct native test reached the Mac, but cmux recorded it under another task on the same VM.
 The fix records the current row's native identity in its task's tmux session before attachment.
 
 ## Fix
@@ -107,95 +104,18 @@ The Mac-side open command starts VS Code directly and does not need this automat
 
 ## Verification on the test VM
 
-Machine names and runtime paths below use privacy placeholders.
-Replace the placeholders before running the commands.
-
-Both commands passed with temporary installed fixes:
-
-```bash
-wt -H <test-vm> open -r <repo> relay-probe
-# Inside the VM task row:
-wt open relay-probe -r <repo>
-```
-
-VS Code's status output reported the remote window:
-
-```text
-window [4] (relay-probe [SSH: <test-vm>] — SSH: <test-vm>)
-```
-
-A VM-side `wt new` created a second task through `wt-attach`.
-Its row stayed unfocused, and `wt open` worked without a manual identity correction.
-The `wt-close` relay removed that task's worktree, Mac row, and tmux session.
-The Mac hook log at `~/.local/state/cmux-hook.log` recorded these requests:
-
-```text
-2026-10-08T12:01:30 handled wt-open for workspace 2AD6A732-463A-47F0-B45C-ACF38065EB27
-2026-10-08T12:02:26 handled wt-attach for workspace 2AD6A732-463A-47F0-B45C-ACF38065EB27
-2026-10-08T12:03:10 handled wt-open for workspace 43676295-744C-4184-9775-5A65E5AEBB9C
-2026-10-08T12:05:52 handled wt-close for workspace 43676295-744C-4184-9775-5A65E5AEBB9C
-```
-
-Both throwaway tasks were removed after testing.
-The original Mac hook symlink, Mac automation configuration, and VM `wt` symlink were restored.
-No installed file remains changed.
-Neither `install.sh` nor `wt update` ran on the Mac or VM.
-
-Follow-up tests attached `relay-second-fixed` to a tmux session with an obsolete TCP identity.
-The native attachment cleared that identity and saved its current terminal without manual corrections.
-Mac-side open passed.
-Two identical VM open operations arrived 158 milliseconds apart with different `request_id` values.
-Both reached the hook and exited successfully.
-Native open also passed after the test deliberately restored an obsolete TCP value alongside the valid native identity.
-
-The hook recorded both repeated requests and the mixed-transport request:
-
-```text
-2026-10-08T13:29:15 handled wt-open for workspace 1ADA0A4D-C4F0-4CC6-A05B-F8FE80F40634
-2026-10-08T13:29:15 handled wt-open for workspace 1ADA0A4D-C4F0-4CC6-A05B-F8FE80F40634
-2026-10-08T13:29:56 handled wt-open for workspace 1ADA0A4D-C4F0-4CC6-A05B-F8FE80F40634
-```
+Native requests use the task session's current terminal identity and a distinct `request_id` for repeated operations.
+[PR #20's archived evidence](https://github.com/mal84emma/workgrove/pull/20#issuecomment-6775483639) preserves the October 8, 2026 checks, logs, and restoration limits.
 
 ## Verification on cmux 0.65.1
 
-On 2026-10-16, the live checks used cmux 0.65.1, build 110, commit `8a853dcc9`.
-The VM ran a temporary copy of workgrove commit `1c9cad7` in a disposable repository.
-The Mac used its existing `wt-native-relay` automation rule.
-No installed workgrove scripts or automation configuration were replaced.
+Native rows use their own lifecycle; the legacy suspended-row recovery path is removed.
+[PR #78's archived evidence](https://github.com/mal84emma/workgrove/pull/78#issuecomment-6775485011) preserves the October 16, 2026 connection observations and cross-window checks.
 
-These checks passed:
-
-- A Claude turn in the native VM task showed Running, then Idle after completion.
-- `wt open` from that task opened its remote folder in VS Code on the Mac.
-  VS Code's status output listed the task's remote window.
-- `wt rm` from a second native task removed its worktree, closed its row, and ended its tmux session.
-  The task's tmux session held `WT_CMUX_CLOSE_ON_EXIT=1`.
-- The two existing VM task rows and their tmux sessions remained present after self-removal.
-
-The native row reported `backend: cmux-tui` and `state: connected`.
-Its status payload omitted `persistent_daemon_slot`.
-The user moved the row into a second window, disconnected the Mac's network for 90 seconds, and reconnected it.
-The user then put the Mac to sleep for 30 seconds and woke it.
-A command in the row confirmed that the connection worked afterward.
-The recorder polled every two seconds while awake and logged state changes.
-Every recorded state for the live row was connected.
-It observed neither `suspended` nor `persistent_daemon_slot`.
-The user also saw no `[ssh:suspended]` label.
-
-The moved row kept its UUID, title, and `workspace:N` ref.
-The caller-window list omitted it, but workgrove's combined window lookup found it.
-Description updates and targeted input reached it by UUID from the original window.
-Self-removal then closed that row and ended its session across windows.
-
-The [cmux 0.65.1 native setup](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/Workspace%2BSSHTui.swift)
-clears the legacy remote session controller and its active controller ID.
-Its [native status payload](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/Workspace%2BSSHTuiStatus.swift)
-omits `persistent_daemon_slot`.
-The [native coordinator](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/SSHTuiWorkspaceCoordinator.swift)
-reports connecting, connected, or error states through its own lifecycle.
-Together, the source and live checks answer issue #62 Step 1 for supported cmux 0.65.1.
-The legacy suspended-row recovery and its stale TCP listener cleanup were removed.
-These checks do not verify cmux 0.65.2.
+The [0.65.1 native setup](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/Workspace%2BSSHTui.swift) clears the legacy remote session controller and its active ID.
+The [native status payload](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/Workspace%2BSSHTuiStatus.swift) omits `persistent_daemon_slot`.
+The [native coordinator](https://github.com/manaflow-ai/cmux/blob/v0.65.1/Sources/RemoteTui/SSHTuiWorkspaceCoordinator.swift) reports connecting, connected, or error states through its own lifecycle.
+These historical checks do not verify another release; use the [compatibility log](cmux-integration.md#cmux-compatibility-log) for current support.
 
 ## Smoke tests
 

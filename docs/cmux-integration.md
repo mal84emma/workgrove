@@ -270,8 +270,8 @@ Support does not include the removed cmux 0.64 TCP relay paths.
 | cmux version | Status | Verified on | Verified behavior |
 |---|---|---|---|
 | 0.65.2 (build 113, `12023d89f`) | Supported; every check passed except `--reattach` | 2026-11-10 | [PR #201](https://github.com/mal84emma/workgrove/pull/201) records the Mac and VM checks. |
-| 0.65.1 (build 110, `8a853dcc9`) | Historical; native VM, cross-window, and SSH UUID checks passed | 2026-10-16; 2026-10-27 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. The [SSH creation measurements](#ssh-creation-identity-on-0651) verify UUID responses. |
-| 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
+| 0.65.1 (build 110, `8a853dcc9`) | Historical | 2026-10-16; 2026-10-27 | [Native and cross-window evidence](https://github.com/mal84emma/workgrove/pull/78#issuecomment-6775485011); [SSH UUID evidence](https://github.com/mal84emma/workgrove/pull/182). |
+| 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | [Self-removal evidence](https://github.com/mal84emma/workgrove/pull/19). |
 
 [PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to cmux 0.65.0's row-closing behavior.
 Local self-removal uses cmux's `--force` only for the verified caller's own row.
@@ -283,56 +283,8 @@ Keep check results on GitHub, not in this log.
 
 ### SSH creation identity on 0.65.1
 
-Measurements on 2026-10-27 used cmux 0.65.1 (110), commit `8a853dcc9`.
-Both `cmux --help` and `cmux ssh --help` returned status 0 with empty stderr.
-Global help advertises `--id-format uuids`.
-SSH help documents `--no-focus` and `--command`.
-The probes created disposable rows on the two supported VMs.
-Each command used a unique title, `--no-focus`, `StrictHostKeyChecking=yes`, and a harmless command with a bounded sleep.
+SSH creation requires both `--json` and `--id-format uuids` to identify the new row without discovery.
+[PR #182](https://github.com/mal84emma/workgrove/pull/182) preserves the 0.65.1 measurements, failures, fixture provenance, and title limitations.
 
-| Presentation flags | Position | Observed stdout | Status |
-|---|---|---|---|
-| None | None | Text with a row reference and a surface reference. | 0 |
-| `--json` | Before `ssh`, and after its arguments. | JSON with `.workspace_ref`; no `.workspace_id`. | 0 |
-| `--id-format uuids` | Before `ssh`, and after its arguments. | Text with two UUIDs; the first matched the new row. | 0 |
-| `--json --id-format uuids` | Before `ssh`, and after its arguments. | JSON with `.workspace_id` matching the new row. | 0 |
-
-All seven forms ran on one supported VM and returned empty stderr.
-The explicit JSON UUID form also passed on the second supported VM.
-JSON alone accepts the flag but does not provide the stable UUID.
-The explicit format identifies the row separately from the window and surface.
-One response reported `connecting`; the matching row later reported `connected`.
-Identity therefore does not require a wait for the connection.
-
-Complete snapshots confirmed that all eight UUIDs were new and matched the requested host and title.
-Creation preserved the selected row and the key-window flag.
-Ordinary cleanup returned status 0 for all eight rows.
-Some removals appeared after the close response.
-The final snapshot contained exactly the nine preexisting row UUIDs and no probe UUID.
-
-One initial short command exited before row validation.
-No row action used its unverified response.
-
-The changed adapter also passed one live creation check on each supported VM.
-Both rows received the requested second line without selection changes.
-Ordinary cleanup removed both rows and preserved the nine original rows.
-
-The private `wt doctor --record` capture succeeded.
-The complete doctor command returned status 1 because `top` reported a null caller.
-Four existing custom-hook warnings remained.
-
-The recorder reads contract snapshots and does not create SSH rows.
-The separate creation capture supplies only measured identity fields to [ssh.json](../test/fixtures/cmux-0.65.1/ssh.json).
-The capture uses the same [doctor sanitizer](../lib/workgrove/doctor-sanitize.jq).
-No unrelated row data enters that fixture.
-
-All eight observed rows retained their requested titles and reported `has_custom_title: true`.
-The [row projection](https://github.com/manaflow-ai/cmux/blob/8a853dcc97010c7e57f656b1e2f4050dc7582b41/Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Coordinator/Workspace/ControlCommandCoordinator%2BWorkspaceReads.swift#L22) defines this field from a nonblank custom title.
-It does not establish connection readiness, title provenance, or permanent title ownership.
-
-The [setting definition](https://github.com/manaflow-ai/cmux/blob/8a853dcc97010c7e57f656b1e2f4050dc7582b41/Packages/macOS/CmuxSettings/Sources/CmuxSettings/Keys/AutomationCatalogSection.swift#L34) describes `automation.workspaceAutoNaming` as agent-conversation summarization.
-The repository template enables this setting.
-The probes did not change it.
-The [title implementation](https://github.com/manaflow-ai/cmux/blob/8a853dcc97010c7e57f656b1e2f4050dc7582b41/Sources/Workspace%2BTitleOwnership.swift#L229) rejects automatic writes over existing user or remote titles.
-These source findings do not establish the cause of [#47](https://github.com/mal84emma/workgrove/issues/47).
-The probes did not exercise its first tmux reattachment trigger or reapply titles.
+`has_custom_title` reports a nonblank custom title; it does not prove readiness, title provenance, or permanent ownership.
+The [pinned source findings](https://github.com/mal84emma/workgrove/issues/47#issuecomment-6455287919) distinguish this field from `automation.workspaceAutoNaming` and leave the reattachment defect unresolved by those probes.

@@ -36,28 +36,7 @@ In a task's tmux session, the agent gets the wrong terminal ID:
 - A reattach gives the row a new terminal.
   A running agent keeps the terminal ID that it started with.
 
-On the test VM, the agent of a new task had the terminal ID of another live row.
-cmux-tui recorded the agent's state on that terminal.
-The new task's row showed no status (output redacted):
-
-```text
-$ tmux show-environment -t =wt-wt-demo-ssh-status-test-a CMUX_TUI_TERMINAL_ID
-CMUX_TUI_TERMINAL_ID=term_26c3…
-$ tmux show-environment -g CMUX_TUI_TERMINAL_ID
-CMUX_TUI_TERMINAL_ID=term_d221…
-$ tr '\0' '\n' < /proc/<agent pid>/environ | grep CMUX_TUI_TERMINAL_ID
-CMUX_TUI_TERMINAL_ID=term_d221…
-$ cmux sidebar-state --workspace <test row> | grep status_count
-status_count=0
-```
-
-A manual report to the row's own terminal set the status on the Mac (output redacted):
-
-```text
-$ cmux-tui --socket <socket> agent report --terminal term_26c3… --state working --source socket
-$ cmux sidebar-state --workspace <test row> | grep agent
-  cmux.remote.agent:agent=Running icon=bolt.fill color=#4C8DFF
-```
+The [wrong-terminal diagnostic evidence](https://github.com/mal84emma/workgrove/pull/46#issuecomment-6775486347) distinguishes the pane's inherited identity from the task session's identity.
 
 ## Fix for the status
 
@@ -101,26 +80,8 @@ Then restart the agent.
 
 ## Verification of the status
 
-The test used a throwaway task on `<test-vm>` and started the fixed `wt run` in the task's tmux pane.
-The agent's own environment still held the other row's terminal ID.
-The task's row showed the agent's states as they changed (output redacted):
-
-```text
-08:46:28   cmux.remote.agent:claude_code=Running icon=bolt.fill color=#4C8DFF
-08:46:34   cmux.remote.agent:claude_code=Idle icon=pause.circle.fill color=#8E8E93
-```
-
-The Mac also received a `Claude finished` notification for that row.
-After the test closed the row and attached the task again, the new row had a new terminal.
-The running agent's status followed it to the new row:
-
-```text
-08:48:10   cmux.remote.agent:claude_code=Running icon=bolt.fill color=#4C8DFF
-08:48:29   cmux.remote.agent:claude_code=Running icon=bolt.fill color=#4C8DFF
-08:48:32   cmux.remote.agent:claude_code=Idle icon=pause.circle.fill color=#8E8E93
-```
-
-Local rows did not change. A local task row showed `claude_code=Running icon=bolt.fill` during the same test.
+The wrapper refreshes native identity at each hook so that status follows the task after reattachment.
+[PR #46's archived evidence](https://github.com/mal84emma/workgrove/pull/46#issuecomment-6775486347) preserves the status output and local-row comparison; its exact test date and commit were not recorded.
 
 ## Smoke tests
 
