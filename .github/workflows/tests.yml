@@ -78,7 +78,7 @@ jobs:
         run: |
           python3 --version
           python3 -c 'import sys; sys.exit(sys.version_info[:2] != (3, 9))'
-          bash test/run.sh test/*-smoke.sh
+          bash test/run.sh --full test/*-smoke.sh
 
   suites:
     strategy:
@@ -141,9 +141,8 @@ jobs:
       # It limits workers and reports scenario, task, suite, and total times.
       - name: Run the suites
         env:
-          JOBS: "4"
           # install-smoke.sh runs install.sh with this bash. An empty value selects the bash on PATH.
           INSTALL_BASH: ${{ runner.os == 'macOS' && '/bin/bash' || '' }}
           # Git in the suites can reach only local repositories.
           GIT_ALLOW_PROTOCOL: file
-        run: bash test/run.sh
+        run: bash test/run.sh --full
