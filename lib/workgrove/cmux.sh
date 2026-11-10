@@ -722,7 +722,7 @@ cmux_row_create_ssh() {
   }
   if cmux_call workspace-action --workspace "$ref" --action set-description --description "$description" >/dev/null 2>&1; then
     if ! cmux_row_check_ssh_title "$ref" "$host" "$title"; then
-      cmux_error "could not verify the connected title for cmux row $ref; kept the row open. On the Mac: $(shell_join cmux workspace-action --workspace "$ref" --action rename --title "$title")"
+      cmux_error "could not verify the connected title for cmux row $ref; left the row untouched. Inspect it, then run on the Mac: $(shell_join cmux workspace-action --workspace "$ref" --action rename --title "$title")"
       return 1
     fi
     if ((focus)); then cmux_select "$ref" || return; fi
