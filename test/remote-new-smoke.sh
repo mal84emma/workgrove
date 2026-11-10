@@ -851,7 +851,8 @@ scenario_self_removal_reuse() {
       HOME="$TEST_ROOT/remote" PATH="$TEST_ROOT/remote/.local/bin:/usr/bin:/bin" \
       CMUX_SSH_ATTEMPT_ID=fixture "$REPO/bin/wt" "$@"
   }
-  CMUX_MODE=alive
+  CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  rm -f "$TEST_ROOT/remote-new"
   invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
   assert_eq 'create the remote cleanup fixture' 0 "$WT_RC"
   remote_task rm task -r "$r" --defer-close >"$TEST_ROOT/remote-removal"
@@ -914,6 +915,7 @@ PY
   assert_eq 'old closure evidence cannot remove a replacement task' 1 "$status"
   assert_eq 'replacement private work survives stale evidence' 'unrelated work' "$(cat "$r/.worktrees/task/private.txt")"
   unset -f remote_task
+  rm -f "$TEST_ROOT/remote-new"
   end_scenario
 }
 
