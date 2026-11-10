@@ -261,14 +261,18 @@ scenario_ssh_creation_identity
 
 scenario_cmux_cap() {
   begin_scenario 'the shared cmux deadline stops a command and its pipe-holding child' || return 0
-  local DEADLINE rc=0
+  local DEADLINE rc=0 started elapsed output
   DEADLINE=$(( $(date +%s) - 1 ))
   cmux_capped sh -c 'echo unexpected' >"$TEST_ROOT/capped.out" || rc=$?
   assert_eq 'an expired deadline executes no command' 142 "$rc"
   assert_eq 'an expired command emits nothing' '' "$(cat "$TEST_ROOT/capped.out")"
   DEADLINE=$(( $(date +%s) + 1 )); rc=0
-  cmux_capped sh -c 'sleep 20 & wait' || rc=$?
+  started=${EPOCHREALTIME/./}
+  output=$(cmux_capped sh -c 'sleep 20 & wait') || rc=$?
+  elapsed=$((${EPOCHREALTIME/./} - started))
   assert_eq 'a hanging command receives the capped timeout status' 142 "$rc"
+  assert_eq 'the child cannot hold the output pipe past the cap' 1 "$((elapsed < 3000000))"
+  assert_eq 'the timed-out command emits no output' '' "$output"
   end_scenario
 }
 scenario_cmux_cap
@@ -292,7 +296,7 @@ now=$(cat "$TITLE_CLOCK")
 printf '%s' "$((now + 1))" >"$TITLE_CLOCK"
 CLOCK
   chmod +x "$TEST_ROOT/title-clock/"*
-  for mode in reset late-reset retained rename-fail ineffective delayed timeout exhausted missing malformed wrong-host wrong-uuid window surface disconnected invalid closed verify-host verify-state; do
+  for mode in reset late-reset retained rename-fail ineffective late-ineffective delayed timeout exhausted missing malformed wrong-host wrong-uuid window surface disconnected invalid closed verify-host verify-state; do
     FAKE_CMUX_STATE="$TEST_ROOT/title-$mode"
     fake_cmux_init "$FAKE_CMUX_STATE"
     touch "$FAKE_CMUX_STATE/materialize-ssh"
@@ -310,6 +314,14 @@ CLOCK
       exhausted) DEADLINE=102 ;;
       rename-fail) fake_failure workspace-rename 1 'rename refused' ;;
       ineffective) fake_queue workspace-rename '{}' ;;
+      late-ineffective)
+        local pending final
+        pending=$(fake_rows "$(fake_row "$id" workspace-99 '' test-vm)")
+        final=$(fake_rows "$(fake_row "$id" task '' test-vm)")
+        for _ in 1 2 3; do fake_queue workspace-list "$pending"; done
+        fake_queue workspace-rename '{}'
+        fake_queue workspace-list "$final"
+        ;;
       missing) fake_queue workspace-list '{"workspaces":[]}' ;;
       malformed) fake_queue workspace-list '{broken' ;;
       wrong-host|wrong-uuid|window|surface|disconnected|invalid|closed|verify-host|verify-state)
@@ -346,7 +358,7 @@ CLOCK
         assert_eq "$mode reports failure" 1 "$rc"
         assert_eq "$mode reports the UUID and manual command" true "$([[ $CMUX_ERROR == *"cmux workspace-action --workspace $id --action rename --title task"* ]] && echo true || echo false)"
         assert_eq "$mode keeps the tagged row" 1 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
-        if [[ $mode != rename-fail && $mode != ineffective && $mode != verify-* ]]; then
+        if [[ $mode != rename-fail && $mode != ineffective && $mode != late-ineffective && $mode != verify-* ]]; then
           assert_eq "$mode cannot authorize rename" false "$([[ $calls == *'--action rename'* ]] && echo true || echo false)"
         fi ;;
     esac

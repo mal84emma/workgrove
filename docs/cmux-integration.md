@@ -245,6 +245,7 @@ The close handler uses 12 seconds before closing, then five seconds for session 
 The capped runner requires Perl and stops without executing the command if Perl is unavailable.
 Title verification uses at most eight seconds and reserves two seconds of the caller's deadline for remaining operations.
 It observes the row again at least one second after readiness before accepting or repairing the title.
+After a rename, it repeats that observation interval before accepting the result.
 A failed repair leaves the tagged row open and reports its UUID and a manual rename command.
 
 cmux 0.65.2's [SSH status projection](https://github.com/manaflow-ai/cmux/blob/12023d89feb5425c766ba05e8d8e4cfc176e3991/Sources/RemoteTui/Workspace%2BSSHTuiStatus.swift)
