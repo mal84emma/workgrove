@@ -133,6 +133,16 @@ workgrove/
 │   │   │   ├── version.txt
 │   │   │   └── windows.json
 │   │   └── cmux-0.65.2/      the same recorded responses without ssh.json
+│   │       ├── REDACTED.txt   redaction notice
+│   │       ├── automation.json
+│   │       ├── capabilities.json
+│   │       ├── event.json
+│   │       ├── notifications.json
+│   │       ├── rows.json
+│   │       ├── rows_by_window.json
+│   │       ├── top.json
+│   │       ├── version.txt
+│   │       └── windows.json
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
 │   ├── tmux-target-smoke.sh  real Linux tmux parsing on a private server
 │   ├── cmux-ownership-smoke.sh  native parent snapshots and idle launch ownership
