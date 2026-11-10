@@ -131,7 +131,7 @@ It also describes what a run changes, the repo's test suites, and how to remove 
     (see Tests).
 - **Python and OpenSSH:** SSH registration and portable remote setup need Python 3.9 or later. SSH registration also needs OpenSSH.
 - **tmux:** the VMs have tmux 3.2a, and `home/.tmux.conf` is written for that version.
-- **cmux:** workgrove supports 0.65.2 (build 113). Its Mac checks and most VM checks passed.
+- **cmux:** workgrove supports 0.65.2 (build 113). Its Mac checks and every VM check except `--reattach` passed.
   Support moves to a newer release after verification, rather than automatically when that release appears.
   See the [cmux compatibility log](docs/cmux-integration.md#cmux-compatibility-log) for verified behavior and remaining checks.
   `home/.config/cmux/cmux.json` is `schemaVersion: 1`.
