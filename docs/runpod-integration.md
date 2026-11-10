@@ -13,7 +13,8 @@ No supplier changes are required.
 A host must provide ordinary remote-command SSH and storage with an understood persistence policy.
 A running container does not establish package availability, process survival across stop/start, or storage retention after deletion.
 Those properties require supplier documentation and separately authorized acceptance checks.
-The [verification status](runpod.md#verification-status) distinguishes offline coverage, live results, and remaining limits.
+The [historical acceptance evidence](https://github.com/mal84emma/workgrove/pull/95#issuecomment-6775489089) distinguishes workflow completion from sandbox acceptance.
+The [Runpod guide](runpod.md#verification-status) maintains current verification procedures and outstanding limits.
 
 ## Responsibility boundary
 
@@ -210,8 +211,8 @@ Verify the selected root's persistence, effective CPU/RAM/GPU visibility, native
 Verify task files across stop/start, explicit preparation when runtime setup is lost, and explicit restart for lost agents.
 Check final lifecycle and billing state through the supplier independently.
 
-The [live results](runpod.md#verification-status) record installation, personal volume acceptance, updates, restoration, both agents, task separation, status, notifications, and native relay.
-The [2026-10-27 restarts](runpod.md#restarts-on-2026-10-27) record refreshed endpoints, surviving task files, restore-only, and explicit agent restarts.
+The [historical live results](https://github.com/mal84emma/workgrove/pull/95#issuecomment-6775489089) preserve the initial installation and task checks, including failed sandbox acceptance.
+The [restart evidence](https://github.com/mal84emma/workgrove/issues/142#issuecomment-6441814307) preserves endpoint refresh and explicit recovery checks.
 These results do not establish automatic endpoint rereading by an already reconnecting native transport; [#176](https://github.com/mal84emma/workgrove/issues/176) retains that check.
 
 Codex sandbox namespace initialization failed; individual command approvals do not establish sandbox compatibility.

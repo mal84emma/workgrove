@@ -107,158 +107,55 @@ Keep relay sockets and native terminal identities on runtime storage.
 ## Verification status
 
 Offline tests cover generic SSH registration, explicit restoration, allocation limits, and task recovery with synthetic fixtures.
-The following table records live results from one active Pod on 2026-10-21.
-The remote installation reached workgrove revision `265acbd` through the tested update procedure.
-Replacement row checks also used shared adapter revision `02e1564` on the Mac.
-Paths, host aliases, identities, and private operational captures are omitted.
-
-| Check | Result |
-|---|---|
-| SSH registration and discovery | Passed isolated validation, authorized registration, ordinary discovery, and strict SSH verification. |
-| Hardware inventory | The visible GPU matched `nvidia-smi`. Hidden cgroup mounts left CPU and RAM unknown and prevented automatic capacity selection. |
-| Persistent setup | Passed with explicit personal volume acceptance. The FUSE filesystem reports mode `777` despite `chmod 700`. |
-| Idempotence and update | Repeated setup preserved configuration. A reviewed `wt update` preserved authentication and task files. |
-| Readiness and restoration | Doctor detected a deliberately removed compatibility link. Explicit restore-only repaired it and preserved 11 saved identity, configuration, and task files. |
-| Deferred tasks and uploads | Both agent tasks retained their briefs and verified uploaded files before attachment. |
-| Native rows and reconnection | Both rows connected. Their original tmux sessions survived a Wi-Fi interruption. |
-| Codex task | Produced the exact requested file and passed its Python assertion using individual command approvals. |
-| Reattachment and status | The same Codex process survived row closure and plain attach. Its response, Idle status, and completion notification reached the replacement row. |
-| Replacement row title | Focused creation reproduced an unexpected generated title. The shared adapter fix preserved the task title by creating unfocused before explicit selection. |
-| Editor requests | Mac-side open and VM-side relay opened the correct connected VS Code windows. |
-| Scoped removal | Removed a separate clean task's worktree, branch, and sidecar while preserving both original tasks and sessions. |
-| Claude task completion | Passed after the usage limit reset. Claude read the uploaded input, produced the exact requested file, and ran the Python assertion successfully. |
-| Claude status and task separation | Running and Idle status and the completion notification reached the correct row. Both tasks retained their inputs, tracked files, and history. |
-| Agent sandboxing | Blocked. Codex 0.163.0 could not create its sandbox namespaces; a no-op sandbox probe failed. |
-| Actual stop/start and endpoint refresh | See the [2026-10-22 results](#restart-on-2026-10-22) and the [2026-10-27 results](#restarts-on-2026-10-27). The supplier refreshed a changed endpoint, and restore-only repaired both restarts. |
-
-Codex required the supported `--no-daemon` launch option because its control socket rejected the volume's directory permissions.
-That option preserved sandbox policy; individual approvals ran the acceptance commands outside the failed sandbox.
-Follow the [agent runtime compatibility checks](remote-setup.md#check-agent-runtime-compatibility) before treating an installation as ready for unattended agent work.
-The personal volume exception does not change agent sandbox requirements.
-Claude completed the workflow test in its existing auto mode; that result does not establish operating-system sandbox isolation.
+The [October 21, 2026 evidence](https://github.com/mal84emma/workgrove/pull/95#issuecomment-6775489089) preserves the live results, tested revisions, failed sandbox acceptance, and limits.
+Historical checks do not establish acceptance for the current host or agent version.
+Use the [agent runtime compatibility checks](remote-setup.md#check-agent-runtime-compatibility) before unattended agent work.
+Personal volume acceptance does not change sandbox requirements, and Claude workflow completion does not establish operating-system isolation.
 
 ### Restart on 2026-10-22
 
-A real stop/start on 2026-10-22 gave the following results for a Pod with a portable profile.
-
-| Check | Result |
-|---|---|
-| Persistent files | The checkout, profile, `env.sh`, saved Git config, agent configs and sign-ins, skill links, and backups under `<root>` survived. |
-| Home folder | The home folder was replaced, and all home links and the `~/.bashrc` block were gone. |
-| Doctor without `--root` | It reported `profile-missing` and `remote-wt-missing`, the same as a new host. |
-| Doctor with `--root` | It reported `compatibility-links-missing` and `remote-wt-missing`. |
-| Restore-only | It refused with `restore-link-conflict` because the Pod's start script had written a regular `~/.gitconfig`. |
-| Full setup | It repaired the host, backed up `~/.gitconfig`, recreated the links, and left doctor reporting ready. |
-| Update and tasks | `wt update` moved the host to `fa622e9`, and `new`, `show`, `attach`, and a Claude task worked. |
-| Agent sandbox | `codex sandbox /bin/true` still failed to create namespaces. |
-
-The SSH alias kept working; no endpoint change or refresh was tested.
-The tasks were created after the restart, so recovery of a task running before the stop remains unverified.
+Home replacement can remove links while persistent task files survive; ordinary home files can block older restore-only implementations.
+[Issue #140](https://github.com/mal84emma/workgrove/issues/140) preserves the October 22, 2026 results and tested revision.
+[PR #143](https://github.com/mal84emma/workgrove/pull/143) records that endpoint changes and recovery of tasks running before the stop were not tested.
+Use the [current recovery procedure](#recover-after-stopstart) for restoration decisions.
 
 ### Restarts on 2026-10-27
 
-Two stop/start cycles of the same Pod ran the checklist in [#142](https://github.com/mal84emma/workgrove/issues/142).
-Before the first stop, the Mac and the host ran workgrove `9194fd8`.
-Two tasks, one with Claude and one with Codex, each had a committed and an uncommitted file, and both agents were running.
-The supplier's start command wrote a regular `~/.gitconfig` in the new home folder each time.
-Paths, aliases, machine names, and identities are omitted.
-
-| Check | First restart | Second restart |
-|---|---|---|
-| SSH endpoint | The port changed. The alias, address, and host key alias stayed the same. SSH worked without a host key prompt. | The port changed again, with the same result. |
-| Doctor without `--root` | It reported `profile-missing` and `remote-wt-missing`, with the recovery hint on stderr. Discovery reported `found` with the correct root. | The same. |
-| Machine record | `same_machine` was `false` because the machine name changed. Restore recorded the new name. | The same. |
-| Task creation before restore | `new` refused with the recovery hint. | Not repeated. |
-| Doctor with `--root` | It reported `compatibility-links-missing` and `remote-wt-missing`, with no conflict code and no warning. | The same. |
-| Restore-only | It passed in about 5 seconds, without a download or a package installation. It backed up `~/.gitconfig` and printed the summary. | An agent ran it. Restore removed `~/.gitconfig`, because the newest backup was identical, and made no new backup. |
-| Doctor after restore | It reported ready, with no issues or warnings. | The same. |
-| Second restore-only | It passed and made no new backup. | The same. |
-| Interactive `PATH` | `command -v wt` printed the `wt` under the root. | The same. |
-| Git and `gh` sign-ins | Both worked without a new sign-in. The summary reported both agent sign-in files as present. | The same. |
-| Tasks from before the stop | Both tasks kept their commit, their untracked file, and the file contents. `show` listed both files. | The same. |
-| Plain `attach` | It refused because the agent was gone, and it named `--restart-agent`. | The same. |
-| `attach --restart-agent` | Both agents started without a sign-in and completed one turn. Each row showed Running and then Idle, and no notification appeared twice. | The same. |
-| New task | The first line of `new` was `created <task>`, and the agent replied. | The same. |
-| `wt update` | It refused to run unattended. An interactive run moved the host to `fd22b07`. One Git config generation remained, and doctor reported ready. | An interactive run moved the host to `a68f230`, with the same results. |
-
-No tmux session or agent survived either stop.
-Claude resumed its earlier conversation.
-Codex started a new session and ran the task's original brief again; `--restart-agent` does not promise Codex conversation resume.
-
-After the second start, a new agent received only a task brief that said the host had restarted.
-It found the root with doctor, checked the six conditions of the [portable restore policy](../home/.claude/TASKS.md#portable-restore-only), and ran restore-only.
-It reported the root, the restore summary, the backup line, and the doctor result.
-It ran no full setup, `--restart-agent`, or sign-in.
-Because `same_machine` was `false`, the agent used the restart statement in its brief to satisfy condition 4.
-
-The first restore copied a `~/.gitconfig` that was identical to a backup from 2026-10-22.
-That older backup had no `.workgrove-backup.json` record, and deduplication reads only folders with a record.
-The second restart added no backup.
-During the second restart, the Mac ran `9194fd8` and the host ran `fd22b07`, both with protocol 1.
+Restoration preserves task files; lost agents require explicit restart, and Codex restart does not promise conversation resume.
+[Issue #142's results](https://github.com/mal84emma/workgrove/issues/142#issuecomment-6441814307) preserve both October 27, 2026 cycles, versions, backup behavior, and unperformed checks.
+These checks do not establish automatic endpoint rereading by an existing native transport; [#176](https://github.com/mal84emma/workgrove/issues/176) retains that question.
 
 ### Sandbox compatibility check
 
-Further live checks reproduced the failure with Codex 0.163.0 and system Bubblewrap 0.9.0.
-All ten Codex probes failed before their test commands started.
-They used only disposable canary files and made no model requests.
-
-| Check | Result |
-|---|---|
-| Existing and clean Codex configuration | Four startup probes failed across the persistent task directory and temporary storage. |
-| Explicit `:workspace` and `:read-only` profiles | Six write probes failed across persistent and ordinary operating-system storage before executing their child commands. |
-| Direct system Bubblewrap | A read-only no-op invocation failed independently of Codex and workgrove. |
-| Namespace creation | User, mount, process, and network namespace probes each returned `Operation not permitted`. |
-| Storage controls | The container root, temporary directory, and home cache used overlay storage. Namespace creation failed on overlay storage and the persistent FUSE volume. |
-| No-op system call | `unshare(0)` returned `EPERM` without requesting namespace changes or filesystem operations. |
-| Kernel settings | Unprivileged user namespaces were enabled, their configured limit was nonzero, and the AppArmor unprivileged-user-namespace restriction was disabled. |
-| Container controls | Seccomp system-call filtering was active, and the system-administration capability (`CAP_SYS_ADMIN`) was absent. The blocking runtime rule remains unverified. |
-| Unsandboxed controls | Disposable canary writes passed. Personal Codex configuration remained unchanged. |
-
-The failure reproduces outside workgrove's launcher and outside the persistent volume.
-It prevents testing both successful workspace writes and rejection of writes outside the workspace.
-Unchanged outside canaries do not establish protection when the sandbox never starts.
-
-This Pod therefore does not pass Codex sandbox acceptance.
-The execution-environment owner must provide compatible namespace support before those boundary checks can pass.
-The [official sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing) describe Bubblewrap's user-namespace requirement.
-These checks changed no container policy, kernel setting, personal sandbox setting, or agent process.
+Namespace startup failure prevents sandbox boundary acceptance; unchanged outside canaries cannot establish enforcement when the sandbox never starts.
+The [archived probe matrix](https://github.com/mal84emma/workgrove/pull/95#issuecomment-6775489089) preserves the failed Codex 0.163.0 and Bubblewrap 0.9.0 checks.
+The exact denying runtime rule remains unverified; [#175](https://github.com/mal84emma/workgrove/issues/175) retains successful startup and boundary acceptance.
 
 ### Remediation investigation
 
-An independent agent reviewed the runtime evidence, public provider documentation, and the installed Codex version's source.
-The shared persistent volume does not explain the namespace failure.
-The separate control-socket permission failure explains the `--no-daemon` option.
-Moving persistent files cannot repair the reproduced namespace denial on overlay storage.
+The [historical investigation](https://github.com/mal84emma/workgrove/pull/95#issuecomment-6775489089) separates control-socket permissions from namespace denial and retains the system-call-filter hypothesis as unverified.
+Moving persistent files cannot repair a namespace denial reproduced on ordinary operating-system storage.
+The execution-environment owner must identify the denying policy and provide compatible namespace support.
 
-The outer container's system-call filter is the leading explanation; the exact blocking rule remains unverified.
+The [official sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing) describe Bubblewrap's user-namespace requirement.
 [Docker's seccomp documentation](https://docs.docker.com/engine/security/seccomp/) lists namespace operations among its default restrictions.
-The no-op `unshare(0)` denial strengthens this explanation without identifying the actual host policy.
-The host owner must inspect its runtime configuration or audit records to identify that policy.
+Inherited filters survive child processes and executable changes; see [seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html).
+A template start command cannot remove those outer runtime restrictions.
 
-The [public Pod API](https://docs.runpod.io/api-reference/pods/POST/pods) documents no seccomp, AppArmor, or capability override.
-No supported self-service runtime-policy control was established by this investigation.
-This documentation gap does not prove that the supplier cannot provide a compatible environment.
-The [template start command](https://docs.runpod.io/pods/templates/manage-templates) changes container command execution, not the outer runtime's security policy.
-Linux preserves inherited filters across child processes and executable changes; see [seccomp(2)](https://man7.org/linux/man-pages/man2/seccomp.2.html).
-
-Ask the supplier whether this Pod class supports Bubblewrap's nested namespaces under a restricted runtime policy.
+Ask the supplier whether the selected environment supports restricted nested namespaces.
 Provide sanitized no-op failures and request identification of the denying host rule.
 If supported, validate a narrowly reviewed policy before changing the host's production setup.
 Repeat startup, permitted task writes, prohibited outside writes, and network-policy checks after that repair.
 Keep the persistent storage layout unchanged while investigating runtime compatibility.
 
-Codex 0.163.0 cannot use its deprecated Landlock option for filesystem-restricted execution.
-Its [versioned implementation](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/linux-sandbox/src/linux_run_main.rs#L382-L388) explicitly rejects that combination.
-Installing Bubblewrap again or changing an already permissive user-namespace setting would not address the observed denial.
-Disabling agent isolation or granting broad container privileges changes the security model; it does not establish the required sandbox behavior.
+Codex 0.163.0 [rejects its deprecated Landlock option](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/linux-sandbox/src/linux_run_main.rs#L382-L388) for filesystem-restricted execution.
+Installing Bubblewrap again cannot repair a denial that reproduces independently of its installation.
+Disabling isolation or granting broad privileges changes the security model; it does not establish the required sandbox behavior.
 
 If the supplier cannot provide compatible namespace support, run Codex in a verified compatible environment and use the Pod for GPU commands.
 That alternative changes the execution location; it does not validate Codex isolation inside the Pod.
 
 ### Optional lifecycle validation
 
-The 2026-10-22 restart verified persistent file retention and environment repair through full setup.
-The [2026-10-27 restarts](#restarts-on-2026-10-27) verified a changed endpoint, restore-only after a start command writes `~/.gitconfig`, and `--restart-agent` recovery.
-They cover the live check in [#132](https://github.com/mal84emma/workgrove/issues/132).
-A replaced Pod on the same volume remains unverified.
+A replaced Pod on the same volume remains unverified in the [lifecycle evidence](https://github.com/mal84emma/workgrove/issues/142#issuecomment-6441814307).
 Further lifecycle validation requires separate authorization and a bounded compute budget.
