@@ -145,6 +145,7 @@ TMUX
   assert_eq 'native reattachment clears the obsolete Mac row' '' "$(cat "$RELAY_STATE/CMUX_WORKSPACE_ID")"
   assert_eq 'native reattachment saves its current terminal' term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$(cat "$RELAY_STATE/CMUX_TUI_TERMINAL_ID")"
   : > "$RELAY_REQUESTS"; : > "$RELAY_DELIVERED"; : > "$CMUX_LOG"
+  fake_native_clients term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >"$FAKE_CMUX_STATE/clients.json"
   for title in wt-open wt-attach wt-close; do
     for _ in 1 2; do
       TMUX=/tmp/fake CMUX_SOCKET_PATH=127.0.0.1:9999 CMUX_WORKSPACE_ID=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA \
@@ -163,6 +164,129 @@ TMUX
   end_scenario
 }
 scenario_reattachment
+
+scenario_relay_diagnostics() {
+  begin_scenario 'open and attach distinguish local acceptance, preflight failures, and notification failures' || return 0
+  local REPO='/vm/repos/repo space' WT_HOST=test-vm TMUX='' CMUX_SSH_ATTEMPT_ID=test
+  local CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local operation sample rc output manual failure
+  ln -s "$FAKE_CMUX_FIXTURES/../../fakes/cmux" "$TEST_ROOT/bin/cmux-tui"
+  # The test repository path shadows REPO, so resolve the fake through its fixture location.
+  for operation in open attach; do
+    manual="wt -H test-vm $operation -r /vm/repos/repo\\ space task"
+    relay_attempt() {
+      rc=0
+      if [[ $operation == open ]]; then
+        output=$(open_worktree task "$REPO/.worktrees/task" 2>&1) || rc=$?
+      else output=$(request_row task 2>&1) || rc=$?; fi
+      has <(printf '%s' "$output") "$manual"
+    }
+    fake_native_clients "$CMUX_TUI_TERMINAL_ID" >"$FAKE_CMUX_STATE/clients.json"
+    relay_attempt
+    assert_eq "$operation accepts a mirrored terminal" 0 "$rc"
+    has <(printf '%s' "$output") 'local relay accepted'
+    has <(printf '%s' "$output") 'Mac delivery is unverified'
+    mkdir -p "$FAKE_CMUX_STATE/after/client-list"
+    : >"$FAKE_CMUX_STATE/after/client-list/notify-unmirrored"
+    : >"$FAKE_CMUX_STATE/notify.delivered.jsonl"
+    relay_attempt
+    assert_eq "$operation accepts a request despite a later mirror disconnect" 0 "$rc"
+    assert_eq "$operation does not require actual delivery for local acceptance" '' "$(cat "$FAKE_CMUX_STATE/notify.delivered.jsonl")"
+    has <(printf '%s' "$output") 'Mac delivery is unverified'
+    rm -r "$FAKE_CMUX_STATE/after/client-list"
+    rm "$FAKE_CMUX_STATE/notify-unmirrored"
+    for sample in '[]' \
+      "$(fake_native_clients term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)" \
+      "$(fake_native_clients "$CMUX_TUI_TERMINAL_ID" | jq '.[1].client_kind="tui"')" \
+      "$(fake_native_clients | jq '.[0].known_terminal_ids=["term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]')"; do
+      printf '%s\n' "$sample" >"$FAKE_CMUX_STATE/clients.json"
+      : >"$FAKE_CMUX_STATE/native-calls.log"
+      relay_attempt
+      assert_eq "$operation rejects an unmirrored terminal" 1 "$rc"
+      has <(printf '%s' "$output") 'no Mac native-mirror client is attached'
+      lacks "$FAKE_CMUX_STATE/native-calls.log" ' notify '
+    done
+    for sample in '' 'not-json' '{}' '[{}]' '[{"client_kind":"native-mirror","attached_terminal_ids":null}]' \
+      '[{"client_kind":"native-mirror","attached_terminal_ids":[42]}]' \
+      '[{"kind":"native-mirror","attached":[{"terminal_id":"term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}]' \
+      $'[]\n[]'; do
+      printf '%s\n' "$sample" >"$FAKE_CMUX_STATE/clients.json"
+      relay_attempt
+      assert_eq "$operation rejects a malformed client query" 1 "$rc"
+      has <(printf '%s' "$output") 'cannot verify a Mac mirror'
+      lacks <(printf '%s' "$output") 'local relay accepted'
+    done
+    for failure in 23 124; do
+      fake_failure client-list "$failure" 'query failed'
+      relay_attempt
+      assert_eq "$operation propagates query failure $failure" 1 "$rc"
+      has <(printf '%s' "$output") "cannot query Mac mirror clients (exit $failure"
+    done
+    rm "$FAKE_CMUX_STATE/fail/client-list"
+    fake_native_clients "$CMUX_TUI_TERMINAL_ID" >"$FAKE_CMUX_STATE/clients.json"
+    for failure in 17 124; do
+      fake_failure notify "$failure" 'notify failed'
+      relay_attempt
+      assert_eq "$operation propagates notify failure $failure" 1 "$rc"
+      has <(printf '%s' "$output") "cmux-tui notify failed (exit $failure"
+    done
+    rm "$FAKE_CMUX_STATE/fail/notify"
+    for sample in relative.sock '' $'/tmp/socket\nother'; do
+      CMUX_TUI_SOCKET=$sample relay_attempt
+      assert_eq "$operation rejects a malformed socket" 1 "$rc"
+      has <(printf '%s' "$output") 'malformed cmux relay'
+    done
+    for sample in term_bad '' term_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA; do
+      CMUX_TUI_TERMINAL_ID=$sample relay_attempt
+      assert_eq "$operation rejects a malformed terminal" 1 "$rc"
+      has <(printf '%s' "$output") 'malformed cmux relay'
+    done
+    mkdir -p "$TEST_ROOT/no-tui"
+    ln -sf "$(command -v jq)" "$TEST_ROOT/no-tui/jq"
+    ln -sf "$(command -v grep)" "$TEST_ROOT/no-tui/grep"
+    PATH="$TEST_ROOT/no-tui" relay_attempt
+    assert_eq "$operation rejects absent tooling" 1 "$rc"
+    has <(printf '%s' "$output") 'cmux-tui CLI not found'
+    rc=0
+    if [[ $operation == open ]]; then
+      output=$(WT_HOST='' open_worktree task "$REPO/.worktrees/task" 2>&1) || rc=$?
+    else output=$(WT_HOST='' request_row task 2>&1) || rc=$?; fi
+    assert_eq "$operation stops when its host is unknown" 1 "$rc"
+    has <(printf '%s' "$output") 'WT_HOST is not set'
+    lacks <(printf '%s' "$output") 'local relay accepted'
+  done
+  unset -f relay_attempt
+  rm "$TEST_ROOT/bin/cmux-tui"
+  end_scenario
+}
+scenario_relay_diagnostics
+
+scenario_relay_deadlines() {
+  begin_scenario 'client queries and notifications have bounded waits' || return 0
+  # shellcheck disable=SC2034  # relay_env reads the caller's identity.
+  local TMUX='' CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local stage rc output started
+  mkdir -p "$TEST_ROOT/unstalled"
+  ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/unstalled/cmux-tui"
+  export RELAY_FAKE="$TEST_ROOT/unstalled/cmux-tui"
+  fake_native_clients "$CMUX_TUI_TERMINAL_ID" >"$FAKE_CMUX_STATE/clients.json"
+  cat >"$TEST_ROOT/bin/cmux-tui" <<'TUI'
+#!/usr/bin/env bash
+if [[ $* == *" $RELAY_STALL "* ]]; then exec sleep 30; fi
+exec "$RELAY_FAKE" "$@"
+TUI
+  chmod +x "$TEST_ROOT/bin/cmux-tui"
+  for stage in client notify; do
+    rc=0; started=$SECONDS
+    output=$(RELAY_STALL=$stage notify_mac wt-close host test-vm repo /vm/repos/repo task task 2>&1) || rc=$?
+    assert_eq "$stage timeout fails shared close notification" 1 "$rc"
+    has <(printf '%s' "$output") 'exit 124'
+    assert_eq "$stage timeout returns within ten seconds" 1 "$((SECONDS - started < 10))"
+  done
+  rm "$TEST_ROOT/bin/cmux-tui"
+  end_scenario
+}
+scenario_relay_deadlines
 
 scenario_shared_creation() {
   begin_scenario 'native attach uses shared SSH creation and description failure policy' || return 0

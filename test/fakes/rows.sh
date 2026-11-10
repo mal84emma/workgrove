@@ -15,6 +15,16 @@ fake_cmux_init() {
   fake_windows >"$FAKE_CMUX_STATE/windows.json"
 }
 
+# Match the resource API client snapshot, including nullable metadata and string durations.
+fake_native_clients() {
+  jq -cn --args '{id:"client_11111111111111111111111111111111",
+    session_id:"session_22222222222222222222222222222222",name:"cmux cloud terminal",
+    client_kind:"native-mirror",transport:"unix",connected_seconds:"12",
+    attached_terminal_ids:$ARGS.positional,sizes:[],self:false}
+    | [(. | .id="client_33333333333333333333333333333333" | .name=null
+        | .client_kind=null | .attached_terminal_ids=[] | .self=true), .]' "$@"
+}
+
 fake_identity_root() {
   if [[ -n ${FAKE_CMUX_STATE:-} ]]; then printf '%s' "$FAKE_CMUX_STATE"
   elif [[ -n ${TEST_ROOT:-} ]]; then printf '%s/cmux-identities' "$TEST_ROOT"
