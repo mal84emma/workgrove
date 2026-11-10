@@ -2,7 +2,7 @@
 
 `wt rm` removes a task after checking work preservation and session ownership.
 This page describes the runtime fix developed from the [squash investigation](self-teardown-squash.md) and [Codex investigation](codex-self-teardown.md).
-The historical investigation reports describe the earlier behavior.
+The investigation pages retain design constraints and links to the archived historical records.
 
 ## Remove your own task
 
@@ -22,6 +22,12 @@ Do not start commands concurrently with removal.
 For sandboxed Codex, submit the complete removal command through escalation.
 Do not clear `CODEX_SANDBOX` or change global approval policy.
 An approval denial leaves the task intact.
+
+The three `--force` flags have different scopes.
+User-facing `wt rm --force` discards preservation checks and requires explicit authorization.
+Internal `git worktree remove --force` removes ignored output after workgrove checks.
+cmux `--force` skips confirmation only for a verified own row or a newly created row during failed setup.
+Internal branch deletion after a squash requires preservation proof; it does not authorize discarding work.
 
 ## Select and validate a destination
 
@@ -45,6 +51,8 @@ Overlapping remote names require version-3 provenance or explicit `wt.landingRem
 Older metadata remains unchanged and uses only unambiguous remote mappings.
 Ambiguous or unavailable destinations keep the task.
 An explicit landing ref still requires preservation proof.
+Do not recreate a deleted parent or overwrite the saved `base` to conceal a comparison refusal.
+Parent landing alone cannot prove that the complete child landed.
 
 Git ancestry uses the original objects, with grafts and replacement refs disabled for preservation checks.
 A separate temporary object view performs content comparisons without source merge drivers, filters, or attributes.
@@ -174,6 +182,8 @@ The check does not trust cmux's environment-derived caller identity.
 Unknown samples, unreadable processes, and unverified shared-server ownership keep the task.
 Legacy shared-server sessions can require a task-owned restart.
 Workgrove never stops a shared Codex daemon as a teardown workaround.
+Provider session archiving and transcript deletion cannot substitute for verified cancellation.
+Task cleanup must preserve unrelated provider sessions and transcripts.
 
 VM self-removal pins the caller pane and verifies its process ancestry and exclusive agent ownership before accepting the named session.
 An agentless shell can request its own removal when every pane process belongs to that cleanup command's ancestry or descendants.
@@ -368,125 +378,18 @@ The finite lock owner handles demonstrated worker interruptions and detached Git
 The raw-file and branch-configuration helpers protect demonstrated work-loss and interrupted-cleanup cases.
 No additional coordinator or persistent process is introduced for the detached cmux observer.
 
-Live acceptance of production commit `00b5946` passed the matrix below.
-The historical results in the following section concern earlier candidates.
-They do not replace the current checks of process absence.
+Historical live results establish acceptance only for their recorded candidates and environments.
+Native durable workspace-record deletion, live approval denial, and live hard interruptions remain outside that evidence.
 
 ## Live acceptance of commit 00b5946
 
-The user authorized disposable live tasks on the Mac and one Ubuntu VM.
-The tests used Codex 0.164.0 and interactive Claude 2.1.312 on both hosts.
-The VM used tmux 3.2a with a private server and an independent sentinel session.
-Each table row covers ordinary and stacked squash merges with deleted remote head refs.
-Stacked cases also removed the landed parent and its remote ref without rewriting the child's saved creation base.
-
-| Path | Provider | Ordinary squash | Stacked squash | Maximum seconds after gate release |
-|---|---|---|---|---:|
-| The Mac | Codex | Passed | Passed | 25.730 |
-| The Mac | Interactive Claude | Passed | Passed | 29.992 |
-| Native VM | Codex | Passed | Passed | 35.231 |
-| Native VM | Interactive Claude | Passed | Passed | 30.650 |
-| Legacy VM | Codex | Passed | Passed | 47.340 |
-| Legacy VM | Interactive Claude | Passed | Passed | 43.342 |
-
-Each provider started a 6000-second background command through its real command tool.
-An independent observer recorded the provider, command, and session identities before releasing its teardown gate.
-Each provider then submitted its own safe removal command from outside its worktree.
-Codex retained workspace-write sandboxing and on-request approval, using escalation for the complete removal command.
-`wt rm` needed neither `--force` nor `--discard-commits`.
-
-Observers confirmed absence of the worktree, registration, branch, branch configuration, sidecars, recorded provider and command processes, and Mac row.
-The Mac Codex checks also confirmed absence of the verified detached cmux observer.
-VM checks confirmed task-session absence and survival of the private-server sentinel.
-All accepted cases reached verified absence within the 60-second limit, before their background commands could expire.
-Main-checkout refs and working status remained unchanged in every fixture.
-Every row present before the tests remained present afterward.
-
-Self-closure can interrupt a tool response before the provider exits.
-Two initial native Claude observations stopped at that response and could not establish the provider's exit time.
-Fresh repeats waited for actual process and session absence and passed.
-The accepted matrix excludes those two inconclusive observations.
-Signal-free observation acknowledgments completed pending receipts only after independent absence checks.
-The controller did not issue the target's initial removal command or terminate its provider or background command.
-
-Legacy cases used real cmux notifications and SSH with the candidate Mac hook and VM receiver.
-The user authorized a temporary dispatcher restricted to the new legacy test rows.
-Other rows continued to use the installed hook.
-The original automation file was restored byte for byte after testing.
-
-Tests used temporary candidate copies outside the disposable worktrees.
-Cleanup removed only the newly authorized repository trust entries.
-Both Codex configurations matched their pre-test hashes afterward.
-Hook trust and Claude settings remained unchanged.
-Installed workgrove copies remained unchanged.
-No test process remained after cleanup, and the private tmux server stopped.
-
-The local regression suite passed 108 tasks from 27 suites on `00b5946`.
-ShellCheck, Ruff, six documentation checks, and all nine required citation checks passed.
-All five CI checks passed on that production commit.
-Later documentation commits record these results without changing production code.
-
-Native durable workspace-record deletion remains unverified.
-Live approval-denial and hard-interruption scenarios were not run; regression fixtures cover those boundaries.
-The matrix establishes successful authorized shutdown without extending those claims.
+[PR #184's archived acceptance](https://github.com/mal84emma/workgrove/pull/184#issuecomment-6775487700) preserves the `00b5946` matrix, timings, exclusions, and unperformed checks.
+Use the [current manual acceptance procedure](#manual-acceptance-requires-separate-authorization) to assess a changed implementation.
 
 ## Earlier live acceptance on October 28, 2026
 
-The user authorized disposable live tasks on the Mac and one Ubuntu VM.
-Both hosts used cmux 0.65.1.
-The VM used tmux 3.2a and a dedicated test server for the final matrix.
-The tests used this candidate without updating either installed workgrove copy.
-
-| Host | Provider | Ordinary squash | Stacked squash |
-|---|---|---|---|
-| The Mac | Claude 2.1.312 | Passed | Passed |
-| The Mac | Codex 0.164.0 | Cancellation unproven | Cancellation unproven |
-| Ubuntu VM | Claude 2.1.306 | Passed | Passed |
-| Ubuntu VM | Codex 0.164.0 | Passed | Passed |
-
-Each case used a disposable bare remote and actual squash commits.
-The ordinary case deleted its remote head after merging.
-The stacked case removed its landed parent before merging the child, then deleted both remote heads.
-The child's sidecar retained its deleted creation base.
-
-Each provider started background work through its real command tool, then waited for an independent observer.
-The observer recorded provider ancestry, process start identities, session identity, and the background process before releasing teardown.
-Each provider saved its pre-close summary and invoked its own safe removal from outside the worktree.
-
-Codex used interactive sessions, workspace-write sandboxing, on-request approval, and the escalated complete removal command.
-The temporary VM Codex installation included its matching official command host.
-The user authorized trust entries only for the four disposable Codex repositories.
-The entries were removed after acceptance; all other parsed settings remained unchanged.
-
-The first matrix recorded absence of worktrees, registrations, branches, branch configuration, sidecars, rows, and sampled processes.
-The VM observer also confirmed task-session absence and survival of an independent sentinel session.
-
-Durable cmux-tui workspace records remained after terminal exit.
-Acceptance verified Mac row, provider, background-process, and tmux-session absence; it did not verify deletion of those records.
-
-The main-checkout ref and working status remained unchanged in every test repository.
-Observation-only acknowledgments completed receipts after independently verified row absence.
-The controller did not issue the initial removal in these cases.
-
-The first Mac Codex background commands used a 600-second duration.
-Their final absence check occurred after that duration, so it did not prove cancellation.
-A repeat with 6000-second commands exposed orphaned commands after otherwise successful Git and row cleanup.
-Those Mac Codex cases failed shutdown acceptance.
-The runtime fix now adds explicit command cancellation and process predicates before completion.
-
-Claude used print mode with real Bash tools and automatic permission handling.
-These cases establish actual Claude tool and process cleanup, but do not establish interactive Claude terminal behavior.
-At that stage, legacy VM transport, denial of approval, and interrupted cleanup had fixture coverage but still required live acceptance.
-
-An earlier shared-server probe caused tmux 3.2a to crash and closed three existing VM rows.
-The two known task worktrees remained intact; teardown had not started.
-A dedicated-server reproduction confirmed that an unqualified pane target could trigger the crash.
-Task-scoped pane and window commands now use the qualified `=session:` target.
-A real Linux regression checks a colliding window name from another session on a private server.
-
-The user authorized restoration of two verified original provider sessions, which resumed successfully.
-The third row's identity remained uncertain, so it stayed closed.
-The final matrix used a dedicated server to protect existing sessions.
+The [earlier acceptance record](https://github.com/mal84emma/workgrove/pull/184#issuecomment-6775487700) retains the failed Mac Codex cancellation checks and tmux crash.
+Those earlier results do not establish current acceptance or cancellation of task-owned commands.
 
 ## Manual acceptance requires separate authorization
 
