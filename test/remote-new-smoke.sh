@@ -811,10 +811,16 @@ PY
   output=$(remote_task rm task -r "$r" --observe-only --row-closed)
   digest=${output#closed receipt }
   cp "$receipt" "$saved"
-  jq '.generation="replacement" | .commands.generation="replacement"' "$saved" >"$receipt"
-  status=0; output=$(remote_task new task -r "$r" -a none --no-workspace --closed-receipt "$digest" 2>&1) || status=$?
-  assert_eq 'a changed generation rejects the old acknowledgment' 1 "$status"
-  assert_absent "$r" .worktrees/task
+  for mode in generation identity; do
+    if [[ $mode == generation ]]; then
+      jq '.generation="replacement" | .commands.generation="replacement"' "$saved" >"$receipt"
+    else
+      jq '.tmux_identity={id:"$202",created:"new",socket:"/tmp/replacement",server:"1",start:"new"}' "$saved" >"$receipt"
+    fi
+    status=0; output=$(remote_task new task -r "$r" -a none --no-workspace --closed-receipt "$digest" 2>&1) || status=$?
+    assert_eq "changed $mode rejects the old acknowledgment" 1 "$status"
+    assert_absent "$r" .worktrees/task
+  done
   cp "$saved" "$receipt"
   invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
   assert_eq 'the Mac can reuse an independently confirmed self-removed name' 0 "$WT_RC"

@@ -1916,6 +1916,13 @@ STUB
   assert_wt_fails 1 'cleanup is pending' rm self -r "$r"
   assert_lacks 'outside-session retry does not kill a session by its reused name' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
   assert_wt_ok 'Mac absence acknowledgment completes native cleanup' rm self --row-closed -r "$r"
+  grep -vxF "$session" "$TEST_ROOT/self-tmux.log.closed" >"$TEST_ROOT/reopened-sessions" || true
+  mv "$TEST_ROOT/reopened-sessions" "$TEST_ROOT/self-tmux.log.closed"
+  WT_RELAY_ENV+=("SELF_TMUX_INSTANCE=\$202" "SELF_TMUX_PROBE=idle")
+  : >"$TEST_ROOT/self-tmux.log"
+  assert_wt_fails 1 'cleanup absence cannot be verified' rm self --observe-only --row-closed -r "$r"
+  assert_wt_fails 1 'cleanup absence cannot be verified' rm self --row-closed -r "$r"
+  assert_lacks 'a completed receipt cannot close a replacement session' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
   local legacy_session
   legacy_session="wt-$(basename "$r")-unmarked"
   printf '%s\n' "$legacy_session" >>"$TEST_ROOT/self-tmux.log.closed"
@@ -2915,6 +2922,8 @@ scenario_teardown_review_preservation() {
   stub_cmux dead
   r=$(new_repo newline-status)
   assert_wt_ok 'create a newline status fixture' new unusual --no-workspace -r "$r"
+  assert_wt_fails 1 'row acknowledgment is only valid for VM cleanup' rm unusual --defer-close --row-closed -r "$r"
+  assert_dir 'a VM acknowledgment cannot delete local Git work' "$r/.worktrees/unusual"
   p="$r/.worktrees/unusual"
   printf 'private\n' >"$p/"$'\n'
   assert_wt_fails 3 'cannot enumerate working files' rm unusual -r "$r"
@@ -3020,7 +3029,7 @@ SHIM
     source "$REPO/lib/workgrove/remote.sh"
     cmux_ok() { return 0; }
     host_new_preflight() { return 0; }
-    vm_result() { echo creation-attempt; printf -v "$5" '%s' 'cleanup remains pending for pending'; printf -v "$6" '%s' 1; }
+    vm_result() { echo creation-attempt; printf -v "$4" '%s' ''; printf -v "$5" '%s' 'cleanup remains pending for pending'; printf -v "$6" '%s' 1; }
     cmux_row_field() { return 1; }
     remote_wt() { echo false-absence-acknowledgment; }
     host_new test.invalid pending -r /scratch/repo || echo refused-query
@@ -3028,6 +3037,28 @@ SHIM
   assert_has 'failed row query refuses name reconciliation' "$controller_output" refused-query
   assert_lacks 'failed row query cannot acknowledge absence' "$controller_output" false-absence-acknowledgment
   assert_eq 'failed row query never retries creation' 1 "$(grep -c creation-attempt <<<"$controller_output")"
+  local query_mode query_log="$TEST_ROOT/closure-query"
+  for query_mode in present failed malformed; do
+    rm -f "$query_log"
+    # shellcheck disable=SC2329,SC2030,SC2031  # Exercise only the isolated controller functions.
+    controller_output=$(
+      # shellcheck source=lib/workgrove/remote.sh
+      source "$REPO/lib/workgrove/remote.sh"
+      cmux_ok() { return 0; }
+      host_new_preflight() { return 0; }
+      vm_result() { echo creation-attempt; printf -v "$4" '%s' ''; printf -v "$5" '%s' 'cleanup remains pending for pending'; printf -v "$6" '%s' 1; }
+      cmux_row_field() {
+        if [[ ! -e $query_log ]]; then touch "$query_log"; return 0; fi
+        case $query_mode in present) echo replacement-row ;; failed) return 1 ;; esac
+      }
+      remote_wt() {
+        if [[ $query_mode == malformed ]]; then echo invalid-token
+        else printf 'closed receipt %064d\n' 0; fi
+      }
+      host_new test.invalid pending -r /scratch/repo || echo refused-query
+    )
+    assert_eq "$query_mode evidence never retries creation" 1 "$(grep -c creation-attempt <<<"$controller_output")"
+  done
   end_scenario
 }
 
