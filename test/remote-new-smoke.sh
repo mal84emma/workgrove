@@ -264,6 +264,7 @@ scenario_row_titles() {
   local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
   rm "$FAKE_CMUX_STATE/ssh.json"
   touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
+  rm -f "$FAKE_CMUX_STATE/ssh-tasks/fakevm/task"
   printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
   printf 6 >"$FAKE_CMUX_STATE/ssh-publish-after"
   printf 2 >"$FAKE_CMUX_STATE/rename-publish-after"

@@ -853,7 +853,7 @@ HELPER
   ln -s "$REPO/bin/wt" "$HOME/.local/bin/wt"
   git -C "$TEST_ROOT/repo" init -q -b main
   git -C "$TEST_ROOT/repo" -c user.name=Test -c user.email=test@example.invalid commit -q --allow-empty -m initial
-  bash "$HOME/.local/bin/wt" new task -a claude --no-workspace -r "$TEST_ROOT/repo" >/dev/null
+  CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=test-vm bash "$HOME/.local/bin/wt" new task -a claude --no-workspace -r "$TEST_ROOT/repo" >/dev/null
   cat > "$TEST_ROOT/bin/claude" <<'AGENT'
 #!/bin/sh
 printf 'hook=%s\nhelper=%s\n' "${CMUX_TUI_HOOK:-}" "${WT_CMUX_TUI_HOOK:-}" > "$AGENT_ENV"
