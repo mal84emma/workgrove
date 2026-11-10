@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Build scenario data from the recorded cmux response shapes.
 # shellcheck disable=SC2119,SC2120
-FAKE_CMUX_FIXTURES=$(cd "${BASH_SOURCE[0]%/*}/../fixtures/cmux-0.65.1" && pwd -P)
+# Serve the responses recorded from the verified release that WG_CMUX_SUPPORTED names.
+FAKE_CMUX_FIXTURES=$(cd "${BASH_SOURCE[0]%/*}/.." \
+  && cd "fixtures/cmux-$(sed -n 's/^WG_CMUX_SUPPORTED=//p' ../lib/workgrove/cmux.sh)" && pwd -P)
+# wt doctor --record does not create SSH rows. A separate capture on cmux 0.65.1 measured this response.
+FAKE_CMUX_SSH_FIXTURE=$(cd "${BASH_SOURCE[0]%/*}/../fixtures/cmux-0.65.1" && pwd -P)/ssh.json
 
 fake_cmux_init() {
   export FAKE_CMUX_STATE=$1
@@ -92,7 +96,7 @@ fake_rows() {
 # Supply identities in the recorded SSH creation response.
 fake_ssh_response() {
   jq --arg id "$1" --arg host "$2" '.workspace_id=$id | .remote.destination=$host' \
-    "${3:-$FAKE_CMUX_FIXTURES/ssh.json}"
+    "${3:-$FAKE_CMUX_SSH_FIXTURE}"
 }
 
 fake_windows() {
