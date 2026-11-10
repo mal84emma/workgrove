@@ -320,11 +320,17 @@ The VM returns a digest of the verified receipt after row-acknowledged observati
 The Mac checks row absence again, then supplies that digest to the creation retry through `--closed-receipt`.
 The VM checks the digest under the teardown lock and repeats observation before creating the task.
 The digest binds the acknowledgment to the complete receipt, including its generation, original SSH alias, and session identity.
-The controller supplies that alias through `--row-host`; a different alias cannot confirm the original row's absence.
-An old self-removal receipt without its original alias remains pending.
-Native and legacy self-removal require `WT_HOST` before Git cleanup, so the receipt and confirmation command identify the original alias.
+The controller records its alias in the task generation through `--row-host` during creation.
+Cleanup retains that original alias even when the VM's configured alias changes.
+Attachment and recovery refuse another alias before closing rows, sending pane input, or replacing a session.
+A different alias cannot confirm the original row's absence.
+An old VM receipt without its original alias remains pending.
+Every new VM generation requires a valid controller alias or `WT_HOST` before creation.
+VM removal requires that saved alias before Git cleanup, so its confirmation command identifies the original alias.
+Automatic VM removal and attachment refuse older generations without a recorded alias.
 A changed receipt, replacement session, active recorded process, or uncertain sample blocks reuse.
 A completed stage alone cannot establish absence.
+The VM's `workspace=0` metadata cannot waive Mac confirmation; the Mac controller uses that value before it creates its row.
 Otherwise, pending cleanup blocks reuse of the task name.
 
 Controller-side VM removal captures idle processes only between fresh samples that confirm no provider is running.

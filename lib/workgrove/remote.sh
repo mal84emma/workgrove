@@ -138,7 +138,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   [[ -z "$repo_request" ]] || inspect+=" -r $(shell_join "$repo_request")"
   local out err name repo session rc result_rc=0
   local -A result=()
-  vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
+  vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin --row-host "$host" "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
   if [[ $rc != 0 && $err == *'cleanup remains pending for '* && -n ${opts[name]-} && -n $repo_request ]]; then
     local closure pending_repo pending_name retry_args=()
     pending_repo=$(host_repo_path "$host" "$repo_request") || return 1

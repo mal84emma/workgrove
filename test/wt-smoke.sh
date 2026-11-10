@@ -134,6 +134,8 @@ FAKE_BIN="$TEST_ROOT/bin"             # first on wt_run's PATH: the agent that `
 CMUX_LOG="$TEST_ROOT/cmux-calls.log"  # every argv that the cmux stub got, one per line
 AGENT_LOG="$TEST_ROOT/agent-argv.log" # the argv that `wt run` gave the agent
 mkdir -p "$SCRATCH_HOME" "$REPOS_DIR" "$FAKE_BIN"
+# Ordinary preservation scenarios use local commands on every platform. VM scenarios set CMUX_SSH_ATTEMPT_ID.
+printf '#!/bin/sh\necho Darwin\n' >"$FAKE_BIN/uname"; chmod +x "$FAKE_BIN/uname"
 REAL_COMMANDS_PYTHON=$(command -v python3)
 ln -s "$REPO/test/fakes/commands-python.sh" "$FAKE_BIN/python3"
 
@@ -1733,6 +1735,7 @@ scenario_self_rm_vm() {
   local r fake session probe
   r="$(new_repo self-rm)"
   stub_cmux dead
+  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=test-vm)
   assert_wt_ok "wt new self" new self --no-workspace -r "$r"
   assert_wt_ok "wt new unmarked native task" new unmarked --no-workspace -r "$r"
   assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
@@ -1821,7 +1824,8 @@ STUB
   assert_wt_fails 3 "1 uncommitted change(s)" rm self -r "$r"
   assert_dir "dirty refusal takes precedence over missing host" "$r/.worktrees/self"
   guard_scratch_root "$r/.worktrees/self"; rm -f "$r/.worktrees/self/scratch.txt"
-  assert_wt_fails 1 'WT_HOST' rm self -r "$r"
+  assert_wt_fails 1 'WT_HOST' new missing-host --no-workspace -r "$r"
+  assert_gone 'missing host cannot create an unbound VM generation' "$r/.worktrees/missing-host"
   assert_dir 'missing host preserves the native worktree' "$r/.worktrees/self"
   WT_RELAY_ENV[0]="WT_HOST=test-vm"
   WT_RELAY_ENV[4]="SELF_TMUX_SESSION=wt-$(basename "$r")-sandboxed"
@@ -1903,7 +1907,7 @@ STUB
         assert_wt_fails 1 'cleanup is pending' rm "status-$probe" -r "$r"
         assert_gone 'idle session cleanup keeps a pending receipt after Git removal' "$r/.worktrees/status-$probe" ;;
       missing|no-server|no-socket)
-        assert_wt_ok "$probe tmux status permits removal" rm "status-$probe" -r "$r"
+        assert_wt_fails 1 'cleanup is pending' rm "status-$probe" -r "$r"
         assert_gone "$probe tmux status removed the worktree" "$r/.worktrees/status-$probe"
         assert_branch "$r" "wt/status-$probe" no ;;
       *)
@@ -2367,7 +2371,9 @@ scenario_cmux() {
   assert_wt_ok "wt new cleared" new cleared --no-workspace -r "$r"
   fake_rows "$(fake_row "cleared-row" "cleared" "" | jq -c --arg directory "$r/.worktrees/cleared" '.current_directory=$directory')" >"$WT_ROWS"
   : >"$CMUX_LOG"
-  assert_wt_ok "wt rm cleared" rm cleared -r "$r"
+  assert_wt_fails 1 'cleanup absence cannot be verified' rm cleared -r "$r"
+  assert_eq 'an unclaimed row leaves cleanup pending' close_requested "$(jq -r .stage "$r/.git/wt/teardown/cleared.json")"
+  assert_gone 'unclaimed row refusal follows successful Git cleanup' "$r/.worktrees/cleared"
   assert_lacks "…and leaves the row open" "$(cat "$CMUX_LOG")" "workspace close"
 
   # From here, each row has an agent state of its own.
@@ -2414,7 +2420,8 @@ scenario_cmux() {
     "$(fake_row "driver-row" "driver" "@local" | jq -c --arg directory "$guarded" '.current_directory=$directory')" >"$WT_ROWS"
   WT_RELAY_ENV=("CMUX_STUB_CALLER=driver-row" "CMUX_STUB_AGENTS=0" "CMUX_STUB_BUSY_ROWS=vm-row notes-row sibling-row")
   : >"$CMUX_LOG"
-  assert_wt_ok "wt rm guarded" rm guarded -r "$r"
+  assert_wt_fails 1 'cleanup absence cannot be verified' rm guarded -r "$r"
+  assert_eq 'directory-only rows keep final confirmation pending' close_requested "$(jq -r .stage "$r/.git/wt/teardown/guarded.json")"
   assert_lacks "…and closes no row" "$(cat "$CMUX_LOG")" "workspace close"
   WT_RELAY_ENV=()
 
@@ -3783,16 +3790,21 @@ SHIM
   if [[ $OS == Darwin ]]; then
     assert_wt_ok 'verified sidecar absence retains legacy removal' rm no-sidecar -r "$r"
   else
-    WT_RELAY_ENV=(WT_HOST=fixture.invalid)
-    # Missing legacy metadata cannot establish VM row absence.
-    assert_wt_fails 1 'cleanup is pending' rm no-sidecar -r "$r"
-    assert_gone 'legacy VM removal completes Git cleanup' "$r/.worktrees/no-sidecar"
-    assert_eq 'unknown VM row remains pending' close_requested "$(jq -r .stage "$r/.git/wt/teardown/no-sidecar.json")"
-    # This fixture controller knows that no row or tmux session was created.
-    assert_wt_ok 'observed absence completes legacy VM cleanup' rm no-sidecar -r "$r" --observe-only --row-closed --row-host fixture.invalid
-    WT_RELAY_ENV=()
+    local legacy_tmux="$TEST_ROOT/legacy-absent-tmux"
+    mkdir -p "$legacy_tmux"
+    printf '#!/bin/sh\necho "no server running on /tmp/fixture-tmux" >&2\nexit 1\n' >"$legacy_tmux/tmux"
+    chmod +x "$legacy_tmux/tmux"
+    WT_PATH_PREFIX=$legacy_tmux
+    WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=fixture.invalid)
+    assert_wt_fails 1 'task row host is unverified' rm no-sidecar -r "$r"
+    assert_dir 'unknown original alias preserves the legacy VM worktree' "$r/.worktrees/no-sidecar"
+    assert_branch "$r" wt/no-sidecar yes
+    assert_absent "$r" .git/wt/teardown/no-sidecar.json
+    WT_RELAY_ENV=() WT_PATH_PREFIX=''
   fi
-  assert_eq 'legacy removal finishes with a complete receipt' complete "$(jq -r .stage "$r/.git/wt/teardown/no-sidecar.json")"
+  if [[ $OS == Darwin ]]; then
+    assert_eq 'local legacy removal finishes with a complete receipt' complete "$(jq -r .stage "$r/.git/wt/teardown/no-sidecar.json")"
+  fi
   end_scenario
 }
 
@@ -3930,6 +3942,8 @@ STUB
   fixture_git "$TEST_ROOT/vm/project" config user.email test@example.invalid
   fixture_commit "$TEST_ROOT/vm/project" README 'a scratch VM repo'
   fixture_git "$TEST_ROOT/vm/project" worktree add -qb wt/task "$TEST_ROOT/vm/project/.worktrees/task"
+  mkdir -p "$TEST_ROOT/vm/project/.git/wt"
+  printf '{"row_host":"fakevm"}\n' >"$TEST_ROOT/vm/project/.git/wt/task.json"
   printf '#!/bin/sh\necho Linux\n' >"$TEST_ROOT/vm-bin/uname"
   cp "$REPO/test/fakes/pgrep" "$TEST_ROOT/vm-bin/pgrep"
   cp "$REPO/test/fakes/tmux" "$TEST_ROOT/vm-bin/show-tmux"
@@ -3943,7 +3957,7 @@ for arg do
   if [[ $arg == /vm/repos/project ]]; then arg=$FAKE_VM_REPO; fi
   args+=("$arg")
 done
-output=$(PATH="$FAKE_VM_BIN:$PATH" CMUX_SSH_ATTEMPT_ID=1 FAKE_SHOW_PROBE=1 WT_MACHINE=1 "$FAKE_VM_WT" "${args[@]}")
+output=$(PATH="$FAKE_VM_BIN:$PATH" CMUX_SSH_ATTEMPT_ID=1 WT_HOST=fakevm FAKE_SHOW_PROBE=1 WT_MACHINE=1 "$FAKE_VM_WT" "${args[@]}")
 while IFS= read -r line; do
   if [[ $line == WT_RESULT$'\t'* ]]; then
     record=${line#*$'\t'}
@@ -4563,7 +4577,7 @@ exec /bin/ps "$@"
 SHIM
   chmod +x "$shim/"*
   for start in 2 4 5 6; do
-    WT_PATH_PREFIX='' WT_RELAY_ENV=()
+    WT_PATH_PREFIX='' WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=fixture.invalid)
     r=$(new_repo "vm-boundary-$start")
     assert_wt_ok 'create controller-owned VM fixture' new target --no-workspace -r "$r"
     WT_PATH_PREFIX=$shim

@@ -158,7 +158,7 @@ wt_read_result() {
           and (.value | if type == "string" then (explode | all(. >= 32 and . != 127)) else true end))
         and all(to_entries[]; if .key == "agent" or .key == "attached" or .key == "started"
           then (.value | type == "boolean")
-          elif .key == "path" then (.value | type == "string" and (explode | all(. >= 32 and . != 127)))
+          elif .key == "path" or .key == "row_host" then (.value | type == "string" and (explode | all(. >= 32 and . != 127)))
           else true end)
         and (if .command == "doctor" then
           (.status | IN("PASS", "FAIL"))

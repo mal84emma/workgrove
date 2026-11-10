@@ -216,14 +216,12 @@ teardown_sidecars_check() { # Absence is valid only after durable sidecar-remova
 }
 
 teardown_row_context() {
-  [[ ${row_closed:-0} == 1 || -n ${row_host:-} ]] || return 0
+  [[ $(jq -r .remote <<<"$WT_TEARDOWN_JSON") == 1 ]] || return 0
   local expected
-  expected=$(jq -r 'if .host == null then "" elif (.host | type) == "string" then .host else error("invalid host") end' <<<"$WT_TEARDOWN_JSON") || return 1
-  if [[ -n $expected ]]; then
-    valid_host "$expected" && [[ ${row_host:-} == "$expected" ]]
-  else
-    [[ $(jq -r .self <<<"$WT_TEARDOWN_JSON") == '' && $(jq -r .workspace <<<"$WT_TEARDOWN_JSON") == 0 ]]
-  fi
+  expected=$(jq -er '.host | strings | select(length > 0)' <<<"$WT_TEARDOWN_JSON") || return 1
+  valid_host "$expected" || return 1
+  [[ ${row_closed:-0} == 1 || -n ${row_host:-} ]] || return 0
+  [[ ${row_host:-} == "$expected" ]]
 }
 
 teardown_observe() { # Observe absence only; this function never closes a row or deletes Git work.
@@ -241,7 +239,7 @@ teardown_observe() { # Observe absence only; this function never closes a row or
     [[ $(teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/branch_config.py" snapshot "$REPO" "$branch") == '""' ]] || return 1
   fi
   if [[ $remote == 1 ]]; then
-    [[ ${row_closed:-0} == 1 || ( $(jq -r .workspace <<<"$WT_TEARDOWN_JSON") == 0 && $(jq -r .self <<<"$WT_TEARDOWN_JSON") == '' ) ]] || return 1
+    [[ ${row_closed:-0} == 1 ]] || return 1
     current=$(task_tmux_identity "$(jq -r .session <<<"$WT_TEARDOWN_JSON")") && rc=0 || rc=$?
     [[ $rc == 1 ]] || return 1
   else
@@ -387,8 +385,6 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
         identity_rc=0; identity=$(task_tmux_identity "$session") || identity_rc=$?
         [[ $identity_rc == 1 ]] || die 'tmux session absence is unverified'
       fi
-    elif [[ $identity_rc == 1 && $self == '' && $(jq -r .workspace <<<"$WT_TEARDOWN_JSON") == 0 ]]; then
-      :
     else
       if [[ -n ${TMUX:-} && ${TMUX_PANE:-} =~ ^%[0-9]+$ ]]; then
         caller_session=$(tmux display-message -p -t "$TMUX_PANE" '#S') || return 1

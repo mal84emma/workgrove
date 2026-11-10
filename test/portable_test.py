@@ -835,6 +835,8 @@ class PortableTests(unittest.TestCase):
         self.install()
         task = self.source / ".worktrees/accidental"
         self.git("worktree", "add", "-qb", "wt/accidental", str(task), "HEAD")
+        (self.source / ".git/wt").mkdir(exist_ok=True)
+        (self.source / ".git/wt/accidental.json").write_text(json.dumps({"row_host": "test-host"}))
         self.git("config", "branch.wt/accidental.remote", "origin")
         self.git("config", "branch.wt/accidental.merge", "refs/heads/main")
         report = json.loads(self.command("doctor", "--json", ok=False).stdout)
