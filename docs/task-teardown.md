@@ -314,6 +314,7 @@ Retries of completed receipts repeat the absence checks and cannot close a repla
 Local observation checks the saved row ID and current matching or ambiguous rows, including receipts that recorded no row.
 Creation can reconcile already-absent local rows without closing anything.
 The Mac can reconcile an absent VM row and session before retrying a requested task name.
+Mac confirmation requires absence of matching and ambiguous task rows, including rows with edited descriptions and remaining duplicate rows.
 The controller resolves repository aliases before checking Mac rows and binds later VM operations to that resolved path.
 The VM returns a digest of the verified receipt after row-acknowledged observation.
 The Mac checks row absence again, then supplies that digest to the creation retry through `--closed-receipt`.

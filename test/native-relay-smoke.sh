@@ -505,6 +505,22 @@ scenario_native_attach_close() {
   has "$CMUX_LOG" "workspace close $ROW_ID --force"
   lacks "$SSH_CALL_LOG" '--row-closed'
   has "$XDG_STATE_HOME/cmux-hook.log" 'row absence is unverified'
+  for sample in matching unclaimed; do
+    record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+    local replacement description='@test-vm · repo'
+    [[ $sample != unclaimed ]] || description='custom description'
+    replacement=$(fake_row replacement-row task "$description" test-vm)
+    fake_rows "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")" "$replacement" >"$TEST_ROOT/duplicate-rows"
+    cp "$TEST_ROOT/duplicate-rows" "$FAKE_CMUX_STATE/rows.json"
+    touch "$FAKE_CMUX_STATE/mutate-close"
+    : >"$SSH_CALL_LOG"
+    bash "$REPO/bin/cmux-hook" --event </dev/null >/dev/null
+    has "$CMUX_LOG" "workspace close $ROW_ID --force"
+    lacks "$SSH_CALL_LOG" '--row-closed'
+    assert_eq "$sample replacement row survives the callback" replacement-row "$(jq -r '.workspaces[0].id' "$FAKE_CMUX_STATE/rows.json")"
+    has "$XDG_STATE_HOME/cmux-hook.log" 'row absence is unverified'
+    rm "$FAKE_CMUX_STATE/mutate-close"
+  done
   unset SSH_CALL_LOG
   record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
   REMOTE_DEFER_FAIL=1 hook >/dev/null

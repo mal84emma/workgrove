@@ -58,6 +58,8 @@ prepare_cmux() {
     ssh-fail) fake_failure ssh 1 'row connection failed' ;;
     tag-fail) fake_failure workspace-action 1 ;;
     existing) before=$(fake_rows "$(fake_row workspace:123 task '@fakevm · repo' fakevm)") ;;
+    unclaimed) before=$(fake_rows "$(fake_row workspace:123 task 'custom description' fakevm)") ;;
+    duplicates) before=$(fake_rows "$(fake_row workspace:123 task '@fakevm · repo' fakevm)" "$(fake_row duplicate-row task '@fakevm · repo' fakevm)") ;;
     legacy) before=$(fake_rows "$(fake_row workspace:123 repo:task @fakevm fakevm)") ;;
     other-repo|no-ref) before=$(fake_rows "$(fake_row other-row task '@fakevm · other' fakevm)") ;;
     no-ref-own) before=$(fake_rows "$(fake_row user-row task '' fakevm)") ;;
@@ -874,12 +876,27 @@ PY
   status=0; output=$(remote_task new task -r "$r" -a none --no-workspace 2>&1) || status=$?
   assert_eq 'a pending self-receipt blocks VM creation' 1 "$status"
   assert_eq 'failed VM creation keeps pending cleanup' close_requested "$(jq -r .stage "$receipt")"
-  for mode in existing partial-window; do
+  for mode in existing unclaimed duplicates partial-window; do
     CMUX_MODE=$mode
     invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
     assert_eq "$mode row state blocks reuse" 1 "$WT_RC"
     assert_eq "$mode row state leaves the receipt pending" close_requested "$(jq -r .stage "$receipt")"
     assert_absent "$r" .worktrees/task
+  done
+  touch "$FAKE_CMUX_STATE/mutate-close"
+  fake_top other 0 | jq '.windows[0].workspaces=[{id:"workspace:123",resources:{pids:[],process_count:0}},{id:"duplicate-row",resources:{pids:[],process_count:0}}]' >"$FAKE_CMUX_STATE/top.json"
+  for mode in unclaimed duplicates; do
+    CMUX_MODE=$mode
+    : >"$TEST_ROOT/cmux.log"
+    invoke_wt -H fakevm rm task -r "$r" --observe-only
+    assert_eq "$mode VM rows block observation" 1 "$WT_RC"
+    assert_eq "$mode observation keeps cleanup pending" close_requested "$(jq -r .stage "$receipt")"
+    check "$(if ! grep -qF 'workspace close' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'observation closed a candidate row'
+    invoke_wt -H fakevm rm task -r "$r"
+    assert_eq "$mode VM rows block full confirmation" 1 "$WT_RC"
+    assert_eq "$mode confirmation keeps cleanup pending" close_requested "$(jq -r .stage "$receipt")"
+    assert_eq "$mode preserves a remaining candidate row" 1 \
+      "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
   done
   CMUX_MODE=alive
   jq 'del(.commands)' "$saved" >"$receipt"

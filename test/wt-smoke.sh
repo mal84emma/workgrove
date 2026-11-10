@@ -3035,7 +3035,7 @@ SHIM
     cmux_ok() { return 0; }
     host_new_preflight() { return 0; }
     vm_result() { echo creation-attempt; printf -v "$4" '%s' ''; printf -v "$5" '%s' 'cleanup remains pending for pending'; printf -v "$6" '%s' 1; }
-    cmux_row_field() { return 1; }
+    rows_json() { return 1; }
     remote_wt() { if [[ $2 == repos ]]; then printf '/scratch/repo\n'; else echo false-absence-acknowledgment; fi; }
     host_new test.invalid pending -r /scratch/repo || echo refused-query
   )
@@ -3052,9 +3052,13 @@ SHIM
       cmux_ok() { return 0; }
       host_new_preflight() { return 0; }
       vm_result() { echo creation-attempt; printf -v "$4" '%s' ''; printf -v "$5" '%s' 'cleanup remains pending for pending'; printf -v "$6" '%s' 1; }
-      cmux_row_field() {
-        if [[ ! -e $query_log ]]; then touch "$query_log"; return 0; fi
-        case $query_mode in present) echo replacement-row ;; failed) return 1 ;; esac
+      rows_json() {
+        if [[ ! -e $query_log ]]; then touch "$query_log"; echo '{"workspaces":[]}'; return 0; fi
+        case $query_mode in
+          present) echo '{"workspaces":[{"id":"replacement-row","title":"pending","description":"@test.invalid · repo","remote":{"enabled":true,"destination":"test.invalid"}}]}' ;;
+          failed) return 1 ;;
+          *) echo '{"workspaces":[]}' ;;
+        esac
       }
       remote_wt() {
         if [[ $2 == repos ]]; then

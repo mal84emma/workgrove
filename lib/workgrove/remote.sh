@@ -140,18 +140,17 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   local -A result=()
   vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
   if [[ $rc != 0 && $err == *'cleanup remains pending for '* && -n ${opts[name]-} && -n $repo_request ]]; then
-    local pending_row closure pending_repo pending_name retry_args=()
+    local closure pending_repo pending_name retry_args=()
     pending_repo=$(host_repo_path "$host" "$repo_request") || return 1
     pending_name=$(tidy_name "${opts[name]}")
     valid_name "$pending_name" || return 1
-    pending_row=$(cmux_row_field "$(row_title "$pending_name")" "$pending_repo" id "$host" checked) || return 1
-    if [[ -z $pending_row ]] && \
-        closure=$(remote_wt "$host" rm "$pending_name" -r "$pending_repo" --observe-only --row-closed --row-host "$host"); then
+    check_task_row_absence "$(row_title "$pending_name")" "$pending_repo" "$host" \
+      || { warn "$CMUX_ERROR"; return 1; }
+    if closure=$(remote_wt "$host" rm "$pending_name" -r "$pending_repo" --observe-only --row-closed --row-host "$host"); then
       if [[ $closure =~ ^closed\ receipt\ ([0-9a-f]{64})$ ]]; then
         local digest=${BASH_REMATCH[1]}
         # Bind a fresh Mac observation to the receipt that the VM just verified.
-        pending_row=$(cmux_row_field "$(row_title "$pending_name")" "$pending_repo" id "$host" checked) || return 1
-        if [[ -z $pending_row ]]; then
+        if check_task_row_absence "$(row_title "$pending_name")" "$pending_repo" "$host"; then
           result_rc=0
           wt_opt_args opts retry_args prompt stdin_prompt workspace repo
           vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin --closed-receipt "$digest" --row-host "$host" \
@@ -236,22 +235,24 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
     *) die "cannot check the agent in tmux session $session on $host; kept the worktree" ;;
   esac
   if [[ ${opts[observe_only]:-0} == 1 ]]; then
-    [[ -z $_row ]] || die 'VM row is still present; observation did not close it'
+    cmux_require check_task_row_absence "$title" "$repo" "$host"
     remote_wt "$host" rm --row-closed "${args[@]}"
     return
   fi
-  local acknowledgment=()
-  [[ -n $_row ]] || acknowledgment=(--row-closed)
+  local acknowledgment=() absence_rc=0
+  check_task_row_absence "$title" "$repo" "$host" || absence_rc=$?
+  case $absence_rc in
+    0) acknowledgment=(--row-closed) ;;
+    1) ;;
+    *) die "$CMUX_ERROR" ;;
+  esac
   remote_wt "$host" rm --defer-close "${acknowledgment[@]}" "${args[@]}" || return $?
   # shellcheck disable=SC2034  # The checked helper also returns caller ownership.
-  local checked_row='' checked_self='' rows
+  local checked_row='' checked_self=''
   cmux_require check_row_removal "$title" "$repo" checked_row checked_self "$host"
   [[ $checked_row == "$_row" ]] || die 'VM row identity changed; cleanup remains pending'
   cmux_require close_row "$checked_row"
-  rows=$(rows_json checked) || die 'cannot confirm VM row absence'
-  if [[ -n $checked_row ]] && jq -e --arg id "$checked_row" 'any(.workspaces[]; .id == $id)' <<<"$rows" >/dev/null; then
-    die 'VM row remains open; session cleanup is pending'
-  fi
+  cmux_require check_task_row_absence "$title" "$repo" "$host" "$checked_row"
   remote_wt "$host" rm --row-closed "${args[@]}"
 }
 

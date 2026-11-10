@@ -67,6 +67,21 @@ cmux_row_field() {
   printf '%s' "$rows" | cmux_find_row "$1" "$repo" "$3" "${4:-}" || true
 }
 
+# A task row can reconnect even when ownership rules prevent its closure.
+# Return 0 for absence, 1 for a candidate row, and 2 for uncertain evidence.
+check_task_row_absence() {
+  local rows rc=0
+  rows=$(rows_json checked) || { CMUX_ERROR='cannot confirm task row absence'; return 2; }
+  jq -e --arg title "$1" --arg repo "$(repo_id "$2")" --arg host "$3" --arg row "${4:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
+    any(.workspaces[]; ($row != "" and .id == $row) or task_row($title; $repo; $host; $sep)
+      or unclaimed_row($title; $host; $sep))' <<<"$rows" >/dev/null || rc=$?
+  case $rc in
+    1) return 0 ;;
+    0) cmux_error 'task row absence is unverified; a matching, ambiguous, or original row remains' ;;
+    *) CMUX_ERROR='cannot confirm task row absence'; return 2 ;;
+  esac
+}
+
 row_label() { # row_label <title> <repo> [host] — the matching row as the sidebar shows it. An older wt's row
   # keeps its old title, so this reads the row's own title and description. A row that is gone by then
   # reads as the label that wt would give it.

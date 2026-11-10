@@ -168,10 +168,8 @@ case $t in
         elif ! remote_row_idle "$ws"; then
           log "relay row ownership prevents closure: $CMUX_ERROR"
         elif close_row "$ws" self >/dev/null 2>&1; then
-          closed_rows=$(rows_json checked) || { log "cannot verify row absence after closing $ws; session cleanup remains pending"; exit 0; }
-          absence_rc=0
-          jq -e --arg row "$ws" 'any(.workspaces[]; .id == $row)' <<<"$closed_rows" >/dev/null || absence_rc=$?
-          [[ $absence_rc == 1 ]] || { log "row absence is unverified after closing $ws; session cleanup remains pending"; exit 0; }
+          check_task_row_absence "$(row_title "$n")" "$r" "$h" "$ws" \
+            || { log "row absence is unverified after closing $ws; session cleanup remains pending; $CMUX_ERROR"; exit 0; }
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
           if vm_wt "$h" rm "$n" -r "$r" --row-closed --row-host "$h" >/dev/null 2>&1; then
