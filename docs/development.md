@@ -96,6 +96,7 @@ workgrove/
 ├── test/
 │   ├── run.sh                 the shared local and CI runner with bounded workers and timings
 │   ├── runner-smoke.sh        runner scheduling, filters, failure logs, and interruption cleanup
+│   ├── runner-jobs.py         bounded worker defaults from the visible CPU allocation
 │   ├── runner-git.sh          optional resolution of Apple's Git launcher for test workers
 │   ├── runner-git-smoke.sh    Git selection, fallback, and fixture precedence
 │   ├── wt-scenarios.sh        the wt scenario IDs and names shared by discovery and execution
