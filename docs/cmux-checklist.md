@@ -83,8 +83,12 @@ The VM checks require a reachable VM and a task with a running agent.
    It reads one retained `notification.created` event without sending a notification.
    If no event exists, retry after an agent notification.
 10. Review the fixtures for personal information before committing them.
-    Record the cmux build and VM results in the [cmux compatibility log](cmux-integration.md#cmux-compatibility-log).
-    After every check passes, update `WG_CMUX_SUPPORTED` in `lib/workgrove/cmux.sh`.
+    Delete the previous release's fixture folder in the same change.
+    Keep any file that the fake cmux still reads from it, such as the SSH creation capture `ssh.json`.
+11. After every check passes, update `WG_CMUX_SUPPORTED` in `lib/workgrove/cmux.sh`.
+    Add one row to the [cmux compatibility log](cmux-integration.md#cmux-compatibility-log) with the build, the date, the status, and a link to the pull request.
+    Record each check's result in the pull request description, not in the repository.
+    Open an issue for each defect that the checks find, and link it from the description.
 
 `wt doctor` returns zero when every check passes.
 It returns nonzero for failures and version warnings, while reporting the remaining checks.

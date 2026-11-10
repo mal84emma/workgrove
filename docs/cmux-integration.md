@@ -13,7 +13,7 @@ The probe does not create rows, execute agent hooks, or verify the complete user
 
 | Check | Reader and required result |
 |---|---|
-| The cmux version | `doctor_mac` parses `cmux version` and compares it with `WG_CMUX_SUPPORTED` in [cmux.sh](../lib/workgrove/cmux.sh), currently `0.65.1`. |
+| The cmux version | `doctor_mac` parses `cmux version` and compares it with `WG_CMUX_SUPPORTED` in [cmux.sh](../lib/workgrove/cmux.sh), currently `0.65.2`. |
 | Available methods | `doctor_mac` requires `workspace.list`, `workspace.create`, `workspace.action`, `workspace.close`, and `workspace.select` in `.methods`. |
 | Other methods | `doctor_mac` also requires `notification.list`, `notification.dismiss`, `system.top`, and `surface.read_text`. |
 | Window and row JSON | `doctor_mac` calls `cmux_rows_load checked` in `cmux.sh`. The next tables define the fields. |
@@ -263,13 +263,14 @@ Run `cmux version` to check your installed version.
 Run `wt doctor` after an update, then follow the [cmux update checklist](cmux-checklist.md).
 `WG_CMUX_SUPPORTED` in `lib/workgrove/cmux.sh` selects the single verified version for the probe.
 
-workgrove supports cmux 0.65.1 until a newer release passes verification. Version 0.65.2 is unverified.
+workgrove supports cmux 0.65.2 until a newer release passes verification.
 The log has one supported version at a time. Older rows record historical verification.
 Support does not include the removed cmux 0.64 TCP relay paths.
 
 | cmux version | Status | Verified on | Verified behavior |
 |---|---|---|---|
-| 0.65.1 (build 110, `8a853dcc9`) | Supported; native VM, cross-window, and SSH UUID checks passed | 2026-10-16; 2026-10-27 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. The [SSH creation measurements](#ssh-creation-identity-on-0651) verify UUID responses. |
+| 0.65.2 (build 113, `12023d89f`) | Supported; every check passed except `--reattach` | 2026-11-10 | [PR #201](https://github.com/mal84emma/workgrove/pull/201) records the Mac and VM checks. |
+| 0.65.1 (build 110, `8a853dcc9`) | Historical; native VM, cross-window, and SSH UUID checks passed | 2026-10-16; 2026-10-27 | A Claude VM task showed Running, then Idle. VM-side `wt open` opened VS Code on the Mac. VM-side self-removal closed its row, ended its tmux session, and removed its worktree. Two existing VM rows and sessions remained present. No recorded native state was suspended, and no payload contained a daemon slot. Cross-window lookup, description updates, input, and self-removal passed. The [SSH creation measurements](#ssh-creation-identity-on-0651) verify UUID responses. |
 | 0.65.0 (build 108, `dda24fbd2`) | Historical | 2026-10-08 | Claude and Codex self-removal, locally and on `<test-vm>`. All four cases removed their task rows. Both VM tmux sessions ended. Five preexisting rows and two VM sessions remained intact. |
 
 [PR #19](https://github.com/mal84emma/workgrove/pull/19) adapts self-removal to cmux 0.65.0's row-closing behavior.
@@ -277,9 +278,8 @@ Local self-removal uses cmux's `--force` only for the verified caller's own row.
 Native VM rows exit with their task's tmux session.
 The earlier `0.64 or newer` requirement did not guarantee compatibility with these changes.
 
-For each supported version, record the exact build, verified behavior, and remaining checks.
-[VM verification on cmux 0.65.1](vm-open-relay.md#verification-on-cmux-0651) records the current live checks.
-Codex VM status, combined states from several agents, and Esc interruption behavior remain unverified by that live session.
+For each new version, add one row with the exact build, the date, the status, and a link to the pull request whose description records the checks.
+Keep check results on GitHub, not in this log.
 
 ### SSH creation identity on 0.65.1
 

@@ -8,7 +8,11 @@ while [[ -L $source_path ]]; do
   [[ $source_path == /* ]] || source_path=$source_dir/$source_path
 done
 HERE=$(cd "${source_path%/*}" && pwd -P)
-fixtures=${CMUX_FIXTURES:-$HERE/../fixtures/cmux-0.65.1}
+# shellcheck source=test/fakes/rows.sh
+source "$HERE/rows.sh"
+fixtures=${CMUX_FIXTURES:-$FAKE_CMUX_FIXTURES}
+ssh_fixture=$fixtures/ssh.json
+[[ -f $ssh_fixture ]] || ssh_fixture=$FAKE_CMUX_SSH_FIXTURE
 state=${FAKE_CMUX_STATE:-}
 if [[ -n $state ]]; then
   printf '%s\n' "$*" >>"$state/$(if [[ ${0##*/} == cmux-tui && -f $state/native-log ]]; then echo native-calls.log; else echo calls.log; fi)"
@@ -161,8 +165,6 @@ if [[ -n $state ]]; then
   if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; apply_effects; exit 0; fi
 fi
 if [[ -n $state && ( -f $state/mutate || ( $key == workspace-close && -f $state/mutate-close ) ) ]]; then
-  # shellcheck source=test/fakes/rows.sh
-  source "$HERE/rows.sh"
   case $key in
     ssh|workspace-create)
       # Local creation keeps its reference. Explicit SSH formatting returns the UUID.
@@ -190,7 +192,7 @@ if [[ -n $state && ( -f $state/mutate || ( $key == workspace-close && -f $state/
       fi
       refresh_windows
       if [[ $key == ssh && $ssh_uuids == 1 ]]; then
-        fake_ssh_response "$id" "$host" "$fixtures/ssh.json"
+        fake_ssh_response "$id" "$host" "$ssh_fixture"
       else printf '%s\n' "$ref"; fi
       apply_effects
       exit 0 ;;
@@ -235,9 +237,7 @@ case "$key" in
   ping|diff|workspace-close|workspace-select|workspace-action|send|send-key|dismiss-notification) ;;
   ssh)
     if ((ssh_uuids)); then
-      # shellcheck source=test/fakes/rows.sh
-      source "$HERE/rows.sh"
-      fake_ssh_response 00000000-0000-4000-8000-000000000099 "$2" "$fixtures/ssh.json"
+      fake_ssh_response 00000000-0000-4000-8000-000000000099 "$2" "$ssh_fixture"
     else printf 'workspace:99\n'; fi ;;
   workspace-create) printf 'workspace:99\n' ;;
   read-screen) exit 1 ;;

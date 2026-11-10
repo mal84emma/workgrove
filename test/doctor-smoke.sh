@@ -99,12 +99,12 @@ scenario_mac() {
   FAKE_CMUX_MISSING_METHOD=workspace.remote.reconnect invoke doctor
   assert_eq 'supported cmux passes' 0 "$STATUS"
   assert_grep 'the commit and protocol are reported' "$TEST_ROOT/output" 'PASS wt version {"commit":'
-  for version in 0.64.0 0.65.2; do
+  for version in 0.64.0 0.65.1 0.65.3; do
     FAKE_CMUX_VERSION=$version invoke doctor
     assert_eq "$version warns" 1 "$STATUS"
-    assert_grep 'warning names the verified release' "$TEST_ROOT/output" 'verified 0.65.1'
+    assert_grep 'warning names the verified release' "$TEST_ROOT/output" 'verified 0.65.2'
     assert_grep 'warning explains the support policy' "$TEST_ROOT/output" 'older and newer versions need verification'
-    assert_grep 'repair downloads the verified release' "$TEST_ROOT/output" 'releases/download/v0.65.1/cmux-macos.dmg'
+    assert_grep 'repair downloads the verified release' "$TEST_ROOT/output" 'releases/download/v0.65.2/cmux-macos.dmg'
     assert_grep 'repair installs the app from that release' "$TEST_ROOT/output" "ditto \"\$d/mount/cmux.app\" /Applications/cmux.app"
     assert_grep 'repair warns before replacing the app' "$TEST_ROOT/output" 'Quit cmux before running this command.'
     local repair_command
@@ -376,6 +376,30 @@ scenario_recorded_contract() {
   end_scenario
 }
 
+scenario_committed_fixtures() {
+  begin_scenario 'committed cmux fixtures cover the verified release and stay redacted' || return 0
+  local supported dir version file search_status
+  supported=$(sed -n 's/^WG_CMUX_SUPPORTED=//p' "$REPO/lib/workgrove/cmux.sh")
+  assert_eq 'the fake serves the verified release' "$REPO/test/fixtures/cmux-$supported" "$FAKE_CMUX_FIXTURES"
+  for file in rows windows top notifications automation capabilities event rows_by_window; do
+    assert_regular "$FAKE_CMUX_FIXTURES" "$file.json"
+  done
+  assert_regular "$(dirname "$FAKE_CMUX_SSH_FIXTURE")" ssh.json
+  for dir in "$REPO"/test/fixtures/cmux-*/; do
+    dir=${dir%/}; version=${dir##*/cmux-}
+    assert_grep "$version fixtures are marked as redacted" "$dir/REDACTED.txt" Redacted
+    assert_eq "$version fixtures name their recorded version" "cmux $version" "$(cut -d' ' -f1-2 "$dir/version.txt")"
+    search_status=0
+    grep -RE '/Users/|/home/|/private/|@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$dir" >"$TEST_ROOT/private-text" 2>&1 || search_status=$?
+    case $search_status in
+      0) fail "$version fixtures contain a personal path or address: $(head -1 "$TEST_ROOT/private-text")" ;;
+      1) pass ;;
+      *) fail "privacy search failed with status $search_status" ;;
+    esac
+  done
+  end_scenario
+}
+
 scenario_record() {
   begin_scenario 'recorded fixtures redact identities and replay through the fake cmux' || return 0
   cp "$CMUX_FIXTURES/windows.json" "$TEST_ROOT/saved-windows.json"
@@ -387,7 +411,7 @@ scenario_record() {
   }' >"$CMUX_FIXTURES/rows_by_window.json"
   invoke doctor --record "$TEST_ROOT/recorded"
   assert_eq 'record succeeds' 0 "$STATUS"
-  local dir="$TEST_ROOT/recorded/cmux-0.65.1" file
+  local dir="$TEST_ROOT/recorded/cmux-0.65.2" file
   printf '%s\n' '{"title":"run","body":"local","subtitle":"notification.created","description":"cmux-tui","current_directory":"run","remote":{"destination":"connected","state":"connected","backend":"cmux-tui"}}' \
     | jq -cf "$REPO/lib/workgrove/doctor-sanitize.jq" >"$TEST_ROOT/enum-collisions.json"
   assert_eq 'free text cannot bypass redaction by matching an enum' \
@@ -416,7 +440,7 @@ scenario_record() {
   printf '{}\n' >"$CMUX_FIXTURES/event.json"
   invoke doctor --record "$TEST_ROOT/no-event"
   assert_eq 'missing event fails recording' 1 "$STATUS"
-  assert_absent "$TEST_ROOT/no-event" cmux-0.65.1
+  assert_absent "$TEST_ROOT/no-event" cmux-0.65.2
   mv "$TEST_ROOT/saved-event.json" "$CMUX_FIXTURES/event.json"
   mv "$TEST_ROOT/saved-windows.json" "$CMUX_FIXTURES/windows.json"
   rm "$CMUX_FIXTURES/rows_by_window.json"
@@ -605,6 +629,7 @@ scenario_old_codex
 scenario_shapes_and_hooks
 scenario_record
 scenario_recorded_contract
+scenario_committed_fixtures
 scenario_reference_redaction
 scenario_retired_hooks
 scenario_vm
