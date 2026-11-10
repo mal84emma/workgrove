@@ -887,9 +887,36 @@ PY
   assert_eq 'an old self-receipt without process evidence blocks reuse' 1 "$WT_RC"
   assert_absent "$r" .worktrees/task
   cp "$saved" "$receipt"
-  invoke_wt -H fakevm rm task -r "$r"
+  CMUX_MODE=existing
+  touch "$FAKE_CMUX_STATE/mutate-close"
+  fake_top other 0 | jq '.windows[0].workspaces=[{id:"workspace:123",resources:{pids:[],process_count:0}}]' >"$FAKE_CMUX_STATE/top.json"
+  : >"$TEST_ROOT/ssh.log"; : >"$TEST_ROOT/cmux.log"
+  REMOTE_FAIL_SUB=repos REMOTE_FAIL_STATUS=42 invoke_wt -H fakevm rm task -r wt-demo
+  assert_eq 'a failed repository lookup refuses alias confirmation' 1 "$WT_RC"
+  assert_eq 'a failed lookup leaves cleanup pending' close_requested "$(jq -r .stage "$receipt")"
+  assert_eq 'a failed lookup preserves the connected row' 1 \
+    "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
+  check "$(if ! grep -qF 'workspace close' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'a failed lookup closed the row'
+  check "$(if ! grep -qF ' rm ' "$TEST_ROOT/ssh.log"; then echo yes; fi)" 'a failed lookup requested VM removal'
+  : >"$TEST_ROOT/ssh.log"; : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm rm task -r wt-demo
   assert_eq 'independent Mac confirmation completes cleanup' 0 "$WT_RC"
   assert_eq 'Mac confirmation records complete cleanup' complete "$(jq -r .stage "$receipt")"
+  assert_eq 'alias confirmation closes the canonical repository row' 0 \
+    "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
+  assert_grep 'alias confirmation closes the matching row' "$TEST_ROOT/cmux.log" 'workspace close workspace:123'
+  assert_grep 'alias confirmation checks the canonical session' "$TEST_ROOT/ssh.log" 'wt-repo-task'
+  check "$(if ! grep -qF 'wt-wt-demo-task' "$TEST_ROOT/ssh.log"; then echo yes; fi)" 'alias confirmation checked an unrelated session name'
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
+  assert_eq 'an existing canonical row blocks alias-based name reuse' 1 "$WT_RC"
+  assert_absent "$r" .worktrees/task
+  if [[ -d $r/.worktrees/task ]]; then
+    unset -f remote_task
+    rm -f "$TEST_ROOT/remote-new"
+    end_scenario
+    return 0
+  fi
+  CMUX_MODE=alive
   status=0; output=$(remote_task new task -r "$r" -a none --no-workspace 2>&1) || status=$?
   assert_eq 'a complete stage alone cannot acknowledge the current Mac row' 1 "$status"
   output=$(remote_task rm task -r "$r" --observe-only --row-closed)
@@ -906,9 +933,10 @@ PY
     assert_absent "$r" .worktrees/task
   done
   cp "$saved" "$receipt"
-  invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
   assert_eq 'the Mac can reuse an independently confirmed self-removed name' 0 "$WT_RC"
   assert_grep 'the retry carries receipt-bound evidence' "$TEST_ROOT/remote-new.args" --closed-receipt
+  assert_grep 'the retry uses the resolved repository path' "$TEST_ROOT/remote-new.args" "$r"
   check "$([[ -d $r/.worktrees/task ]] && echo yes)" 'the replacement task is absent'
   printf 'unrelated work\n' >"$r/.worktrees/task/private.txt"
   status=0; output=$(remote_task rm task -r "$r" --observe-only --row-closed --closed-receipt "$digest" 2>&1) || status=$?

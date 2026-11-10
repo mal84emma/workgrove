@@ -313,6 +313,7 @@ Recovery rechecks row identity and running-agent ownership before closing anythi
 Retries of completed receipts repeat the absence checks and cannot close a replacement row or session.
 Creation can reconcile already-absent local rows without closing anything.
 The Mac can reconcile an absent VM row and session before retrying a requested task name.
+The controller resolves repository aliases before checking Mac rows and binds later VM operations to that resolved path.
 The VM returns a digest of the verified receipt after row-acknowledged observation.
 The Mac checks row absence again, then supplies that digest to the creation retry through `--closed-receipt`.
 The VM checks the digest under the teardown lock and repeats observation before creating the task.

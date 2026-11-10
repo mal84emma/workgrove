@@ -2510,6 +2510,7 @@ printf 'ssh %s\n' "$*" >>"$ssh_dir/calls.log"
 script=$(mktemp "$ssh_dir/stdin.XXXXXX")
 cat >"$script"
 printf '%s\n' "$script" >>"$ssh_dir/scripts.log"
+case "$cmd" in *' repos '*) printf '%s\n' "$VM_CANONICAL_REPO"; exit 0 ;; esac
 if [ "${VM_AGENT_ACTIVE:-}" = 1 ]; then
   case "$cmd" in
     *' rm '*) echo 'another agent is running in tmux session' >&2; exit 1 ;;
@@ -2531,16 +2532,17 @@ STUB
   chmod +x "$fake/ssh" "$fake/tmux"
   # This row has the "<repo>:<name>" title of an older wt, so these checks also show that host_rm finds it.
   fake_rows "$(fake_row "active-vm-row" "$id:active-vm" "" "smoke.invalid" "connected" "cmux-tui" "null")" >"$WT_ROWS"
-  WT_PATH_PREFIX="$fake" WT_RELAY_ENV=("CMUX_STUB_AGENTS=1")
+  WT_PATH_PREFIX="$fake" WT_RELAY_ENV=("CMUX_STUB_AGENTS=1" "VM_CANONICAL_REPO=$r")
   : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "cannot verify ownership" -H smoke.invalid rm active-vm --force -r "$r"
-  assert_lacks "a Mac removal refuses an active VM row before SSH" "$(cat "$ssh_log")" "ssh "
-  WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_ACTIVE=1")
+  assert_has "a Mac removal resolves the repository before checking its row" "$(cat "$ssh_log")" ' repos '
+  assert_lacks "a Mac removal refuses an active VM row before VM mutation" "$(cat "$ssh_log")" ' rm '
+  WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_ACTIVE=1" "VM_CANONICAL_REPO=$r")
   : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
   assert_has "the Mac delegates active ownership to the receiver" "$(cat "$ssh_log")" "ssh -o"
   assert_lacks "a receiver refusal preserves the row" "$(cat "$CMUX_LOG")" 'close-workspace'
-  WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_QUERY_FAIL=1")
+  WT_RELAY_ENV=("CMUX_STUB_AGENTS=0" "VM_AGENT_QUERY_FAIL=1" "VM_CANONICAL_REPO=$r")
   : >"$CMUX_LOG"; : >"$ssh_log"
   assert_wt_fails 1 "cannot check the agent in tmux session" -H smoke.invalid rm active-vm -r "$r"
   assert_has "the remote probe reports its socket error" "$WT_OUT" "Operation not permitted"
@@ -2549,7 +2551,7 @@ STUB
   # agent. The refusal below comes from the VM's tmux session, not from that row.
   fake_rows "$(fake_row "other-vm-row" "active-vm" "@smoke.invalid · other-repo" "smoke.invalid" "connected" "cmux-tui" "null")" \
     "$(fake_row "local-row" "active-vm" "")" >"$WT_ROWS"
-  WT_RELAY_ENV=("CMUX_STUB_AGENTS=1" "VM_AGENT_ACTIVE=1")
+  WT_RELAY_ENV=("CMUX_STUB_AGENTS=1" "VM_AGENT_ACTIVE=1" "VM_CANONICAL_REPO=$r")
   : >"$CMUX_LOG"
   assert_wt_fails 1 "another agent is running in tmux session" -H smoke.invalid rm active-vm --force -r "$r"
   assert_lacks "…and the other repo's row was not checked" "$(cat "$CMUX_LOG")" "top --workspace other-vm-row"
@@ -3017,7 +3019,7 @@ SHIM
     cmux_require() { "$@"; }
     check_row_removal() { printf -v "$3" '%s' recorded-row; printf -v "$4" '%s' ''; }
     agent_on_vm() { return 0; }
-    remote_wt() { printf 'receiver %s\n' "$*"; }
+    remote_wt() { if [[ $2 == repos ]]; then printf '/scratch/repo\n'; else printf 'receiver %s\n' "$*"; fi; }
     close_row() { echo row-closed; }
     rows_json() { echo '{"workspaces":[]}'; }
     host_rm test.invalid pending -r /scratch/repo
@@ -3032,14 +3034,14 @@ SHIM
     host_new_preflight() { return 0; }
     vm_result() { echo creation-attempt; printf -v "$4" '%s' ''; printf -v "$5" '%s' 'cleanup remains pending for pending'; printf -v "$6" '%s' 1; }
     cmux_row_field() { return 1; }
-    remote_wt() { echo false-absence-acknowledgment; }
+    remote_wt() { if [[ $2 == repos ]]; then printf '/scratch/repo\n'; else echo false-absence-acknowledgment; fi; }
     host_new test.invalid pending -r /scratch/repo || echo refused-query
   )
   assert_has 'failed row query refuses name reconciliation' "$controller_output" refused-query
   assert_lacks 'failed row query cannot acknowledge absence' "$controller_output" false-absence-acknowledgment
   assert_eq 'failed row query never retries creation' 1 "$(grep -c creation-attempt <<<"$controller_output")"
   local query_mode query_log="$TEST_ROOT/closure-query"
-  for query_mode in present failed malformed; do
+  for query_mode in present failed malformed lookup-failed lookup-relative lookup-multiple lookup-unterminated; do
     rm -f "$query_log"
     # shellcheck disable=SC2329,SC2030,SC2031  # Exercise only the isolated controller functions.
     controller_output=$(
@@ -3053,6 +3055,16 @@ SHIM
         case $query_mode in present) echo replacement-row ;; failed) return 1 ;; esac
       }
       remote_wt() {
+        if [[ $2 == repos ]]; then
+          case $query_mode in
+            lookup-failed) return 42 ;;
+            lookup-relative) echo relative/repo ;;
+            lookup-multiple) printf '/scratch/repo\n/scratch/other\n' ;;
+            lookup-unterminated) printf '/scratch/repo' ;;
+            *) printf '/scratch/repo\n' ;;
+          esac
+          return
+        fi
         if [[ $query_mode == malformed ]]; then echo invalid-token
         else printf 'closed receipt %064d\n' 0; fi
       }
