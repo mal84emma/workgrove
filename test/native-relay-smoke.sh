@@ -190,6 +190,8 @@ scenario_title_repair() {
   begin_scenario 'the Mac hook repairs burst titles by UUID without changing focus' || return 0
   record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"burst1"}'
   touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-burst"
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
   printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
   local n id out original
   original=$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")
@@ -228,36 +230,27 @@ scenario_title_repair
 
 scenario_title_budget() {
   begin_scenario 'title verification reserves the Mac hook budget for remaining operations' || return 0
-  local -x PATH="$TEST_ROOT/hook-clock:$PATH"
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
   local mode out expected
-  mkdir -p "$TEST_ROOT/hook-clock" "$FAKE_CMUX_STATE/after/ssh"
-  cat >"$TEST_ROOT/hook-clock/date" <<'CLOCK'
-#!/bin/sh
-if [ "$*" = +%s ]; then cat "$FAKE_CMUX_STATE/title-now"; else exec /bin/date "$@"; fi
-CLOCK
-  cat >"$TEST_ROOT/hook-clock/sleep" <<'CLOCK'
-#!/bin/sh
-now=$(cat "$FAKE_CMUX_STATE/title-now")
-printf '%s' "$((now + 1))" >"$FAKE_CMUX_STATE/title-now"
-CLOCK
-  chmod +x "$TEST_ROOT/hook-clock/"*
+  mkdir -p "$FAKE_CMUX_STATE/after/ssh"
   for mode in remaining exhausted; do
     record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"budget"}'
-    printf 100 >"$FAKE_CMUX_STATE/title-now"
+    printf 100 >"$FAKE_CMUX_STATE/clock-now"
     expected=110
     [[ $mode != exhausted ]] || expected=113
-    printf '%s' "$expected" >"$FAKE_CMUX_STATE/after/ssh/title-now"
+    printf '%s' "$expected" >"$FAKE_CMUX_STATE/after/ssh/clock-now"
     out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
     if [[ $mode == remaining ]]; then
       assert_eq 'a late successful check leaves dismissal time' true "$(jq '.effects.desktop == false' <<<"$out")"
       has "$CMUX_LOG" 'dismiss-notification'
-      assert_eq 'verification finishes before its reserved deadline' 112 "$(cat "$FAKE_CMUX_STATE/title-now")"
+      assert_eq 'verification finishes before its reserved deadline' 112 "$(cat "$FAKE_CMUX_STATE/clock-now")"
     else
       assert_eq 'an exhausted check keeps the notification' '' "$out"
       lacks "$CMUX_LOG" 'dismiss-notification'
       lacks "$CMUX_LOG" '--action rename'
       has "$XDG_STATE_HOME/cmux-hook.log" 'cmux workspace-action --workspace 00000000-0000-4000-8000-000000000099 --action rename --title budget'
-      assert_eq 'an exhausted check never extends the hook deadline' 113 "$(cat "$FAKE_CMUX_STATE/title-now")"
+      assert_eq 'an exhausted check never extends the hook deadline' 113 "$(cat "$FAKE_CMUX_STATE/clock-now")"
     fi
     lacks "$CMUX_LOG" 'workspace close'
     lacks "$CMUX_LOG" 'workspace select'

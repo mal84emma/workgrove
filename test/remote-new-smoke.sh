@@ -235,6 +235,8 @@ scenario_row_titles() {
   begin_scenario "$1" || return 0
   prepare_cmux
   CMUX_MODE="title-lifecycle"
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
   rm "$FAKE_CMUX_STATE/ssh.json"
   touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
   printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
