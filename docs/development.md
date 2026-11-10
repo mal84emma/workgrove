@@ -134,6 +134,7 @@ workgrove/
 │   │       ├── notifications.json
 │   │       ├── rows.json
 │   │       ├── rows_by_window.json
+│   │       ├── surface-catalog.json  accepted VM title fields from a live capture
 │   │       ├── top.json
 │   │       ├── version.txt
 │   │       └── windows.json

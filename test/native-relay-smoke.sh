@@ -193,6 +193,8 @@ scenario_title_repair() {
   fake_cmux_clock
   local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
   printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  printf 6 >"$FAKE_CMUX_STATE/ssh-publish-after"
+  printf 2 >"$FAKE_CMUX_STATE/rename-publish-after"
   local n id out original
   original=$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")
   for n in 1 2 3 4 5; do
@@ -223,7 +225,7 @@ scenario_title_repair() {
   has "$XDG_STATE_HOME/cmux-hook.log" "cmux workspace-action --workspace $id --action rename --title failed"
   lacks "$CMUX_LOG" 'workspace close'
   lacks "$CMUX_LOG" 'dismiss-notification'
-  rm "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-burst" "$FAKE_CMUX_STATE/ssh-reset-title" "$FAKE_CMUX_STATE/ssh-connect-after" "$FAKE_CMUX_STATE/fail/workspace-rename"
+  rm "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-burst" "$FAKE_CMUX_STATE/ssh-reset-title" "$FAKE_CMUX_STATE/ssh-connect-after" "$FAKE_CMUX_STATE/fail/workspace-rename" "$FAKE_CMUX_STATE/ssh-publish-after" "$FAKE_CMUX_STATE/rename-publish-after"
   end_scenario
 }
 scenario_title_repair
@@ -237,6 +239,8 @@ scenario_hook_reattachment() {
   [[ ! -f $FAKE_CMUX_STATE/mutate-close ]] || had_close=1
   touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
   printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  printf 6 >"$FAKE_CMUX_STATE/ssh-publish-after"
+  printf 2 >"$FAKE_CMUX_STATE/rename-publish-after"
   original=$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")
   out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
   assert_eq 'the original hook row opens successfully' true "$(jq '.effects.desktop == false' <<<"$out")"
@@ -247,7 +251,7 @@ scenario_hook_reattachment() {
   out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
   assert_eq 'the hook reattaches after closure' true "$(jq '.effects.desktop == false' <<<"$out")"
   repaired=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows.json")
-  for _ in 1 2 3; do "$REPO/test/fakes/cmux" workspace list --json >/dev/null; done
+  for _ in {1..10}; do "$REPO/test/fakes/cmux" workspace list --json >/dev/null; done
   assert_eq 'the hook receives a new row UUID' true "$([[ $repaired != "$first" ]] && echo true || echo false)"
   has "$CMUX_LOG" "workspace-action --workspace $repaired --action rename --title reattach"
   assert_eq 'the hook restores the requested title and description' 'reattach|@test-vm · repo' "$(jq -r '.workspaces[-1] | [.title,.description] | join("|")' "$FAKE_CMUX_STATE/rows.json")"
@@ -260,7 +264,7 @@ scenario_hook_reattachment() {
   has "$CMUX_LOG" "workspace select $repaired"
   assert_eq 'later hook attach creates no duplicate' 2 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
   assert_eq 'reattachment preserves the sending row' "$original" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")"
-  rm "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/ssh-connect-after"
+  rm "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/ssh-connect-after" "$FAKE_CMUX_STATE/ssh-publish-after" "$FAKE_CMUX_STATE/rename-publish-after"
   if [[ $had_close == 0 ]]; then rm "$FAKE_CMUX_STATE/mutate-close"; fi
   end_scenario
 }
@@ -282,7 +286,7 @@ scenario_title_budget() {
     if [[ $mode == remaining ]]; then
       assert_eq 'a late successful check leaves dismissal time' true "$(jq '.effects.desktop == false' <<<"$out")"
       has "$CMUX_LOG" 'dismiss-notification'
-      assert_eq 'verification finishes before its reserved deadline' 112 "$(cat "$FAKE_CMUX_STATE/clock-now")"
+      assert_eq 'verification finishes before its reserved deadline' 110 "$(cat "$FAKE_CMUX_STATE/clock-now")"
     else
       assert_eq 'an exhausted check keeps the notification' '' "$out"
       lacks "$CMUX_LOG" 'dismiss-notification'

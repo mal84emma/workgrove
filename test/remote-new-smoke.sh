@@ -74,6 +74,7 @@ prepare_cmux() {
       before=$(fake_rows "$(fake_row race-row task '@fakevm · repo' fakevm)")
       fake_failure workspace-action 1 ;;
   esac
+  printf '%s' "$before" >"$FAKE_CMUX_STATE/rows.json"
   printf '%s' "$before" >"$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json"
   case $CMUX_MODE in
     no-ref*)
@@ -264,6 +265,8 @@ scenario_row_titles() {
   rm "$FAKE_CMUX_STATE/ssh.json"
   touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
   printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  printf 6 >"$FAKE_CMUX_STATE/ssh-publish-after"
+  printf 2 >"$FAKE_CMUX_STATE/rename-publish-after"
   local -x REMOTE_SESSION_STATE="$TEST_ROOT/title-sessions"
   mkdir -p "$REMOTE_SESSION_STATE"
   printf 'unrelated session state\n' >"$REMOTE_SESSION_STATE/wt-other-notes"
@@ -283,7 +286,7 @@ scenario_row_titles() {
   assert_eq 'the first reattachment opens a repaired row' 0 "$WT_RC"
   repaired=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows/$window.json")
   # Advance pending projections before later attach, as a live connection does without wt polling.
-  for _ in 1 2 3; do "$REPO/test/fakes/cmux" workspace list --json --window "$window" >/dev/null; done
+  for _ in {1..10}; do "$REPO/test/fakes/cmux" workspace list --json --window "$window" >/dev/null; done
   assert_eq 'the connected row retains the requested title' task "$(jq -r '.workspaces[-1].title' "$FAKE_CMUX_STATE/rows/$window.json")"
   assert_eq 'reattachment creates a distinct row UUID' true "$([[ -n $repaired && $repaired != "$first" ]] && echo true || echo false)"
   assert_grep 'the first reattachment repairs its UUID' "$TEST_ROOT/cmux.log" "workspace-action --workspace $repaired --action rename --title task"
