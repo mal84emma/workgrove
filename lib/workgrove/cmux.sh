@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: CMUX_BUNDLED_CLI_PATH, CMUX_ROWS, CMUX_ROWS_FULL, CMUX_ROWS_JSON, CMUX_RUN,
-#   CMUX_WORKSPACE_ID, CMUX_SAMPLE_RETRY, DEADLINE, HOME, REPO, ROW_AGENT, ROW_JQ, ROW_SEP, WS_JSON, WS_RC, WT_FS.
+#   CMUX_WORKSPACE_ID, CMUX_SAMPLE_RETRY, DEADLINE, HOME, REPO, ROW_AGENT, ROW_JQ, ROW_SEP, WS_JSON, WS_RC, WT_FS, WG_POLL_INTERVAL.
 # The shared adapter owns cmux commands and row identity queries.
 # CMUX_ERROR holds a diagnostic; callers choose whether to stop or log it.
 # Callers read the exported diagnostics and creation state.
@@ -671,12 +671,12 @@ cmux_row_check_ssh_title() {
     case $state in
       connected)
         # The host link connects before this row binds its remote terminal.
-        jq -e '.remote.remote_workspace_id | type == "string" and length > 0' <<<"$row" >/dev/null || { ready_at=0; wg_sleep; continue; }
-        jq -e '.remote.active_terminal_sessions | type == "number" and . > 0 and floor == .' <<<"$row" >/dev/null || { ready_at=0; wg_sleep; continue; }
+        jq -e '.remote.remote_workspace_id | type == "string" and length > 0' <<<"$row" >/dev/null || { ready_at=0; cmux_capped sleep "${WG_POLL_INTERVAL:-1}" || return 1; continue; }
+        jq -e '.remote.active_terminal_sessions | type == "number" and . > 0 and floor == .' <<<"$row" >/dev/null || { ready_at=0; cmux_capped sleep "${WG_POLL_INTERVAL:-1}" || return 1; continue; }
         now=$(date +%s)
         # Observe again after readiness: title projection can follow the connection snapshot.
         if ((ready_at == 0)); then ready_at=$((now + 2)); fi
-        if ((now < ready_at)); then wg_sleep; continue; fi
+        if ((now < ready_at)); then cmux_capped sleep "${WG_POLL_INTERVAL:-1}" || return 1; continue; fi
         ((now < DEADLINE)) || return 1
         if jq -e --arg title "$title" '.title == $title' <<<"$row" >/dev/null; then return 0; fi
         ((renamed == 0)) || return 1
@@ -684,7 +684,7 @@ cmux_row_check_ssh_title() {
         renamed=1
         ready_at=$(( $(date +%s) + 2 ))
         ;;
-      connecting|reconnecting) ready_at=0; wg_sleep ;;
+      connecting|reconnecting) ready_at=0; cmux_capped sleep "${WG_POLL_INTERVAL:-1}" || return 1 ;;
       *) return 1 ;;
     esac
   done

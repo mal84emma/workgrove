@@ -277,6 +277,40 @@ scenario_cmux_cap() {
 }
 scenario_cmux_cap
 
+scenario_title_poll_deadline() {
+  begin_scenario 'SSH title polling caps configured sleeps within the caller deadline' || return 0
+  local -x HOME="$TEST_ROOT/title-poll-home" FAKE_CMUX_STATE WG_POLL_INTERVAL=6
+  local CMUX_RUN=(env CMUX_QUIET=1 "$REPO/test/fakes/cmux") CMUX_ROWS_FULL=1
+  local CMUX_ROWS_JSON='{"workspaces":[]}' DEADLINE CMUX_ERROR
+  local id=00000000-0000-4000-8000-000000000099 mode row rc started elapsed original_deadline
+  mkdir -p "$HOME/.ssh"
+  printf 'Host test-vm\n' >"$HOME/.ssh/config"
+  for mode in connecting binding terminal ready; do
+    CMUX_ROWS_JSON='{"workspaces":[]}' CMUX_ERROR=''
+    fake_cmux_init "$TEST_ROOT/title-poll-$mode"
+    row=$(fake_row "$id" task '@test-vm · repo' test-vm)
+    case $mode in
+      connecting) row=$(jq '.remote.state="connecting"' <<<"$row") ;;
+      binding) row=$(jq '.remote.remote_workspace_id=null' <<<"$row") ;;
+      terminal) row=$(jq '.remote.active_terminal_sessions=0' <<<"$row") ;;
+    esac
+    fake_rows "$row" >"$FAKE_CMUX_STATE/rows.json"
+    fake_queue ssh "$(fake_ssh_response "$id" test-vm)"
+    DEADLINE=$(( $(date +%s) + 4 )); original_deadline=$DEADLINE
+    started=${EPOCHREALTIME/./}; rc=0
+    cmux_row_create_ssh test-vm task '@test-vm · repo' true --no-focus || rc=$?
+    elapsed=$((${EPOCHREALTIME/./} - started))
+    assert_eq "$mode reports deadline exhaustion" 1 "$rc"
+    assert_eq "$mode caps the six-second interval" 1 "$((elapsed < 3500000))"
+    assert_eq "$mode retains time in the caller budget" 1 "$((DEADLINE - $(date +%s) >= 1))"
+    assert_eq "$mode preserves the caller deadline" "$original_deadline" "$DEADLINE"
+    assert_eq "$mode keeps its row" 1 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+    assert_eq "$mode requests no teardown" false "$(if grep -q '^workspace close' "$FAKE_CMUX_STATE/calls.log"; then echo true; else echo false; fi)"
+  done
+  end_scenario
+}
+scenario_title_poll_deadline
+
 scenario_ssh_title_repair() {
   begin_scenario 'SSH creation waits for its own terminal and verifies title repairs' || return 0
   local -x HOME="$TEST_ROOT/title-home" FAKE_CMUX_STATE

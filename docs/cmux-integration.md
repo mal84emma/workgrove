@@ -214,7 +214,7 @@ Adapter state such as `CMUX_ROWS_JSON` and `CMUX_RUN` is internal shell state, n
 | `WT_HOST`, `WT_REPOS_DIR` | `task.sh`: `wt_host`, repository search initialization. `doctor.sh`: `doctor_vm`. | The VM alias must be valid. The probe requires existing absolute folders separated by colons. |
 | `CODEX_SANDBOX` | `bin/wt`: `cmd_rm`. [task.sh](../lib/workgrove/task.sh): `open_code`. | A nonempty value blocks removal before socket cleanup and blocks direct VS Code launch. |
 | `WT_CLOSE_WAIT_SECONDS` | `bin/wt`: `cmd_rm`. | Relay teardown waits 22 seconds by default. Invalid values use the default. |
-| `WG_POLL_INTERVAL` | `common.sh`: `wg_sleep`. | Tests can replace the normal one-second waits. |
+| `WG_POLL_INTERVAL` | `common.sh`: `wg_sleep`; `cmux.sh`: `cmux_row_check_ssh_title`. | Tests can replace the normal one-second waits. Title polling also caps each sleep by its deadline. |
 | `CMUX_CUSTOM_CODEX_PATH`, `CMUX_CUSTOM_CLAUDE_PATH`, `HOME` | [home/.zshenv](../home/.zshenv): top-level Darwin block. | Unset or empty overrides receive executable agent paths from `~/.local/bin`, which prevents wrapper recursion. |
 
 The [tmux environment contract](vm-protocol.md#the-tmux-session-environment) records the exact empty and removed-value rules.
@@ -244,6 +244,7 @@ The close handler uses 12 seconds before closing, then five seconds for session 
 `cmux_row_create_ssh` adds three seconds for cleanup if the description update fails.
 The capped runner requires Perl and stops without executing the command if Perl is unavailable.
 Title verification uses at most eight seconds and reserves two seconds of the caller's deadline for remaining operations.
+The same deadline caps polling sleeps, including intervals set through `WG_POLL_INTERVAL`.
 It observes the row again at least one second after readiness before accepting or repairing the title.
 After a rename, it repeats that observation interval before accepting the result.
 A failed repair leaves the tagged row open and reports its UUID and a manual rename command.
