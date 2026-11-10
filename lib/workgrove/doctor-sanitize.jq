@@ -1,4 +1,4 @@
-# Keep public contract names. Replace free text, identities, and unknown map keys.
+# Keep projected contract names. Replace free text and identities.
 def public_keys: [
   "rows","rows_by_window","windows","notifications","top","automation","capabilities","event",
   "workspaces","id","title","description","remote","enabled","destination","state","backend",
@@ -8,7 +8,8 @@ def public_keys: [
   "created_at","is_read","rule_id","when","then","action","command","timeout_seconds",
   "rate_limit","interval_seconds","maximum","methods","access_mode","redacted_fields",
   "body_length","title_length","subtitle_length","delivery","replaced_notification_ids",
-  "ref","window_ref","has_custom_title","terminal_transport","selected_workspace_id","workspace_count"
+  "ref","window_ref","workspace_ref","has_custom_title","terminal_transport","selected_workspace_id","workspace_count",
+  "pids","missing_pids"
 ];
 def public_value($key; $value):
   {backend:["cmux-tui"], state:["connected","disconnected","suspended","connecting"],
@@ -22,9 +23,11 @@ def methods: ["workspace.list","workspace.create","workspace.action","workspace.
 | ([paths(strings) as $p | getpath($p)] + [.. | objects | keys[]]
     | map(select(test("^[A-Fa-f0-9]{8}(-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}$"))) | unique) as $ids
 | ([.. | objects | to_entries[] | select(.key == "ref" or .key == "window_ref") | .value
-    | strings | select(test("^workspace:[1-9][0-9]*$"))] | unique) as $workspace_refs
+    | strings | select(test("^workspace:[1-9][0-9]*$"))]
+    + [.. | objects | .workspace_ref? | strings] | unique) as $workspace_refs
 | ([.. | objects | to_entries[] | select(.key == "ref" or .key == "window_ref") | .value
     | strings | select(test("^window:[1-9][0-9]*$"))] | unique) as $window_refs
+| ([.. | objects | (.pids? // [])[], (.missing_pids? // [])[]] | unique) as $pids
 | def reference($value):
     if ($workspace_refs | index($value)) != null then
       "workspace:" + (($workspace_refs | index($value)) + 1 | tostring)
@@ -34,14 +37,16 @@ def methods: ["workspace.list","workspace.create","workspace.action","workspace.
   def identity($value):
     (($ids | index($value)) + 1 | tostring) as $n
     | "00000000-0000-4000-8000-" + (("000000000000" + $n)[-12:]);
-  def scrub($key):
+  def scrub($key; $full):
     if type == "object" then
       to_entries | to_entries | map(.key as $index | .value
-        | .key as $field | .value |= scrub($field)
+        | .key as $field
+        | select($full or (public_keys | index($field)) != null or ($ids | index($field)) != null)
+        | .value |= scrub($field; ($full or $field == "automation"))
         | .key |= (. as $k | if ($ids | index($k)) != null then identity($k)
             elif (public_keys | index($k)) != null then . else "<field-\($index)>" end))
       | from_entries
-    elif type == "array" then map(scrub($key))
+    elif type == "array" then map(scrub($key; $full))
     elif type == "string" then
       . as $value
       | if $key == "destination" then "<test-vm>"
@@ -49,10 +54,12 @@ def methods: ["workspace.list","workspace.create","workspace.action","workspace.
         elif $key == "title" then "<title>"
         elif $key == "body" or $key == "subtitle" then "<redacted>"
         elif $key == "current_directory" then "<path>"
-        elif $key == "ref" or $key == "window_ref" then reference($value)
+        elif $key == "ref" or $key == "window_ref" or $key == "workspace_ref" then reference($value)
         elif ($ids | index($value)) != null then identity($value)
         elif public_value($key; $value) then .
         elif $key == "methods" and (methods | index($value)) != null then .
         else "<redacted>" end
+    elif type == "number" and ($key == "pids" or $key == "missing_pids") then
+      . as $pid | ($pids | index($pid)) + 2
     else . end;
-$input | scrub("")
+$input | scrub(""; false)

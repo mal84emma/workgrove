@@ -399,10 +399,13 @@ doctor_record() {
       and (.payload.notification_id | type == "string")' || rc=1
   fi
   if [[ $rc == 0 ]]; then
+    bundle=$(python3 "$WG_LIB_DIR/doctor_fixtures.py" <<<"$bundle") || rc=1
+  fi
+  if [[ $rc == 0 ]]; then
     bundle=$(jq -f "$WG_LIB_DIR/doctor-sanitize.jq" <<<"$bundle") || rc=1
   fi
   if [[ $rc != 0 ]]; then
-    doctor_result 1 'fixture capture; a retained notification.created event is required' 'wt doctor --record test/fixtures # retry after an agent notification'
+    doctor_result 1 'fixture capture; valid contracts and a retained notification.created event are required' 'wt doctor --record test/fixtures # check contracts and retry after an agent notification'
     return 1
   fi
   if mkdir -p "$dir"; then
