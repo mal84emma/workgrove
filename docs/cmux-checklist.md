@@ -24,13 +24,37 @@ The VM checks require a reachable VM and a task with a running agent.
 4. On the VM, run `wt open cmux-check -r <repo>`.
    Confirm that VS Code opens the VM worktree.
    If no window appears, run the Mac command that `wt open` prints.
-5. From a separate VM shell, run `wt attach cmux-check -r <repo>`.
-   Confirm that cmux selects the existing row without creating another row.
+5. Use a separate VM shell whose terminal a Mac native SSH row mirrors.
+   An ordinary SSH shell can have relay variables without a Mac mirror.
+   Choose an unused disposable row name, such as `step5-shell`.
+   On the Mac, run `cmux ssh <vm> --name step5-shell --json --id-format uuids`.
+   Record `.workspace_id` from the creation response as `<shell-row-uuid>`.
+   Before the request, record the `cmux-check` row UUID from `cmux workspace list --json` on the Mac.
+   Record the row count in each window that contains test rows.
+   In the new shell row, run `wt attach cmux-check -r <repo>`.
+   Confirm that cmux selects the recorded UUID and creates no additional row.
+   Check the row count again in each test window.
+   On the Mac, run `cmux workspace close <shell-row-uuid>`.
+   Confirm that only that disposable shell row closes.
 6. Send the agent a brief that requires a tool call.
    Confirm that its row shows Running during the call and Idle after completion.
    Repeat this check with Claude and Codex.
-7. From the Mac, run `wt -H <vm> attach cmux-check -r <repo> --reattach`.
+7. This check requires an existing native task row at a bare VM shell prompt naming `user@host`.
+   The row reaches this state after `remote session was lost; starting a new shell`.
+   No safe, repeatable setup for this state has been verified.
+   If this state is unavailable, record step 7 as **not run: requires a lost remote session**.
+   Do not stop shared SSH transports or unrelated rows to produce it.
+   When the prerequisite holds, run `wt -H <vm> attach cmux-check -r <repo> --reattach` from the Mac.
    Confirm that the task resumes and its status returns to Idle after another turn.
+
+   Detaching tmux closes a native task row because `tmux attach` is its only command.
+   Detachment does not produce the bare shell that `--reattach` requires.
+   To check plain-attach recovery separately, detach only the disposable task's tmux client with `Ctrl-b d`.
+   Confirm that its row closes.
+   From the Mac, run `wt -H <vm> attach cmux-check -r <repo>` without `--reattach`.
+   Confirm that one new row attaches to the existing session.
+   Send another agent turn and check Running, then Idle.
+   [Issue #199](https://github.com/mal84emma/workgrove/issues/199) records this recovery behavior and the step 7 limit.
 8. Check both removal cases below with clean, disposable tasks.
    Use an installed `wt` outside the worktree that you remove.
    In the expected output, `<task>` names the target task and `<repo>` is its absolute repository path.
