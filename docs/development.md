@@ -120,19 +120,11 @@ workgrove/
 │   │   ├── rows.sh           builds scenario data from recorded responses
 │   │   └── tmux              supplies the fake VM's session, pane, and client answers
 │   ├── fixtures/
-│   │   ├── cmux-0.65.1/      redacted responses recorded from real cmux, and the SSH creation capture
+│   │   ├── cmux-0.65.1/      the SSH creation capture, which wt doctor --record does not make
 │   │   │   ├── REDACTED.txt   redaction notice
-│   │   │   ├── automation.json
-│   │   │   ├── capabilities.json
-│   │   │   ├── event.json
-│   │   │   ├── notifications.json
-│   │   │   ├── rows.json
-│   │   │   ├── rows_by_window.json
 │   │   │   ├── ssh.json
-│   │   │   ├── top.json
-│   │   │   ├── version.txt
-│   │   │   └── windows.json
-│   │   └── cmux-0.65.2/      the same recorded responses without ssh.json
+│   │   │   └── version.txt
+│   │   └── cmux-0.65.2/      redacted responses recorded from the supported cmux release
 │   │       ├── REDACTED.txt   redaction notice
 │   │       ├── automation.json
 │   │       ├── capabilities.json

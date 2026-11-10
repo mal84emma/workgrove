@@ -163,6 +163,16 @@ When you edit an agent instruction file:
 - In skill front matter, keep `name:` unchanged.
   Keep every quoted and listed trigger in `description:`.
 
+### Keep check results on GitHub
+
+Tracked docs describe what holds on `main`: the contracts that the code relies on, how to use workgrove, and how to verify a change.
+Put the record of a check in the pull request or issue that made it.
+
+- Write verification results, such as live VM checks and measurements, in the pull request description.
+- Open an issue for each defect that a check finds.
+- In a doc, state a verified behavior or limit in one or two sentences, and link the pull request or issue that holds the evidence.
+- Do not add a section that reports a single run's steps, timings, or output.
+
 ### Simplify without losing facts
 
 - Keep the logical links when you split a sentence:
