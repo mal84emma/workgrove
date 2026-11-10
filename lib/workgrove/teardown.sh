@@ -33,139 +33,8 @@ teardown_lock() { # Only the finite coordinator holds the lock descriptor; comma
     return 0
   fi
   local rc=0
-  # shellcheck disable=SC2016  # The worker shell expands its own PID and arguments.
-  WT_BASE_FETCH_NOTIFIED=$WT_BASE_FETCH_NOTIFIED teardown_interpreter -c '
-import fcntl, json, os, select, signal, socket, subprocess, sys, time
-path, name, interpreter, script, machine = sys.argv[1:6]
-prior = os.environ.get("WG_TEARDOWN_CONTROL_FD", "")
-if prior.isdigit():
-    try:
-        os.close(int(prior))
-    except OSError:
-        pass
-os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-parent, worker = socket.socketpair()
-child = None
-held = False
-def worker_exited():
-    state = subprocess.check_output(["ps", "-p", str(child.pid), "-o", "stat="], text=True).strip()
-    return state.startswith("Z")
-def group_inactive(group):
-    listing = subprocess.check_output(["ps", "-axo", "pgid=,stat="], text=True)
-    for line in listing.splitlines():
-        pgid, state = line.split()
-        if int(pgid) == group and not state.startswith("Z"):
-            return False
-    return True
-def process_start(pid):
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], text=True, stdout=subprocess.PIPE, env=dict(os.environ, LC_ALL="C"))
-    if result.returncode not in (0, 1):
-        raise RuntimeError("cannot inspect recorded teardown process")
-    return result.stdout.strip()
-boot = process_start(1)
-if not boot:
-    sys.exit("wt: cannot identify the current boot")
-def acquire():
-    global held
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    previous = os.pread(fd, 4096, 0)
-    if previous:
-        owner = json.loads(previous)
-        if not isinstance(owner, dict) or type(owner.get("group")) is not int or owner["group"] <= 1:
-            raise ValueError("invalid teardown lock owner")
-        for key in ("start", "boot"):
-            if key in owner and (not isinstance(owner[key], str) or not owner[key].strip() or "\n" in owner[key]):
-                raise ValueError("invalid teardown lock owner")
-        group = owner["group"]
-        start = process_start(group)
-        same_boot = owner.get("boot", boot) == boot
-        same_owner = not start or "start" not in owner or owner["start"] == start
-        if same_boot and same_owner and not group_inactive(group):
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            raise ValueError("previous teardown commands are still running")
-    held = True
-def record(group=None):
-    os.ftruncate(fd, 0)
-    if group is not None:
-        start = process_start(group)
-        if not start:
-            raise RuntimeError("cannot identify teardown command group")
-        os.pwrite(fd, json.dumps({"group":group,"start":start,"boot":boot}).encode(), 0)
-    os.fsync(fd)
-def stop_worker():
-    if not group_inactive(child.pid):
-        os.killpg(child.pid, signal.SIGKILL)
-    for _ in range(500):
-        if group_inactive(child.pid):
-            return child.wait()
-        time.sleep(0.01)
-    raise RuntimeError("teardown commands have not stopped; cleanup remains pending")
-try:
-    try:
-        acquire()
-    except BlockingIOError:
-        sys.exit("wt: teardown already runs for " + name)
-    environment = dict(os.environ, WG_TEARDOWN_CONTROL_FD=str(worker.fileno()), WG_TEARDOWN_LOCK_PATH=path,
-                       WG_TEARDOWN_ORIGIN_PID=str(os.getppid()))
-    if machine:
-        environment["WT_MACHINE"] = machine
-    child = subprocess.Popen([interpreter, "-c", "export WG_TEARDOWN_WORKER_PID=$BASHPID; exec \"$@\"", "worker",
-                              interpreter, script, "rm", *sys.argv[6:]], env=environment,
-                             pass_fds=(worker.fileno(),), start_new_session=True)
-    record(child.pid)
-    worker.close()
-    def forward(signum, frame):
-        if not group_inactive(child.pid):
-            os.killpg(child.pid, signum)
-    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        signal.signal(signum, forward)
-    buffer = b""
-    while True:
-        ready, _, _ = select.select([parent], [], [], 0.05)
-        if not ready:
-            if worker_exited():
-                break
-            continue
-        part = parent.recv(4096)
-        if not part:
-            break
-        buffer += part
-        while b"\n" in buffer:
-            line, buffer = buffer.split(b"\n", 1)
-            answer = "ok"
-            try:
-                request = json.loads(line)
-                if request.get("path") != path:
-                    raise ValueError("teardown lock identity changed")
-                operation = request.get("op")
-                if operation == "acquire":
-                    if not held:
-                        acquire()
-                        record(child.pid)
-                elif operation == "release":
-                    record()
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                    held = False
-                elif operation != "check" or not held:
-                    raise ValueError("teardown lock is not held")
-            except (ValueError, OSError) as error:
-                answer = str(error)
-            parent.sendall((answer + "\n").encode())
-        if len(buffer) > 16384:
-            raise ValueError("invalid teardown control message")
-    result = stop_worker()
-    sys.exit(result if result >= 0 else 128 - result)
-finally:
-    if child is not None and child.returncode is None:
-        stop_worker()
-    if held:
-        record()
-        fcntl.flock(fd, fcntl.LOCK_UN)
-    os.close(fd)
-    parent.close()
-    worker.close()
-' "$lock_path" "$name" "$BASH" "$WG_LIB_DIR/../../bin/wt" "${WG_MACHINE_RESULT:-}" "$@" || rc=$?
+  WT_BASE_FETCH_NOTIFIED=$WT_BASE_FETCH_NOTIFIED teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/coordinator.py" \
+    "$lock_path" "$name" "$BASH" "$WG_LIB_DIR/../../bin/wt" "${WG_MACHINE_RESULT:-}" "$@" || rc=$?
   exit "$rc"
 }
 
@@ -369,6 +238,9 @@ teardown_observe() { # Observe absence only; this function never closes a row or
     ! jq -e --arg row "$row" 'any(.workspaces[]; .id == $row)' <<<"$rows" >/dev/null || return 1
   fi
   teardown_save complete
+  if [[ $remote == 1 && ${row_closed:-0} == 1 && ${observe_only:-0} == 1 ]]; then
+    printf 'closed receipt %s\n' "$(metadata_fingerprint "$WT_TEARDOWN_FILE")"
+  fi
 }
 
 teardown_finish() { # Complete only recorded cleanup. Never remove a new task with the same name.
@@ -383,7 +255,7 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
   fi
   if [[ ${row_closed:-0} == 1 && $remote != 1 ]]; then die 'row acknowledgment is only valid for VM cleanup'; fi
   if [[ $stage == complete ]]; then
-    teardown_commands_observe || die 'task commands remain active or unverified; cleanup is pending'
+    teardown_observe "$name" "$path" "$branch" "$keep" "$row" "$remote" || die 'cleanup absence cannot be verified'
     printf 'teardown complete %s\n' "$name"; return 0
   fi
   task_admin_preserved "$path" || die 'private submodule Git data prevents cleanup; kept the task registration'
@@ -525,10 +397,6 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
         # A surviving caller cannot independently confirm that its Mac terminal closed.
         rc=1
       fi
-      if [[ $rc != 0 ]]; then
-        warn 'worktree removed, but its Mac row or tmux session is still open or unverified'
-        warn "on the Mac: wt -H $host rm $name -r $(shell_join "$REPO")"
-      fi
     fi
   elif [[ -n $row ]]; then
     local checked_row='' checked_self=''
@@ -554,7 +422,12 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
     fi
   fi
   if [[ $rc != 0 ]]; then
-    warn "Git cleanup completed; session cleanup is pending. Retry: wt rm $name -r $(shell_join "$REPO")"
+    if [[ $remote == 1 ]]; then
+      warn 'Git cleanup completed; Mac row or tmux session closure is unverified; cleanup is pending'
+      warn "on the Mac: wt -H $host rm $name -r $(shell_join "$REPO")"
+    else
+      warn "Git cleanup completed; session cleanup is pending. Retry: wt rm $name -r $(shell_join "$REPO")"
+    fi
     warn "receipt: $WT_TEARDOWN_FILE"
     return 1
   fi

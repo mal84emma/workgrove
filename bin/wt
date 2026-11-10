@@ -216,8 +216,15 @@ cmd_new() {
   local p b; p=$(wt_path "$name"); b=$(wt_branch "$name")
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (kept by wt rm --keep-branch, or by a removal git would not call merged, or left behind by a worktree deleted outside wt); inspect it (git -C $REPO log $b), then delete it (git -C $REPO branch -D $b) or pick another name"
+  local closure_args=()
+  if [[ -v opts[closed_receipt] ]]; then
+    is_remote || die 'closed receipts are only valid for VM creation'
+    [[ ${opts[closed_receipt]} =~ ^[0-9a-f]{64}$ && -f $REPO/.git/wt/teardown/$name.json ]] \
+      || die 'invalid closed receipt for task creation'
+    closure_args=(--row-closed --closed-receipt "${opts[closed_receipt]}")
+  fi
   if [[ -f $REPO/.git/wt/teardown/$name.json ]]; then
-    (cmd_rm "$name" -r "$REPO" --observe-only) >/dev/null 2>&1 \
+    (cmd_rm "$name" -r "$REPO" --observe-only "${closure_args[@]}") >/dev/null 2>&1 \
       || die "cleanup remains pending for $name; retry wt rm $name before reusing this name"
   fi
   [[ $agent != codex ]] || check_codex || return 1
@@ -602,9 +609,16 @@ cmd_rm() {
   [[ -n "$name" ]] || die "rm: worktree name required"
   resolve_repo "$repo"; local path branch
   valid_name "$name" || die "invalid worktree name: $name"
+  [[ $row_closed == 0 ]] || is_remote || die 'row acknowledgment is only valid for VM cleanup'
   [[ -z "${CODEX_SANDBOX:-}" ]] || die 'the Codex sandbox can block cmux or tmux cleanup; rerun this command with escalation'
   teardown_lock "$name" "$@"
   WT_TEARDOWN_FILE="$REPO/.git/wt/teardown/$name.json"
+  if [[ -v opts[closed_receipt] ]]; then
+    [[ $observe_only == 1 && $row_closed == 1 && ${opts[closed_receipt]} =~ ^[0-9a-f]{64}$ ]] \
+      || die 'a closed receipt requires row-acknowledged observation'
+    [[ $(metadata_fingerprint "$WT_TEARDOWN_FILE") == "${opts[closed_receipt]}" ]] \
+      || die 'cleanup receipt changed; repeat independent Mac confirmation'
+  fi
   if [[ ! -d $(wt_path "$name") && -f $WT_TEARDOWN_FILE ]]; then
     WT_TEARDOWN_JSON=$(cat "$WT_TEARDOWN_FILE")
     jq -e --arg repo "$REPO" --arg name "$name" --arg path "$(wt_path "$name")" '.repo == $repo and .name == $name and .path == $path and .branch == ("wt/" + $name) and (.head | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and all(.keep,.native,.remote; IN("0","1")) and (.stage | IN("prepared","worktree_removed","branch_config_removing","sidecars_removing","git_removed","close_requested","complete"))' <<<"$WT_TEARDOWN_JSON" >/dev/null \
@@ -617,7 +631,7 @@ cmd_rm() {
       teardown_finish; return
     fi
   fi
-  [[ $observe_only == 0 && $row_closed == 0 ]] || die 'no pending cleanup receipt for this absent task'
+  [[ $observe_only == 0 && ( $row_closed == 0 || $defer_close == 1 ) ]] || die 'no pending cleanup receipt for this absent task'
   require_wt "$name" path branch "rm"
   teardown_preflight "$path"
   local verified_head verified_base='' proof='' generation
@@ -665,6 +679,7 @@ cmd_rm() {
       case $ownership_rc in
         0) self_remote=1 ;;
         1) die 'another agent is running in this tmux session; kept the worktree' ;;
+        3) die "unowned process blocks this tmux session: $TMUX_BLOCKER; kept the worktree" ;;
         *) die 'cannot verify exclusive agent ownership in this tmux session; kept the worktree' ;;
       esac
     fi

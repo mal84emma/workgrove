@@ -3,3 +3,4 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 python3 -B "$root/test/commands_test.py"
+python3 -B "$root/test/coordinator_test.py"

@@ -418,6 +418,16 @@ tmux_agent() { # tmux_agent <session> [session exists output]
 }
 
 # A shell caller can close its own pane only when every process belongs to this cleanup command.
+TMUX_BLOCKER=''
+tmux_unowned_process() {
+  local pid=$1 agents=${2:-} command
+  [[ $'\n'$agents$'\n' != *$'\n'"$pid"$'\n'* ]] || return 1
+  command=$(ps -p "$pid" -o comm=) || return 2
+  [[ -n $command ]] || return 2
+  TMUX_BLOCKER="PID $pid ($command)"
+  case ${command##*/} in claude|codex) return 1 ;; *) return 3 ;; esac
+}
+
 tmux_shell_ownership() {
   local session=$1 caller=$BASHPID root command panes tty pids pid start root_start records='[]' identity_command
   [[ ${TMUX_PANE:-} =~ ^%[0-9]+$ ]] || return 2
@@ -437,8 +447,10 @@ tmux_shell_ownership() {
     [[ -n $pids ]] || return 2
     while IFS= read -r pid; do
       pid=${pid//[[:space:]]/}; [[ $pid =~ ^[0-9]+$ ]] || return 2
-      process_descends "$pid" "$root" || return 1
-      if ! process_descends "$pid" "$caller"; then process_descends "$caller" "$pid" || return 1; fi
+      process_descends "$pid" "$root" || { tmux_unowned_process "$pid"; return $?; }
+      if ! process_descends "$pid" "$caller"; then
+        process_descends "$caller" "$pid" || { tmux_unowned_process "$pid"; return $?; }
+      fi
       start=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 2
       identity_command=$(ps -p "$pid" -o comm=) || return 2
       records=$(jq -c --arg pid "$pid" --arg start "$start" --arg command "$identity_command" '. + [$ARGS.named]' <<<"$records") || return 2
@@ -448,8 +460,10 @@ tmux_shell_ownership() {
     '$ARGS.named + {mode:"shell"}')
 }
 
-# Return 0 for an exclusive caller-owned agent tree, 1 for another agent, and 2 for unknown process state.
+# Return 0 for ownership, 1 for another agent, 2 for unknown state, and 3 for an unowned command.
 tmux_self_ownership() {
+  # shellcheck disable=SC2034  # cmd_rm reports the unowned process.
+  TMUX_BLOCKER=''
   local session=$1 panes tty agents='' found rc pid root='' caller_pid=$BASHPID command
   panes=$(tmux list-panes -s -t "=$session:" -F '#{pane_tty}' 2>/dev/null) || return 2
   [[ -n $panes ]] || return 2
@@ -488,7 +502,7 @@ tmux_self_ownership() {
       pid=${pid//[[:space:]]/}
       [[ $pid =~ ^[0-9]+$ ]] || return 2
       if ! process_descends "$pid" "$root"; then
-        process_descends "$root" "$pid" || return 1
+        process_descends "$root" "$pid" || { tmux_unowned_process "$pid" "$agents"; return $?; }
         identity_start=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 2
         identity_command=$(ps -p "$pid" -o comm=) || return 2
         ancestor_records=$(jq -c --arg pid "$pid" --arg start "$identity_start" --arg command "$identity_command" '. + [$ARGS.named]' <<<"$ancestor_records")

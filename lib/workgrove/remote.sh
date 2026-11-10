@@ -106,6 +106,7 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   # read nothing locally and pipe an empty prompt into ssh. The VM would then create the task with no brief.
   local -A opts=()
   wt_opts "$(wt_spec new remote)" opts "$@"
+  [[ ! -v opts[closed_receipt] ]] || die 'closed receipts must come from independent Mac confirmation'
   local i
   for ((i=0; i<${opts[@count]}; i++)); do
     case ${opts[@key:$i]} in
@@ -128,12 +129,19 @@ host_new() { # create the worktree on the VM, then the cmux row here unless --no
   local -A result=()
   vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
   if [[ $rc != 0 && $err == *'cleanup remains pending for '* && -n ${opts[name]-} && -n $repo_request ]]; then
-    local pending_row
+    local pending_row closure
     pending_row=$(cmux_row_field "$(row_title "${opts[name]}")" "$repo_request" id "$host" checked) || return 1
     if [[ -z $pending_row ]] && \
-        remote_wt "$host" rm "${opts[name]}" -r "$repo_request" --observe-only --row-closed >/dev/null; then
-      result_rc=0
-      vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
+        closure=$(remote_wt "$host" rm "${opts[name]}" -r "$repo_request" --observe-only --row-closed); then
+      if [[ $closure =~ ^closed\ receipt\ ([0-9a-f]{64})$ ]]; then
+        local digest=${BASH_REMATCH[1]}
+        # Bind a fresh Mac observation to the receipt that the VM just verified.
+        pending_row=$(cmux_row_field "$(row_title "${opts[name]}")" "$repo_request" id "$host" checked) || return 1
+        if [[ -z $pending_row ]]; then
+          result_rc=0
+          vm_result "$host" new result out err rc -- --no-workspace --prompt-stdin --closed-receipt "$digest" "${args[@]}" < <(printf '%s' "$prompt") || result_rc=$?
+        fi
+      fi
     fi
   fi
   [[ -z $err ]] || printf '%s\n' "$err" >&2
@@ -213,7 +221,9 @@ host_rm() { # remove on the VM, close the row, then kill the session (closing fi
     remote_wt "$host" rm "${args[@]}" --row-closed
     return
   fi
-  remote_wt "$host" rm "${args[@]}" --defer-close || return $?
+  local acknowledgment=()
+  [[ -n $_row ]] || acknowledgment=(--row-closed)
+  remote_wt "$host" rm "${args[@]}" --defer-close "${acknowledgment[@]}" || return $?
   # shellcheck disable=SC2034  # The checked helper also returns caller ownership.
   local checked_row='' checked_self='' rows
   cmux_require check_row_removal "$title" "$repo" checked_row checked_self "$host"

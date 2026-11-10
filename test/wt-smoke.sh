@@ -1797,7 +1797,9 @@ STUB
   {
     printf '#!/bin/sh\n'
     # shellcheck disable=SC2016  # The fake process probe expands these variables.
-    printf 'if [ "$1" = -t ]; then echo "$SELF_TMUX_OWNER_PID"; [ "${SELF_TMUX_OTHER_ACTIVE:-}" != 1 ] || echo 99999999; exit 0; fi\n'
+    printf 'if [ "$1" = -t ]; then echo "$SELF_TMUX_OWNER_PID"; [ "${SELF_TMUX_OTHER_ACTIVE:-}${SELF_TMUX_SIBLING:-}" != 1 ] || echo 99999999; exit 0; fi\n'
+    # shellcheck disable=SC2016  # The fake process probe expands these variables.
+    printf 'if [ "$1 $2 $4" = "-p 99999999 comm=" ] && [ "${SELF_TMUX_SIBLING:-}" = 1 ]; then echo tee; exit 0; fi\n'
     printf 'exec %q "$@"\n' "$real_ps"
   } >"$fake/ps"
   chmod +x "$fake/ps"
@@ -1838,11 +1840,22 @@ STUB
   WT_RELAY_ENV[${#WT_RELAY_ENV[@]}-1]="SELF_TMUX_FAIL=0"
   WT_RELAY_ENV[4]="SELF_TMUX_SESSION=$session"
   : >"$CMUX_LOG"; : >"$TEST_ROOT/self-tmux.log"
+  WT_RELAY_ENV+=("SELF_TMUX_SIBLING=1")
+  assert_wt_fails 1 'unowned process blocks this tmux session: PID 99999999 (tee)' rm self -r "$r"
+  assert_dir 'an unrelated pipe process preserves the worktree' "$r/.worktrees/self"
+  assert_branch "$r" wt/self yes
+  assert_lacks 'an unrelated pipe process prevents session closure' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
+  unset 'WT_RELAY_ENV[${#WT_RELAY_ENV[@]}-1]'
   WT_RELAY_ENV+=("SELF_TMUX_OTHER_ACTIVE=1")
   assert_wt_fails 1 'another agent is running in this tmux session' rm self -r "$r"
   assert_dir 'a second agent in the caller session keeps its worktree' "$r/.worktrees/self"
   unset 'WT_RELAY_ENV[${#WT_RELAY_ENV[@]}-1]'
   assert_wt_fails 1 "unverified" rm self -r "$r"
+  assert_has 'surviving self-removal confirms Git cleanup' "$WT_OUT" 'removed self'
+  assert_has 'surviving self-removal gives the Mac confirmation command' "$WT_OUT" 'on the Mac: wt -H test-vm rm self'
+  assert_lacks 'surviving self-removal cannot claim full completion' "$WT_OUT" 'teardown complete'
+  assert_eq 'unconfirmed self-removal retains its pending receipt' close_requested "$(jq -r .stage "$r/.git/wt/teardown/self.json")"
+  assert_eq 'self-removal releases its coordinator lock' '' "$(cat "$r/.git/wt/teardown/self.lock")"
   assert_gone "self-removal removed the worktree" "$r/.worktrees/self"
   assert_branch "$r" wt/self no
   assert_has "VM ends its own tmux session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
@@ -1857,8 +1870,8 @@ STUB
   assert_branch "$r" wt/unmarked no
   assert_has "unmarked native self-removal sends wt-close" "$(cat "$CMUX_LOG")" "--socket /tmp/native notify --surface term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --title wt-close"
   assert_lacks "unmarked native self-removal leaves tmux to the Mac hook" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
-  assert_has "an unanswered native close warns about incomplete cleanup" "$WT_OUT" "worktree removed, but its Mac row or tmux session is still open"
-  assert_has "an unanswered native close prints a recovery command" "$WT_OUT" "Retry: wt rm unmarked"
+  assert_has "an unanswered native close warns about incomplete cleanup" "$WT_OUT" "Mac row or tmux session closure is unverified"
+  assert_has "an unanswered native close prints a recovery command" "$WT_OUT" "on the Mac: wt -H test-vm rm unmarked"
   rm "$fake/cmux-tui"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=other-session"
                 "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_OTHER_ACTIVE=1")
@@ -3721,7 +3734,7 @@ SHIM
     assert_wt_ok 'verified sidecar absence retains legacy removal' rm no-sidecar -r "$r"
   else
     # Missing legacy metadata cannot establish VM row absence.
-    assert_wt_fails 1 'session cleanup is pending' rm no-sidecar -r "$r"
+    assert_wt_fails 1 'cleanup is pending' rm no-sidecar -r "$r"
     assert_gone 'legacy VM removal completes Git cleanup' "$r/.worktrees/no-sidecar"
     assert_eq 'unknown VM row remains pending' close_requested "$(jq -r .stage "$r/.git/wt/teardown/no-sidecar.json")"
     # This fixture controller knows that no row or tmux session was created.
@@ -3745,7 +3758,7 @@ scenario_teardown_idle_shell() {
     }
     ps() {
       if [[ $1 == -t ]]; then echo 100; [[ ${SHELL_SIBLING:-0} == 0 ]] || echo 120; return 0; fi
-      case ${4:-} in comm=) echo "${SHELL_COMMAND:-bash}" ;; lstart=) echo identity ;; *) return 1 ;; esac
+      case ${4:-} in comm=) if [[ $2 == 120 ]]; then echo tee; else echo "${SHELL_COMMAND:-bash}"; fi ;; lstart=) echo identity ;; *) return 1 ;; esac
     }
     tmux_self_ownership target || rc=$?
     printf 'idle=%s mode=%s\n' "$rc" "$(jq -r .mode <<<"$WT_TMUX_OWNER")"
@@ -3757,13 +3770,13 @@ scenario_teardown_idle_shell() {
     SHELL_COMMAND=bash
     SHELL_SIBLING=1
     rc=0; tmux_self_ownership target || rc=$?
-    printf 'sibling=%s\n' "$rc"
+    printf 'sibling=%s blocker=%s\n' "$rc" "$TMUX_BLOCKER"
     rc=0; tmux_recorded_owner target shell "$WT_TMUX_OWNER" || rc=$?
     printf 'recorded-sibling=%s\n' "$rc"
   )
   assert_has 'a verified idle shell can request self-removal' "$result" 'idle=0 mode=shell'
   assert_has 'shell recovery skips obsolete Codex launch binding' "$result" 'recorded=0'
-  assert_has 'a sibling command prevents shell self-removal' "$result" 'sibling=1'
+  assert_has 'a sibling command prevents shell self-removal' "$result" 'sibling=3 blocker=PID 120 (tee)'
   assert_has 'recorded shell cannot adopt a later background command' "$result" 'recorded-sibling=1'
   assert_has 'a same-PID provider replacement cannot inherit shell authorization' "$result" 'exec-provider=1'
   end_scenario
@@ -3781,7 +3794,7 @@ scenario_teardown_review_ownership() {
       fi
       case ${4:-} in
         command=) [[ $2 != 110 ]] && echo claude || echo 'codex app-server' ;;
-        comm=) echo "${REVIEW_PROVIDER:-codex}" ;;
+        comm=) if [[ $2 == 99999999 && ${REVIEW_EXTRA_AGENT:-1} == 0 ]]; then echo tee; else echo "${REVIEW_PROVIDER:-codex}"; fi ;;
         *) case $2 in 90) echo 80 ;; 100) echo 90 ;; 110) echo 100 ;; 120) echo 110 ;; 99999999) echo 1 ;; *) echo 120 ;; esac ;;
       esac
     }
@@ -3807,7 +3820,7 @@ scenario_teardown_review_ownership() {
   assert_has 'shared-server ancestry cannot grant self ownership' "$result" 'shared rc=1'
   assert_has 'the refusal identifies missing task-owned context' "$result" 'task-owned Codex launch'
   assert_has 'another agent in another window prevents session shutdown' "$result" 'other-window agent rc=1'
-  assert_has 'an independent command in another window prevents session shutdown' "$result" 'other-window command rc=1'
+  assert_has 'an independent command in another window prevents session shutdown' "$result" 'other-window command rc=3'
   end_scenario
 }
 
@@ -4531,14 +4544,14 @@ scenario_teardown_command_completion() {
   receipt=$(cat "$r/.git/wt/teardown/completed.json")
   for invalid in false '{}' '[]'; do
     printf '%s\n' "$receipt" | jq --argjson commands "$invalid" '.commands=$commands' >"$r/.git/wt/teardown/completed.json"
-    assert_wt_fails 1 'task commands remain active or unverified' rm completed -r "$r"
+    assert_wt_fails 1 'cleanup absence cannot be verified' rm completed -r "$r"
     assert_wt_fails 1 'cleanup absence cannot be verified' rm completed --observe-only -r "$r"
     assert_wt_fails 1 'cleanup remains pending' new completed --no-workspace -r "$r"
     assert_gone 'invalid command evidence cannot reuse a completed task name' "$r/.worktrees/completed"
     assert_branch "$r" wt/completed no
   done
   printf '%s\n' "$receipt" | jq '.self=null' >"$r/.git/wt/teardown/completed.json"
-  assert_wt_fails 1 'task commands remain active or unverified' rm completed -r "$r"
+  assert_wt_fails 1 'cleanup absence cannot be verified' rm completed -r "$r"
   printf '%s\n' "$receipt" >"$r/.git/wt/teardown/completed.json"
   assert_wt_ok 'valid headless completion remains repeatable' rm completed -r "$r"
   assert_wt_ok 'verified completion permits a new generation' new completed --no-workspace -r "$r"

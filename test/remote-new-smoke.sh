@@ -20,6 +20,7 @@ lib_register_scenario scenario_prompt_order "remote briefs preserve explicit and
 lib_register_scenario scenario_interrupted_setup "interrupted setup retains the brief, agent and model"
 lib_register_scenario scenario_nested_commands "machine requests do not reach setup hooks or nested commands"
 lib_register_scenario scenario_vm_failures "VM failures name the command, host, status, signal, and recovery command"
+lib_register_scenario scenario_self_removal_reuse "self-removed VM names need receipt-bound Mac confirmation"
 lib_scenario_discovery
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/wt-remote-new.XXXXXX")
 TEST_ROOT=$(cd "$TEST_ROOT" && pwd -P)
@@ -755,6 +756,75 @@ scenario_vm_failures() {
   invoke_wt -H fakevm version
   assert_eq 'successful VM commands keep their status' 0 "$WT_RC"
   assert_eq 'successful VM commands add no diagnostic' '' "$WT_STDERR"
+  end_scenario
+}
+
+scenario_self_removal_reuse() {
+  begin_scenario "$1" || return 0
+  local r="$TEST_ROOT/remote/repo" receipt="$TEST_ROOT/remote/repo/.git/wt/teardown/task.json" output status digest mode
+  local saved="$TEST_ROOT/self-receipt.json"
+  remote_task() {
+    env -u CODEX_SANDBOX -u TMUX -u TMUX_PANE -u WT_HOST \
+      HOME="$TEST_ROOT/remote" PATH="$TEST_ROOT/remote/.local/bin:/usr/bin:/bin" \
+      CMUX_SSH_ATTEMPT_ID=fixture "$REPO/bin/wt" "$@"
+  }
+  CMUX_MODE=alive
+  invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+  assert_eq 'create the remote cleanup fixture' 0 "$WT_RC"
+  remote_task rm task -r "$r" --defer-close >"$TEST_ROOT/remote-removal"
+  # Model the durable receipt after a self-closure loses its final response.
+  python3 - "$REPO" "$receipt" <<'PY'
+import importlib.util, json, pathlib, sys
+spec = importlib.util.spec_from_file_location('commands', pathlib.Path(sys.argv[1]) / 'lib/workgrove/commands.py')
+commands = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(commands)
+p = pathlib.Path(sys.argv[2])
+data = json.loads(p.read_text())
+data.update(self='remote', workspace='1')
+data['commands'] = dict(version=1, generation=data['generation'], boot=commands.Processes().boot(), platform=sys.platform,
+                        records=[dict(pid=99999999, birth='bsd:1:1' if sys.platform == 'darwin' else 'ticks:1',
+                                      comm='fixture-provider', role='runtime')])
+p.write_text(json.dumps(data) + '\n')
+PY
+  cp "$receipt" "$saved"
+  status=0; output=$(remote_task new task -r "$r" -a none --no-workspace 2>&1) || status=$?
+  assert_eq 'a pending self-receipt blocks VM creation' 1 "$status"
+  assert_eq 'failed VM creation keeps pending cleanup' close_requested "$(jq -r .stage "$receipt")"
+  for mode in existing partial-window; do
+    CMUX_MODE=$mode
+    invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+    assert_eq "$mode row state blocks reuse" 1 "$WT_RC"
+    assert_eq "$mode row state leaves the receipt pending" close_requested "$(jq -r .stage "$receipt")"
+    assert_absent "$r" .worktrees/task
+  done
+  CMUX_MODE=alive
+  jq 'del(.commands)' "$saved" >"$receipt"
+  invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+  assert_eq 'an old self-receipt without process evidence blocks reuse' 1 "$WT_RC"
+  assert_absent "$r" .worktrees/task
+  cp "$saved" "$receipt"
+  invoke_wt -H fakevm rm task -r "$r"
+  assert_eq 'independent Mac confirmation completes cleanup' 0 "$WT_RC"
+  assert_eq 'Mac confirmation records complete cleanup' complete "$(jq -r .stage "$receipt")"
+  status=0; output=$(remote_task new task -r "$r" -a none --no-workspace 2>&1) || status=$?
+  assert_eq 'a complete stage alone cannot acknowledge the current Mac row' 1 "$status"
+  output=$(remote_task rm task -r "$r" --observe-only --row-closed)
+  digest=${output#closed receipt }
+  cp "$receipt" "$saved"
+  jq '.generation="replacement" | .commands.generation="replacement"' "$saved" >"$receipt"
+  status=0; output=$(remote_task new task -r "$r" -a none --no-workspace --closed-receipt "$digest" 2>&1) || status=$?
+  assert_eq 'a changed generation rejects the old acknowledgment' 1 "$status"
+  assert_absent "$r" .worktrees/task
+  cp "$saved" "$receipt"
+  invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+  assert_eq 'the Mac can reuse an independently confirmed self-removed name' 0 "$WT_RC"
+  assert_grep 'the retry carries receipt-bound evidence' "$TEST_ROOT/remote-new.args" --closed-receipt
+  check "$([[ -d $r/.worktrees/task ]] && echo yes)" 'the replacement task is absent'
+  printf 'unrelated work\n' >"$r/.worktrees/task/private.txt"
+  status=0; output=$(remote_task rm task -r "$r" --observe-only --row-closed --closed-receipt "$digest" 2>&1) || status=$?
+  assert_eq 'old closure evidence cannot remove a replacement task' 1 "$status"
+  assert_eq 'replacement private work survives stale evidence' 'unrelated work' "$(cat "$r/.worktrees/task/private.txt")"
+  unset -f remote_task
   end_scenario
 }
 
