@@ -48,24 +48,7 @@ log() { # Keep diagnostics in this log so the native automation response stays u
   (umask 077; mkdir -p "${LOG%/*}" &&
     printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >>"$LOG") 2>/dev/null
   return 0; }
-PERL=$(command -v perl || true)
 DEADLINE=$(( $(date +%s) + 15 ))
-# shellcheck disable=SC2329  # CMUX_RUN and VM_SSH_RUN invoke this function.
-capped() { # capped <cmd…>: one cmux call, inside what is left of that budget. `workspace list --json`
-           # answers in ~0.02 s, and `cmux ssh` in ~4 s. The 1.2-2.9 s quoted in the notes is how long a
-           # row takes to *paint*: UI work that happens after the CLI has already returned. So the cap is
-           # for an app that has hung, not for ordinary latency. Because macOS has no timeout(1), perl runs
-           # the call in a process group of its own. On the alarm, perl kills the group. If it killed only
-           # the leader, a child would stay behind and hold open the pipe that this call is read through.
-  local left=$(( DEADLINE - $(date +%s) ))
-  (( left > 0 )) || return 142
-  [[ -n $PERL ]] || { "$@"; return; }      # no perl: uncapped beats not running the call at all
-  # shellcheck disable=SC2016   # this is a perl program, not a shell string: the sigils are perl's
-  "$PERL" -e 'my $t = shift; my $p = fork; defined $p or exit 127;
-              unless ($p) { setpgrp(0, 0); exec @ARGV; exit 127 }   # own group, so nothing it spawns
-              $SIG{ALRM} = sub { kill 9, -$p; waitpid $p, 0; exit 142 };   # survives to hold the pipe open
-              alarm $t; waitpid $p, 0; my $s = $?; exit(($s & 127) ? 128 + ($s & 127) : ($s >> 8))' "$left" "$@"
-}
 event_handled() {
   [[ $mode == --event ]] || return 0
   # Closing a row removes its notifications too. Open and attach remove only their own request.
@@ -78,9 +61,9 @@ quiet() { event_handled; printf '%s\n' '{"effects":{"desktop":false,"sound":fals
 quiet_control() { event_handled; printf '%s\n' '{"effects":{"record":false,"markUnread":false,"reorderWorkspace":false,"desktop":false,"sound":false,"command":false,"paneFlash":false}}'; }
 CODE=$(command -v code || echo "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code")
 CMUX=$(cmux_bin) || { log "cmux executable not found"; exit 0; }
-CMUX_RUN=(capped "$CMUX")
-VM_SSH_RUN=(capped ssh)
-VM_SSH_CHECK_RUN=(capped)
+CMUX_RUN=(cmux_capped "$CMUX")
+VM_SSH_RUN=(cmux_capped ssh)
+VM_SSH_CHECK_RUN=(cmux_capped)
 field() { printf '%s' "$b" | jq -er --arg k "$1" '.[$k] | strings' 2>/dev/null; }
 
 attach_row() { # attach_row <host> <session> <title> <repo id> <command>

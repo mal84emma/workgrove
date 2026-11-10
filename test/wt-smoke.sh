@@ -336,6 +336,7 @@ PROMPT_FIXTURE=$'first "line": $HOME `date` \'quoted\' back\\slash\nsecond line:
 source "$REPO/test/fakes/rows.sh"
 fake_cmux_init "$TEST_ROOT/cmux-state"
 touch "$FAKE_CMUX_STATE/mutate-close"
+touch "$FAKE_CMUX_STATE/materialize-ssh"
 CMUX_DEAD="$TEST_ROOT/cmux-dead/cmux"
 CMUX_ALIVE="$TEST_ROOT/cmux-alive/cmux"
 WT_STUB="$CMUX_DEAD"

@@ -23,6 +23,7 @@ unset XDG_DATA_HOME   # the cmux-tui hook wrapper must find its default helper i
 source "$REPO/test/fakes/rows.sh"
 fake_cmux_init "$TEST_ROOT/cmux-state"
 : >"$FAKE_CMUX_STATE/native-log"
+touch "$FAKE_CMUX_STATE/materialize-ssh"
 ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/bin/cmux"
 CMUX_LOG="$FAKE_CMUX_STATE/calls.log"
 cat > "$TEST_ROOT/bin/code" <<'CODE'
@@ -184,6 +185,118 @@ scenario_shared_creation() {
   end_scenario
 }
 scenario_shared_creation
+
+scenario_title_repair() {
+  begin_scenario 'the Mac hook repairs burst titles by UUID without changing focus' || return 0
+  record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"burst1"}'
+  touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-burst"
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  local n id out original
+  original=$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")
+  for n in 1 2 3 4 5; do
+    jq --arg task "burst$n" '.[0].body=({host:"test-vm",repo:"/vm/repos/repo",task:$task} | tojson)' \
+      "$RECORD_FILE" >"$FAKE_CMUX_STATE/notifications.json"
+    out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+    assert_eq "burst$n quiets its successful request" true "$(jq '.effects.desktop == false' <<<"$out")"
+    assert_eq "burst$n keeps its requested title" 1 "$(jq --arg title "burst$n" '[.workspaces[] | select(.title == $title and .description == "@test-vm · repo")] | length' "$FAKE_CMUX_STATE/rows.json")"
+  done
+  assert_eq 'the hook repairs only the affected burst rows' 3 "$(grep -c -- '--action rename' "$CMUX_LOG")"
+  lacks "$CMUX_LOG" 'workspace select'
+  lacks "$CMUX_LOG" 'workspace close'
+  assert_eq 'the hook preserves its sending row' "$original" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")"
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  lacks "$CMUX_LOG" 'ssh test-vm'
+  id=$(jq -r '.workspaces[] | select(.title == "burst5") | .id' "$FAKE_CMUX_STATE/rows.json")
+  has "$CMUX_LOG" "workspace select $id"
+  assert_eq 'later hook attach creates no duplicate' 6 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+  touch "$FAKE_CMUX_STATE/ssh-reset-title"
+  fake_failure workspace-rename 1 'rename refused'
+  jq '.[0].body="{\"host\":\"test-vm\",\"repo\":\"/vm/repos/repo\",\"task\":\"failed\"}"' \
+    "$RECORD_FILE" >"$FAKE_CMUX_STATE/notifications.json"
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'a failed repair keeps its notification' '' "$out"
+  id=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows.json")
+  has "$XDG_STATE_HOME/cmux-hook.log" "cmux workspace-action --workspace $id --action rename --title failed"
+  lacks "$CMUX_LOG" 'workspace close'
+  lacks "$CMUX_LOG" 'dismiss-notification'
+  rm "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-burst" "$FAKE_CMUX_STATE/ssh-reset-title" "$FAKE_CMUX_STATE/ssh-connect-after" "$FAKE_CMUX_STATE/fail/workspace-rename"
+  end_scenario
+}
+scenario_title_repair
+
+scenario_hook_reattachment() {
+  begin_scenario 'the Mac hook repairs the first reattachment after original row closure' || return 0
+  record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"reattach"}'
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  local original first repaired out had_close=0
+  [[ ! -f $FAKE_CMUX_STATE/mutate-close ]] || had_close=1
+  touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
+  printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  original=$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'the original hook row opens successfully' true "$(jq '.effects.desktop == false' <<<"$out")"
+  first=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows.json")
+  lacks "$CMUX_LOG" '--action rename'
+  "$REPO/test/fakes/cmux" workspace close "$first"
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'the hook reattaches after closure' true "$(jq '.effects.desktop == false' <<<"$out")"
+  repaired=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows.json")
+  for _ in 1 2 3; do "$REPO/test/fakes/cmux" workspace list --json >/dev/null; done
+  assert_eq 'the hook receives a new row UUID' true "$([[ $repaired != "$first" ]] && echo true || echo false)"
+  has "$CMUX_LOG" "workspace-action --workspace $repaired --action rename --title reattach"
+  assert_eq 'the hook restores the requested title and description' 'reattach|@test-vm · repo' "$(jq -r '.workspaces[-1] | [.title,.description] | join("|")' "$FAKE_CMUX_STATE/rows.json")"
+  lacks "$CMUX_LOG" 'workspace select'
+  lacks "$CMUX_LOG" 'workspace close'
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'later hook attach succeeds' true "$(jq '.effects.desktop == false' <<<"$out")"
+  lacks "$CMUX_LOG" 'ssh test-vm'
+  has "$CMUX_LOG" "workspace select $repaired"
+  assert_eq 'later hook attach creates no duplicate' 2 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'reattachment preserves the sending row' "$original" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")"
+  rm "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/ssh-connect-after"
+  if [[ $had_close == 0 ]]; then rm "$FAKE_CMUX_STATE/mutate-close"; fi
+  end_scenario
+}
+scenario_hook_reattachment
+
+scenario_title_budget() {
+  begin_scenario 'title verification reserves the Mac hook budget for remaining operations' || return 0
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  local mode out expected
+  mkdir -p "$FAKE_CMUX_STATE/after/ssh"
+  for mode in remaining exhausted; do
+    record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"budget"}'
+    printf 100 >"$FAKE_CMUX_STATE/clock-now"
+    expected=110
+    [[ $mode != exhausted ]] || expected=113
+    printf '%s' "$expected" >"$FAKE_CMUX_STATE/after/ssh/clock-now"
+    out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+    if [[ $mode == remaining ]]; then
+      assert_eq 'a late successful check leaves dismissal time' true "$(jq '.effects.desktop == false' <<<"$out")"
+      has "$CMUX_LOG" 'dismiss-notification'
+      assert_eq 'verification finishes before its reserved deadline' 112 "$(cat "$FAKE_CMUX_STATE/clock-now")"
+    else
+      assert_eq 'an exhausted check keeps the notification' '' "$out"
+      lacks "$CMUX_LOG" 'dismiss-notification'
+      lacks "$CMUX_LOG" '--action rename'
+      has "$XDG_STATE_HOME/cmux-hook.log" 'cmux workspace-action --workspace 00000000-0000-4000-8000-000000000099 --action rename --title budget'
+      assert_eq 'an exhausted check never extends the hook deadline' 113 "$(cat "$FAKE_CMUX_STATE/clock-now")"
+    fi
+    lacks "$CMUX_LOG" 'workspace close'
+    lacks "$CMUX_LOG" 'workspace select'
+  done
+  rm -r "$FAKE_CMUX_STATE/after/ssh"
+  end_scenario
+}
+scenario_title_budget
 
 scenario_lookup_race() {
   begin_scenario 'native attach selects a row that arrived after event validation' || return 0
