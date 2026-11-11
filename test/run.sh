@@ -17,7 +17,7 @@ source "$REPO/test/runner-git.sh"
 if [[ ${1:-} == -h || ${1:-} == --help ]]; then
   echo 'usage: bash test/run.sh [--full | --fast] [suite.sh ...]'
   echo 'Full discovery is the default and required before merging. --fast is a local subset.'
-  echo 'JOBS overrides the CPU-aware default (1 to 8 workers). Use a positive decimal integer.'
+  echo 'JOBS overrides the CPU-aware default (1 to 4 workers). Use a positive decimal integer.'
   echo 'Use ONLY with one selected suite. KEEP=1 preserves all runner logs.'
   exit 0
 fi

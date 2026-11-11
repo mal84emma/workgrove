@@ -28,7 +28,7 @@ def default_jobs():
                 cpus = 1
     else:
         cpus = 1
-    return max(1, min(8, cpus))
+    return max(1, min(4, cpus))
 
 
 if __name__ == "__main__":
