@@ -2191,7 +2191,7 @@ PTY
 }
 
 # Scenario 8 simulates the Mac so every platform checks its row ownership rules.
-scenario_cmux_rows() {
+scenario_cmux() {
   begin_scenario "$1" || return 0
   local r id
   local mac_bin="$TEST_ROOT/mac-bin"
@@ -2351,25 +2351,6 @@ scenario_cmux_rows() {
   assert_wt_ok "wt rm oldnote" rm oldnote -r "$r"
   assert_has "…closes the row with the old title and an edited second line" "$(cat "$CMUX_LOG")" "workspace close oldnote-row"
 
-  stub_cmux dead
-  end_scenario
-}
-
-scenario_cmux_ownership() {
-  begin_scenario "$1" || return 0
-  local r id
-  local mac_bin="$TEST_ROOT/mac-bin"
-  mkdir -p "$mac_bin"
-  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
-  chmod +x "$mac_bin/uname"
-  local PATH="$mac_bin:$PATH"
-  r="$(new_repo cmux)"
-  id="$(basename "$r")"
-
-  stub_cmux alive
-  local r2 id2
-  r2="$(new_repo other)"
-  id2="$(basename "$r2")"
   # The user can edit or clear a row's second line in cmux. Then no lookup names the row. So wt rm checks each
   # row with the task's title whose second line wt did not write, and refuses while an agent runs in one.
   # A second line that names another repo is that repo's row, so wt rm does not check it.
@@ -2486,23 +2467,6 @@ scenario_cmux_ownership() {
     WT_RELAY_ENV=()
   done
 
-  stub_cmux dead
-  end_scenario
-}
-
-scenario_cmux_queries() {
-  begin_scenario "$1" || return 0
-  local r id
-  local mac_bin="$TEST_ROOT/mac-bin"
-  mkdir -p "$mac_bin"
-  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
-  chmod +x "$mac_bin/uname"
-  local PATH="$mac_bin:$PATH"
-  r="$(new_repo cmux)"
-  id="$(basename "$r")"
-
-  stub_cmux alive
-  local w1=AAAAAAAA-0000-0000-0000-00000000000A w2=BBBBBBBB-0000-0000-0000-00000000000B
   local failure
   for failure in denied invalid missing null no-id remote partial empty scalar; do
     stub_cmux alive
@@ -2545,32 +2509,6 @@ scenario_cmux_queries() {
   printf '{"workspaces":[]}\n' >"$WT_ROWS"
   assert_wt_ok "a successful empty row list permits removal" rm ping-denied -r "$r"
 
-  assert_wt_ok "wt new close-failed" new close-failed --no-workspace -r "$r"
-  fake_rows "$(fake_row "failed-row" "close-failed" "@local · $id" | jq -c --arg directory "$r" '.current_directory=$directory')" >"$WT_ROWS"
-  WT_RELAY_ENV=("CMUX_STUB_FAIL_CLOSE=1")
-  wt_run rm close-failed -r "$r"
-  assert_eq "row-close failure exits nonzero" "1" "$WT_RC"
-  assert_has "row-close failure names the row" "$WT_OUT" "could not close cmux row failed-row"
-  assert_has "row-close failure reports the socket error" "$WT_OUT" "socket access denied"
-  assert_gone "row-close failure reports an already removed worktree" "$r/.worktrees/close-failed"
-  WT_RELAY_ENV=()
-
-  stub_cmux dead
-  end_scenario
-}
-
-scenario_cmux_remote() {
-  begin_scenario "$1" || return 0
-  local r id
-  local mac_bin="$TEST_ROOT/mac-bin"
-  mkdir -p "$mac_bin"
-  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac_bin/uname"
-  chmod +x "$mac_bin/uname"
-  local PATH="$mac_bin:$PATH"
-  r="$(new_repo cmux)"
-  id="$(basename "$r")"
-
-  stub_cmux alive
   local fake="$TEST_ROOT/active-row-bin" ssh_log
   ssh_log="$fake/calls.log"
   mkdir -p "$fake"
@@ -2628,6 +2566,16 @@ STUB
   assert_lacks "…and the other repo's row was not checked" "$(cat "$CMUX_LOG")" "top --workspace other-vm-row"
   assert_lacks "…nor a local row with the same title" "$(cat "$CMUX_LOG")" "top --workspace local-row"
   WT_PATH_PREFIX="" WT_RELAY_ENV=()
+
+  assert_wt_ok "wt new close-failed" new close-failed --no-workspace -r "$r"
+  fake_rows "$(fake_row "failed-row" "close-failed" "@local · $id" | jq -c --arg directory "$r" '.current_directory=$directory')" >"$WT_ROWS"
+  WT_RELAY_ENV=("CMUX_STUB_FAIL_CLOSE=1")
+  wt_run rm close-failed -r "$r"
+  assert_eq "row-close failure exits nonzero" "1" "$WT_RC"
+  assert_has "row-close failure names the row" "$WT_OUT" "could not close cmux row failed-row"
+  assert_has "row-close failure reports the socket error" "$WT_OUT" "socket access denied"
+  assert_gone "row-close failure reports an already removed worktree" "$r/.worktrees/close-failed"
+  WT_RELAY_ENV=()
 
   stub_cmux dead
   end_scenario
