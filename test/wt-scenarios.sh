@@ -19,7 +19,11 @@ wt_scenarios() {
   "$@" scenario_rm_fetch_notice "6g. removal reports one fetch notice while refreshing deletion evidence"
   "$@" scenario_prune_agrees "7. wt prune --dry-run keeps exactly what wt rm refuses"
   "$@" scenario_self_rm_vm "7b. a VM task can remove itself after changing to its main checkout"
-  "$@" scenario_cmux "8. a cmux that is not running, and one that is"
+  if [[ ${LIB_SCENARIO_ID:-} == scenario_cmux ]]; then
+    "$@" scenario_cmux "8. a cmux that is not running, and one that is"
+  else
+    wt_cmux_scenarios "$@"
+  fi
   "$@" scenario_commands "8b. wt diff / sync / pr / repos / driver use isolated services"
   "$@" scenario_codex_caller_context "8c. Codex ownership uses process ancestry despite stale caller context"
   "$@" scenario_close_confirmation_failure "8d. close confirmation can fail after successful worktree removal"
@@ -50,3 +54,15 @@ wt_scenarios() {
   "$@" scenario_shared_helpers "11. bash startup, shared library loading, and tmux launch behavior"
   "$@" scenario_cleanup_guard "12. lib_cleanup refuses a scratch root it must not remove"
 }
+
+# Preserve the aggregate ID while discovery schedules independent fixtures.
+wt_cmux_scenarios() {
+  local name="8. a cmux that is not running, and one that is"
+  "$@" scenario_cmux_rows "$name: row identity"
+  "$@" scenario_cmux_ownership "$name: ownership"
+  "$@" scenario_cmux_queries "$name: failed queries"
+  "$@" scenario_cmux_remote "$name: VM refusal"
+}
+
+wt_run_scenario() { "$1" "$2"; }
+scenario_cmux() { wt_cmux_scenarios wt_run_scenario; }

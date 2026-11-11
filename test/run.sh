@@ -117,17 +117,19 @@ queue_task() {
   local suite=$1 id=$2 name=$3 suite_index=$4 priority=5
   # Re-measure with JOBS=4 KEEP=1 and use the reported task times. See docs/development.md.
   case ${suite##*/}:$id in
-    wt-smoke.sh:scenario_cmux) priority=149 ;;
     wt-smoke.sh:scenario_self_rm_vm) priority=107 ;;
     wt-smoke.sh:scenario_squash_merge) priority=106 ;;
     wt-smoke.sh:scenario_rm_refusals) priority=73 ;;
     wt-smoke.sh:scenario_teardown_raw_tracked) priority=68 ;;
+    wt-smoke.sh:scenario_cmux_ownership) priority=66 ;;
     wt-smoke.sh:scenario_teardown_destinations) priority=63 ;;
     doctor-smoke.sh:) priority=58 ;;
+    wt-smoke.sh:scenario_cmux_rows) priority=57 ;;
     wt-smoke.sh:scenario_teardown_recovery_edges) priority=52 ;;
     wt-smoke.sh:scenario_teardown_final_proof) priority=51 ;;
     wt-smoke.sh:scenario_teardown_astra_sidecars) priority=46 ;;
     wt-smoke.sh:scenario_teardown_review_git) priority=38 ;;
+    wt-smoke.sh:scenario_cmux_queries) priority=36 ;;
     portable-smoke.sh:python-9) priority=35 ;;
     remote-new-smoke.sh:scenario_preflight_recovery) priority=33 ;;
     native-relay-smoke.sh:) priority=32 ;;
@@ -143,6 +145,7 @@ queue_task() {
     wt-smoke.sh:scenario_teardown_copy_schema) priority=18 ;;
     github-guard-smoke.sh:|wt-smoke.sh:scenario_teardown_astra_registrations) priority=17 ;;
     wt-smoke.sh:scenario_close_confirmation_failure|lib-smoke.sh:) priority=15 ;;
+    wt-smoke.sh:scenario_cmux_remote) priority=3 ;;
     portable-smoke.sh:*|ssh-host-smoke.sh:*|remote-new-smoke.sh:scenario_result_versions) priority=12 ;;
     wt-smoke.sh:*|remote-new-smoke.sh:*|hosts-smoke.sh:|update-smoke.sh:) priority=8 ;;
     capacity-smoke.sh:*|docs-smoke.sh:) priority=1 ;;
