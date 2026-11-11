@@ -68,10 +68,8 @@ The [Mac–VM protocol](docs/vm-protocol.md) defines remote commands, result rec
     - `wt new` did not detect a row title that another repo already used.
     - The Mac hook could not prove that a VM's `wt open` came from that VM, so it did nothing.
   - *The earlier evidence:* Measured on cmux 0.64, a row keeps its id, its title and its `workspace:N` ref when it moves.
-    Every command that acts on a row (select, send, close, set-description) finds the row by id in any window.
-    Only the listing is limited to the caller's window.
-    On cmux 0.65.1, a moved native VM row kept its UUID, title, and ref.
-    Combined window lookup, description updates, targeted input, and self-removal also passed.
+    Row actions reach its id in any window; only listing uses the caller's window.
+    [PR #78's historical evidence](https://github.com/mal84emma/workgrove/pull/78#issuecomment-6775485011) records the cmux 0.65.1 cross-window checks and their limits.
   - *The decision:* `cmux_rows_load` in `lib/workgrove/cmux.sh` enumerates the windows and merges their row lists. Both `rows_json` and the Mac hook use it.
     Because the commands that act on a row already reach it in any window, no other code had to change.
     The loader uses window UUIDs because opening a window renumbers the indices that `cmux list-windows` prints first.
