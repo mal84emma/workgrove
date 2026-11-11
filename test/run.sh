@@ -117,11 +117,8 @@ queue_task() {
   local suite=$1 id=$2 name=$3 suite_index=$4 priority=5
   # Re-measure with JOBS=4 KEEP=1 and use the reported task times. See docs/development.md.
   case ${suite##*/}:$id in
-    wt-smoke.sh:scenario_squash_prune) priority=88 ;;
-    wt-smoke.sh:scenario_squash_old_git) priority=17 ;;
-    wt-smoke.sh:scenario_squash_offline) priority=5 ;;
-    wt-smoke.sh:scenario_self_rm_native) priority=51 ;;
-    wt-smoke.sh:scenario_self_rm_probes) priority=33 ;;
+    wt-smoke.sh:scenario_self_rm_vm) priority=107 ;;
+    wt-smoke.sh:scenario_squash_merge) priority=106 ;;
     wt-smoke.sh:scenario_rm_refusals) priority=73 ;;
     wt-smoke.sh:scenario_teardown_raw_tracked) priority=68 ;;
     wt-smoke.sh:scenario_cmux_ownership) priority=66 ;;

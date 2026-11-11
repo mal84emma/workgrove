@@ -1504,9 +1504,9 @@ scenario_teardown_destinations() {
 # whether merging the branch into the base would change anything. These cases are the shapes that answer
 # yes and no. Each squash happens on a second clone, the "editor", and the repo under test has not fetched.
 # Its origin/main is from before the merge, as it is when the user types `wt rm` right after merging a PR.
-scenario_squash_prune() {
+scenario_squash_merge() {
   begin_scenario "$1" || return 0
-  local r e stale fresh dry n verdict want hunks=no
+  local r e stale fresh dry n verdict want shim hunks=no
   r="$(new_repo squash)"
   stub_cmux dead
   printf 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n' >"$r/lines.txt"   # for the cases about a later edit
@@ -1642,22 +1642,6 @@ scenario_squash_prune() {
   refuses "$r" conf "(merging wt/conf into origin/main would"
   forced "$r" conf
 
-  end_scenario
-}
-
-scenario_squash_old_git() {
-  begin_scenario "$1" || return 0
-  local r e shim hunks=no
-  r="$(new_repo squash)"
-  stub_cmux dead
-  printf 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n' >"$r/lines.txt"   # for the cases about a later edit
-  fixture_git "$r" add lines.txt
-  fixture_git "$r" commit -q -m lines
-  e="$(add_origin "$r")"
-  # Use the safety module's function to check whether git merges hunk by hunk.
-  # shellcheck disable=SC2016  # The child shell expands $1.
-  if "$BASH" -c 'source "$1"; git_merges_trees' _ "$REPO/lib/workgrove/safety.sh" 2>/dev/null; then hunks=yes; fi
-
   # Older git: a `git` that says it is 2.34, and hands everything else to the real one, drives the
   # file-level fallback. That fallback lands a plain squash, but it refuses a squash whose file the base
   # edited again, even when the edits are in different hunks.
@@ -1689,15 +1673,6 @@ scenario_squash_old_git() {
     assert_gone "…removed the worktree" "$r/.worktrees/old2"
   else forced "$r" old2; fi
 
-  end_scenario
-}
-
-scenario_squash_offline() {
-  begin_scenario "$1" || return 0
-  local r n
-  r="$(new_repo squash-offline)"
-  stub_cmux dead
-  add_origin "$r" >/dev/null
   # a remote that cannot be reached: the offline verdict stands, and the refusal says the base is as last fetched
   assert_wt_ok "wt new off" new off --no-workspace -r "$r"
   fixture_commit "$r/.worktrees/off" twelve.txt 'twelve'
@@ -1714,7 +1689,6 @@ scenario_squash_offline() {
   fixture_git "$r" remote set-url origin "$TEST_ROOT/origins/$(basename "$r").git"
   end_scenario
 }
-
 
 # 7. wt rm and wt prune use the same removal reasons.
 scenario_prune_agrees() {
@@ -1756,9 +1730,22 @@ scenario_prune_agrees() {
 
 # Native rows with the cleanup marker end through tmux. Other native rows request cleanup from the Mac hook.
 # Refusals leave both alone. All paths here are scratch fixtures.
-self_rm_vm_tools() {
-  local fake=$1
-  mkdir -p "$fake"
+scenario_self_rm_vm() {
+  begin_scenario "$1" || return 0
+  local r fake session probe
+  r="$(new_repo self-rm)"
+  stub_cmux dead
+  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=test-vm)
+  assert_wt_ok "wt new self" new self --no-workspace -r "$r"
+  assert_wt_ok "wt new unmarked native task" new unmarked --no-workspace -r "$r"
+  assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
+  assert_wt_ok "wt new tmux-denied" new tmux-denied --no-workspace -r "$r"
+  assert_wt_ok 'create a callback receiver fixture' new callback --no-workspace -r "$r"
+  for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
+    assert_wt_ok "$probe tmux status test worktree" new "status-$probe" --no-workspace -r "$r"
+  done
+  session="wt-$(basename "$r")-self"
+  fake="$TEST_ROOT/self-tmux-bin"; mkdir -p "$fake"
   cat >"$fake/tmux" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SELF_TMUX_LOG"
@@ -1821,22 +1808,6 @@ STUB
   } >"$fake/ps"
   chmod +x "$fake/ps"
   chmod +x "$fake/tmux" "$fake/pgrep"
-}
-
-scenario_self_rm_native() {
-  begin_scenario "$1" || return 0
-  local r fake session
-  r="$(new_repo self-rm)"
-  stub_cmux dead
-  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=test-vm)
-  assert_wt_ok "wt new self" new self --no-workspace -r "$r"
-  assert_wt_ok "wt new unmarked native task" new unmarked --no-workspace -r "$r"
-  assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
-  assert_wt_ok "wt new tmux-denied" new tmux-denied --no-workspace -r "$r"
-  assert_wt_ok 'create a callback receiver fixture' new callback --no-workspace -r "$r"
-  session="wt-$(basename "$r")-self"
-  fake="$TEST_ROOT/self-tmux-bin"; mkdir -p "$fake"
-  self_rm_vm_tools "$fake"
   stub_cmux alive
   WT_PATH_PREFIX="$fake" WT_CWD="$r"
   : >"$TEST_ROOT/self-tmux.log"
@@ -1927,6 +1898,26 @@ scenario_self_rm_native() {
   assert_has "native VM ends its own terminal through tmux" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session -t \$101"
   assert_lacks "native VM needs no Mac hook" "$(cat "$CMUX_LOG")" "--title wt-close"
 
+  for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
+    WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0"
+                  "SELF_TMUX_SESSION=other-session" "SELF_TMUX_PROBE=$probe" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
+    : >"$TEST_ROOT/self-tmux.log"
+    case "$probe" in
+      idle)
+        assert_wt_fails 1 'cleanup is pending' rm "status-$probe" -r "$r"
+        assert_gone 'idle session cleanup keeps a pending receipt after Git removal' "$r/.worktrees/status-$probe" ;;
+      missing|no-server|no-socket)
+        assert_wt_fails 1 'cleanup is pending' rm "status-$probe" -r "$r"
+        assert_gone "$probe tmux status removed the worktree" "$r/.worktrees/status-$probe"
+        assert_branch "$r" "wt/status-$probe" no ;;
+      *)
+        assert_wt_fails 1 "cannot check the agent in tmux session" rm "status-$probe" -r "$r"
+        assert_dir "$probe tmux status kept the worktree" "$r/.worktrees/status-$probe"
+        assert_branch "$r" "wt/status-$probe" yes
+        assert_regular "$r" ".git/wt/status-$probe.json"
+        assert_lacks "$probe tmux status did not stop the session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session" ;;
+    esac
+  done
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
   : >"$TEST_ROOT/self-tmux.log"
   assert_wt_fails 1 'cleanup is pending' rm self -r "$r"
@@ -1976,45 +1967,6 @@ scenario_self_rm_native() {
   assert_eq 'an independent callback acquires the released lock and finishes the recorded live session' complete \
     "$(jq -r .stage "$r/.git/wt/teardown/callback.json")"
   rm "$FAKE_CMUX_STATE/notify-callback" "$fake/cmux-tui"
-  WT_RELAY_ENV=() WT_PATH_PREFIX="" WT_CWD=""
-  end_scenario
-}
-
-
-scenario_self_rm_probes() {
-  begin_scenario "$1" || return 0
-  local r fake probe
-  r="$(new_repo self-probes)"
-  stub_cmux dead
-  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=test-vm)
-  for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
-    assert_wt_ok "$probe tmux status test worktree" new "status-$probe" --no-workspace -r "$r"
-  done
-  fake="$TEST_ROOT/self-tmux-bin"
-  self_rm_vm_tools "$fake"
-  stub_cmux alive
-  WT_PATH_PREFIX="$fake" WT_CWD="$r"
-  : >"$TEST_ROOT/self-tmux.log"
-  for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
-    WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0"
-                  "SELF_TMUX_SESSION=other-session" "SELF_TMUX_PROBE=$probe" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
-    : >"$TEST_ROOT/self-tmux.log"
-    case "$probe" in
-      idle)
-        assert_wt_fails 1 'cleanup is pending' rm "status-$probe" -r "$r"
-        assert_gone 'idle session cleanup keeps a pending receipt after Git removal' "$r/.worktrees/status-$probe" ;;
-      missing|no-server|no-socket)
-        assert_wt_fails 1 'cleanup is pending' rm "status-$probe" -r "$r"
-        assert_gone "$probe tmux status removed the worktree" "$r/.worktrees/status-$probe"
-        assert_branch "$r" "wt/status-$probe" no ;;
-      *)
-        assert_wt_fails 1 "cannot check the agent in tmux session" rm "status-$probe" -r "$r"
-        assert_dir "$probe tmux status kept the worktree" "$r/.worktrees/status-$probe"
-        assert_branch "$r" "wt/status-$probe" yes
-        assert_regular "$r" ".git/wt/status-$probe.json"
-        assert_lacks "$probe tmux status did not stop the session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session" ;;
-    esac
-  done
   WT_RELAY_ENV=() WT_PATH_PREFIX="" WT_CWD=""
   end_scenario
 }

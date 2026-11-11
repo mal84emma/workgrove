@@ -354,49 +354,37 @@ PYTHON
 }
 scenario_discovery
 
-scenario_split_groups() {
-  begin_scenario 'long scenario groups preserve filtered discovery and aggregate IDs' || return 0
-  local listing output id expected alias name group
-  local ids=()
-  for alias in scenario_cmux scenario_squash_merge scenario_self_rm_vm; do
-    case $alias in
-      scenario_cmux)
-        name='8. a cmux that is not running, and one that is'
-        ids=(scenario_cmux_rows scenario_cmux_ownership scenario_cmux_queries scenario_cmux_remote) ;;
-      scenario_squash_merge)
-        name='6b. wt rm after a squash merge: work that landed is not a reason, work that did not still is'
-        ids=(scenario_squash_prune scenario_squash_old_git scenario_squash_offline) ;;
-      scenario_self_rm_vm)
-        name='7b. a VM task can remove itself after changing to its main checkout'
-        ids=(scenario_self_rm_native scenario_self_rm_probes) ;;
-    esac
-    listing=$(ONLY="$name" TMPDIR="$TEST_ROOT/not-created" \
-      WT_BASH=missing PATH=/nonexistent "$BASH" "$REPO/test/wt-smoke.sh" --list-scenarios)
-    expected=$(printf '%s\n' "${ids[@]}")
-    assert_eq "$alias keeps historical name coverage without duplicates" "$expected" "$(cut -f1 <<<"$listing")"
-    assert_eq 'group discovery creates no fixture state' no "$([[ -e $TEST_ROOT/not-created ]] && echo yes || echo no)"
-    for id in "$alias" "${ids[@]}"; do
-      output=$(
-        # Stub execution after real selection to keep dispatch checks independent of Git fixtures.
-        source "$REPO/test/wt-scenarios.sh"
-        ONLY=''
-        for group in "${ids[@]}"; do
-          eval "$group() { printf '%s\\n' '$group'; }"
-        done
-        lib_scenario_selection --scenario "$id"
-        wt_scenarios lib_register_scenario
-        lib_run_scenarios
-      )
-      if [[ $id == "$alias" ]]; then
-        assert_eq "$alias executes every group once" "$expected" "$output"
-      else
-        assert_eq 'an exact group ID executes no neighboring group' "$id" "$output"
-      fi
-    done
+scenario_cmux_groups() {
+  begin_scenario 'cmux groups preserve filtered discovery and the aggregate ID' || return 0
+  local listing output id expected
+  local ids=(scenario_cmux_rows scenario_cmux_ownership scenario_cmux_queries scenario_cmux_remote)
+  listing=$(ONLY='8. a cmux that is not running, and one that is' TMPDIR="$TEST_ROOT/not-created" \
+    WT_BASH=missing PATH=/nonexistent "$BASH" "$REPO/test/wt-smoke.sh" --list-scenarios)
+  expected=$(printf '%s\n' "${ids[@]}")
+  assert_eq 'the historical name selects every independent group once' "$expected" \
+    "$(cut -f1 <<<"$listing")"
+  assert_eq 'group discovery creates no fixture state' no "$([[ -e $TEST_ROOT/not-created ]] && echo yes || echo no)"
+  for id in scenario_cmux "${ids[@]}"; do
+    output=$(
+      # Stub execution after real selection to keep dispatch checks independent of Git fixtures.
+      source "$REPO/test/wt-scenarios.sh"
+      ONLY=''
+      for group in "${ids[@]}"; do
+        eval "$group() { printf '%s\\n' '$group'; }"
+      done
+      lib_scenario_selection --scenario "$id"
+      wt_scenarios lib_register_scenario
+      lib_run_scenarios
+    )
+    if [[ $id == scenario_cmux ]]; then
+      assert_eq 'the aggregate ID executes every group once' "$expected" "$output"
+    else
+      assert_eq 'an exact group ID executes no neighboring group' "$id" "$output"
+    fi
   done
   end_scenario
 }
-scenario_split_groups
+scenario_cmux_groups
 
 scenario_selection() {
   begin_scenario 'runner filters wt scenarios and dispatches exact IDs' || return 0
