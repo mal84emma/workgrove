@@ -239,6 +239,7 @@ scenario_retired_hooks() {
   cp "$HOME/.codex/hooks.json" "$TEST_ROOT/retired-codex.json"
   printf '#!/bin/sh\nexit 99\n' >"$TEST_ROOT/bin/agent-notify"
   chmod +x "$TEST_ROOT/bin/agent-notify"
+  ln -s "$TEST_ROOT/bin/agent-notify" "$HOME/.local/bin/agent-notify"
   for platform in Darwin Linux; do
     printf '#!/bin/sh\necho %s\n' "$platform" >"$TEST_ROOT/bin/uname"
     for file in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"; do
