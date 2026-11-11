@@ -168,7 +168,7 @@ doctor_hooks() {
 
 # Retirement warnings do not block tasks. Unreadable inputs cannot certify cleanup.
 doctor_retired_hooks() {
-  local policy file commands command rc repair fix detail portable=0
+  local policy file commands command rc repair fix detail replacement portable=0
   # shellcheck source=lib/workgrove/vm/python-runtime.sh
   source "$WG_LIB_DIR/vm/python-runtime.sh"
   if wg_has_portable_profile "$WG_VERSION_ROOT/.."; then portable=1; fi
@@ -183,7 +183,7 @@ doctor_retired_hooks() {
   for file in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" "${CODEX_HOME:-$HOME/.codex}/hooks.json"; do
     rc=0 fix=$repair
     if [[ $portable == 0 && $file != "$HOME/.claude/settings.json" && $file != "$HOME/.codex/hooks.json" ]]; then
-      fix="vi $(shell_join "$file") # keep the replacement once per event; remove the reported retired command"
+      fix="vi $(shell_join "$file") # remove the reported retired command; keep a nonempty replacement once per event"
     fi
     commands=$(jq -esc 'if length == 1 then .[0] else error("invalid hook file") end
       | if type == "object" and (.hooks | type == "object")
@@ -203,7 +203,11 @@ doctor_retired_hooks() {
       while IFS= read -r -d '' command; do
         rc=$DOCTOR_FAILED detail=''
         if [[ $fix != "$repair" ]]; then
-          detail="Classic refresh does not manage this root. Use this replacement once per event: $(jq -r --arg command "$command" '.[$command]' <<<"$policy")"
+          replacement=$(jq -r --arg command "$command" '.[$command]' <<<"$policy")
+          detail='Classic refresh does not manage this root. Remove the reported command without a replacement.'
+          if [[ -n $replacement ]]; then
+            detail="Classic refresh does not manage this root. Use this replacement once per event: $replacement"
+          fi
         fi
         doctor_result 1 "retired hook command $file: $command" "$fix" WARN "$detail"
         DOCTOR_FAILED=$rc

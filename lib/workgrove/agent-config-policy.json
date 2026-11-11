@@ -1,7 +1,9 @@
 {
   "retired_hook_commands": {
-    "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify": "AGENT_NOTIFY_SOURCE='Claude Code' ~/.local/bin/agent-notify",
-    "AGENT_NOTIFY_SOURCE=Codex agent-notify": "AGENT_NOTIFY_SOURCE=Codex ~/.local/bin/agent-notify"
+    "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify": "",
+    "AGENT_NOTIFY_SOURCE=Codex agent-notify": "",
+    "AGENT_NOTIFY_SOURCE='Claude Code' ~/.local/bin/agent-notify": "",
+    "AGENT_NOTIFY_SOURCE=Codex ~/.local/bin/agent-notify": ""
   },
   "settings": [
     {

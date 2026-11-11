@@ -14,10 +14,11 @@ Use the [cmux update checklist](cmux-checklist.md) after each cmux update.
 
 Before native status support, workgrove's status relay supported only cmux 0.64 TCP relay rows.
 `wt run` started the status owner only when `CMUX_SOCKET_PATH` named a TCP socket.
-`bin/agent-notify` relayed status only for the same socket.
+The former `bin/agent-notify` implementation relayed status only for the same socket.
 On a native row, `tmux_cmd` cleared `CMUX_SOCKET_PATH`, so workgrove sent no status.
 The fix for `wt open` in [VM requests after cmux 0.65](vm-open-relay.md) did not change that status path.
 The TCP status relay has since been removed.
+`bin/agent-notify` now remains only as a silent stub for hooks loaded before configuration refresh.
 
 cmux 0.65 has its own status path for native rows.
 cmux-tui installs agent hooks in `~/.claude/settings.json` and `~/.codex/hooks.json` on the VM.

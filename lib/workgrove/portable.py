@@ -999,7 +999,8 @@ def merge_hooks(existing, base, policy=None):
     commands = {hook["command"] for groups in base.get("hooks", {}).values()
                 for group in groups for hook in group["hooks"] if isinstance(hook.get("command"), str)}
     if policy is not None:
-        commands.update(old for old, replacement in policy["retired_hook_commands"].items() if replacement in commands)
+        commands.update(old for old, replacement in policy["retired_hook_commands"].items()
+                        if replacement == "" or replacement in commands)
     merged = {event: [dict(group, hooks=list(group["hooks"])) for group in groups]
               for event, groups in base.get("hooks", {}).items()}
     for event, groups in hooks.items():

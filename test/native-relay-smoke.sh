@@ -58,6 +58,8 @@ case "$*" in
 esac
 exit 0
 SSH
+# The teardown hook can call this helper on failure. Keep notifications inside the fixture.
+printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/bin/osascript"
 chmod +x "$TEST_ROOT/bin/"*
 export CMUX_AUTOMATION_EVENT_JSON
 CMUX_AUTOMATION_EVENT_JSON=$(jq -cn --arg w "$ROW_ID" --arg i "$NOTIFICATION_ID" '{name:"notification.created",workspace_id:$w,payload:{notification_id:$i,title:null,body:null,redacted_fields:["title","body"]}}')

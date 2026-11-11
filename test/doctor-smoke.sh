@@ -242,21 +242,21 @@ scenario_retired_hooks() {
   for platform in Darwin Linux; do
     printf '#!/bin/sh\necho %s\n' "$platform" >"$TEST_ROOT/bin/uname"
     for file in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"; do
-      old=$(jq -r '.retired_hook_commands | keys[]' "$REPO/lib/workgrove/agent-config-policy.json" | head -1)
-      jq -n --arg old "$old" '{hooks:{Stop:[{hooks:[{type:"command",command:$old}]}]}}' \
-        >"$file"
+      jq -n --slurpfile policy "$REPO/lib/workgrove/agent-config-policy.json" \
+        '{hooks:{Stop:[{hooks:[$policy[0].retired_hook_commands | keys[] | {type:"command",command:.}]}]}}' >"$file"
     done
     invoke doctor
-    assert_grep "$platform reports the retired Claude command" "$TEST_ROOT/output" "WARN retired hook command $HOME/.claude/settings.json: $old"
-    assert_grep "$platform reports the retired Codex command" "$TEST_ROOT/output" "WARN retired hook command $HOME/.codex/hooks.json: $old"
+    while IFS= read -r old; do
+      assert_grep "$platform reports the retired Claude command" "$TEST_ROOT/output" "WARN retired hook command $HOME/.claude/settings.json: $old"
+      assert_grep "$platform reports the retired Codex command" "$TEST_ROOT/output" "WARN retired hook command $HOME/.codex/hooks.json: $old"
+    done < <(jq -r '.retired_hook_commands | keys[]' "$REPO/lib/workgrove/agent-config-policy.json")
     if [[ $platform == Darwin ]]; then
       assert_eq 'retired commands do not fail Mac readiness' 0 "$STATUS"
       assert_grep 'Mac repair names the installer' "$TEST_ROOT/output" 'install.sh --refresh-config'
     else
       assert_grep 'VM repair runs on the VM' "$TEST_ROOT/output" 'Fix: wt update --refresh-config'
     fi
-    for old in "$(jq -r '.retired_hook_commands | keys[0]' "$REPO/lib/workgrove/agent-config-policy.json")" \
-        "$(jq -r '.retired_hook_commands | keys[1]' "$REPO/lib/workgrove/agent-config-policy.json")"; do
+    while IFS= read -r old; do
       for command in "$old --custom" "EXTRA=1 $old" "env $old" 'AGENT_NOTIFY_SOURCE=Personal agent-notify'; do
         jq -n --arg command "$command" '{hooks:{Stop:[{hooks:[{type:"command",command:$command}]}]}}' \
           >"$HOME/.claude/settings.json"
@@ -265,7 +265,7 @@ scenario_retired_hooks() {
         assert_grep 'foreign Claude command has no retirement warning' "$TEST_ROOT/output" "PASS retired hook commands absent $HOME/.claude/settings.json"
         assert_grep 'foreign Codex command has no retirement warning' "$TEST_ROOT/output" "PASS retired hook commands absent $HOME/.codex/hooks.json"
       done
-    done
+    done < <(jq -r '.retired_hook_commands | keys[]' "$REPO/lib/workgrove/agent-config-policy.json")
     for file in "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json"; do
       for command in '{broken' '{"hooks":[]}' '{"hooks":{"Stop":[{"hooks":null}]}}' '{} {}' \
           '{"hooks":{"Stop":{}}}' '{"hooks":{"Stop":[{"hooks":{}}]}}'; do
@@ -289,9 +289,8 @@ scenario_retired_hooks() {
   WT_MACHINE=1 CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude" CODEX_HOME="$TEST_ROOT/custom-codex" invoke doctor
   assert_grep 'classic custom roots name a file repair' "$TEST_ROOT/output" "Fix: vi $TEST_ROOT/custom-codex/hooks.json"
   assert_grep 'classic custom roots explain the refresh limit' "$TEST_ROOT/output" 'Classic refresh does not manage this root.'
-  while IFS= read -r command; do
-    assert_grep 'custom repairs name each policy replacement' "$TEST_ROOT/output" "Use this replacement once per event: $command"
-  done < <(jq -r '.retired_hook_commands[]' "$REPO/lib/workgrove/agent-config-policy.json")
+  assert_grep 'custom repairs explain removal without replacement' "$TEST_ROOT/output" \
+    'Remove the reported command without a replacement.'
   printf '#!/bin/sh\necho Darwin\n' >"$TEST_ROOT/bin/uname"
   CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude" CODEX_HOME="$TEST_ROOT/custom-codex" invoke doctor
   assert_grep 'Mac custom roots name a file repair' "$TEST_ROOT/output" "Fix: vi $TEST_ROOT/custom-claude/settings.json"
@@ -327,7 +326,7 @@ scenario_retired_hooks() {
   assert_grep 'custom Codex root is checked' "$TEST_ROOT/output" "WARN retired hook command $TEST_ROOT/custom-codex/hooks.json:"
   local record
   record=$(sed -n $'s/^WT_RESULT\t//p' "$TEST_ROOT/output")
-  assert_eq 'VM records retain nonblocking warnings' true "$(jq '.status == "PASS" and ([.checks[] | select(.status == "WARN" and (.name | startswith("retired hook command")))] | length == 4)' <<<"$record")"
+  assert_eq 'VM records retain nonblocking warnings' true "$(jq '.status == "PASS" and ([.checks[] | select(.status == "WARN" and (.name | startswith("retired hook command")))] | length == 8)' <<<"$record")"
   make_fake_ssh "$TEST_ROOT/bin/ssh"
   CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude" CODEX_HOME="$TEST_ROOT/custom-codex" invoke -H test-vm doctor
   assert_eq 'the Mac accepts VM retirement warnings' 0 "$STATUS"

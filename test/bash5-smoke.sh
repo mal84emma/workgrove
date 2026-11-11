@@ -25,13 +25,13 @@ scenario_handoff_copies() {
     block=$(awk '/^# The scripts in bin\// {copy=1} /^if \(\(BASH_VERSINFO/ {exit} copy {print}' "$file")
     assert_eq "${file##*/} has the same handoff comments" "$comments" "$block"
   done
-  assert_eq 'all six handoffs are compared' 6 "$count"
+  assert_eq 'all five handoffs are compared' 5 "$count"
   end_scenario
 }
 scenario_handoff_copies
 
 BASH5=$BASH
-SCRIPTS=(wt azml-ssh-host wt-ssh-host github-guard cmux-hook agent-notify)
+SCRIPTS=(wt azml-ssh-host wt-ssh-host github-guard cmux-hook)
 mkdir -p "$TEST_ROOT/home" "$TEST_ROOT/copies" "$TEST_ROOT/lib/workgrove" "$TEST_ROOT/nolib/bin"
 FIRST="$TEST_ROOT/first-bash"
 SECOND="$TEST_ROOT/second-bash"
@@ -43,7 +43,7 @@ done
 cp "$REPO"/lib/workgrove/*.sh "$REPO"/lib/workgrove/*.py "$TEST_ROOT/lib/workgrove/"
 cp -R "$REPO/lib/workgrove/vm" "$TEST_ROOT/lib/workgrove/"
 # These copies have no ../lib, so they test each script without the library.
-for script in wt wt-ssh-host cmux-hook agent-notify; do
+for script in wt wt-ssh-host cmux-hook; do
   cp "$REPO/bin/$script" "$TEST_ROOT/nolib/bin/$script"
 done
 cat > "$TEST_ROOT/bash-env" <<'BASH_ENV_FILE'
@@ -99,13 +99,11 @@ scenario_direct_bash5
 
 scenario_missing_library() {
   begin_scenario 'scripts with no library: commands stop and hooks exit 0' || return 0
-  for script in wt wt-ssh-host cmux-hook agent-notify; do
+  for script in wt wt-ssh-host cmux-hook; do
     rc=0
     args=()
     [[ $script == wt || $script == wt-ssh-host ]] && args=(help)
-    if [[ $script == agent-notify ]]; then
-      exec 3<<<'{"hook_event_name":"UserPromptSubmit","session_id":"no-library"}'
-    else exec 3<<<'{}'; fi
+    exec 3<<<'{}'
     env -i PATH="$PATH" HOME="$TEST_ROOT/home" XDG_STATE_HOME="$TEST_ROOT/home/.local/state" \
       "$BASH5" "$TEST_ROOT/nolib/bin/$script" "${args[@]}" > "$TEST_ROOT/out" 2> "$TEST_ROOT/err" <&3 || rc=$?
     remaining=$(cat <&3)
@@ -121,10 +119,6 @@ scenario_missing_library() {
       else
         assert_eq "$script drains its payload with no library" '' "$remaining"
       fi
-      if [[ $script == agent-notify ]]; then
-        assert_eq 'agent-notify works without the library' '' "$(cat "$TEST_ROOT/err")"
-        assert_regular "$TEST_ROOT/home" '.local/state/claude-start-times/no-library'
-      fi
     fi
   done
   end_scenario
@@ -134,7 +128,7 @@ scenario_missing_library
 # install.sh links each script into ~/.local/bin. Here a relative link points to an absolute link, which
 # points to the script in this checkout. Each run starts in another folder, so only the link leads to lib/.
 mkdir -p "$TEST_ROOT/links/bin" "$TEST_ROOT/links/chain"
-for script in wt wt-ssh-host cmux-hook agent-notify; do
+for script in wt wt-ssh-host cmux-hook; do
   ln -s "$REPO/bin/$script" "$TEST_ROOT/links/chain/$script"
   ln -s "../chain/$script" "$TEST_ROOT/links/bin/$script"
 done
@@ -156,9 +150,6 @@ scenario_linked_library() {
     CMUX_AUTOMATION_EVENT_JSON='{"name":"notification.created","workspace_id":"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA","payload":{"notification_id":"BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"}}' \
     "$TEST_ROOT/links/bin/cmux-hook" --event 2>&1) || true
   assert_grep 'cmux-hook loads the library through the links' "$FAKE_CMUX_STATE/calls.log" 'list-windows'
-  out=$(cd "$TEST_ROOT/home" && printf '{}\n' | env -i PATH="$PATH" HOME="$TEST_ROOT/home" \
-    XDG_STATE_HOME="$TEST_ROOT/home/.local/state" "$TEST_ROOT/links/bin/agent-notify" 2>&1) || true
-  assert_eq 'agent-notify runs through the links' '' "$out"
   end_scenario
 }
 scenario_linked_library

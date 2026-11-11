@@ -119,12 +119,13 @@ It also describes what a run changes, the repo's test suites, and how to remove 
   in your global git config. Without an identity, it stops with a message.
 - **oh-my-zsh (when `~/.zshrc` is opted in):** install it before you run `install.sh`. Without it, `install.sh`
   stops with a message.
-- **`bash`:** the scripts in `bin/` need version 5 or later. Ubuntu 22.04 and 24.04 ship bash 5.1 and 5.2.
+- **`bash`:** the Bash scripts in `bin/` need version 5 or later. Ubuntu 22.04 and 24.04 ship bash 5.1 and 5.2.
   macOS ships only `/bin/bash` 3.2, so `Brewfile` installs Homebrew's bash.
   - When `/bin/bash` starts a script in `bin/`, the script checks two Homebrew candidates in order.
     It uses the first bash 5 or later: `/opt/homebrew/bin/bash`, then `/usr/local/bin/bash`.
   - Without a bash 5, `wt`, `azml-ssh-host`, and `wt-ssh-host` stop with a message that names `brew install bash`. The hooks
     exit 0 and do nothing, so they block no agent and no notification.
+  - The retired `agent-notify` stub uses `/bin/sh` and needs no Bash handoff.
   - `install.sh` still runs under bash 3.2. To check that, run its smoke test with `INSTALL_BASH=/bin/bash`
     (see Tests).
 - **Python and OpenSSH:** SSH registration and portable remote setup need Python 3.9 or later. SSH registration also needs OpenSSH.
@@ -249,23 +250,41 @@ The summary includes both flags because the existing copy cannot remember the re
 | Machine-local copies | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.codex/hooks.json` | Both installers create them from the versioned `.base` files with the shared policy below. The apps write local state into them. A classic install keeps existing copies unless you specify `--refresh-config`. Portable setup preserves personal settings and merges hooks on every full setup. Both hook merges preserve foreign commands and their group settings. |
 | Never touched | `~/.gitconfig.local`, `~/.zshrc.local`, `~/.zshenv.local` (which on a VM gains the `WT_HOST` and `WT_REPOS_DIR` lines when they are absent), and the real directories the apps write into | Your machine-local overrides. The linked files source or include them, but `~/.zshrc.local` only when `~/.zshrc` is one of the linked files. |
 
-A foreign hook command matches neither a base command nor a retired form whose replacement is in the base.
-A refresh keeps each foreign command with its matcher and other group settings.
+A foreign hook command matches neither a base command nor an exact retired command with an applicable policy entry.
+A nonempty replacement applies only when the replacement appears in the base.
+An empty replacement means remove the command without a replacement.
+A refresh keeps foreign commands with their matchers and other group settings.
 For a mixed group, it keeps only the foreign commands.
 Commands present in the base use the base's groups and matchers.
 The comparison uses the complete command string, including its arguments.
 
-The shared policy maps two exact retired commands to their replacements:
-`AGENT_NOTIFY_SOURCE='Claude Code' agent-notify` and `AGENT_NOTIFY_SOURCE=Codex agent-notify`.
-A refresh replaces these commands with the base groups that call `~/.local/bin/agent-notify`.
-It keeps commands with different arguments, source assignments, or wrappers.
+The shared policy retires four exact commands without replacements:
 
-If an earlier refresh kept both forms, run `install.sh --refresh-config` again on the Mac.
-For a VM, run `wt -H <vm> update --refresh-config`.
-The refresh removes the retired commands, including extra groups that contain only those commands.
-Mixed groups keep their other commands and settings.
-On classic installs, check the backup and complete the install summary's follow-ups.
-Then restart the agents.
+- `AGENT_NOTIFY_SOURCE='Claude Code' agent-notify`
+- `AGENT_NOTIFY_SOURCE=Codex agent-notify`
+- `AGENT_NOTIFY_SOURCE='Claude Code' ~/.local/bin/agent-notify`
+- `AGENT_NOTIFY_SOURCE=Codex ~/.local/bin/agent-notify`
+
+A refresh removes these commands and groups that contain only these commands.
+It keeps commands with different arguments, source assignments, or wrappers.
+It also keeps foreign hooks for events removed from the base, including cmux and cmux-tui hooks.
+Older installers accept the policy's string values but preserve these retired commands.
+Update workgrove before refreshing configuration.
+
+Wait for idle agents, then exit them before refreshing configuration.
+On the Mac, run `bash install.sh --refresh-config` from the checkout.
+On each classic or portable VM, run `wt update --refresh-config` in that VM's session.
+Check the backup and complete the install summary's follow-ups.
+Review and trust the Codex hooks with `/hooks`, then restart agents.
+Run `wt doctor`; expect `PASS retired hook commands absent` for both hook files.
+
+`bin/agent-notify` remains a silent compatibility stub for hooks loaded before refresh.
+It drains redirected input and exits successfully without writing state.
+Keep it until every machine refreshes and every older agent exits, as tracked in #92.
+The obsolete `~/.local/state/claude-start-times` directory remains untouched.
+After older agents exit, you can remove that directory.
+Classic refresh will retire its dangling repository link after eventual stub removal.
+Portable setup will need targeted cleanup of both home and durable-root links before that removal.
 
 Run `wt doctor` on the Mac, and run `wt -H <vm> doctor` for each VM.
 Doctor warns about each exact retired command that remains and names the refresh repair.
@@ -669,7 +688,6 @@ This table lists configuration variables, test overrides, and repository setting
 | `WG_DEBUG` | Unset. `1` adds tracebacks for unexpected errors in `portable.py`, including calls through `install.sh`. Set it in the host process environment. `wt -H <host> setup` does not forward the Mac's value. Expected refusals keep their usual output. |
 | `WT_CLOSE_WAIT_SECONDS` | `22`. Sets the wait for older VM rows to close during self-removal. |
 | `WT_STATUS_LEASE_SECONDS` | Retired with the TCP status paths. Current code ignores it. |
-| `AGENT_NOTIFY_MIN_SECONDS` | `180`. Suppresses completion banners for shorter turns outside cmux. |
 | `INSTALL_BASH` | `bash` on `PATH`. Selects the interpreter for `install.sh` in `test/install-smoke.sh`. |
 | `FORCE_OS` | The result of `uname -s`. Overrides the installer platform for tests. |
 | `GUARD_BASH` | `bash` on `PATH`. Selects the guard interpreter in `test/github-guard-smoke.sh`. |
@@ -877,12 +895,9 @@ It also tells when a desktop banner appears instead, and what else the Mac hook 
 - `cmux hooks codex install --yes` merges its generated Codex lifecycle handlers into `~/.codex/hooks.json`.
   With these handlers, a Codex row goes from `running` to `idle` when a turn ends.
 
-**The portable hooks.** The portable hooks are the versioned hooks in `settings.base.json` and
-`hooks.base.json`. They call `bin/agent-notify`. That script acts as follows:
-
-- In a local cmux pane, it leaves lifecycle tracking to cmux.
-- On a VM, it leaves lifecycle tracking to cmux-tui.
-- Otherwise, on a Mac, it posts a desktop banner.
+**The workgrove hooks.** `settings.base.json` and `hooks.base.json` connect Bash tool calls to `github-guard`.
+cmux and cmux-tui own agent lifecycle tracking.
+Workgrove does not post agent lifecycle banners.
 
 **Status from a VM task on cmux 0.65:**
 
@@ -1141,11 +1156,8 @@ Codex applies its own sandbox and approvals.
 
 Three files connect events to scripts:
 
-- `settings.base.json` connects six Claude events (`UserPromptSubmit`, `PermissionRequest`, `Notification`,
-  `Stop`, `StopFailure`, `SessionEnd`) to `agent-notify`. It also connects `PreToolUse` on every Bash
-  command to `github-guard`.
-- `hooks.base.json` connects Codex's five lifecycle events to `agent-notify`.
-  It also connects `PreToolUse` on Bash commands to `github-guard --codex`.
+- `settings.base.json` connects Claude's `PreToolUse` event on Bash commands to `github-guard`.
+- `hooks.base.json` connects Codex's `PreToolUse` event on Bash commands to `github-guard --codex`.
 - `~/.cmuxterm/automations.json` connects `notification.created` events to `cmux-hook --event` through the `wt-native-relay` rule.
 
 These scripts are symlinks into this repository's `bin/`, and they run as you. So `wt update` is a
@@ -1294,12 +1306,6 @@ If the relay fails, run the manual command on the Mac. Where you run it depends 
 
 - If it is an `open` command, use any Mac shell.
 - If it is a `new` or `attach` command, use a cmux terminal, because these subcommands need the cmux socket.
-
-### The notification hooks use a home-relative path
-
-The portable hooks call `~/.local/bin/agent-notify` directly, so they do not need `~/.local/bin` on `PATH`.
-The hook shell expands `~` to the agent's home directory.
-The helper still needs its dependencies, including `bash` and `jq`, on `PATH`.
 
 ## Deliberately left out
 

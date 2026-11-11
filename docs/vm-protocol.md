@@ -397,6 +397,7 @@ Setup uploads the Mac's Python source, so the installed VM version cannot measur
 
 | File | Function | Group | Condition | How to check | Removal step |
 |---|---|---|---|---|---|
+| `bin/agent-notify` | `<module>` | G | Older agents retain retired notification hooks. | Check every machine under #92 for refreshed hooks and restart older agents. | Remove after every machine refreshes and every older agent exits. Add portable cleanup for home and durable-root links first. |
 | `lib/workgrove/cmux.sh` | `ROW_JQ` | D | Old rows have repository-prefixed titles. | Compare open row titles with sidecar titles on each machine. | Keep. Remove the old-title match only after all old rows close. |
 | `lib/workgrove/common.sh` | `wt_result` | C | Macs request protocol 1. | Identify the first Mac release that requests protocol 2. | After that release, remove version 1 emission under the new protocol policy. |
 | `lib/workgrove/portable.py` | `confirm_volume_request` | F | Selected revisions emit untagged trust requests. | Check selected source revisions for the `trust-request` prefix. | Keep until supported sources all tag requests; then remove untagged decoding. |
