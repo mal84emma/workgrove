@@ -1200,8 +1200,13 @@ def restore_can_backup(path, home):
     return home and stat.S_ISREG(path.lstat().st_mode)
 
 
-def preflight_files(profile, migrations, restoring, restore_files=None):
+FilePreflightPlan = namedtuple("FilePreflightPlan", "instruction_copies restore_files")
+
+
+def preflight_files(profile, migrations, restoring):
+    """Plan files without writes, with owned instruction pairs and frozen restore replacements."""
     root = Path(profile["root"])
+    restore_files = set()
     moved = {start: target for start, target in migrations}
     backup_paths = set(moved)
     for target, path, home in compatibility(profile):
@@ -1212,7 +1217,7 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
                     continue
                 require(not restoring or restore_can_backup(path, home), "restore-link-conflict")
                 backup_paths.add(path)
-                if restoring and restore_files is not None:
+                if restoring:
                     restore_files.add(path)
                 if path.is_dir() and not path.is_symlink():
                     require(path in moved, "directory-conflict")
@@ -1252,7 +1257,7 @@ def preflight_files(profile, migrations, restoring, restore_files=None):
                 parent = parent.parent
             if not os.access(parent, os.W_OK | os.X_OK):
                 raise PermissionError("backup storage is not writable")
-    return instructions
+    return FilePreflightPlan(tuple(instructions.items()), frozenset(restore_files))
 
 
 def require_agent_roots(profile):
@@ -1266,15 +1271,15 @@ def require_agent_roots(profile):
             require(target.is_dir(), "external-agent-configuration-missing")
 
 
-def install_files(profile, restoring=False, instruction_copies=None, restore_files=()):
+def install_files(profile, plan, restoring=False):
     root, source = Path(profile["root"]), Path(profile["source"])
     for path in profile["agent_roots"].values():
         mkdir(Path(path))
-    for path, contents in (instruction_copies or {}).items():
+    for path, contents in plan.instruction_copies:
         backup(path, root, display_path(path, root, profile))
         write(path, contents)
     for target, path, home in compatibility(profile):
-        link(target, path, root, replace=not restoring or path in restore_files,
+        link(target, path, root, replace=not restoring or path in plan.restore_files,
              label=display_path(path, root, profile))
     env = root / ".config/workgrove/env.sh"
     write(env, shell_environment(profile))
@@ -1370,7 +1375,7 @@ def install(args):
                    agent_commands=select_agent_commands(root, migrations, previous),
                    tmux=args.with_tmux_conf or bool(previous and previous["tmux"]), agent_args=launch,
                    claude_config_dir=claude_directory(agents, persist, previous), runtime_manifest=manifest)
-    instruction_copies = preflight_files(profile, migrations, False)
+    file_plan = preflight_files(profile, migrations, False)
     global_target, global_contents, global_originals = plan_claude_state(profile, previous, migrations)
     with installation_lock(root), git_generation(root) as generation:
         require(read(profile_path(root), missing=True) == expected_profile, "profile-changed-retry-setup")
@@ -1395,7 +1400,7 @@ def install(args):
         if canonical(personal) != canonical(global_path):
             write(global_path, '[include]\n    path = ' + git_quote(personal) + '\n')
         write(profile_path(root), json.dumps(profile, indent=2) + "\n")
-        install_files(profile, instruction_copies=instruction_copies)
+        install_files(profile, file_plan)
         write(machine_path(root), socket.gethostname() + "\n")
     print("workgrove: portable profile installed; run doctor before creating tasks")
 
@@ -1410,13 +1415,12 @@ def restore(args):
     require(profile["host"] == args.host, "restore-host-mismatch")
     storage(root, profile["storage"], profile["mount"])
     validate_source(Path(profile["source"]), profile)
-    restore_files = set()
-    preflight_files(profile, [], True, restore_files)
+    file_plan = preflight_files(profile, [], True)
     require((root / ".config/workgrove/git/global").is_file(), "personal-git-configuration-missing")
     require_agent_roots(profile)
     with installation_lock(root):
         require(read(profile_path(root)) == expected_profile, "profile-changed-retry-setup")
-        install_files(profile, restoring=True, restore_files=restore_files)
+        install_files(profile, file_plan, restoring=True)
         write(machine_path(root), socket.gethostname() + "\n")
         restore_summary(profile)
     print("workgrove: portable links and environment restored; run doctor before recovery")

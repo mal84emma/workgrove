@@ -25,6 +25,130 @@ spec.loader.exec_module(portable)
 CANARY = "SYNTHETIC-CONFIDENTIAL-CANARY"
 
 
+class FilePreflightPlanTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(dir=os.environ.get("TEST_ROOT"))
+        self.addCleanup(self.scratch.cleanup)
+        self.base = Path(self.scratch.name).resolve()
+        self.home, self.root = self.base / "home", self.base / "durable"
+        self.source = self.root / "workgrove"
+        for path in (self.home, self.source / "bin", self.source / "home/.agents/skills"):
+            path.mkdir(parents=True, mode=0o700)
+        (self.source / "bin/wt").write_text("command\n")
+        self.agents = {agent: str(self.root / ".config" / agent) for agent in ("claude", "codex")}
+        for path in self.agents.values():
+            Path(path).mkdir(parents=True, mode=0o700)
+        self.profile = dict(root=str(self.root), source=str(self.source), agent_roots=self.agents,
+                            agent_commands={}, persist_agents=True, tmux=False, claude_config_dir=None)
+        self.environment = patch.dict(os.environ, HOME=str(self.home))
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def snapshot(self):
+        return {str(path.relative_to(self.base)): (path.lstat().st_mode,
+                str(path.readlink()) if path.is_symlink() else path.read_bytes() if path.is_file() else None)
+                for path in self.base.rglob("*")}
+
+    def plan(self, restoring=False, migrations=()):
+        before = self.snapshot()
+        try:
+            with patch.object(portable.subprocess, "Popen", side_effect=AssertionError("unexpected subprocess")), \
+                    patch.object(portable, "write", side_effect=AssertionError("unexpected write")), \
+                    patch.object(portable, "backup", side_effect=AssertionError("unexpected backup")), \
+                    patch.object(portable, "mkdir", side_effect=AssertionError("unexpected mkdir")), \
+                    patch.object(portable, "link", side_effect=AssertionError("unexpected link")):
+                plan = portable.preflight_files(self.profile, migrations, restoring)
+            self.assertIsInstance(plan, portable.FilePreflightPlan)
+            self.assertIsInstance(plan.instruction_copies, tuple)
+            self.assertIsInstance(plan.restore_files, frozenset)
+            return plan
+        finally:
+            self.assertEqual(self.snapshot(), before)
+
+    def test_unchanged_links_need_no_planned_changes(self):
+        for target, path, home in portable.compatibility(self.profile):
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.symlink_to(target)
+        for restoring in (False, True):
+            with self.subTest(restoring=restoring):
+                self.assertEqual(self.plan(restoring), portable.FilePreflightPlan((), frozenset()))
+
+    def test_restore_plans_regular_home_files_only(self):
+        paths = (self.home / ".gitconfig", self.home / ".local/bin/wt")
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.write_bytes(b"supplier\xff")
+        plan = self.plan(restoring=True)
+        self.assertEqual(plan.restore_files, frozenset(paths))
+        self.assertEqual(plan.instruction_copies, ())
+        paths[0].unlink()
+        self.assertEqual(plan.restore_files, frozenset(paths))
+        self.assertEqual(self.plan(restoring=True).restore_files, frozenset(paths[1:]))
+
+    def test_install_accepts_existing_compatibility_files_and_foreign_links(self):
+        target = self.base / "supplier"
+        target.write_text("supplier\n")
+        for base in (self.home, self.root):
+            path = base / ".local/bin/wt"
+            path.parent.mkdir(parents=True, mode=0o700)
+            for linked in (False, True):
+                with self.subTest(base=base.name, linked=linked):
+                    if linked:
+                        path.symlink_to(target)
+                    else:
+                        path.write_text("old command\n")
+                    self.assertEqual(self.plan(), portable.FilePreflightPlan((), frozenset()))
+                    path.unlink()
+
+    def test_instruction_copies_are_ordered_snapshots_and_restore_refuses_them(self):
+        copies = []
+        for agent in ("claude", "codex"):
+            target = self.base / (agent + "-instructions")
+            target.write_text(agent + " personal instructions.\n")
+            path = Path(self.agents[agent]) / "AGENTS.md"
+            path.symlink_to(target)
+            copies.append((path, target.read_text()))
+        plan = self.plan()
+        self.assertEqual(plan.instruction_copies, tuple(copies))
+        self.assertEqual(plan.restore_files, frozenset())
+        target.write_text("changed after planning\n")
+        self.assertEqual(plan.instruction_copies, tuple(copies))
+        with self.assertRaisesRegex(portable.Refusal, "^instruction-link-conflict$"):
+            self.plan(restoring=True)
+
+    def test_restore_refuses_directories_foreign_links_and_durable_files(self):
+        home_path = self.home / ".local/bin/wt"
+        root_path = self.root / ".local/bin/wt"
+        target = self.base / "supplier"
+        target.write_text("supplier\n")
+        for path, kind in ((home_path, "directory"), (home_path, "link"), (root_path, "file")):
+            with self.subTest(kind=kind):
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if kind == "directory":
+                    path.mkdir(mode=0o700)
+                elif kind == "link":
+                    path.symlink_to(target)
+                else:
+                    path.write_text("durable command\n")
+                with self.assertRaisesRegex(portable.Refusal, "^restore-link-conflict$") as caught:
+                    self.plan(restoring=True)
+                self.assertEqual(caught.exception.path, portable.display_path(path, self.root, self.profile))
+                if kind == "directory":
+                    path.rmdir()
+                else:
+                    path.unlink()
+
+    def test_install_refuses_directories_except_planned_migrations(self):
+        path = self.home / ".claude"
+        path.mkdir(mode=0o700)
+        with self.assertRaisesRegex(portable.Refusal, "^directory-conflict$") as caught:
+            self.plan()
+        self.assertEqual(caught.exception.path, "~/.claude")
+        target = Path(self.agents["claude"])
+        target.rmdir()
+        self.assertEqual(self.plan(migrations=((path, target),)), portable.FilePreflightPlan((), frozenset()))
+
+
 class HookMergeTests(unittest.TestCase):
     def documents(self, agent):
         template = "settings.base.json" if agent == "claude" else "hooks.base.json"
@@ -2942,7 +3066,8 @@ sys.exit(module["main"]())
         with patch.dict(os.environ, self.env, clear=True), \
                 patch.object(portable, "backup", wraps=portable.backup) as backup, \
                 patch.object(portable, "write", wraps=portable.write) as write:
-            portable.install_files(self.profile())
+            profile = self.profile()
+            portable.install_files(profile, portable.preflight_files(profile, [], False))
         self.assertEqual([call.args for call in backup.call_args_list if call.args[0] == bashrc],
                          [(bashrc, self.root)])
         writes = [call.args[1] for call in write.call_args_list if call.args[0] == bashrc]
