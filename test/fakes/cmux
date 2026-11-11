@@ -39,6 +39,57 @@ update_row_snapshots() {
     update_rows "$document" "$@"
   done
 }
+# Materialize successful SSH replies only when a scenario requests row lifecycle behavior.
+materialize_ssh() {
+  [[ -n $state && -f $state/materialize-ssh ]] || return 0
+  local response=$1 id host=$2 title='' arg previous='' count=0 reset=false delay=0 publish=0 row window
+  shift 2
+  for arg; do
+    [[ $previous != --name ]] || title=$arg
+    previous=$arg
+  done
+  id=$(jq -er '.workspace_id | strings' <<<"$response") || return 0
+  mkdir -p "$state/ssh-tasks/$host"
+  if [[ -f $state/ssh-tasks/$host/$title ]]; then count=$(cat "$state/ssh-tasks/$host/$title"); fi
+  count=$((count + 1)); printf '%s' "$count" >"$state/ssh-tasks/$host/$title"
+  if [[ -f $state/ssh-reset-title || ( -f $state/ssh-reset-first-reattach && $count == 2 ) ]]; then reset=true; fi
+  if [[ -f $state/ssh-reset-burst ]]; then
+    local burst=0
+    [[ ! -f $state/burst-count ]] || burst=$(cat "$state/burst-count")
+    burst=$((burst + 1)); printf '%s' "$burst" >"$state/burst-count"
+    ((burst > 3)) || reset=true
+  fi
+  if [[ -f $state/ssh-connect-after ]]; then delay=$(cat "$state/ssh-connect-after"); fi
+  if [[ -f $state/ssh-publish-after ]]; then publish=$(cat "$state/ssh-publish-after"); fi
+  row=$(fake_row "$id" "$title" '' "$host" | jq -c --argjson delay "$delay" --argjson reset "$reset" --argjson publish "$publish" '
+    .fake_remaining=$delay | .fake_reset=$reset | .fake_publish_remaining=$publish
+    | .fake_remote_title=(if $reset then "workspace-" + .ref[10:] else .title end)
+    | .remote.state="connecting" | .remote.remote_workspace_id=null | .remote.active_terminal_sessions=0')
+  # shellcheck disable=SC2016  # jq expands its own variables.
+  update_rows "$state/rows.json" --argjson row "$row" '.workspaces += [$row]'
+  while IFS= read -r window; do
+    [[ -f $state/rows/$window.json ]] || continue
+    # shellcheck disable=SC2016  # jq expands its own variables.
+    update_rows "$state/rows/$window.json" --argjson row "$row" '.workspaces += [$row]'
+    break
+  done < <(jq -r '.[].id' "$state/windows.json")
+}
+advance_ssh() {
+  [[ -n $state && $key == workspace-list* && -f $state/materialize-ssh ]] || return 0
+  # Connection and title publication finish independently. A pending title can fail after terminal projection.
+  update_row_snapshots '
+    (.workspaces[] | select(has("fake_remaining"))) |= (
+      .remote.state="connected"
+      | if .fake_remaining > 0 then .fake_remaining -= 1
+        else .remote.remote_workspace_id=("remote-" + .id) | .remote.active_terminal_sessions=1
+          | if .fake_publish_remaining > 0 then .fake_publish_remaining -= 1
+            else if .fake_reset then .title=.fake_remote_title else . end
+              | del(.fake_remaining,.fake_reset,.fake_publish_remaining) end end)
+    | (.workspaces[] | select(has("fake_rename_remaining"))) |= (
+      if .fake_rename_remaining > 0 then .fake_rename_remaining -= 1
+      else .title=.fake_rename_title | .fake_remote_title=.fake_rename_title
+        | del(.fake_rename_remaining,.fake_rename_title) end)'
+}
 # Set id and ref to unused identities across all row snapshots.
 allocate_row_identity() {
   local identities count
@@ -94,6 +145,9 @@ case "$1 ${2:-}" in
     [[ $# == 3 && $3 == --json || $# == 5 && $3 == --json && $4 == --window && -n $5 ]] || unexpected_command "$@"
     key=workspace-list; file=rows.json
     if [[ $# == 5 ]]; then key+=--$5; file=rows/$5.json; fi ;;
+  'surface ls')
+    [[ $# == 5 && $3 == --json && $4 == --refresh && -n $5 ]] || unexpected_command "$@"
+    key=surface-catalog; file=surface-catalog.json ;;
   'top --json'|'top --workspace')
     [[ $# == 2 && $2 == --json || $# == 4 && $2 == --workspace && -n $3 && $4 == --json || $# == 5 && $2 == --workspace && -n $3 && $4 == --processes && $5 == --json ]] || unexpected_command "$@"
     key=top; file=top.json
@@ -106,8 +160,14 @@ case "$1 ${2:-}" in
     [[ $# == 3 ]] || unexpected_command "$@"
     key=workspace-select; file=select.txt ;;
   'workspace-action --workspace')
-    [[ $# == 7 && -n $3 && $4 == --action && $5 == set-description && $6 == --description ]] || unexpected_command "$@"
-    key=workspace-action; file=workspace-action.json; target=$3; description=$7 ;;
+    [[ $# == 7 && -n $3 && $4 == --action ]] || unexpected_command "$@"
+    target=$3
+    case "$5 $6" in
+      'set-description --description') key=workspace-action; description=$7 ;;
+      'rename --title') key=workspace-rename; title=$7 ;;
+      *) unexpected_command "$@" ;;
+    esac
+    file=$key.json ;;
   'automation show')
     [[ $# == 3 && $3 == wt-native-relay ]] || unexpected_command "$@"
     key=automation; file=automation.json ;;
@@ -141,6 +201,7 @@ if [[ -n $state ]]; then
   if [[ -d $state/queue/$key ]]; then
     for entry in "$state/queue/$key/"*; do
       [[ -d $entry ]] || continue
+      if [[ $key == ssh && $(cat "$entry/status") == 0 ]]; then materialize_ssh "$(cat "$entry/stdout")" "$2" "$@"; fi
       cat "$entry/stdout" 2>/dev/null || true
       cat "$entry/stderr" >&2 2>/dev/null || true
       rc=$(cat "$entry/status")
@@ -167,9 +228,13 @@ if [[ -n $state ]]; then
     apply_effects
     exit 0
   fi
-  if [[ -f $state/$file ]]; then cat "$state/$file"; screen_append; apply_effects; exit 0; fi
+  advance_ssh
+  if [[ -f $state/$file && $key != workspace-action && $key != workspace-rename ]]; then
+    if [[ $key == ssh ]]; then materialize_ssh "$(cat "$state/$file")" "$2" "$@"; fi
+    cat "$state/$file"; screen_append; apply_effects; exit 0
+  fi
 fi
-if [[ -n $state && ( -f $state/mutate || ( $key == workspace-close && -f $state/mutate-close ) ) ]]; then
+if [[ -n $state && ( -f $state/mutate || ( -f $state/materialize-ssh && ( $key == workspace-action || $key == workspace-rename ) ) || ( $key == workspace-close && -f $state/mutate-close ) ) ]]; then
   case $key in
     ssh|workspace-create)
       # Local creation keeps its reference. Explicit SSH formatting returns the UUID.
@@ -205,6 +270,18 @@ if [[ -n $state && ( -f $state/mutate || ( $key == workspace-close && -f $state/
       # shellcheck disable=SC2016  # jq expands the filter variables.
       update_row_snapshots --arg id "$3" '.workspaces |= map(select(.id != $id and .ref != $id))'
       refresh_windows ;;
+    workspace-rename)
+      delay=0
+      [[ ! -f $state/rename-publish-after ]] || delay=$(cat "$state/rename-publish-after")
+      # An accepted CLI request can precede daemon publication, including an ineffective remote write.
+      # shellcheck disable=SC2016  # jq expands its own variables.
+      update_row_snapshots --arg id "$target" --arg title "$title" --argjson delay "$delay" '
+        (.workspaces[] | select(.id == $id)) |= (
+          del(.fake_remaining,.fake_reset,.fake_publish_remaining)
+          | if $delay > 0 then .title=$title | .fake_rename_remaining=$delay | .fake_rename_title=$title
+            else .title=$title | .fake_remote_title=$title end)'
+      apply_effects
+      exit 0 ;;
     workspace-action)
       # shellcheck disable=SC2016  # jq expands the filter variables.
       update_row_snapshots --arg id "$target" --arg description "$description" \
@@ -226,6 +303,8 @@ case "$key" in
     elif [[ ${4:-} == --window && -f $fixtures/rows_by_window.json ]]; then
       jq -e --arg window "$5" 'if has($window) then .[$window] else error("unknown fixture window") end' "$fixtures/rows_by_window.json"
     else cat "$fixtures/rows.json"; fi ;;
+  surface-catalog)
+    fake_surface_catalog "$5" "${state:-$fixtures}/rows.json" ;;
   events) cat "$fixtures/event.json" ;;
   notify)
     : "${state:?notify needs FAKE_CMUX_STATE}"
@@ -241,10 +320,14 @@ case "$key" in
     tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl"
     if [[ -x $state/notify-callback ]]; then "$state/notify-callback"; fi ;;
   client-list) printf '[]\n' ;;
-  ping|diff|workspace-close|workspace-select|workspace-action|send|send-key|dismiss-notification) ;;
+  ping|diff|workspace-close|workspace-select|workspace-action|workspace-rename|send|send-key|dismiss-notification) ;;
   ssh)
     if ((ssh_uuids)); then
-      fake_ssh_response 00000000-0000-4000-8000-000000000099 "$2" "$ssh_fixture"
+      id=00000000-0000-4000-8000-000000000099
+      if [[ -n $state && -f $state/ssh-allocate ]]; then allocate_row_identity; fi
+      response=$(fake_ssh_response "$id" "$2" "$ssh_fixture")
+      materialize_ssh "$response" "$2" "$@"
+      printf '%s\n' "$response"
     else printf 'workspace:99\n'; fi ;;
   workspace-create) printf 'workspace:99\n' ;;
   read-screen) exit 1 ;;

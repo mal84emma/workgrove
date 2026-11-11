@@ -204,6 +204,8 @@ WT_META_FILTER='
   | if any(to_entries[]; .key == "" or (.key | index("\u0000") != null)
          or (.value | any(.. | strings; index("\u0000") != null)))
     then error("unsupported NUL or empty key") else . end
+  | if has("row_host") and (.row_host | type != "string" or (. != "" and (test("^[A-Za-z0-9][A-Za-z0-9._-]*$") | not)))
+    then error("invalid task row host") else . end
   | if has("metadata_version") and (.metadata_version | IN(1,2,3) | not)
     then error("unsupported metadata version") else . end
   | if .metadata_version == 3 or has("includes_status") then
@@ -365,7 +367,10 @@ open_worktree() { # open_worktree <name> <path> — VS Code here; from a VM ask 
 }
 
 request_row() { # request_row <name> — report relay acceptance and retain the Mac recovery command.
-  local h manual rc=0; h=$(wt_host) || return 1
+  local h manual rc=0
+  meta_require "$1"
+  h=${WT_META[row_host]:-}
+  valid_host "$h" || die 'task row host is unverified; kept the task without requesting a row'
   manual=$(shell_join wt -H "$h" attach -r "$REPO" "$1")
   if ! hook_ok_repo || ! notify_mac wt-attach host "$h" repo "$REPO" task "$1"; then
     printf 'Task row request to the Mac failed.\n'

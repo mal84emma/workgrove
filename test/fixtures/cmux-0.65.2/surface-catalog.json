@@ -1,0 +1,19 @@
+{
+  "cloud_states": [
+    {
+      "machine": "<machine>",
+      "cursor": {
+        "generation": "<generation>",
+        "revision": "782"
+      },
+      "freshness": "current",
+      "sync_mode": "journaled",
+      "workspaces": [
+        {
+          "id": "<remote-workspace-id>",
+          "name": "<title>"
+        }
+      ]
+    }
+  ]
+}

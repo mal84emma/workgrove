@@ -20,7 +20,11 @@ lib_register_scenario scenario_prompt_order "remote briefs preserve explicit and
 lib_register_scenario scenario_interrupted_setup "interrupted setup retains the brief, agent and model"
 lib_register_scenario scenario_nested_commands "machine requests do not reach setup hooks or nested commands"
 lib_register_scenario scenario_vm_failures "VM failures name the command, host, status, signal, and recovery command"
+lib_register_scenario scenario_unresolved_title "unresolved retained VM titles cannot authorize cleanup or name reuse"
+lib_register_scenario scenario_row_host_identity "task generations retain their original controller alias"
+lib_register_scenario scenario_remote_confirmation "VM creation metadata cannot waive Mac confirmation"
 lib_register_scenario scenario_self_removal_reuse "self-removed VM names need receipt-bound Mac confirmation"
+lib_register_scenario scenario_row_titles "VM row titles survive first reattachment and burst creation"
 lib_scenario_discovery
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/wt-remote-new.XXXXXX")
 TEST_ROOT=$(cd "$TEST_ROOT" && pwd -P)
@@ -39,10 +43,12 @@ UNAME
 source "$REPO/test/fakes/rows.sh"
 fake_cmux_init "$TEST_ROOT/cmux-state"
 ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/local/bin/cmux"
+touch "$FAKE_CMUX_STATE/materialize-ssh"
 rm "$FAKE_CMUX_STATE/calls.log"
 ln -s "$TEST_ROOT/cmux.log" "$FAKE_CMUX_STATE/calls.log"
 
 prepare_cmux() {
+  [[ $CMUX_MODE != title-lifecycle ]] || return 0
   local before after
   rm -rf "$FAKE_CMUX_STATE/fail" "$FAKE_CMUX_STATE/queue" "$FAKE_CMUX_STATE/after"
   mkdir -p "$FAKE_CMUX_STATE/fail" "$FAKE_CMUX_STATE/queue"
@@ -55,6 +61,8 @@ prepare_cmux() {
     ssh-fail) fake_failure ssh 1 'row connection failed' ;;
     tag-fail) fake_failure workspace-action 1 ;;
     existing) before=$(fake_rows "$(fake_row workspace:123 task '@fakevm · repo' fakevm)") ;;
+    unclaimed) before=$(fake_rows "$(fake_row workspace:123 task 'custom description' fakevm)") ;;
+    duplicates) before=$(fake_rows "$(fake_row workspace:123 task '@fakevm · repo' fakevm)" "$(fake_row duplicate-row task '@fakevm · repo' fakevm)") ;;
     legacy) before=$(fake_rows "$(fake_row workspace:123 repo:task @fakevm fakevm)") ;;
     other-repo|no-ref) before=$(fake_rows "$(fake_row other-row task '@fakevm · other' fakevm)") ;;
     no-ref-own) before=$(fake_rows "$(fake_row user-row task '' fakevm)") ;;
@@ -67,6 +75,7 @@ prepare_cmux() {
       before=$(fake_rows "$(fake_row race-row task '@fakevm · repo' fakevm)")
       fake_failure workspace-action 1 ;;
   esac
+  printf '%s' "$before" >"$FAKE_CMUX_STATE/rows.json"
   printf '%s' "$before" >"$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json"
   case $CMUX_MODE in
     no-ref*)
@@ -115,6 +124,7 @@ make_fake_ssh "$TEST_ROOT/local/bin/ssh" "$TEST_ROOT/local/bin/ssh.fixture"
 cat >"$TEST_ROOT/remote/.local/bin/wt" <<'WT'
 #!/usr/bin/env bash
 set -euo pipefail
+export WT_HOST=fakevm
 # Supply portable exports without changing this fixture's legacy readiness checks.
 if [[ -n ${REMOTE_INSTALL_ROOT:-} ]]; then
   export WT_REMOTE_ROOT="$REMOTE_INSTALL_ROOT" WT_REPOS_DIR="$REMOTE_INSTALL_ROOT"
@@ -161,11 +171,29 @@ WT
 printf '#!/bin/sh\necho Linux\n' >"$TEST_ROOT/remote/.local/bin/uname"
 cat >"$TEST_ROOT/remote/.local/bin/tmux" <<'TMUX'
 #!/bin/sh
+if [ -n "${REMOTE_SESSION_STATE:-}" ]; then
+  printf '%s\n' "$*" >>"$REMOTE_SESSION_STATE/calls.log"
+  target=''; previous=''
+  for argument do
+    if [ "$previous" = -t ]; then target=${argument#=}; target=${target%:}; fi
+    previous=$argument
+  done
+  case $1 in
+    kill-session) rm -f "$REMOTE_SESSION_STATE/$target"; exit 0 ;;
+    kill-server) rm -f "$REMOTE_SESSION_STATE/"wt-*; exit 0 ;;
+  esac
+fi
 if [ "${REMOTE_OUTPUT_MODE:-}" = running ]; then
   case $1 in list-panes) echo /dev/pts/123 ;; list-clients) ;; esac
   exit 0
 fi
-if [ "$1" = has-session ]; then echo 'no server running on /tmp/fake' >&2; exit 1; fi
+if [ "$1" = has-session ]; then
+  if [ -n "${REMOTE_SESSION_STATE:-}" ]; then
+    [ ! -f "$REMOTE_SESSION_STATE/$target" ] || exit 0
+    printf "can't find session: %s\n" "$3" >&2
+  else echo 'no server running on /tmp/fake' >&2; fi
+  exit 1
+fi
 TMUX
 for tool in claude codex; do
   printf '#!/bin/sh\necho --no-daemon\n' >"$TEST_ROOT/remote/.local/bin/$tool"
@@ -228,6 +256,71 @@ run_wt() {
   invoke_wt "${args[@]}"
 }
 check() { if [[ "$1" ]]; then pass; else fail "$2; output: $WT_OUT"; fi; }
+
+scenario_row_titles() {
+  begin_scenario "$1" || return 0
+  prepare_cmux
+  CMUX_MODE="title-lifecycle"
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  rm "$FAKE_CMUX_STATE/ssh.json"
+  touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
+  rm -f "$FAKE_CMUX_STATE/ssh-tasks/fakevm/task"
+  printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  printf 6 >"$FAKE_CMUX_STATE/ssh-publish-after"
+  printf 2 >"$FAKE_CMUX_STATE/rename-publish-after"
+  local -x REMOTE_SESSION_STATE="$TEST_ROOT/title-sessions"
+  mkdir -p "$REMOTE_SESSION_STATE"
+  printf 'unrelated session state\n' >"$REMOTE_SESSION_STATE/wt-other-notes"
+  local window=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC first repaired title
+  local unrelated; unrelated=$(fake_row DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD notes '@other-vm · other' other-vm)
+  fake_rows "$unrelated" >"$FAKE_CMUX_STATE/rows.json"
+  fake_rows "$unrelated" >"$FAKE_CMUX_STATE/rows/$window.json"
+  fake_top other 0 >"$FAKE_CMUX_STATE/top.json"
+  invoke_wt -H fakevm new task -a none -r "$TEST_ROOT/remote/repo"
+  assert_eq 'the original row opens' 0 "$WT_RC"
+  first=$(jq -r '.workspaces[] | select(.title == "task") | .id' "$FAKE_CMUX_STATE/rows/$window.json")
+  check "$(if ! grep -q -- '--action rename' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'the original row was renamed'
+  "$REPO/test/fakes/cmux" workspace close "$first"
+  : >"$TEST_ROOT/cmux.log"
+  REMOTE_OUTPUT_MODE=running
+  invoke_wt -H fakevm attach task -r "$TEST_ROOT/remote/repo"
+  assert_eq 'the first reattachment opens a repaired row' 0 "$WT_RC"
+  repaired=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows/$window.json")
+  # Advance pending projections before later attach, as a live connection does without wt polling.
+  for _ in {1..10}; do "$REPO/test/fakes/cmux" workspace list --json --window "$window" >/dev/null; done
+  assert_eq 'the connected row retains the requested title' task "$(jq -r '.workspaces[-1].title' "$FAKE_CMUX_STATE/rows/$window.json")"
+  assert_eq 'reattachment creates a distinct row UUID' true "$([[ -n $repaired && $repaired != "$first" ]] && echo true || echo false)"
+  assert_grep 'the first reattachment repairs its UUID' "$TEST_ROOT/cmux.log" "workspace-action --workspace $repaired --action rename --title task"
+  assert_grep 'direct attach selects only the repaired UUID' "$TEST_ROOT/cmux.log" "workspace select $repaired"
+  : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm attach task -r "$TEST_ROOT/remote/repo"
+  check "$([[ $WT_RC == 0 ]] && echo yes)" 'later attach did not find the repaired row'
+  check "$(if ! grep -q '^ssh fakevm' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'later attach created a duplicate'
+  assert_eq 'later attach keeps exactly one task row' 2 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$window.json")"
+  REMOTE_OUTPUT_MODE=normal
+  invoke_wt -H fakevm rm task -r "$TEST_ROOT/remote/repo"
+  check "$([[ $WT_RC == 0 ]] && echo yes)" 'removal did not find the repaired row'
+  assert_grep 'removal closes the repaired UUID' "$TEST_ROOT/cmux.log" "workspace close $repaired"
+  assert_eq 'removal leaves only the unrelated row' 1 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$window.json")"
+  assert_eq 'removal preserves the unrelated row' "$unrelated" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows/$window.json")"
+  assert_eq 'removal preserves the unrelated session state' 'unrelated session state' "$(cat "$REMOTE_SESSION_STATE/wt-other-notes")"
+  check "$(if ! grep -Eq '^kill-(session|server)' "$REMOTE_SESSION_STATE/calls.log"; then echo yes; fi)" 'removal killed a session after the task session had exited'
+  rm "$FAKE_CMUX_STATE/ssh-reset-first-reattach"
+  touch "$FAKE_CMUX_STATE/ssh-reset-burst"
+  printf 1 >"$FAKE_CMUX_STATE/next-row"
+  : >"$TEST_ROOT/cmux.log"
+  for title in burst1 burst2 burst3 burst4 burst5; do
+    invoke_wt -H fakevm new "$title" -a none -r "$TEST_ROOT/remote/repo"
+    assert_eq "$title opens with its requested title" 0 "$WT_RC"
+    assert_eq "$title remains findable" 1 "$(jq --arg title "$title" '[.workspaces[] | select(.title == $title and .description == "@fakevm · repo")] | length' "$FAKE_CMUX_STATE/rows/$window.json")"
+  done
+  assert_eq 'the first three burst rows require repair' 3 "$(grep -c -- '--action rename' "$TEST_ROOT/cmux.log")"
+  check "$(if ! grep -q '^workspace select' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'burst creation changed focus'
+  assert_eq 'the unrelated row retains its title and description' "$unrelated" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows/$window.json")"
+  assert_eq 'burst creation preserves the unrelated session state' 'unrelated session state' "$(cat "$REMOTE_SESSION_STATE/wt-other-notes")"
+  end_scenario
+}
 
 scenario_installation_preflight() {
   begin_scenario "$1" || return 0
@@ -759,16 +852,197 @@ scenario_vm_failures() {
   end_scenario
 }
 
+scenario_unresolved_title() {
+  begin_scenario "$1" || return 0
+  local r="$TEST_ROOT/remote/repo" receipt="$TEST_ROOT/remote/repo/.git/wt/teardown/task.json"
+  local window=CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC row_id=00000000-0000-4000-8000-000000000123 unrelated option
+  unresolved_task() {
+    env -u CODEX_SANDBOX -u TMUX -u TMUX_PANE WT_HOST=fakevm \
+      HOME="$TEST_ROOT/remote" PATH="$TEST_ROOT/remote/.local/bin:/usr/bin:/bin" \
+      CMUX_SSH_ATTEMPT_ID=fixture "$REPO/bin/wt" "$@"
+  }
+  CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  rm -f "$TEST_ROOT/remote-new"
+  prepare_cmux
+  CMUX_MODE="title-lifecycle"
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  unrelated=$(fake_rows "$(fake_row other-repo-row workspace-888 '@fakevm · other' fakevm)" \
+    "$(fake_row other-host-row workspace-999 '@other-vm · repo' other-vm)")
+  printf '%s' "$unrelated" >"$FAKE_CMUX_STATE/rows.json"
+  printf '%s' "$unrelated" >"$FAKE_CMUX_STATE/rows/$window.json"
+  fake_top other 0 | jq --arg id "$row_id" '.windows[0].workspaces=[{id:$id,resources:{pids:[],process_count:0}}]' >"$FAKE_CMUX_STATE/top.json"
+  touch "$FAKE_CMUX_STATE/ssh-reset-title" "$FAKE_CMUX_STATE/mutate-close"
+  fake_failure workspace-rename 1 'title publication failed'
+  : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm new task -r "$r" -a none
+  assert_eq 'failed title publication retains its newly created task' 1 "$WT_RC"
+  check "$([[ -d $r/.worktrees/task ]] && echo yes)" 'title failure removed Git work'
+  assert_eq 'failed publication leaves a generated title on the known UUID' true \
+    "$(jq --arg id "$row_id" 'any(.workspaces[]; .id == $id and (.title | test("^workspace-[0-9]+$")) and .description == "@fakevm · repo")' "$FAKE_CMUX_STATE/rows/$window.json")"
+  check "$(if ! grep -qF 'workspace close' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'title failure closed its retained row'
+  unresolved_task rm task -r "$r" --defer-close >/dev/null
+  assert_eq 'Git cleanup preserves its pending receipt' close_requested "$(jq -r .stage "$receipt")"
+  for option in observe normal new; do
+    : >"$TEST_ROOT/cmux.log"
+    case $option in
+      observe) invoke_wt -H fakevm rm task -r "$r" --observe-only ;;
+      normal) invoke_wt -H fakevm rm task -r "$r" ;;
+      new) invoke_wt -H fakevm new task -r "$r" -a none --no-workspace ;;
+    esac
+    assert_eq "$option cannot confirm an unresolved task row" 1 "$WT_RC"
+    assert_eq "$option keeps cleanup pending" close_requested "$(jq -r .stage "$receipt")"
+    assert_absent "$r" .worktrees/task
+    assert_eq "$option preserves every original row" 3 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/$window.json")"
+    check "$(if ! grep -Eq 'workspace close|--action rename' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'unresolved confirmation changed a row'
+  done
+  rm "$FAKE_CMUX_STATE/fail/workspace-rename"
+  "$REPO/test/fakes/cmux" workspace-action --workspace "$row_id" --action rename --title task >/dev/null
+  invoke_wt -H fakevm rm task -r "$r" --observe-only
+  assert_eq 'observation still refuses the repaired but present row' 1 "$WT_RC"
+  invoke_wt -H fakevm rm task -r "$r"
+  assert_eq 'verified original-row cleanup permits completion after repair' 0 "$WT_RC"
+  assert_eq 'verified cleanup records completion' complete "$(jq -r .stage "$receipt")"
+  assert_eq 'other hosts and repositories retain their generated rows' "$(jq -c .workspaces <<<"$unrelated")" "$(jq -c .workspaces "$FAKE_CMUX_STATE/rows/$window.json")"
+  invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+  assert_eq 'unrelated generated rows do not block verified name reuse' 0 "$WT_RC"
+  unresolved_task rm task -r "$r" --defer-close >/dev/null
+  invoke_wt -H fakevm rm task -r "$r"
+  assert_eq 'replacement cleanup also preserves unrelated generated rows' 0 "$WT_RC"
+  rm -f "$FAKE_CMUX_STATE/ssh-reset-title" "$TEST_ROOT/remote-new"
+  : >"$TEST_ROOT/cmux.log"
+  unset -f unresolved_task
+  CMUX_MODE=alive
+  end_scenario
+}
+
+scenario_row_host_identity() {
+  begin_scenario "$1" || return 0
+  local r="$TEST_ROOT/remote/repo" receipt="$TEST_ROOT/remote/repo/.git/wt/teardown/task.json" status output option
+  provenance_task() {
+    env -u CODEX_SANDBOX -u TMUX -u TMUX_PANE WT_HOST=fakevm \
+      HOME="$TEST_ROOT/remote" PATH="$TEST_ROOT/remote/.local/bin:/usr/bin:/bin" \
+      CMUX_SSH_ATTEMPT_ID=fixture "$REPO/bin/wt" "$@"
+  }
+  CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  rm -f "$TEST_ROOT/remote-new"
+  prepare_cmux
+  CMUX_MODE="title-lifecycle"
+  fake_ssh_response 00000000-0000-4000-8000-000000000123 alternatevm >"$FAKE_CMUX_STATE/ssh.json"
+  fake_top other 0 | jq '.windows[0].workspaces=[{id:"00000000-0000-4000-8000-000000000123",resources:{pids:[],process_count:0}}]' >"$FAKE_CMUX_STATE/top.json"
+  touch "$FAKE_CMUX_STATE/mutate-close"
+  invoke_wt -H alternatevm new task -r "$r" -a none
+  assert_eq 'another controller alias creates its own task generation' 0 "$WT_RC"
+  assert_eq 'generation metadata retains the actual controller alias' alternatevm "$(jq -r .row_host "$r/.git/wt/task.json")"
+  assert_eq 'the original row uses the controller alias' alternatevm \
+    "$(jq -r '.workspaces[0].remote.destination' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
+  cp "$r/.git/wt/task.json" "$TEST_ROOT/bound-generation"
+  jq 'del(.row_host)' "$TEST_ROOT/bound-generation" >"$r/.git/wt/task.json"
+  status=0; output=$(provenance_task rm task -r "$r" --defer-close 2>&1) || status=$?
+  assert_eq 'unbound older generations refuse fresh cleanup' 1 "$status"
+  assert_absent "$r" .git/wt/teardown/task.json
+  check "$([[ -d $r/.worktrees/task ]] && echo yes)" 'unbound generation lost its worktree'
+  status=0; output=$(provenance_task attach task -r "$r" 2>&1) || status=$?
+  assert_eq 'a VM attachment cannot invent an old generation alias' 1 "$status"
+  invoke_wt -H fakevm attach task -r "$r" --restart-agent
+  assert_eq 'Mac recovery refuses an unbound older generation' 1 "$WT_RC"
+  cp "$TEST_ROOT/bound-generation" "$r/.git/wt/task.json"
+  for option in plain --restart-agent --reattach; do
+    : >"$TEST_ROOT/cmux.log"; : >"$TEST_ROOT/ssh.log"
+    if [[ $option == plain ]]; then invoke_wt -H fakevm attach task -r "$r"
+    else invoke_wt -H fakevm attach task -r "$r" "$option"; fi
+    assert_eq "$option attachment refuses a different generation alias" 1 "$WT_RC"
+    check "$(if ! grep -Eq 'workspace close|^ssh |^send ' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'mismatched attachment changed a row or sent pane input'
+    check "$(if ! grep -qF 'kill-session' "$TEST_ROOT/ssh.log"; then echo yes; fi)" 'mismatched attachment stopped a session'
+  done
+  status=0; output=$(provenance_task rm task -r "$r" 2>&1) || status=$?
+  assert_eq 'changed VM configuration cannot confirm Mac closure' 1 "$status"
+  assert_eq 'receipt retains the generation alias instead of current WT_HOST' alternatevm "$(jq -r .host "$receipt")"
+  check "$([[ $output == *"wt -H alternatevm rm task -r $r"* ]] && echo yes)" 'confirmation command lost the original controller alias'
+  invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+  assert_eq 'another alias cannot reuse the surviving generation name' 1 "$WT_RC"
+  assert_eq 'the original row keeps cleanup pending' close_requested "$(jq -r .stage "$receipt")"
+  assert_absent "$r" .worktrees/task
+  invoke_wt -H alternatevm rm task -r "$r"
+  assert_eq 'the original controller alias confirms its own row closure' 0 "$WT_RC"
+  assert_eq 'original alias confirmation records completion' complete "$(jq -r .stage "$receipt")"
+  invoke_wt -H alternatevm new task -r "$r" -a none --no-workspace
+  assert_eq 'verified original alias confirmation permits reuse' 0 "$WT_RC"
+  provenance_task rm task -r "$r" --defer-close >/dev/null
+  invoke_wt -H alternatevm rm task -r "$r"
+  assert_eq 'replacement confirmation uses its own retained alias' 0 "$WT_RC"
+  unset -f provenance_task
+  rm -f "$TEST_ROOT/remote-new"
+  CMUX_MODE=alive
+  end_scenario
+}
+
+scenario_remote_confirmation() {
+  begin_scenario "$1" || return 0
+  local r="$TEST_ROOT/remote/repo" receipt="$TEST_ROOT/remote/repo/.git/wt/teardown/task.json" mode status output
+  confirmation_task() {
+    env -u CODEX_SANDBOX -u TMUX -u TMUX_PANE WT_HOST=fakevm \
+      HOME="$TEST_ROOT/remote" PATH="$TEST_ROOT/remote/.local/bin:/usr/bin:/bin" \
+      CMUX_SSH_ATTEMPT_ID=fixture "$REPO/bin/wt" "$@"
+  }
+  CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  rm -f "$TEST_ROOT/remote-new"
+  fake_top other 0 | jq '.windows[0].workspaces=[{id:"workspace:123",resources:{pids:[],process_count:0}}]' >"$FAKE_CMUX_STATE/top.json"
+  touch "$FAKE_CMUX_STATE/mutate-close"
+  for mode in normal deferred; do
+    CMUX_MODE=alive
+    invoke_wt -H fakevm new task -r "$r" -a none
+    assert_eq "$mode creates a Mac-managed task" 0 "$WT_RC"
+    assert_eq 'controller creation stores workspace zero on the VM' 0 "$(jq -r .workspace "$r/.git/wt/task.json")"
+    assert_eq 'controller creation opens a connected Mac row' 1 \
+      "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
+    status=0
+    if [[ $mode == deferred ]]; then
+      output=$(confirmation_task rm task -r "$r" --defer-close 2>&1) || status=$?
+      assert_eq 'deferred Git cleanup returns control to the Mac' 0 "$status"
+    else
+      output=$(confirmation_task rm task -r "$r" 2>&1) || status=$?
+      assert_eq 'separate-shell cleanup cannot confirm its Mac row' 1 "$status"
+      check "$([[ $output == *'Git cleanup completed; Mac row or tmux session closure is unverified; cleanup is pending'* ]] && echo yes)" 'separate-shell output omits unverified closure'
+      check "$([[ $output == *"wt -H fakevm rm task -r $r"* ]] && echo yes)" 'separate-shell output omits the Mac confirmation command'
+      check "$([[ $output != *'teardown complete'* ]] && echo yes)" 'separate-shell cleanup announced completion'
+    fi
+    assert_eq "$mode keeps an unconfirmed receipt pending" close_requested "$(jq -r .stage "$receipt")"
+    assert_eq 'non-self removal records an empty self field' '' "$(jq -r .self "$receipt")"
+    assert_absent "$r" .worktrees/task
+    CMUX_MODE=existing
+    invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+    assert_eq "$mode cannot reuse a name beside its surviving row" 1 "$WT_RC"
+    assert_eq "$mode reuse refusal preserves pending cleanup" close_requested "$(jq -r .stage "$receipt")"
+    assert_absent "$r" .worktrees/task
+    invoke_wt -H fakevm rm task -r "$r" --observe-only
+    assert_eq 'observation preserves the surviving row' 1 "$WT_RC"
+    invoke_wt -H fakevm rm task -r "$r"
+    assert_eq 'independent Mac cleanup confirms the controller-created task' 0 "$WT_RC"
+    assert_eq 'independent Mac cleanup records completion' complete "$(jq -r .stage "$receipt")"
+    CMUX_MODE=alive
+    invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+    assert_eq 'verified Mac confirmation permits name reuse' 0 "$WT_RC"
+    confirmation_task rm task -r "$r" --defer-close >/dev/null
+    invoke_wt -H fakevm rm task -r "$r"
+    assert_eq 'replacement cleanup requires its own Mac confirmation' 0 "$WT_RC"
+  done
+  unset -f confirmation_task
+  rm -f "$TEST_ROOT/remote-new"
+  end_scenario
+}
+
 scenario_self_removal_reuse() {
   begin_scenario "$1" || return 0
   local r="$TEST_ROOT/remote/repo" receipt="$TEST_ROOT/remote/repo/.git/wt/teardown/task.json" output status digest mode
   local saved="$TEST_ROOT/self-receipt.json"
   remote_task() {
-    env -u CODEX_SANDBOX -u TMUX -u TMUX_PANE -u WT_HOST \
+    env -u CODEX_SANDBOX -u TMUX -u TMUX_PANE WT_HOST=fakevm \
       HOME="$TEST_ROOT/remote" PATH="$TEST_ROOT/remote/.local/bin:/usr/bin:/bin" \
       CMUX_SSH_ATTEMPT_ID=fixture "$REPO/bin/wt" "$@"
   }
-  CMUX_MODE=alive
+  CMUX_MODE=alive SSH_MODE=ok REMOTE_OUTPUT_MODE=normal
+  rm -f "$TEST_ROOT/remote-new"
   invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
   assert_eq 'create the remote cleanup fixture' 0 "$WT_RC"
   remote_task rm task -r "$r" --defer-close >"$TEST_ROOT/remote-removal"
@@ -780,7 +1054,7 @@ commands = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(commands)
 p = pathlib.Path(sys.argv[2])
 data = json.loads(p.read_text())
-data.update(self='remote', workspace='1')
+data.update(self='remote', workspace='1', host='fakevm')
 data['commands'] = dict(version=1, generation=data['generation'], boot=commands.Processes().boot(), platform=sys.platform,
                         records=[dict(pid=99999999, birth='bsd:1:1' if sys.platform == 'darwin' else 'ticks:1',
                                       comm='fixture-provider', role='runtime')])
@@ -790,12 +1064,27 @@ PY
   status=0; output=$(remote_task new task -r "$r" -a none --no-workspace 2>&1) || status=$?
   assert_eq 'a pending self-receipt blocks VM creation' 1 "$status"
   assert_eq 'failed VM creation keeps pending cleanup' close_requested "$(jq -r .stage "$receipt")"
-  for mode in existing partial-window; do
+  for mode in existing unclaimed duplicates partial-window; do
     CMUX_MODE=$mode
     invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
     assert_eq "$mode row state blocks reuse" 1 "$WT_RC"
     assert_eq "$mode row state leaves the receipt pending" close_requested "$(jq -r .stage "$receipt")"
     assert_absent "$r" .worktrees/task
+  done
+  touch "$FAKE_CMUX_STATE/mutate-close"
+  fake_top other 0 | jq '.windows[0].workspaces=[{id:"workspace:123",resources:{pids:[],process_count:0}},{id:"duplicate-row",resources:{pids:[],process_count:0}}]' >"$FAKE_CMUX_STATE/top.json"
+  for mode in unclaimed duplicates; do
+    CMUX_MODE=$mode
+    : >"$TEST_ROOT/cmux.log"
+    invoke_wt -H fakevm rm task -r "$r" --observe-only
+    assert_eq "$mode VM rows block observation" 1 "$WT_RC"
+    assert_eq "$mode observation keeps cleanup pending" close_requested "$(jq -r .stage "$receipt")"
+    check "$(if ! grep -qF 'workspace close' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'observation closed a candidate row'
+    invoke_wt -H fakevm rm task -r "$r"
+    assert_eq "$mode VM rows block full confirmation" 1 "$WT_RC"
+    assert_eq "$mode confirmation keeps cleanup pending" close_requested "$(jq -r .stage "$receipt")"
+    assert_eq "$mode preserves a remaining candidate row" 1 \
+      "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
   done
   CMUX_MODE=alive
   jq 'del(.commands)' "$saved" >"$receipt"
@@ -803,12 +1092,58 @@ PY
   assert_eq 'an old self-receipt without process evidence blocks reuse' 1 "$WT_RC"
   assert_absent "$r" .worktrees/task
   cp "$saved" "$receipt"
-  invoke_wt -H fakevm rm task -r "$r"
+  CMUX_MODE=existing
+  touch "$FAKE_CMUX_STATE/mutate-close"
+  fake_top other 0 | jq '.windows[0].workspaces=[{id:"workspace:123",resources:{pids:[],process_count:0}}]' >"$FAKE_CMUX_STATE/top.json"
+  : >"$TEST_ROOT/ssh.log"; : >"$TEST_ROOT/cmux.log"
+  REMOTE_FAIL_SUB=repos REMOTE_FAIL_STATUS=42 invoke_wt -H fakevm rm task -r wt-demo
+  assert_eq 'a failed repository lookup refuses alias confirmation' 1 "$WT_RC"
+  assert_eq 'a failed lookup leaves cleanup pending' close_requested "$(jq -r .stage "$receipt")"
+  assert_eq 'a failed lookup preserves the connected row' 1 \
+    "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
+  check "$(if ! grep -qF 'workspace close' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'a failed lookup closed the row'
+  check "$(if ! grep -qF ' rm ' "$TEST_ROOT/ssh.log"; then echo yes; fi)" 'a failed lookup requested VM removal'
+  for mode in new rm; do
+    : >"$TEST_ROOT/cmux.log"
+    if [[ $mode == new ]]; then
+      invoke_wt -H alternatevm new task -r wt-demo -a none --no-workspace
+    else
+      invoke_wt -H alternatevm rm task -r wt-demo
+    fi
+    assert_eq "another SSH alias cannot confirm $mode closure" 1 "$WT_RC"
+    assert_eq 'another alias leaves the receipt pending' close_requested "$(jq -r .stage "$receipt")"
+    assert_absent "$r" .worktrees/task
+    assert_eq 'another alias preserves the original row' 1 \
+      "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
+    check "$(if ! grep -qF 'workspace close' "$TEST_ROOT/cmux.log"; then echo yes; fi)" 'another alias closed the original row'
+  done
+  jq 'del(.host)' "$saved" >"$receipt"
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
+  assert_eq 'an unknown original self-removal host blocks confirmation' 1 "$WT_RC"
+  assert_eq 'unknown original host stays pending' close_requested "$(jq -r .stage "$receipt")"
+  cp "$saved" "$receipt"
+  : >"$TEST_ROOT/ssh.log"; : >"$TEST_ROOT/cmux.log"
+  invoke_wt -H fakevm rm task -r wt-demo
   assert_eq 'independent Mac confirmation completes cleanup' 0 "$WT_RC"
   assert_eq 'Mac confirmation records complete cleanup' complete "$(jq -r .stage "$receipt")"
+  assert_eq 'alias confirmation closes the canonical repository row' 0 \
+    "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows/CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC.json")"
+  assert_grep 'alias confirmation closes the matching row' "$TEST_ROOT/cmux.log" 'workspace close workspace:123'
+  assert_grep 'alias confirmation checks the canonical session' "$TEST_ROOT/ssh.log" 'wt-repo-task'
+  check "$(if ! grep -qF 'wt-wt-demo-task' "$TEST_ROOT/ssh.log"; then echo yes; fi)" 'alias confirmation checked an unrelated session name'
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
+  assert_eq 'an existing canonical row blocks alias-based name reuse' 1 "$WT_RC"
+  assert_absent "$r" .worktrees/task
+  if [[ -d $r/.worktrees/task ]]; then
+    unset -f remote_task
+    rm -f "$TEST_ROOT/remote-new"
+    end_scenario
+    return 0
+  fi
+  CMUX_MODE=alive
   status=0; output=$(remote_task new task -r "$r" -a none --no-workspace 2>&1) || status=$?
   assert_eq 'a complete stage alone cannot acknowledge the current Mac row' 1 "$status"
-  output=$(remote_task rm task -r "$r" --observe-only --row-closed)
+  output=$(remote_task rm task -r "$r" --observe-only --row-closed --row-host fakevm)
   digest=${output#closed receipt }
   cp "$receipt" "$saved"
   for mode in generation identity; do
@@ -817,20 +1152,22 @@ PY
     else
       jq '.tmux_identity={id:"$202",created:"new",socket:"/tmp/replacement",server:"1",start:"new"}' "$saved" >"$receipt"
     fi
-    status=0; output=$(remote_task new task -r "$r" -a none --no-workspace --closed-receipt "$digest" 2>&1) || status=$?
+    status=0; output=$(remote_task new task -r "$r" -a none --no-workspace --closed-receipt "$digest" --row-host fakevm 2>&1) || status=$?
     assert_eq "changed $mode rejects the old acknowledgment" 1 "$status"
     assert_absent "$r" .worktrees/task
   done
   cp "$saved" "$receipt"
-  invoke_wt -H fakevm new task -r "$r" -a none --no-workspace
+  invoke_wt -H fakevm new task -r wt-demo -a none --no-workspace
   assert_eq 'the Mac can reuse an independently confirmed self-removed name' 0 "$WT_RC"
   assert_grep 'the retry carries receipt-bound evidence' "$TEST_ROOT/remote-new.args" --closed-receipt
+  assert_grep 'the retry uses the resolved repository path' "$TEST_ROOT/remote-new.args" "$r"
   check "$([[ -d $r/.worktrees/task ]] && echo yes)" 'the replacement task is absent'
   printf 'unrelated work\n' >"$r/.worktrees/task/private.txt"
-  status=0; output=$(remote_task rm task -r "$r" --observe-only --row-closed --closed-receipt "$digest" 2>&1) || status=$?
+  status=0; output=$(remote_task rm task -r "$r" --observe-only --row-closed --row-host fakevm --closed-receipt "$digest" 2>&1) || status=$?
   assert_eq 'old closure evidence cannot remove a replacement task' 1 "$status"
   assert_eq 'replacement private work survives stale evidence' 'unrelated work' "$(cat "$r/.worktrees/task/private.txt")"
   unset -f remote_task
+  rm -f "$TEST_ROOT/remote-new"
   end_scenario
 }
 
