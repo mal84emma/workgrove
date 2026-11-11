@@ -336,7 +336,7 @@ CLOCK
     fake_cmux_init "$FAKE_CMUX_STATE"
     touch "$FAKE_CMUX_STATE/materialize-ssh"
     printf 100 >"$TITLE_CLOCK"
-    DEADLINE=115; CMUX_ERROR=''; CMUX_ROWS_JSON='{"workspaces":[]}'
+    DEADLINE=115; CMUX_ERROR=''; CMUX_ROWS_FULL=1 CMUX_ROWS_JSON='{"workspaces":[]}'
     rc=0
     case $mode in
       retained|catalog-pending) ;;

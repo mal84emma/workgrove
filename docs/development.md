@@ -299,6 +299,7 @@ The cmux query and tmux probe refusal cases reuse an unchanged task within each 
 Each refusal still invokes the real `wt rm` command.
 After each refusal, the tests check the branch, worktree registration, unchanged sidecar bytes, and absence of a teardown receipt.
 Successful removals keep separate tasks because they change Git and receipt state.
+Each SSH title-repair case resets row-list completeness alongside its private fake state.
 
 Test input matrices belong at the narrowest boundary that owns their behavior.
 The native-hook status matrix calls the parser directly without installing a portable home.
