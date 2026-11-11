@@ -158,7 +158,7 @@ from unittest.mock import Mock, patch
 spec = importlib.util.spec_from_file_location("runner_jobs", sys.argv[1])
 jobs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(jobs)
-for count, expected in (("1", 1), ("2", 2), ("11", 8), ("128", 8), ("0", 1)):
+for count, expected in (("1", 1), ("2", 2), ("4", 4), ("5", 4), ("11", 4), ("128", 4), ("0", 1)):
     with patch.object(jobs.sys, "platform", "darwin"), patch.object(
             jobs.subprocess, "check_output", return_value=count):
         assert jobs.default_jobs() == expected
@@ -168,13 +168,21 @@ for error in (OSError(), subprocess.CalledProcessError(1, "sysctl"), ValueError(
         assert jobs.default_jobs() == 1
 capacity = Mock()
 module_spec = Mock()
-for count, expected in ((0, 1), (1, 1), (2, 2), (16, 8), (None, 2)):
+for count, affinity, expected in ((0, 2, 1), (1, 2, 1), (2, 2, 2), (4, 8, 4), (5, 8, 4),
+                                  (16, 8, 4), (None, 2, 2), (None, 16, 4), (None, 0, 1)):
     capacity.effective.return_value = {"observed_cpu_logical": count}
     with patch.object(jobs.sys, "platform", "linux"), patch.object(
             jobs.importlib.util, "spec_from_file_location", return_value=module_spec), patch.object(
             jobs.importlib.util, "module_from_spec", return_value=capacity), patch.object(
-            jobs.os, "sched_getaffinity", return_value={0, 1}, create=True):
+            jobs.os, "sched_getaffinity", return_value=set(range(affinity)), create=True):
         assert jobs.default_jobs() == expected
+for error in (AttributeError(), OSError()):
+    capacity.effective.return_value = {}
+    with patch.object(jobs.sys, "platform", "linux"), patch.object(
+            jobs.importlib.util, "spec_from_file_location", return_value=module_spec), patch.object(
+            jobs.importlib.util, "module_from_spec", return_value=capacity), patch.object(
+            jobs.os, "sched_getaffinity", side_effect=error, create=True):
+        assert jobs.default_jobs() == 1
 PYTHON
   assert_eq 'physical cores, quotas, affinity, unknown counts, and the cap select bounded workers' 0 "$rc"
   RUNNER_RC=0
