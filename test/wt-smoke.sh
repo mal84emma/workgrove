@@ -385,6 +385,7 @@ prepare_cmux() {
   else rm -f "$FAKE_CMUX_STATE/close-confirmation"; fi
   if [[ -f $TEST_ROOT/cmux-send-fail ]]; then fake_failure send 1; fi
   if [[ -f $TEST_ROOT/native-fail ]]; then fake_failure notify 1; fi
+  fake_native_clients term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >"$FAKE_CMUX_STATE/clients.json"
   if [[ -f $TEST_ROOT/remote-screen ]]; then cp "$TEST_ROOT/remote-screen" "$FAKE_CMUX_STATE/read-screen.json"; fi
   if [[ -f $TEST_ROOT/remote-screen-delay ]]; then
     fake_queue read-screen "$(cat "$TEST_ROOT/remote-screen-delay")"
@@ -940,6 +941,37 @@ SHIM
   rm "$FAKE_BIN/cmux-tui" "$TEST_ROOT/native-fail"
   WT_RELAY_ENV=()
   REPOS_DIR="$saved"
+  end_scenario
+}
+
+scenario_relay_creation() {
+  begin_scenario "$1" || return 0
+  local r WT_MACHINE=1
+  r=$(new_repo relay-creation); stub_cmux alive
+  ln -s "$CMUX_ALIVE" "$FAKE_BIN/cmux-tui"
+  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=test WT_HOST=fakevm TMUX= CMUX_TUI_SOCKET=relative.sock
+    CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+  assert_wt_fails 1 'the task was created; resolve the reported error and use attach' new created-task -r "$r"
+  assert_has 'creation remains reported after the row failure' "$WT_OUT" 'created created-task'
+  assert_eq 'the creation record remains truthful on row failure' created \
+    "$(printf '%s\n' "$WT_OUT" | sed -n $'s/^WT_RESULT\t//p' | jq -r 'select(.command == "new") | .status')"
+  assert_has 'creation failure retains the attach command' "$WT_OUT" "on the Mac: wt -H fakevm attach -r $r created-task"
+  if [[ -d $r/.worktrees/created-task ]]; then pass; else fail 'a failed row request lost the created worktree'; fi
+  assert_branch "$r" wt/created-task yes
+  assert_wt_fails 1 'Task row request to the Mac failed.' attach created-task -r "$r"
+  WT_RELAY_ENV[1]='WT_HOST='
+  assert_wt_fails 1 'WT_HOST is not set' new hostless-task -r "$r"
+  assert_lacks 'an unknown host cannot produce relay acceptance' "$WT_OUT" 'local relay accepted'
+  assert_gone 'the host prerequisite still fails before task creation' "$r/.worktrees/hostless-task"
+  assert_branch "$r" wt/hostless-task no
+  WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=test WT_HOST=fakevm TMUX= CMUX_TUI_SOCKET=/tmp/native
+    CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+  assert_wt_ok 'a mirrored VM accepts attach for the existing task' attach created-task -r "$r"
+  assert_has 'attach reports the delivery limit' "$WT_OUT" 'Mac delivery is unverified'
+  assert_wt_ok 'a mirrored VM accepts a new task row request' new accepted-task -r "$r"
+  assert_has 'new reports the delivery limit' "$WT_OUT" 'Mac delivery is unverified'
+  rm "$FAKE_BIN/cmux-tui"
+  WT_RELAY_ENV=()
   end_scenario
 }
 
@@ -1732,6 +1764,8 @@ scenario_self_rm_vm() {
   WT_RELAY_ENV=(CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=test-vm)
   assert_wt_ok "wt new self" new self --no-workspace -r "$r"
   assert_wt_ok "wt new unmarked native task" new unmarked --no-workspace -r "$r"
+  assert_wt_ok 'create a malformed relay cleanup fixture' new relay-malformed --no-workspace -r "$r"
+  assert_wt_ok 'create a notify failure cleanup fixture' new relay-failed --no-workspace -r "$r"
   assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
   assert_wt_ok "wt new tmux-denied" new tmux-denied --no-workspace -r "$r"
   assert_wt_ok 'create a callback receiver fixture' new callback --no-workspace -r "$r"
@@ -1878,6 +1912,33 @@ STUB
   assert_lacks "unmarked native self-removal leaves tmux to the Mac hook" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
   assert_has "an unanswered native close warns about incomplete cleanup" "$WT_OUT" "Mac row or tmux session closure is unverified"
   assert_has "an unanswered native close prints a recovery command" "$WT_OUT" "on the Mac: wt -H test-vm rm unmarked"
+  local relay_task diagnostic
+  for relay_task in relay-malformed relay-failed; do
+    WT_RELAY_ENV[3]="SELF_TMUX_SESSION=wt-$(basename "$r")-$relay_task"
+    if [[ $relay_task == relay-malformed ]]; then
+      WT_RELAY_ENV[6]='CMUX_TUI_SOCKET=relative.sock'
+      diagnostic='this row predates native teardown'
+    else
+      WT_RELAY_ENV[6]='CMUX_TUI_SOCKET=/tmp/native'
+      : >"$TEST_ROOT/native-fail"
+      diagnostic='cmux-tui notify failed (exit 1'
+    fi
+    : >"$CMUX_LOG"; : >"$TEST_ROOT/self-tmux.log"
+    assert_wt_fails 1 "$diagnostic" rm "$relay_task" -r "$r"
+    if [[ $relay_task == relay-malformed ]]; then
+      assert_dir 'malformed setup preserves the earlier Git cleanup refusal' "$r/.worktrees/$relay_task"
+      assert_absent "$r" ".git/wt/teardown/$relay_task.json"
+      assert_has 'malformed setup prints the existing row recovery command' "$WT_OUT" "wt -H test-vm attach -r $r $relay_task"
+      assert_lacks 'malformed setup never sends a close notification' "$(cat "$CMUX_LOG")" '--title wt-close'
+    else
+      assert_gone 'notify failure does not undo completed Git cleanup' "$r/.worktrees/$relay_task"
+      assert_eq 'notify failure retains pending cleanup' close_requested "$(jq -r .stage "$r/.git/wt/teardown/$relay_task.json")"
+      assert_has 'notify failure prints the Mac cleanup command' "$WT_OUT" "on the Mac: wt -H test-vm rm $relay_task"
+    fi
+    assert_lacks 'relay failure cannot claim full completion' "$WT_OUT" 'teardown complete'
+    assert_lacks 'relay failure leaves tmux for independent Mac cleanup' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
+  done
+  rm "$TEST_ROOT/native-fail"
   rm "$fake/cmux-tui"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0" "SELF_TMUX_SESSION=other-session"
                 "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_OTHER_ACTIVE=1")
