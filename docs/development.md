@@ -354,6 +354,11 @@ Test input matrices belong at the narrowest boundary that owns their behavior.
 Select these direct cases with `ONLY='StoragePermissionPolicyTests'`.
 `OperationPolicyTests` retains storage resolution, command dispatch, and interactive retry checks.
 Real portable tests retain scope changes, rejected writes, saved acceptance, home replacement, and changed profile digests.
+`preflight_files` returns a `FilePreflightPlan` that owns ordered instruction copies and permitted restore replacements in immutable collections.
+Install and restore pass the complete plan to `install_files`; planning writes nothing.
+`FilePreflightPlanTests` uses temporary directories without subprocesses for unchanged links, regular-file replacements, instruction copies, and refused conflicts.
+Select these direct cases with `ONLY='FilePreflightPlanTests'`.
+Real install and restore tests retain symlinks, directories, backups, permissions, and changed-state checks.
 The native-hook status matrix calls the parser directly without installing a portable home.
 The hook-merge policy matrix calls `merge_hooks` with fresh documents for each case.
 Real installer tests retain classic and portable parity, retired-command and duplicate repair, and an idempotence rerun.
