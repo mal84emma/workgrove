@@ -349,6 +349,11 @@ Successful removals keep separate tasks because they change Git and receipt stat
 Each SSH title-repair case resets row-list completeness alongside its private fake state.
 
 Test input matrices belong at the narrowest boundary that owns their behavior.
+`storage_permission_decision` owns storage permission decisions from prior policy facts and the resolved scope.
+`StoragePermissionPolicyTests` checks option conflicts, saved acceptance, strict mode, restore restrictions, and refusal order without filesystem or subprocess work.
+Select these direct cases with `ONLY='StoragePermissionPolicyTests'`.
+`OperationPolicyTests` retains storage resolution, command dispatch, and interactive retry checks.
+Real portable tests retain scope changes, rejected writes, saved acceptance, home replacement, and changed profile digests.
 The native-hook status matrix calls the parser directly without installing a portable home.
 The hook-merge policy matrix calls `merge_hooks` with fresh documents for each case.
 Real installer tests retain classic and portable parity, retired-command and duplicate repair, and an idempotence rerun.

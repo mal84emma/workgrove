@@ -492,55 +492,77 @@ class OperationPolicyTests(unittest.TestCase):
                  ("volume", ["--mount", str(linked)], "volume", str(self.root)),
                  ("os-disk", ["--storage", "volume"], "volume", None),
                  ("volume", ["--storage", "os-disk"], "os-disk", str(self.root)))
+        for saved, flags, policy, mount in cases:
+            previous = self.profile(saved, str(self.root) if saved == "volume" else None) if saved else None
+            args = Namespace(storage=None, mount=None)
+            for name, value in zip(flags[::2], flags[1::2]):
+                setattr(args, name.removeprefix("--"), value)
+            with self.subTest(saved=saved, flags=flags):
+                self.assertEqual(portable.storage_policy(self.root, args, previous), (policy, mount))
         for mode in ("install", "bootstrap"):
-            for saved, flags, policy, mount in cases:
-                previous = self.profile(saved, str(self.root) if saved == "volume" else None) if saved else None
-                if previous is None:
-                    portable.profile_path(self.root).unlink(missing_ok=True)
-                with self.subTest(mode=mode, saved=saved, flags=flags), \
-                        patch.object(portable, "load_profile", return_value=previous), \
-                        patch.object(portable, "mounted", return_value=True), \
-                        patch.object(portable, "storage", side_effect=portable.Refusal("storage-observed")) as storage, \
-                        patch.object(sys, "argv", ["portable.py", mode, "--root", str(self.root), *flags]), \
-                        patch("sys.stderr", io.StringIO()) as errors:
-                    old_mask = os.umask(0o077)
-                    try:
-                        self.assertEqual(portable.main(), 1)
-                    finally:
-                        os.umask(old_mask)
-                    self.assertEqual(errors.getvalue(), "workgrove: storage-observed\n")
-                    storage.assert_called_once_with(self.root, policy, mount)
+            previous = self.profile("volume", str(self.root), True)
+            with self.subTest(mode=mode), patch.object(portable, "load_profile", return_value=previous), \
+                    patch.object(portable, "mounted", return_value=True), \
+                    patch.object(portable, "storage", side_effect=portable.Refusal("storage-observed")) as storage, \
+                    patch.object(sys, "argv", ["portable.py", mode, "--root", str(self.root), "--mount", str(linked)]), \
+                    patch("sys.stderr", io.StringIO()) as errors:
+                old_mask = os.umask(0o077)
+                try:
+                    self.assertEqual(portable.main(), 1)
+                finally:
+                    os.umask(old_mask)
+                self.assertEqual(errors.getvalue(), "workgrove: storage-observed\n")
+                storage.assert_called_once_with(self.root, "volume", str(self.root))
 
     def test_restore_mode_refusals_at_each_entry_point(self):
-        for mode in ("restore", "install", "bootstrap", "reinstall"):
-            for saved in (None, False, True):
-                previous = self.profile("volume", str(self.root), saved) if saved is not None else None
-                if previous is None:
-                    portable.profile_path(self.root).unlink(missing_ok=True)
-                cases = (([], "restore-storage-policy-conflict"),) if saved is None else (
-                    (["--storage", "os-disk"], "restore-storage-policy-conflict"),
-                    (["--mount", str(self.root / "other")], "restore-storage-policy-conflict"),
-                    (["--strict-permissions"] if saved else ["--trust-personal-volume"],
-                     "restore-cannot-change-volume-trust"))
-                for flags, code in cases:
-                    if mode == "reinstall" and previous is None:
-                        continue
-                    arguments = ["portable.py", mode, "--root", str(self.root), *flags]
-                    if mode != "restore":
-                        arguments.append("--restore-only")
-                    if mode == "reinstall":
-                        arguments.extend(("--source", str(self.root / "workgrove")))
-                    with self.subTest(mode=mode, saved=saved, flags=flags), \
-                            patch.object(portable, "load_profile", return_value=previous), \
-                            patch.object(portable, "storage") as storage, \
-                            patch.object(sys, "argv", arguments), patch("sys.stderr", io.StringIO()) as errors:
-                        old_mask = os.umask(0o077)
-                        try:
-                            self.assertEqual(portable.main(), 1)
-                        finally:
-                            os.umask(old_mask)
-                        self.assertEqual(errors.getvalue(), "workgrove: " + code + "\n")
-                        storage.assert_not_called()
+        cases = (("restore", False, ["--trust-personal-volume"], "restore-cannot-change-volume-trust"),
+                 ("install", True, ["--strict-permissions"], "restore-cannot-change-volume-trust"),
+                 ("bootstrap", True, ["--mount", str(self.root / "other"), "--trust-personal-volume"],
+                  "restore-storage-policy-conflict"),
+                 ("reinstall", True, ["--storage", "os-disk", "--strict-permissions"], "restore-storage-policy-conflict"))
+        for mode, saved, flags, code in cases:
+            previous = self.profile("volume", str(self.root), saved)
+            arguments = ["portable.py", mode, "--root", str(self.root), *flags]
+            if mode != "restore":
+                arguments.append("--restore-only")
+            if mode == "reinstall":
+                arguments.extend(("--source", str(self.root / "workgrove")))
+            with self.subTest(mode=mode), patch.object(portable, "load_profile", return_value=previous), \
+                    patch.object(portable, "storage") as storage, patch.object(sys, "argv", arguments), \
+                    patch("sys.stderr", io.StringIO()) as errors:
+                old_mask = os.umask(0o077)
+                try:
+                    self.assertEqual(portable.main(), 1)
+                finally:
+                    os.umask(old_mask)
+                self.assertEqual(errors.getvalue(), "workgrove: " + code + "\n")
+                storage.assert_not_called()
+
+    def test_interactive_acceptance_retries_resolved_arguments(self):
+        previous = self.profile("volume", str(self.root))
+        observed = []
+
+        def storage(root, policy, mount):
+            observed.append((root, policy, mount, portable._volume_policy.get()["trusted"]))
+            if len(observed) == 1:
+                raise portable.VolumeTrustRequired(root, mount)
+            raise portable.Refusal("storage-observed")
+
+        with patch.object(portable, "load_profile", return_value=previous), \
+                patch.object(portable, "mounted", return_value=True), patch.object(portable, "storage", storage), \
+                patch.object(portable, "confirm_volume_trust", return_value=True) as confirm, \
+                patch.object(sys, "argv", ["portable.py", "install", "--root", str(self.root)]), \
+                patch("sys.stderr", io.StringIO()) as errors:
+            old_mask = os.umask(0o077)
+            try:
+                self.assertEqual(portable.main(), 1)
+            finally:
+                os.umask(old_mask)
+        self.assertEqual(observed, [(self.root, "volume", str(self.root), False),
+                                    (self.root, "volume", str(self.root), True)])
+        confirm.assert_called_once_with(dict(error="personal-volume-trust-required", root=str(self.root), mount=str(self.root)))
+        self.assertEqual(errors.getvalue(), "workgrove: storage-observed\n")
+        self.assertIsNone(portable._volume_policy.get())
 
     def test_explicit_restore_mode_does_not_depend_on_function_name(self):
         def renamed(args):
@@ -1383,10 +1405,11 @@ sys.exit(module["main"]())
     def test_explicit_strict_policy_revokes_acceptance_only_after_validation(self):
         self.root.chmod(0o777)
         self.volume_install("--trust-personal-volume")
+        personal = self.home / ".claude/settings.json"
+        original = personal.read_bytes()
         self.volume_install("--strict-permissions", ok=False)
         self.assertTrue(self.profile()["trust_personal_volume"])
-        result = self.volume_install("--strict-permissions", "--trust-personal-volume", ok=False)
-        self.assertIn("conflicting-storage-permission-options", result.stderr)
+        self.assertEqual(personal.read_bytes(), original)
         self.root.chmod(0o700)
         self.volume_install("--strict-permissions")
         self.assertFalse(self.profile()["trust_personal_volume"])
@@ -3827,6 +3850,72 @@ sys.exit(1)
         self.assertFalse((self.root / "missing-project").exists())
         self.assertFalse((self.home / ".config/workgrove/env.sh").exists())
 
+
+
+class StoragePermissionPolicyTests(unittest.TestCase):
+    def decide(self, **changes):
+        facts = dict(previous_exists=True, previous_storage="volume", previous_mount="/example/mount",
+                     previous_trusted=False, storage="volume", mount="/example/mount",
+                     explicit=False, strict=False, restoring=False)
+        facts.update(changes)
+        original = facts.copy()
+        try:
+            return portable.storage_permission_decision(**facts)
+        finally:
+            self.assertEqual(facts, original)
+
+    def test_setup_options_and_saved_acceptance(self):
+        cases = (({}, False),
+                 (dict(previous_exists=False), False),
+                 (dict(explicit=True), True),
+                 (dict(strict=True), False),
+                 (dict(previous_trusted=True), True),
+                 (dict(previous_trusted=True, explicit=True), True),
+                 (dict(previous_trusted=True, strict=True), False),
+                 (dict(previous_exists=False, previous_trusted=True), False))
+        for changes, trusted in cases:
+            for storage, mount in ((None, None), ("os-disk", None), ("volume", "/example/mount")):
+                with self.subTest(changes=changes, storage=storage, mount=mount):
+                    result = self.decide(previous_storage=storage, previous_mount=mount,
+                                         storage=storage, mount=mount, **changes)
+                    self.assertIsInstance(result, portable.StoragePermissionDecision)
+                    self.assertEqual((result.storage, result.mount, result.trust_personal_volume), (storage, mount, trusted))
+
+    def test_option_conflict_precedes_other_refusals(self):
+        for restoring in (False, True):
+            for exists in (False, True):
+                with self.subTest(restoring=restoring, exists=exists), \
+                        self.assertRaisesRegex(portable.Refusal, "^conflicting-storage-permission-options$"):
+                    self.decide(previous_exists=exists, previous_trusted=True, mount="/example/other",
+                                explicit=True, strict=True, restoring=restoring)
+
+    def test_restore_requires_matching_scope_before_trust_changes(self):
+        changes = (dict(previous_exists=False), dict(storage="os-disk"), dict(mount="/example/other"))
+        for scope in changes:
+            for trusted, explicit, strict in ((False, False, False), (False, True, False), (True, False, True)):
+                with self.subTest(scope=scope, trusted=trusted, explicit=explicit, strict=strict), \
+                        self.assertRaisesRegex(portable.Refusal, "^restore-storage-policy-conflict$"):
+                    self.decide(restoring=True, previous_trusted=trusted, explicit=explicit, strict=strict, **scope)
+
+    def test_restore_cannot_grant_or_revoke_acceptance(self):
+        for trusted, explicit, strict in ((False, True, False), (True, False, True)):
+            with self.subTest(trusted=trusted), \
+                    self.assertRaisesRegex(portable.Refusal, "^restore-cannot-change-volume-trust$"):
+                self.decide(restoring=True, previous_trusted=trusted, explicit=explicit, strict=strict)
+        for trusted, explicit, strict in ((False, False, False), (False, False, True),
+                                         (True, False, False), (True, True, False)):
+            with self.subTest(trusted=trusted, explicit=explicit, strict=strict):
+                self.assertEqual(self.decide(restoring=True, previous_trusted=trusted,
+                                             explicit=explicit, strict=strict).trust_personal_volume, trusted)
+
+    def test_scope_change_requires_acceptance_or_strict_mode(self):
+        for scope in (dict(storage="os-disk"), dict(mount="/example/other")):
+            with self.subTest(scope=scope):
+                with self.assertRaisesRegex(portable.Refusal, "^personal-volume-trust-scope-changed$"):
+                    self.decide(previous_trusted=True, **scope)
+                self.assertTrue(self.decide(previous_trusted=True, explicit=True, **scope).trust_personal_volume)
+                self.assertFalse(self.decide(previous_trusted=True, strict=True, **scope).trust_personal_volume)
+                self.assertFalse(self.decide(previous_trusted=False, **scope).trust_personal_volume)
 
 
 if __name__ == "__main__":

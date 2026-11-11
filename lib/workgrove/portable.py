@@ -1,6 +1,7 @@
 """Install and inspect a portable remote profile without provider-specific state."""
 
 import argparse
+from collections import namedtuple
 import contextlib
 import contextvars
 import fcntl
@@ -73,6 +74,23 @@ def storage_policy(root, args, previous):
     return policy, mount
 
 
+StoragePermissionDecision = namedtuple("StoragePermissionDecision", "storage mount trust_personal_volume")
+
+
+def storage_permission_decision(*, previous_exists, previous_storage, previous_mount, previous_trusted,
+                                storage, mount, explicit, strict, restoring):
+    """Decide permission acceptance from prior policy facts and the resolved scope."""
+    require(not (explicit and strict), "conflicting-storage-permission-options")
+    saved = bool(previous_exists and previous_trusted)
+    same_scope = bool(previous_exists and storage == previous_storage and mount == previous_mount)
+    if restoring:
+        require(previous_exists and same_scope, "restore-storage-policy-conflict")
+        require(not explicit or saved, "restore-cannot-change-volume-trust")
+        require(not strict or not saved, "restore-cannot-change-volume-trust")
+    require(not saved or same_scope or explicit or strict, "personal-volume-trust-scope-changed")
+    return StoragePermissionDecision(storage, mount, explicit or (saved and same_scope and not strict))
+
+
 def configured_permissions(*, restoring=False):
     def decorate(function):
         def operation(args):
@@ -84,18 +102,13 @@ def configured_permissions(*, restoring=False):
             require(read(profile_path(root), missing=True) == snapshot, "profile-changed-retry-setup")
             args.permission_profile_snapshot = snapshot
             policy, mount = storage_policy(root, args, previous)
-            explicit = getattr(args, "trust_personal_volume", False)
-            strict = getattr(args, "strict_permissions", False)
-            require(not (explicit and strict), "conflicting-storage-permission-options")
-            saved = bool(previous and previous["trust_personal_volume"])
-            same_scope = bool(previous and policy == previous["storage"] and mount == previous["mount"])
-            if restoring or getattr(args, "restore_only", False):
-                require(previous and same_scope, "restore-storage-policy-conflict")
-                require(not explicit or saved, "restore-cannot-change-volume-trust")
-                require(not strict or not saved, "restore-cannot-change-volume-trust")
-            require(not saved or same_scope or explicit or strict, "personal-volume-trust-scope-changed")
-            args.storage, args.mount = policy, mount
-            args.trust_personal_volume = explicit or (saved and same_scope and not strict)
+            decision = storage_permission_decision(
+                previous_exists=bool(previous), previous_storage=previous["storage"] if previous else None,
+                previous_mount=previous["mount"] if previous else None,
+                previous_trusted=bool(previous and previous["trust_personal_volume"]), storage=policy, mount=mount,
+                explicit=getattr(args, "trust_personal_volume", False), strict=getattr(args, "strict_permissions", False),
+                restoring=restoring or getattr(args, "restore_only", False))
+            args.storage, args.mount, args.trust_personal_volume = decision
             with volume_permissions(root, policy, mount, args.trust_personal_volume):
                 return function(args)
         return operation
