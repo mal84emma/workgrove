@@ -89,8 +89,34 @@ The automation cannot change those effects before delivery.
 ## An accepted request without a window
 
 An updated `wt` script does not install or load the Mac automation rule.
-VM-side exit status 0 means that cmux accepted the request.
-It does not confirm that the Mac hook ran or that VS Code opened.
+VM-side exit status 0 means that the local relay accepted the request.
+It does not confirm Mac delivery, hook execution, row selection, or a VS Code window.
+
+Before notification, `wt` queries `cmux-tui --socket <socket> --json client list` with the current session's identity.
+The [0.65.2 CLI](https://github.com/manaflow-ai/cmux/blob/v0.65.2/cmux-tui/crates/cmux-tui/src/cli/command.rs) uses the resource API for this command.
+Its [client snapshots](https://github.com/manaflow-ai/cmux/blob/v0.65.2/cmux-tui/crates/cmux-tui-core/src/server.rs) expose `client_kind` and `attached_terminal_ids`.
+The [Mac mirror handshake](https://github.com/manaflow-ai/cmux/blob/v0.65.2/Sources/Cloud/CloudTuiManualMirrorHandshake.swift) registers the kind `native-mirror`.
+Client kind is client-supplied metadata.
+`wt` requires that kind with the caller's terminal in `attached_terminal_ids`.
+Environment variables, a socket, and a registered terminal cannot establish that a Mac client mirrors the terminal.
+
+An absent mirror fails before notification.
+A failed or malformed query also fails because mirror presence is unknown.
+Older raw client-list responses use different fields and fail this check.
+`cmux-tui` reports its own version rather than the Mac app release.
+The preflight validates response fields instead of comparing version strings.
+Each client query and notification has a five-second wait limit.
+The diagnostic reports exit status 142 for a deadline and preserves other command statuses.
+The shared deadline runner requires Perl and bounds child processes too.
+Attach and open return nonzero for these failures and print the quoted Mac fallback command.
+If task creation succeeded before its row request failed, the task remains created.
+Use its printed attach command; do not create the task again.
+
+A mirror can disconnect after the query, before the Mac receives the notification.
+Notification admission and Mac automation limits can also prevent handling.
+Therefore, successful requests explicitly report local acceptance and unverified Mac delivery.
+A notification failure or timeout also leaves delivery unverified because the relay might already have accepted it.
+[Issue #198](https://github.com/mal84emma/workgrove/issues/198) records the unmirrored-terminal failure.
 
 On the Mac, run `cmux automation list`.
 If it reports `No automation rules`, check `~/.cmuxterm/automations.json` for the `wt-native-relay` rule.
