@@ -128,7 +128,7 @@ queue_task() {
     wt-smoke.sh:scenario_teardown_final_proof) priority=51 ;;
     wt-smoke.sh:scenario_teardown_astra_sidecars) priority=46 ;;
     wt-smoke.sh:scenario_teardown_review_git) priority=38 ;;
-    portable-smoke.sh:python-9) priority=35 ;;
+    portable-smoke.sh:python-10) priority=35 ;;
     remote-new-smoke.sh:scenario_preflight_recovery) priority=33 ;;
     native-relay-smoke.sh:) priority=32 ;;
     install-smoke.sh:|wt-smoke.sh:scenario_teardown_astra_files) priority=30 ;;
