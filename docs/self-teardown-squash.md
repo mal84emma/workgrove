@@ -2,6 +2,7 @@
 
 This page preserves design constraints and anchors from the investigation before the runtime fix.
 The [complete historical record](https://github.com/mal84emma/workgrove/pull/180#issuecomment-6775475035) preserves the original findings, diagnostics, recommendations, and validation.
+The archive's code citations identify the reviewed investigation revision.
 Use [safe task teardown](task-teardown.md) for implemented behavior and current acceptance limits.
 
 ## Result and incident evidence

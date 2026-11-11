@@ -2,6 +2,7 @@
 
 This page preserves design constraints and anchors from the investigation before the runtime fix.
 The [complete historical record](https://github.com/mal84emma/workgrove/pull/180#issuecomment-6775477731) preserves the original findings, diagnostics, recommendations, and validation.
+The archive's code citations identify the reviewed investigation revision.
 Use [safe task teardown](task-teardown.md) for implemented behavior and current acceptance limits.
 
 ## Findings
@@ -32,7 +33,7 @@ The [current receipt contract](task-teardown.md#recover-incomplete-cleanup) repo
 ### A successful prune status can conceal a refusal
 
 The [historical prune reproduction](https://github.com/mal84emma/workgrove/pull/180#issuecomment-6775477731) preserves the misleading successful status and exact refusal.
-A candidate or dry-run result cannot establish completed teardown.
+The [current pruning contract](task-teardown.md#recover-incomplete-cleanup) distinguishes ordinary preservation skips from failed removal attempts.
 
 ### A removed line can precede a close failure
 

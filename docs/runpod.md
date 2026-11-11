@@ -148,7 +148,7 @@ If supported, validate a narrowly reviewed policy before changing the host's pro
 Repeat startup, permitted task writes, prohibited outside writes, and network-policy checks after that repair.
 Keep the persistent storage layout unchanged while investigating runtime compatibility.
 
-Codex 0.163.0 [rejects its deprecated Landlock option](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/linux-sandbox/src/linux_run_main.rs#L382-L388) for filesystem-restricted execution.
+Codex 0.163.0 [rejects its deprecated Landlock option](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/linux-sandbox/src/linux_run_main.rs#L411-L418) for filesystem-restricted execution.
 Installing Bubblewrap again cannot repair a denial that reproduces independently of its installation.
 Disabling isolation or granting broad privileges changes the security model; it does not establish the required sandbox behavior.
 

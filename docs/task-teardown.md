@@ -303,6 +303,9 @@ A changed branch, branch-deletion failure, or changed sidecar retains the remain
 Use `--keep-branch` during recovery to preserve a branch that changed after directory removal.
 It does not silently discard the unexpected object or metadata.
 
+`wt prune` returns nonzero when an attempted task removal fails.
+Ordinary preservation skips remain distinct from failed removal attempts.
+
 The `removed` message confirms Git worktree removal, not complete session cleanup.
 Local row absence must be confirmed before `teardown complete` is reported.
 Self-closure can terminate the caller after the durable `close_requested` stage and before its final response.
