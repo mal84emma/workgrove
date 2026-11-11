@@ -25,6 +25,108 @@ spec.loader.exec_module(portable)
 CANARY = "SYNTHETIC-CONFIDENTIAL-CANARY"
 
 
+class HookMergeTests(unittest.TestCase):
+    def documents(self, agent):
+        template = "settings.base.json" if agent == "claude" else "hooks.base.json"
+        base = json.loads((REPO / "home" / ("." + agent) / template).read_text())
+        policy = json.loads((REPO / "lib/workgrove/agent-config-policy.json").read_text())
+        return base, policy
+
+    def test_adds_base_hooks_and_returns_the_existing_document(self):
+        for text in ('{}', '{"personal": true}', '{"hooks": {}}'):
+            for base_text in ('{}', '{"hooks": {"Stop": [{"hooks": [{"command": "managed"}, '
+                              '{"type": "prompt"}, {"command": null}]}]}}'):
+                with self.subTest(existing=text, base=base_text):
+                    existing, base = json.loads(text), json.loads(base_text)
+                    expected = dict(json.loads(text), hooks=json.loads(base_text).get("hooks", {}))
+                    self.assertIs(portable.merge_hooks(existing, base), existing)
+                    self.assertEqual(existing, expected)
+                    if "Stop" in existing["hooks"]:
+                        self.assertIsNot(existing["hooks"]["Stop"][0], base["hooks"]["Stop"][0])
+                        self.assertIsNot(existing["hooks"]["Stop"][0]["hooks"], base["hooks"]["Stop"][0]["hooks"])
+
+    def test_retires_only_exact_commands_with_a_managed_replacement(self):
+        for agent in ("claude", "codex"):
+            for use_policy in (False, True):
+                for replacement_present in (False, True):
+                    with self.subTest(agent=agent, policy=use_policy, replacement=replacement_present):
+                        base, policy = self.documents(agent)
+                        old, replacement = next((old, new) for old, new in policy["retired_hook_commands"].items()
+                                                if (agent == "claude") == ("Claude Code" in old))
+                        if not replacement_present:
+                            base = {"hooks": {}}
+                        commands = [old, old + " --custom", "echo " + old,
+                                    "AGENT_NOTIFY_SOURCE=Personal agent-notify"]
+                        foreign = [{"type": "command", "command": command} for command in commands]
+                        existing = {"hooks": {"Stop": [{"hooks": foreign}]}}
+                        expected = json.loads(json.dumps(base.get("hooks", {})))
+                        kept = foreign[1:] if use_policy and replacement_present else foreign
+                        expected.setdefault("Stop", []).append({"hooks": kept})
+                        expected = json.loads(json.dumps(expected))
+                        self.assertEqual(portable.merge_hooks(existing, base, policy if use_policy else None),
+                                         {"hooks": expected})
+                        if replacement_present:
+                            self.assertIn(replacement, json.dumps(existing["hooks"]))
+
+    def test_repairs_retired_and_duplicate_groups(self):
+        for agent in ("claude", "codex"):
+            for duplicated in (False, True):
+                with self.subTest(agent=agent, duplicated=duplicated):
+                    base, policy = self.documents(agent)
+                    expected = json.loads(json.dumps(base))
+                    retired = {new: old for old, new in policy["retired_hook_commands"].items()}
+                    hooks = json.loads(json.dumps(base["hooks"]))
+                    for event, groups in hooks.items():
+                        for group in groups:
+                            group["matcher"] = "different-matcher"
+                            for hook in group["hooks"]:
+                                hook["command"] = retired.get(hook["command"], hook["command"])
+                        if duplicated:
+                            groups.extend(json.loads(json.dumps(base["hooks"][event])))
+                    self.assertEqual(portable.merge_hooks({"hooks": hooks}, base, policy),
+                                     {"hooks": expected["hooks"]})
+
+    def test_preserves_foreign_hooks_matchers_metadata_and_custom_events(self):
+        for agent in ("claude", "codex"):
+            with self.subTest(agent=agent):
+                base, policy = self.documents(agent)
+                command = base["hooks"]["Stop"][0]["hooks"][0]["command"]
+                tool = base["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+                foreign = {"matcher": "personal", "timeout": 42, "hooks": [
+                    {"type": "command", "command": "echo foreign", "timeout": 7},
+                    {"type": "prompt", "prompt": "Keep this prompt"}, {"command": ""}]}
+                custom = {"matcher": "custom", "hooks": [{"command": "echo custom"}]}
+                pretool = {"matcher": "foreign-tool", "timeout": 42, "hooks": [{"command": "foreign-policy"}]}
+                existing = {"personal": True, "hooks": {
+                    "Stop": [dict(foreign, hooks=foreign["hooks"] + [{"command": command, "timeout": 99}]),
+                             {"matcher": "managed-only", "hooks": [{"command": command}]}],
+                    "PreToolUse": [dict(pretool, hooks=[{"command": tool}] + pretool["hooks"])],
+                    "CustomEvent": [custom], "OtherEvent": [{"hooks": [{"command": command}]}]}}
+                expected = json.loads(json.dumps(base["hooks"]))
+                expected["Stop"].append(foreign)
+                expected["PreToolUse"].append(pretool)
+                expected["CustomEvent"] = [custom]
+                expected = json.loads(json.dumps(expected))
+                self.assertEqual(portable.merge_hooks(existing, base, policy), {"personal": True, "hooks": expected})
+
+    def test_discards_empty_foreign_groups(self):
+        for group in ('{}', '{"hooks": []}'):
+            with self.subTest(group=group):
+                existing = {"personal": True, "hooks": {"EmptyEvent": [], "Stop": [json.loads(group)]}}
+                self.assertEqual(portable.merge_hooks(existing, {}), {"personal": True, "hooks": {}})
+
+    def test_refuses_each_invalid_agent_json_shape(self):
+        for text in ('null', '[]', '"settings"', '{"hooks": null}', '{"hooks": []}',
+                     '{"hooks": {"Stop": {}}}', '{"hooks": {"Stop": [null]}}',
+                     '{"hooks": {"Stop": [{"hooks": null}]}}', '{"hooks": {"Stop": [{"hooks": {}}]}}',
+                     '{"hooks": {"Stop": [{"hooks": [null]}]}}',
+                     '{"hooks": {"Stop": [{"hooks": [{"command": null}]}]}}',
+                     '{"hooks": {"Stop": [{"hooks": [{"command": 42}]}]}}'):
+            with self.subTest(document=text):
+                with self.assertRaisesRegex(portable.Refusal, "^invalid-agent-json$"):
+                    portable.merge_hooks(json.loads(text), {})
+
+
 class NativeHookTests(unittest.TestCase):
     def installed(self):
         return dict(errors=[], providers=[dict(provider=name, state="installed") for name in ("claude", "codex")])
@@ -1505,49 +1607,52 @@ sys.exit(module["main"]())
             self.assertEqual(actual["hooks"]["PreToolUse"], base["hooks"]["PreToolUse"] + [
                 {"matcher": "foreign-tool", "timeout": 42, "hooks": [
                     {"type": "command", "command": "foreign-policy"}]}])
-        before = [(self.home / name).read_bytes() for name in (".claude/settings.json", ".codex/hooks.json")]
-        self.install()
-        self.assertEqual(before, [(self.home / name).read_bytes()
-                                  for name in (".claude/settings.json", ".codex/hooks.json")])
+            self.assertEqual(actual["hooks"]["Stop"], base["hooks"]["Stop"] + [
+                {"matcher": "personal", "timeout": 42, "hooks": [{"type": "command", "command": "echo foreign"}]}])
+            self.assertEqual(actual["hooks"]["CustomEvent"], [{"hooks": [{"type": "command", "command": "echo custom"}]}])
+            self.assertNotIn("OtherEvent", actual["hooks"])
 
     def test_hook_refresh_retires_old_commands_and_repairs_duplicates(self):
         self.install()
         config = Path(self.profile()["agent_roots"]["codex"]) / "config.toml"
         config.write_text(config.read_text() + '\n[hooks.state]\nsynthetic_trust = true\n')
         trusted = config.read_bytes()
-        for duplicated in (False, True):
-            expected = {}
-            for agent, filename, old in (
-                    ("claude", "settings.json", "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"),
-                    ("codex", "hooks.json", "AGENT_NOTIFY_SOURCE=Codex agent-notify")):
-                template = "settings.base.json" if agent == "claude" else "hooks.base.json"
-                base = json.loads((self.source / "home" / ("." + agent) / template).read_text())
-                hooks = json.loads(json.dumps(base["hooks"]))
-                for event, groups in hooks.items():
-                    for group in groups:
-                        for hook in group["hooks"]:
-                            if hook["command"].endswith(" ~/.local/bin/agent-notify"):
-                                hook["command"] = old
-                    if duplicated:
-                        groups.extend(base["hooks"][event])
-                foreign = {"matcher": "mixed", "timeout": 42, "hooks": [
-                    {"type": "command", "command": "foreign-helper", "timeout": 7},
-                    {"type": "command", "command": "AGENT_NOTIFY_SOURCE=Personal agent-notify"},
-                    {"type": "command", "command": old + " --custom"},
-                    {"type": "command", "command": "echo " + old}]}
-                hooks["Stop"].append(dict(foreign, hooks=[{"type": "command", "command": old}] + foreign["hooks"]))
-                path = self.home / ("." + agent) / filename
-                path.write_text(json.dumps({"personal": True, "hooks": hooks}))
-                expected[path] = base["hooks"]
-                expected[path]["Stop"].append(foreign)
-            for attempt in range(2):
-                self.command("reinstall", "--source", str(self.source), "--refresh-config")
-                self.assertEqual(config.read_bytes(), trusted)
-                for path, hooks in expected.items():
-                    with self.subTest(duplicated=duplicated, attempt=attempt, agent=path.parent.name):
-                        actual = json.loads(path.read_text())
-                        self.assertEqual(actual["hooks"], hooks)
-                        self.assertTrue(actual["personal"])
+        expected = {}
+        for agent, filename, old in (
+                ("claude", "settings.json", "AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"),
+                ("codex", "hooks.json", "AGENT_NOTIFY_SOURCE=Codex agent-notify")):
+            template = "settings.base.json" if agent == "claude" else "hooks.base.json"
+            base = json.loads((self.source / "home" / ("." + agent) / template).read_text())
+            hooks = json.loads(json.dumps(base["hooks"]))
+            for event, groups in hooks.items():
+                for group in groups:
+                    for hook in group["hooks"]:
+                        if hook["command"].endswith(" ~/.local/bin/agent-notify"):
+                            hook["command"] = old
+                groups.extend(base["hooks"][event])
+            foreign = {"matcher": "mixed", "timeout": 42, "hooks": [
+                {"type": "command", "command": "foreign-helper", "timeout": 7},
+                {"type": "command", "command": "AGENT_NOTIFY_SOURCE=Personal agent-notify"},
+                {"type": "command", "command": old + " --custom"},
+                {"type": "command", "command": "echo " + old}]}
+            hooks["Stop"].append(dict(foreign, hooks=[{"type": "command", "command": old}] + foreign["hooks"]))
+            path = self.home / ("." + agent) / filename
+            path.write_text(json.dumps({"personal": True, "hooks": hooks}))
+            expected[path] = base["hooks"]
+            expected[path]["Stop"].append(foreign)
+        before = None
+        for attempt in range(2):
+            self.command("reinstall", "--source", str(self.source), "--refresh-config")
+            self.assertEqual(config.read_bytes(), trusted)
+            for path, hooks in expected.items():
+                with self.subTest(attempt=attempt, agent=path.parent.name):
+                    actual = json.loads(path.read_text())
+                    self.assertEqual(actual["hooks"], hooks)
+                    self.assertTrue(actual["personal"])
+            actual_bytes = {path: path.read_bytes() for path in expected}
+            if before is not None:
+                self.assertEqual(actual_bytes, before)
+            before = actual_bytes
 
     def test_fullscreen_default_preserves_personal_ui_settings(self):
         self.install()
