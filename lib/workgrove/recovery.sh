@@ -61,6 +61,9 @@ host_attach() { # re-attach to the VM's session; start an agent only for a task 
   [[ -z $err ]] || printf '%s\n' "$err" >&2
   if [[ $rc != 0 && $rc != 255 && -n $out ]]; then printf '%s\n' "$out" >&2; fi
   vm_wt_failure "$host" show "$rc" "" "$result_rc" "${result[status]-}" "$name" "$repo" || return $?
+  [[ -v result[row_host] ]] || die "task row host is unavailable; update workgrove on $host before attaching"
+  valid_host "${result[row_host]}" || die 'task row host is unverified; kept the task without changing its rows'
+  [[ ${result[row_host]} == "$host" ]] || die "task belongs to SSH alias ${result[row_host]}; use that alias to attach"
   session=${result[session]} path=${result[repo]} state=${result[state]-}
   agent=${result[agent]} attached=${result[attached]} started=${result[started]}
   title=$(row_title "$name")

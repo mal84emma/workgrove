@@ -49,7 +49,7 @@ case "$*" in
     printf 'WT_RESULT\t%s\n' '{"version":1,"command":"path","status":"missing","name":"task","repo":"/vm/repos/repo","session":"","state":""}' >&2
     echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
     exit 1 ;;
-  *' rm task -r /vm/repos/repo --defer-close')
+  *' rm task -r /vm/repos/repo --defer-close --row-host test-vm')
     if [ "${REMOTE_RETARGET:-0}" = 1 ]; then
       jq '.workspaces[0].remote.destination="other-vm"' "$FAKE_CMUX_STATE/rows.json" >"$FAKE_CMUX_STATE/retarget.json"
       mv "$FAKE_CMUX_STATE/retarget.json" "$FAKE_CMUX_STATE/rows.json"
@@ -500,6 +500,7 @@ scenario_native_attach_close() {
   hook >/dev/null
   has "$CMUX_LOG" "workspace close $ROW_ID --force"
   has "$SSH_CALL_LOG" '--row-closed'
+  has "$SSH_CALL_LOG" '--row-host test-vm'
   lacks "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
   rm "$FAKE_CMUX_STATE/mutate-close"
   record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
@@ -508,6 +509,22 @@ scenario_native_attach_close() {
   has "$CMUX_LOG" "workspace close $ROW_ID --force"
   lacks "$SSH_CALL_LOG" '--row-closed'
   has "$XDG_STATE_HOME/cmux-hook.log" 'row absence is unverified'
+  for sample in matching unclaimed; do
+    record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+    local replacement description='@test-vm · repo'
+    [[ $sample != unclaimed ]] || description='custom description'
+    replacement=$(fake_row replacement-row task "$description" test-vm)
+    fake_rows "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")" "$replacement" >"$TEST_ROOT/duplicate-rows"
+    cp "$TEST_ROOT/duplicate-rows" "$FAKE_CMUX_STATE/rows.json"
+    touch "$FAKE_CMUX_STATE/mutate-close"
+    : >"$SSH_CALL_LOG"
+    bash "$REPO/bin/cmux-hook" --event </dev/null >/dev/null
+    has "$CMUX_LOG" "workspace close $ROW_ID --force"
+    lacks "$SSH_CALL_LOG" '--row-closed'
+    assert_eq "$sample replacement row survives the callback" replacement-row "$(jq -r '.workspaces[0].id' "$FAKE_CMUX_STATE/rows.json")"
+    has "$XDG_STATE_HOME/cmux-hook.log" 'row absence is unverified'
+    rm "$FAKE_CMUX_STATE/mutate-close"
+  done
   unset SSH_CALL_LOG
   record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
   REMOTE_DEFER_FAIL=1 hook >/dev/null
@@ -836,7 +853,7 @@ HELPER
   ln -s "$REPO/bin/wt" "$HOME/.local/bin/wt"
   git -C "$TEST_ROOT/repo" init -q -b main
   git -C "$TEST_ROOT/repo" -c user.name=Test -c user.email=test@example.invalid commit -q --allow-empty -m initial
-  bash "$HOME/.local/bin/wt" new task -a claude --no-workspace -r "$TEST_ROOT/repo" >/dev/null
+  CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=test-vm bash "$HOME/.local/bin/wt" new task -a claude --no-workspace -r "$TEST_ROOT/repo" >/dev/null
   cat > "$TEST_ROOT/bin/claude" <<'AGENT'
 #!/bin/sh
 printf 'hook=%s\nhelper=%s\n' "${CMUX_TUI_HOOK:-}" "${WT_CMUX_TUI_HOOK:-}" > "$AGENT_ENV"

@@ -178,6 +178,8 @@ Workgrove never stops a shared Codex daemon as a teardown workaround.
 VM self-removal pins the caller pane and verifies its process ancestry and exclusive agent ownership before accepting the named session.
 An agentless shell can request its own removal when every pane process belongs to that cleanup command's ancestry or descendants.
 A sibling background command or another pane prevents this shell exception.
+A refusal distinguishes a competing agent from an unowned command, such as a sibling `tee` process.
+For an unowned command, the diagnostic gives its process identifier and executable name.
 Shell recovery records process start identities and cannot adopt arbitrary later shell descendants.
 A retry can refresh the cleanup caller chain only beneath the original verified shell.
 
@@ -251,6 +253,10 @@ After unexpected coordinator death, retries refuse while its command group remai
 The coordinator releases it before an independent session-cleanup callback runs.
 Later receipt writes acquire the lock and reject a different generation.
 Process exit also releases the lock, including interrupted self-closure.
+Signal handlers queue cancellation without starting subprocesses.
+The coordinator makes at most three attempts when `SIGHUP` interrupts a process probe.
+Failed, empty, or invalid group samples cannot prove process absence.
+If group shutdown remains unverified, the lock file retains its owner record for recovery.
 
 The private `<name>.lock` file remains beside the receipt and can serve later generations.
 Before deletion, workgrove writes a private receipt under `<repo>/.git/wt/teardown/<name>.json`.
@@ -292,7 +298,9 @@ Local row absence must be confirmed before `teardown complete` is reported.
 Self-closure can terminate the caller after the durable `close_requested` stage and before its final response.
 Preflight checks directly invoked cleanup utilities and their selected paths before removal.
 A task-local executable path refuses removal even when its symlink target is outside the task.
-A surviving caller reports failure when row closure fails.
+A surviving VM caller reports nonzero status until independent Mac confirmation, even when self-closure appears successful.
+Its pending output confirms Git cleanup and gives the Mac confirmation command.
+It does not claim that the row or tmux session remains open.
 
 Repeat the original `wt rm` command to resume pending cleanup after the worktree registration is gone.
 For VM-side removal of another task, use the printed Mac retry instead.
@@ -302,9 +310,29 @@ Run `wt -H <test-vm> rm <task> -r <repo>` on the Mac to finish that cleanup.
 [Checklist step 8](cmux-checklist.md) tests both self-removal and this Mac retry.
 
 Recovery rechecks row identity and running-agent ownership before closing anything.
-A completed receipt makes another retry harmless.
+Initial completion and retries repeat the absence checks and cannot close a replacement row or session.
+Local observation checks the saved row ID and current matching or ambiguous rows, including receipts that recorded no row.
 Creation can reconcile already-absent local rows without closing anything.
 The Mac can reconcile an absent VM row and session before retrying a requested task name.
+Mac confirmation requires absence of matching and ambiguous task rows, including rows with edited descriptions and remaining duplicate rows.
+A same-host, same-repository row with a generated `workspace-N` title also blocks confirmation.
+A failed title publication can leave that row's task identity unresolved; observation never renames or closes it.
+The controller resolves repository aliases before checking Mac rows and binds later VM operations to that resolved path.
+The VM returns a digest of the verified receipt after row-acknowledged observation.
+The Mac checks row absence again, then supplies that digest to the creation retry through `--closed-receipt`.
+The VM checks the digest under the teardown lock and repeats observation before creating the task.
+The digest binds the acknowledgment to the complete receipt, including its generation, original SSH alias, and session identity.
+The controller records its alias in the task generation through `--row-host` during creation.
+Cleanup retains that original alias even when the VM's configured alias changes.
+Attachment and recovery refuse another alias before closing rows, sending pane input, or replacing a session.
+A different alias cannot confirm the original row's absence.
+An old VM receipt without its original alias remains pending.
+Every new VM generation requires a valid controller alias or `WT_HOST` before creation.
+VM removal requires that saved alias before Git cleanup, so its confirmation command identifies the original alias.
+Automatic VM removal and attachment refuse older generations without a recorded alias.
+A changed receipt, replacement session, active recorded process, or uncertain sample blocks reuse.
+A completed stage alone cannot establish absence.
+The VM's `workspace=0` metadata cannot waive Mac confirmation; the Mac controller uses that value before it creates its row.
 Otherwise, pending cleanup blocks reuse of the task name.
 
 Controller-side VM removal captures idle processes only between fresh samples that confirm no provider is running.
@@ -331,8 +359,11 @@ The controller flags are narrow cleanup operations:
 - `--defer-close` completes Git cleanup while leaving session cleanup to the Mac.
 - `--row-closed` acknowledges independently observed Mac row absence and validates the recorded VM session.
 - `--observe-only` reconciles verified absence without deleting Git work or closing sessions.
+- `--row-host <host>` binds Mac row confirmation to the original SSH alias recorded in the receipt.
+- `--closed-receipt <digest>` binds row-acknowledged observation to one receipt during the controller's creation retry.
 
 These flags never waive work-preservation checks or authorize another running agent's closure.
+Update workgrove on both machines before using receipt-bound confirmation; an older receiver refuses unknown controller flags.
 
 A lock does not exclude arbitrary editors, external Git writers, or independent process starts.
 The deletion-boundary checks narrow that race but cannot atomically exclude uncooperative filesystem changes.

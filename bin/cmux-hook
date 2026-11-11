@@ -161,20 +161,18 @@ case $t in
           :
         elif ! receiver=$(vm_wt "$h" version 2>/dev/null) || ! printf '%s' "$receiver" | wt_read_version | jq -e '.capabilities | index("teardown-receipts") != null' >/dev/null 2>&1; then
           log "VM teardown receiver lacks receipt support; update workgrove on $h before closing $ws"
-        elif ! vm_wt "$h" rm "$n" -r "$r" --defer-close >/dev/null 2>&1; then
+        elif ! vm_wt "$h" rm "$n" -r "$r" --defer-close --row-host "$h" >/dev/null 2>&1; then
           log "recorded VM owner validation failed; kept row $ws"
         elif ! ws_load fresh || ! from_row_on_host "$ws" "$h" || [[ $(row_by_title "$(row_title "$n")" "$id" "$h") != "$ws" ]]; then
           log "relay row identity changed; kept row $ws"
         elif ! remote_row_idle "$ws"; then
           log "relay row ownership prevents closure: $CMUX_ERROR"
         elif close_row "$ws" self >/dev/null 2>&1; then
-          closed_rows=$(rows_json checked) || { log "cannot verify row absence after closing $ws; session cleanup remains pending"; exit 0; }
-          absence_rc=0
-          jq -e --arg row "$ws" 'any(.workspaces[]; .id == $row)' <<<"$closed_rows" >/dev/null || absence_rc=$?
-          [[ $absence_rc == 1 ]] || { log "row absence is unverified after closing $ws; session cleanup remains pending"; exit 0; }
+          check_task_row_absence "$(row_title "$n")" "$r" "$h" "$ws" \
+            || { log "row absence is unverified after closing $ws; session cleanup remains pending; $CMUX_ERROR"; exit 0; }
           # Close first: an open SSH row can reconnect and recreate the tmux session after it is killed.
           DEADLINE=$(( $(date +%s) + 5 ))
-          if vm_wt "$h" rm "$n" -r "$r" --row-closed >/dev/null 2>&1; then
+          if vm_wt "$h" rm "$n" -r "$r" --row-closed --row-host "$h" >/dev/null 2>&1; then
             quiet_control
           else
             log "could not stop tmux session $sess on $h after closing $ws"

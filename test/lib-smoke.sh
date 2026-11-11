@@ -591,7 +591,7 @@ scenario_vm_results() {
     )
     assert_eq "$sample VM result" "$expected" "$output"
   done
-  for sample in agent attached started path; do
+  for sample in agent attached started path row_host; do
     output=$(WG_MACHINE_RESULT=1 wt_result show found task /repo wt-repo-task '' "{\"$sample\":7}")
     local rc=0
     wt_read_result "$output" show >/dev/null || rc=$?

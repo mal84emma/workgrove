@@ -11,6 +11,8 @@
 #           [-a|--agent claude|codex|none] [-m|--model MODEL] [--no-workspace] [-r|--repo PATH]
 #                                                             create a worktree and a cmux row that runs `wt run`.
 #                                                             --no-workspace leaves the worktree ready for `wt attach`
+#                                                             --closed-receipt DIGEST carries Mac confirmation for a matching VM receipt.
+#                                                             --row-host HOST records the controller alias for this task generation.
 #   wt run  <name> [-r PATH]                                  run the worktree's agent with its brief (cmux runs this)
 #   wt list [--all] [--json] [-r PATH]                        list worktrees (--all: every repo in $WT_REPOS_DIR)
 #                                                             --json prints task status for scripts.
@@ -41,6 +43,8 @@
 #                                                             --defer-close leaves session cleanup to the Mac controller.
 #                                                             --row-closed acknowledges its verified row closure.
 #                                                             --observe-only verifies completed cleanup without deleting or closing anything.
+#                                                             --closed-receipt DIGEST limits row-acknowledged observation to that receipt.
+#                                                             --row-host HOST identifies the SSH alias whose row absence was verified.
 #   wt prune [--dry-run] [-r PATH]                           remove worktrees whose branch is merged (by ancestry or
 #                                                             as a squash) and whose tree is clean
 #   wt repos [<name>] [--porcelain|--table]                   list every git repo in $WT_REPOS_DIR.
@@ -216,8 +220,24 @@ cmd_new() {
   local p b; p=$(wt_path "$name"); b=$(wt_branch "$name")
   [[ -e "$p" ]] && die "worktree '$name' already exists at $p (wt attach $name to open it)"
   git -C "$REPO" show-ref -q --verify "refs/heads/$b" && die "branch $b already exists (kept by wt rm --keep-branch, or by a removal git would not call merged, or left behind by a worktree deleted outside wt); inspect it (git -C $REPO log $b), then delete it (git -C $REPO branch -D $b) or pick another name"
+  local closure_args=()
+  local creation_host=''
+  if is_remote; then
+    creation_host=${opts[row_host]:-}
+    [[ -n $creation_host ]] || creation_host=$(wt_host)
+    valid_host "$creation_host" || die 'invalid task row host'
+  else
+    [[ ! -v opts[row_host] ]] || die 'a row host is only valid for VM creation'
+  fi
+  if [[ -v opts[closed_receipt] ]]; then
+    is_remote || die 'closed receipts are only valid for VM creation'
+    [[ ${opts[closed_receipt]} =~ ^[0-9a-f]{64}$ && -f $REPO/.git/wt/teardown/$name.json ]] \
+      || die 'invalid closed receipt for task creation'
+    valid_host "${opts[row_host]:-}" || die 'a closed receipt requires its verified Mac row host'
+    closure_args=(--row-closed --row-host "${opts[row_host]}" --closed-receipt "${opts[closed_receipt]}")
+  fi
   if [[ -f $REPO/.git/wt/teardown/$name.json ]]; then
-    (cmd_rm "$name" -r "$REPO" --observe-only) >/dev/null 2>&1 \
+    (cmd_rm "$name" -r "$REPO" --observe-only "${closure_args[@]}") >/dev/null 2>&1 \
       || die "cleanup remains pending for $name; retry wt rm $name before reusing this name"
   fi
   [[ $agent != codex ]] || check_codex || return 1
@@ -262,7 +282,7 @@ cmd_new() {
   meta_set "$name" "base=$base" "metadata_version:=3" "creation_commit=$(git -C "$REPO" rev-parse "$base^{commit}")" \
     "generation=$(printf '%s\n' "$BASHPID-$RANDOM-$(date -u +%s)" | git hash-object --stdin)" "created=$(date -u +%FT%TZ)" "agent=$agent" "model=$model" \
     "title=$(row_title "$name")" "session=$(wt_session "$name" "$REPO")" \
-    "workspace=$workspace" "includes:=[]" "includes_status=pending" "setup:=[]" "filtered_status=pending" "filtered_files:={}"
+    "workspace=$workspace" "row_host=$creation_host" "includes:=[]" "includes_status=pending" "setup:=[]" "filtered_status=pending" "filtered_files:={}"
   local landing_ref="$base" landing_remote='' parent_name
   local -A parent_meta=()
   case $base in
@@ -495,8 +515,10 @@ cmd_show() {
       agent=${session_status[agent]} attached=${session_status[attached]}
     fi
     [[ ! -e "$(wt_started "$name")" ]] || started=true
-    facts=$(jq -cn --argjson agent "$agent" --argjson attached "$attached" --argjson started "$started" \
-      '{agent:$agent,attached:$attached,started:$started}')
+    local row_host=''
+    if is_remote; then row_host=${WT_META[row_host]:-}; fi
+    facts=$(jq -cn --argjson agent "$agent" --argjson attached "$attached" --argjson started "$started" --arg row_host "$row_host" \
+      '{agent:$agent,attached:$attached,started:$started,row_host:$row_host}')
   fi
   wt_result show found "$name" "$REPO" "$(wt_session "$name" "$REPO")" "$state" "$facts"
   printf '\n--- commits vs %s\n' "$base"; git -C "$path" --no-pager log --oneline --max-count=20 "$base..HEAD" 2>/dev/null
@@ -589,7 +611,7 @@ cmd_pr() {
 }
 
 cmd_rm() {
-  local discard_commits=0 defer_close=0 row_closed=0 observe_only=0
+  local discard_commits=0 defer_close=0 row_closed=0 observe_only=0 row_host=''
   local name="" force=0 keep=0 repo="" self_remote=0 host="" session="" title="" native=0
   local -A opts=()
   wt_opts "$(wt_spec rm)" opts "$@"
@@ -598,13 +620,22 @@ cmd_rm() {
   keep=${opts[keep]-$keep}
   discard_commits=${opts[discard_commits]-$discard_commits}
   defer_close=${opts[defer_close]:-0} row_closed=${opts[row_closed]:-0} observe_only=${opts[observe_only]:-0}
+  row_host=${opts[row_host]:-}
   repo=${opts[repo]-$repo}
   [[ -n "$name" ]] || die "rm: worktree name required"
   resolve_repo "$repo"; local path branch
   valid_name "$name" || die "invalid worktree name: $name"
+  [[ $row_closed == 0 && -z $row_host ]] || is_remote || die 'row acknowledgment is only valid for VM cleanup'
+  [[ ! -v opts[row_host] ]] || valid_host "$row_host" || die 'invalid Mac row host'
   [[ -z "${CODEX_SANDBOX:-}" ]] || die 'the Codex sandbox can block cmux or tmux cleanup; rerun this command with escalation'
   teardown_lock "$name" "$@"
   WT_TEARDOWN_FILE="$REPO/.git/wt/teardown/$name.json"
+  if [[ -v opts[closed_receipt] ]]; then
+    [[ $observe_only == 1 && $row_closed == 1 && ${opts[closed_receipt]} =~ ^[0-9a-f]{64}$ ]] \
+      || die 'a closed receipt requires row-acknowledged observation'
+    [[ $(metadata_fingerprint "$WT_TEARDOWN_FILE") == "${opts[closed_receipt]}" ]] \
+      || die 'cleanup receipt changed; repeat independent Mac confirmation'
+  fi
   if [[ ! -d $(wt_path "$name") && -f $WT_TEARDOWN_FILE ]]; then
     WT_TEARDOWN_JSON=$(cat "$WT_TEARDOWN_FILE")
     jq -e --arg repo "$REPO" --arg name "$name" --arg path "$(wt_path "$name")" '.repo == $repo and .name == $name and .path == $path and .branch == ("wt/" + $name) and (.head | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and all(.keep,.native,.remote; IN("0","1")) and (.stage | IN("prepared","worktree_removed","branch_config_removing","sidecars_removing","git_removed","close_requested","complete"))' <<<"$WT_TEARDOWN_JSON" >/dev/null \
@@ -617,7 +648,7 @@ cmd_rm() {
       teardown_finish; return
     fi
   fi
-  [[ $observe_only == 0 && $row_closed == 0 ]] || die 'no pending cleanup receipt for this absent task'
+  [[ $observe_only == 0 && ( $row_closed == 0 || $defer_close == 1 ) ]] || die 'no pending cleanup receipt for this absent task'
   require_wt "$name" path branch "rm"
   teardown_preflight "$path"
   local verified_head verified_base='' proof='' generation
@@ -665,6 +696,7 @@ cmd_rm() {
       case $ownership_rc in
         0) self_remote=1 ;;
         1) die 'another agent is running in this tmux session; kept the worktree' ;;
+        3) die "unowned process blocks this tmux session: $TMUX_BLOCKER; kept the worktree" ;;
         *) die 'cannot verify exclusive agent ownership in this tmux session; kept the worktree' ;;
       esac
     fi
@@ -688,9 +720,14 @@ cmd_rm() {
   else
     cmux_require check_row_removal "$title" "$REPO" row self "" "$(wt_path "$name")"
   fi
+  if is_remote; then
+    host=${WT_META[row_host]:-}
+    valid_host "$host" || die 'task row host is unverified; kept the worktree'
+    [[ -z $row_host || $row_host == "$host" ]] \
+      || die 'Mac row host changed; use the original SSH alias for cleanup'
+  fi
   if [[ $self_remote -eq 1 && $native -eq 0 ]]; then
     # Check the relay setup only after the reasons above, while the worktree is still intact.
-    host=$(wt_host)
     hook_ok_repo || die "cannot request Mac row cleanup for $REPO"
     local _ident=() _tui_socket _tui_terminal
     if ! relay_env _ident _tui_socket _tui_terminal; then

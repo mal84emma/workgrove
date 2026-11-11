@@ -52,7 +52,11 @@ The VM checks require a reachable VM and a task with a running agent.
      ```
 
      Self-closure can end the command before it returns or prints a completion line.
-     Its receipt can remain at `close_requested` until independent observation confirms closure.
+     A surviving caller exits nonzero with the pending output below.
+     Its receipt remains at `close_requested` until independent observation confirms closure.
+     Run the printed Mac command even when the row appears closed.
+     Then reuse the name with `wt -H <test-vm> new cmux-check -r <repo>`.
+     Confirm that creation succeeds after independent Mac confirmation.
 
    - Remove another task from a separate VM shell.
      From the Mac, create it with `wt -H <test-vm> new cmux-check-other -r <repo>`.
@@ -63,9 +67,8 @@ The VM checks require a reachable VM and a task with a running agent.
 
      ```text
      removed <task>
-     wt: worktree removed, but its Mac row or tmux session is still open or unverified
+     wt: Git cleanup completed; Mac row or tmux session closure is unverified; cleanup is pending
      wt: on the Mac: wt -H <test-vm> rm <task> -r <repo>
-     wt: Git cleanup completed; session cleanup is pending. Retry: wt rm <task> -r <repo>
      wt: receipt: <repo>/.git/wt/teardown/<task>.json
      ```
 
