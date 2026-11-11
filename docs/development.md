@@ -295,6 +295,11 @@ The runner shares a temporary standard-library bytecode cache across Python test
 Each process still starts separately. Isolated Python invocations ignore the cache environment setting.
 Portable tests pack their source template's Git objects once and keep a separate source copy and durable root for each test.
 
+The cmux query and tmux probe refusal cases reuse an unchanged task within each scenario.
+Each refusal still invokes the real `wt rm` command.
+After each refusal, the tests check the branch, worktree registration, unchanged sidecar bytes, and absence of a teardown receipt.
+Successful removals keep separate tasks because they change Git and receipt state.
+
 Set `ONLY` to select scenario names with a shell glob pattern. The filter matches substrings too.
 For example, `ONLY='11.*' bash test/wt-smoke.sh` runs scenario 11.
 For a filtered runner invocation, select one suite: `ONLY='11.*' bash test/run.sh test/wt-smoke.sh`.

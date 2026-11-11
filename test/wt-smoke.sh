@@ -1741,7 +1741,11 @@ scenario_self_rm_vm() {
   assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
   assert_wt_ok "wt new tmux-denied" new tmux-denied --no-workspace -r "$r"
   assert_wt_ok 'create a callback receiver fixture' new callback --no-workspace -r "$r"
-  for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
+  local status_metadata
+  # Unreadable status probes must preserve the same task and its metadata.
+  assert_wt_ok 'create the tmux query refusal fixture' new status-error --no-workspace -r "$r"
+  status_metadata=$(cat "$r/.git/wt/status-error.json")
+  for probe in missing no-server no-socket idle; do
     assert_wt_ok "$probe tmux status test worktree" new "status-$probe" --no-workspace -r "$r"
   done
   session="wt-$(basename "$r")-self"
@@ -1911,11 +1915,14 @@ STUB
         assert_gone "$probe tmux status removed the worktree" "$r/.worktrees/status-$probe"
         assert_branch "$r" "wt/status-$probe" no ;;
       *)
-        assert_wt_fails 1 "cannot check the agent in tmux session" rm "status-$probe" -r "$r"
-        assert_dir "$probe tmux status kept the worktree" "$r/.worktrees/status-$probe"
-        assert_branch "$r" "wt/status-$probe" yes
-        assert_regular "$r" ".git/wt/status-$probe.json"
-        assert_lacks "$probe tmux status did not stop the session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session" ;;
+        assert_wt_fails 1 "cannot check the agent in tmux session" rm "status-error" -r "$r"
+        assert_dir "$probe tmux status kept the worktree" "$r/.worktrees/status-error"
+        assert_branch "$r" "wt/status-error" yes
+        assert_regular "$r" ".git/wt/status-error.json"
+        assert_lacks "$probe tmux status did not stop the session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
+        assert_eq "$probe query preserves the original sidecar" "$status_metadata" "$(cat "$r/.git/wt/status-error.json")"
+        assert_registered "$r" status-error yes
+        assert_absent "$r" .git/wt/teardown/status-error.json ;;
     esac
   done
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
@@ -2467,18 +2474,20 @@ scenario_cmux() {
     WT_RELAY_ENV=()
   done
 
-  local failure
+  local failure query_metadata
+  # Every query must refuse before changing this fixture.
+  assert_wt_ok 'create the row query refusal fixture' new row-list --no-workspace -r "$r"
+  query_metadata=$(cat "$r/.git/wt/row-list.json")
   for failure in denied invalid missing null no-id remote partial empty scalar; do
     stub_cmux alive
-    assert_wt_ok "$failure row-list test worktree" new "list-$failure" --no-workspace -r "$r"
     printf '{"workspaces":[]}\n' >"$WT_ROWS"
     case "$failure" in
       denied) WT_RELAY_ENV=("CMUX_STUB_FAIL_LIST=all") ;;
       invalid) printf 'not json\n' >"$WT_ROWS" ;;
       missing) printf '{"unexpected":[]}\n' >"$WT_ROWS" ;;
       null) printf '{"workspaces":null}\n' >"$WT_ROWS" ;;
-      no-id) printf '{"workspaces":[{"title":"list-no-id","description":"@local · %s"}]}\n' "$id" >"$WT_ROWS" ;;
-      remote) printf '{"workspaces":[{"id":"bad-row","title":"list-remote","remote":{"enabled":"unknown"}}]}\n' >"$WT_ROWS" ;;
+      no-id) printf '{"workspaces":[{"title":"row-list","description":"@local · %s"}]}\n' "$id" >"$WT_ROWS" ;;
+      remote) printf '{"workspaces":[{"id":"bad-row","title":"row-list","remote":{"enabled":"unknown"}}]}\n' >"$WT_ROWS" ;;
       partial|empty|scalar)
         stub_windows "$w1" "$w2"
         if [[ "$failure" == partial ]]; then WT_RELAY_ENV=("CMUX_STUB_FAIL_LIST=$w2")
@@ -2486,11 +2495,14 @@ scenario_cmux() {
         else printf '42\n' >"$WT_ROWS_DIR/$w2.json"; fi ;;
     esac
     : >"$CMUX_LOG"
-    assert_wt_fails 1 "cannot list cmux rows" rm "list-$failure" -r "$r"
-    assert_dir "$failure row list kept the worktree" "$r/.worktrees/list-$failure"
-    assert_branch "$r" "wt/list-$failure" yes
-    assert_regular "$r" ".git/wt/list-$failure.json"
+    assert_wt_fails 1 "cannot list cmux rows" rm "row-list" -r "$r"
+    assert_dir "$failure row list kept the worktree" "$r/.worktrees/row-list"
+    assert_branch "$r" "wt/row-list" yes
+    assert_regular "$r" ".git/wt/row-list.json"
     assert_lacks "$failure row list sent no close" "$(cat "$CMUX_LOG")" "workspace close"
+    assert_eq "$failure row query preserves the original sidecar" "$query_metadata" "$(cat "$r/.git/wt/row-list.json")"
+    assert_registered "$r" row-list yes
+    assert_absent "$r" .git/wt/teardown/row-list.json
     WT_RELAY_ENV=()
   done
   stub_cmux alive
