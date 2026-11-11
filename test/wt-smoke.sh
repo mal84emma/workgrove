@@ -1744,7 +1744,8 @@ scenario_self_rm_vm() {
   local status_metadata
   # Unreadable status probes must preserve the same task and its metadata.
   assert_wt_ok 'create the tmux query refusal fixture' new status-error --no-workspace -r "$r"
-  status_metadata=$(cat "$r/.git/wt/status-error.json")
+  status_metadata="$TEST_ROOT/status-error.metadata"
+  cp "$r/.git/wt/status-error.json" "$status_metadata"
   for probe in missing no-server no-socket idle; do
     assert_wt_ok "$probe tmux status test worktree" new "status-$probe" --no-workspace -r "$r"
   done
@@ -1920,7 +1921,7 @@ STUB
         assert_branch "$r" "wt/status-error" yes
         assert_regular "$r" ".git/wt/status-error.json"
         assert_lacks "$probe tmux status did not stop the session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
-        assert_eq "$probe query preserves the original sidecar" "$status_metadata" "$(cat "$r/.git/wt/status-error.json")"
+        assert_same_bytes "$probe query preserves the original sidecar" "$status_metadata" "$r/.git/wt/status-error.json"
         assert_registered "$r" status-error yes
         assert_absent "$r" .git/wt/teardown/status-error.json ;;
     esac
@@ -2477,7 +2478,8 @@ scenario_cmux() {
   local failure query_metadata
   # Every query must refuse before changing this fixture.
   assert_wt_ok 'create the row query refusal fixture' new row-list --no-workspace -r "$r"
-  query_metadata=$(cat "$r/.git/wt/row-list.json")
+  query_metadata="$TEST_ROOT/row-list.metadata"
+  cp "$r/.git/wt/row-list.json" "$query_metadata"
   for failure in denied invalid missing null no-id remote partial empty scalar; do
     stub_cmux alive
     printf '{"workspaces":[]}\n' >"$WT_ROWS"
@@ -2500,7 +2502,7 @@ scenario_cmux() {
     assert_branch "$r" "wt/row-list" yes
     assert_regular "$r" ".git/wt/row-list.json"
     assert_lacks "$failure row list sent no close" "$(cat "$CMUX_LOG")" "workspace close"
-    assert_eq "$failure row query preserves the original sidecar" "$query_metadata" "$(cat "$r/.git/wt/row-list.json")"
+    assert_same_bytes "$failure row query preserves the original sidecar" "$query_metadata" "$r/.git/wt/row-list.json"
     assert_registered "$r" row-list yes
     assert_absent "$r" .git/wt/teardown/row-list.json
     WT_RELAY_ENV=()
