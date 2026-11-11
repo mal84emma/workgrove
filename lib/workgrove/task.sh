@@ -204,6 +204,8 @@ WT_META_FILTER='
   | if any(to_entries[]; .key == "" or (.key | index("\u0000") != null)
          or (.value | any(.. | strings; index("\u0000") != null)))
     then error("unsupported NUL or empty key") else . end
+  | if has("row_host") and (.row_host | type != "string" or (. != "" and (test("^[A-Za-z0-9][A-Za-z0-9._-]*$") | not)))
+    then error("invalid task row host") else . end
   | if has("metadata_version") and (.metadata_version | IN(1,2,3) | not)
     then error("unsupported metadata version") else . end
   | if .metadata_version == 3 or has("includes_status") then
@@ -364,7 +366,10 @@ open_worktree() { # open_worktree <name> <path> — VS Code here; from a VM ask 
 }
 
 request_row() { # request_row <name> — VM side: ask the Mac for a cmux row, and always print the recovery line
-  local h; h=$(wt_host)
+  local h
+  meta_require "$1"
+  h=${WT_META[row_host]:-}
+  valid_host "$h" || die 'task row host is unverified; kept the task without requesting a row'
   if hook_ok_repo; then notify_mac wt-attach host "$h" repo "$REPO" task "$1" || true; fi
   printf 'on the Mac: wt -H %s attach -r %s %s\n' "$h" "$(shell_join "$REPO")" "$1"
 }

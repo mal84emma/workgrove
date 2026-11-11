@@ -113,6 +113,8 @@ try:
             except ProcessLookupError:
                 pass
             forwarded.add(signum)
+        if pending_signals:
+            break
         ready, _, _ = select.select([parent], [], [], 0.05)
         if not ready:
             if worker_exited():

@@ -97,6 +97,7 @@ workgrove/
 ├── test/
 │   ├── run.sh                 the shared local and CI runner with bounded workers and timings
 │   ├── runner-smoke.sh        runner scheduling, filters, failure logs, and interruption cleanup
+│   ├── runner-jobs.py         bounded worker defaults from the visible CPU allocation
 │   ├── runner-git.sh          optional resolution of Apple's Git launcher for test workers
 │   ├── runner-git-smoke.sh    Git selection, fallback, and fixture precedence
 │   ├── wt-scenarios.sh        the wt scenario IDs and names shared by discovery and execution
@@ -133,6 +134,7 @@ workgrove/
 │   │       ├── notifications.json
 │   │       ├── rows.json
 │   │       ├── rows_by_window.json
+│   │       ├── surface-catalog.json  accepted VM title fields from a live capture
 │   │       ├── top.json
 │   │       ├── version.txt
 │   │       └── windows.json
@@ -256,12 +258,25 @@ ruff check --select F,E9 lib test
 GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash test/run.sh
 ```
 
-By default, the runner limits execution to four workers across suites and discovered tasks.
+By default, the runner selects one to eight workers across suites and discovered tasks.
+On macOS, it caps the physical core count at eight.
+On Linux, it caps the visible CPU allocation at eight, including affinity, CPU quotas, and CPU sets.
+An allocation below one CPU selects one worker.
+If Linux allocation detection fails, the runner caps process affinity at four workers.
+If neither allocation nor affinity is available, the runner selects one worker.
+Explicit `JOBS` values must be positive decimal integers without leading zeros.
+An empty `JOBS` value is invalid. An unset `JOBS` selects the default.
 It splits `wt-smoke.sh` and `remote-new-smoke.sh` into one task per scenario.
 It splits the portable, SSH registration, and capacity Python suites into groups of at most eight tests.
 Python discovery includes new tests without changes to the runner.
 The runner starts tasks with the largest estimated durations first.
-After measuring a new long task, add its duration to `queue_task` in `test/run.sh`.
+Re-measure estimates with `JOBS=4 KEEP=1 GIT_ALLOW_PROTOCOL=file bash test/run.sh`.
+On macOS, also set `INSTALL_BASH=/bin/bash`.
+Record the commit, hardware, worker count, competing workload, and each run's total time in the pull request conversation.
+Coordinate expensive runs with other active tasks before measuring.
+Use several complete runs on the same environment to compare worker settings.
+Use the reported `task time` values to update estimates in `queue_task` in `test/run.sh`.
+Round estimates up to whole seconds, and re-measure Python groups after discovery changes their membership.
 The short Python checks within `hosts-smoke.sh` and `docs-smoke.sh` stay with their shell scenarios.
 Set `JOBS=1` for a serial run or `JOBS=8` to allow more workers.
 To select suites, pass their paths: `bash test/run.sh test/wt-smoke.sh`.
@@ -290,6 +305,24 @@ Direct suite invocations remain serial.
 `--list-scenarios` lists exact task IDs and names for each split suite.
 Use `bash test/wt-smoke.sh --scenario scenario_shared_helpers` to run an exact scenario.
 Set `KEEP=1` to keep scratch files for inspection.
+
+Use `bash test/run.sh --fast` for a local fast check.
+The runner prints its coverage and included suites before execution.
+The fast tier includes these suites:
+
+- `bash5`, `python-runtime`, and `hook-wiring` check interpreter startup and hook configuration.
+- `branch-config`, `cmux-monitor`, `cmux-ownership`, and `commands` check isolated helpers and disposable process state.
+- `capacity`, `lib`, `metadata`, `named-outputs`, and `options` check allocation, shared functions, records, and command parsing.
+- `docs`, `runner`, and `runner-git` check documentation, scheduling, failure reporting, interruption cleanup, and Git selection.
+
+These names refer to `test/<name>-smoke.sh`.
+The fast tier excludes the end-to-end teardown, installation, portable recovery, and remote creation suites.
+It also excludes the doctor, GitHub guard, hosts, native relay, SSH registration, task, tmux target, and update suites.
+New suites join full discovery automatically. They join the fast tier only after an explicit allowlist change.
+The fast tier rejects suite arguments and `ONLY` to keep its reported coverage accurate.
+GitHub Actions rejects `--fast`.
+Run the complete suite before merging: `GIT_ALLOW_PROTOCOL=file bash test/run.sh --full`.
+The full suite remains the default and the required continuous integration (CI) check.
 
 `wt-smoke.sh` and `remote-new-smoke.sh` set `WG_POLL_INTERVAL=0` to shorten production poll waits.
 Other suites keep the default one-second interval for checks that need real waits.

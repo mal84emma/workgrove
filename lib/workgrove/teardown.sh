@@ -215,8 +215,17 @@ teardown_sidecars_check() { # Absence is valid only after durable sidecar-remova
   done
 }
 
+teardown_row_context() {
+  [[ $(jq -r .remote <<<"$WT_TEARDOWN_JSON") == 1 ]] || return 0
+  local expected
+  expected=$(jq -er '.host | strings | select(length > 0)' <<<"$WT_TEARDOWN_JSON") || return 1
+  valid_host "$expected" || return 1
+  [[ ${row_closed:-0} == 1 || -n ${row_host:-} ]] || return 0
+  [[ ${row_host:-} == "$expected" ]]
+}
+
 teardown_observe() { # Observe absence only; this function never closes a row or deletes Git work.
-  local name=$1 path=$2 branch=$3 keep=$4 row=$5 remote=$6 registrations current rc=0 rows
+  local name=$1 path=$2 branch=$3 keep=$4 row=$5 remote=$6 registrations current rc=0 rows error
   [[ ! -e $path && ! -L $path ]] || return 1
   [[ ! -e $REPO/.git/wt/teardown/$name.branch-locks && ! -L $REPO/.git/wt/teardown/$name.branch-locks ]] || return 1
   [[ $(teardown_sidecars_snapshot "$name") == '{"metadata":"absent","prompt":"absent","started":"absent"}' ]] || return 1
@@ -230,12 +239,27 @@ teardown_observe() { # Observe absence only; this function never closes a row or
     [[ $(teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/branch_config.py" snapshot "$REPO" "$branch") == '""' ]] || return 1
   fi
   if [[ $remote == 1 ]]; then
-    [[ ${row_closed:-0} == 1 || ( $(jq -r .workspace <<<"$WT_TEARDOWN_JSON") == 0 && $(jq -r .self <<<"$WT_TEARDOWN_JSON") == '' ) ]] || return 1
+    [[ ${row_closed:-0} == 1 ]] || return 1
     current=$(task_tmux_identity "$(jq -r .session <<<"$WT_TEARDOWN_JSON")") && rc=0 || rc=$?
     [[ $rc == 1 ]] || return 1
-  elif [[ -n $row ]]; then
-    rows=$(rows_json checked) || return 1
-    ! jq -e --arg row "$row" 'any(.workspaces[]; .id == $row)' <<<"$rows" >/dev/null || return 1
+  else
+    rows='{"workspaces":[]}'
+    if ! cmux_bin >/dev/null; then
+      [[ -z $row && -z ${CMUX_WORKSPACE_ID:-} ]] || return 1
+    elif error=$(cmux_call ping 2>&1); then
+      rows=$(rows_json checked) || return 1
+    else
+      [[ -z $row && -z ${CMUX_WORKSPACE_ID:-} && $error == 'Error: Socket not found at '* ]] || return 1
+    fi
+    rc=0
+    jq -e --arg row "$row" --arg name "$(row_title "$name")" --arg title "$(jq -r '.title // .name' <<<"$WT_TEARDOWN_JSON")" \
+      --arg repo "$(repo_id "$REPO")" --arg path "$path" --arg sep "$ROW_SEP" "$ROW_JQ"'
+      any(.workspaces[]; ($row != "" and .id == $row) or task_row($name; $repo; ""; $sep) or task_row($title; $repo; ""; $sep)
+        or unclaimed_row($name; ""; $sep) or unclaimed_row($title; ""; $sep)
+        or (on_host(""; $sep) and ((.current_directory // "") as $cwd
+          | ($cwd | type) == "string" and ($cwd == $path or ($cwd | startswith($path + "/"))))))' \
+      <<<"$rows" >/dev/null || rc=$?
+    [[ $rc == 1 ]] || return 1
   fi
   teardown_save complete
   if [[ $remote == 1 && ${row_closed:-0} == 1 && ${observe_only:-0} == 1 ]]; then
@@ -249,6 +273,7 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
   branch=$(jq -r .branch <<<"$WT_TEARDOWN_JSON"); head=$(jq -r .head <<<"$WT_TEARDOWN_JSON")
   keep=$(jq -r .keep <<<"$WT_TEARDOWN_JSON"); stage=$(jq -r .stage <<<"$WT_TEARDOWN_JSON")
   row=$(jq -r .row <<<"$WT_TEARDOWN_JSON"); remote=$(jq -r .remote <<<"$WT_TEARDOWN_JSON")
+  teardown_row_context || die 'Mac row host is unverified or changed; use the original SSH alias for confirmation'
   if [[ ${observe_only:-0} == 1 ]]; then
     teardown_observe "$name" "$path" "$branch" "$keep" "$row" "$remote" || die 'cleanup absence cannot be verified'
     return 0
@@ -360,8 +385,6 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
         identity_rc=0; identity=$(task_tmux_identity "$session") || identity_rc=$?
         [[ $identity_rc == 1 ]] || die 'tmux session absence is unverified'
       fi
-    elif [[ $identity_rc == 1 && $self == '' && $(jq -r .workspace <<<"$WT_TEARDOWN_JSON") == 0 ]]; then
-      :
     else
       if [[ -n ${TMUX:-} && ${TMUX_PANE:-} =~ ^%[0-9]+$ ]]; then
         caller_session=$(tmux display-message -p -t "$TMUX_PANE" '#S') || return 1
@@ -433,6 +456,6 @@ teardown_finish() { # Complete only recorded cleanup. Never remove a new task wi
   fi
   teardown_commands_stop all || die 'Git and row cleanup completed, but task command cleanup remains pending'
   teardown_commands_observe || die 'task runtime or command absence is unverified; cleanup remains pending'
-  teardown_save complete
+  teardown_observe "$name" "$path" "$branch" "$keep" "$row" "$remote" || die 'cleanup absence cannot be verified'
   printf 'teardown complete %s\n' "$name"
 }

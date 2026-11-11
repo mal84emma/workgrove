@@ -57,7 +57,7 @@ def handle(signum, frame):
     global received
     received = signum
 for signum in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
-    signal.signal(signum, handle)
+    signal.signal(signum, signal.SIG_IGN if (root / 'ignore-signals').exists() else handle)
 (root / 'ready').touch()
 while not received and not (root / 'release').exists():
     time.sleep(0.01)
@@ -131,6 +131,32 @@ raise SystemExit(128 + received if received else 0)
         finally:
             unrelated.terminate()
             unrelated.wait(timeout=5)
+
+    def cancel_ignoring_worker(self, signum):
+        unrelated = subprocess.Popen(['sleep', '60'], start_new_session=True)
+        try:
+            (self.root / 'ignore-signals').touch()
+            self.launch()
+            os.kill(self.coordinator.pid, signum)
+            status, _, _ = self.finish()
+            self.assertNotEqual(status, 0)
+            self.assertEqual(self.lock.read_text(), '')
+            self.assertIsNone(unrelated.poll())
+            listing = subprocess.check_output(
+                [self.environment['REAL_PS'], '-axo', 'pgid=,stat='], text=True)
+            self.assertFalse(any(int(line.split()[0]) == self.worker
+                                 and not line.split()[1].startswith('Z')
+                                 for line in listing.splitlines()))
+            (self.root / 'worker-pid').unlink()
+        finally:
+            unrelated.terminate()
+            unrelated.wait(timeout=5)
+
+    def test_ignored_hangup_still_cancels_the_owned_group(self):
+        self.cancel_ignoring_worker(signal.SIGHUP)
+
+    def test_ignored_termination_still_cancels_the_owned_group(self):
+        self.cancel_ignoring_worker(signal.SIGTERM)
 
     def test_uncertain_samples_keep_the_owner_record_and_fail(self):
         for fault in ('always', 'error', 'empty', 'malformed'):
