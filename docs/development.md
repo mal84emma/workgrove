@@ -304,10 +304,14 @@ A filter that matches no scenario or Python test exits nonzero.
 Direct suite invocations remain serial.
 `--list-scenarios` lists exact task IDs and names for each split suite.
 Use `bash test/wt-smoke.sh --scenario scenario_shared_helpers` to run an exact scenario.
+
 The cmux checks run as four independent tasks for row identity, ownership, failed queries, and VM refusal.
 Each worker owns its scratch repositories, Git configuration, fake responses, command queues, and process state.
 Their names retain the original scenario name as a prefix, so existing `ONLY` filters select all four tasks.
-The exact ID `scenario_cmux` still runs all four groups serially.
+The squash checks keep their ten-task aggregate prune together and separate older Git and unreachable base fixtures.
+VM self-removal separates native closure and recovery from session status probes.
+The exact IDs `scenario_cmux`, `scenario_squash_merge`, and `scenario_self_rm_vm` still run their complete groups serially.
+
 Set `KEEP=1` to keep scratch files for inspection.
 
 Use `bash test/run.sh --fast` for a local fast check.

@@ -11,14 +11,22 @@ wt_scenarios() {
   "$@" scenario_show_limits "4b. wt show keeps every section for long task reports"
   "$@" scenario_include_and_setup "5. .wt-include copies ignored files; .wt-setup runs in the new worktree"
   "$@" scenario_rm_refusals "6. wt rm refuses to destroy work, and --force is the one way past it"
-  "$@" scenario_squash_merge "6b. wt rm after a squash merge: work that landed is not a reason, work that did not still is"
+  if [[ ${LIB_SCENARIO_ID:-} == scenario_squash_merge ]]; then
+    "$@" scenario_squash_merge "6b. wt rm after a squash merge: work that landed is not a reason, work that did not still is"
+  else
+    wt_squash_scenarios "$@"
+  fi
   "$@" scenario_stacked_squash_base "6c. a deleted stacked base resolves landed work without changing child metadata"
   "$@" scenario_teardown_evidence_limits "6d. teardown rejects stale remote evidence and failed comparisons"
   "$@" scenario_teardown_destinations "6e. teardown validates local, renamed, and ambiguous landing destinations"
   "$@" scenario_teardown_review_git "6f. review regressions preserve work under aliases, remote ambiguity, and enumeration errors"
   "$@" scenario_rm_fetch_notice "6g. removal reports one fetch notice while refreshing deletion evidence"
   "$@" scenario_prune_agrees "7. wt prune --dry-run keeps exactly what wt rm refuses"
-  "$@" scenario_self_rm_vm "7b. a VM task can remove itself after changing to its main checkout"
+  if [[ ${LIB_SCENARIO_ID:-} == scenario_self_rm_vm ]]; then
+    "$@" scenario_self_rm_vm "7b. a VM task can remove itself after changing to its main checkout"
+  else
+    wt_self_rm_scenarios "$@"
+  fi
   if [[ ${LIB_SCENARIO_ID:-} == scenario_cmux ]]; then
     "$@" scenario_cmux "8. a cmux that is not running, and one that is"
   else
@@ -66,3 +74,20 @@ wt_cmux_scenarios() {
 
 wt_run_scenario() { "$1" "$2"; }
 scenario_cmux() { wt_cmux_scenarios wt_run_scenario; }
+
+wt_squash_scenarios() {
+  local name="6b. wt rm after a squash merge: work that landed is not a reason, work that did not still is"
+  "$@" scenario_squash_prune "$name: aggregate prune"
+  "$@" scenario_squash_old_git "$name: older Git"
+  "$@" scenario_squash_offline "$name: unreachable base"
+}
+
+scenario_squash_merge() { wt_squash_scenarios wt_run_scenario; }
+
+wt_self_rm_scenarios() {
+  local name="7b. a VM task can remove itself after changing to its main checkout"
+  "$@" scenario_self_rm_native "$name: native closure and recovery"
+  "$@" scenario_self_rm_probes "$name: session status"
+}
+
+scenario_self_rm_vm() { wt_self_rm_scenarios wt_run_scenario; }
