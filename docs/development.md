@@ -305,6 +305,7 @@ The native-hook status matrix calls the parser directly without installing a por
 Doctor integration checks still verify status changes, selected agent roots, and the inventory deadline.
 Every corrupt metadata input still blocks forced removal.
 One corrupt input also checks ordinary removal, human output, and JSON output through their command entry points.
+
 Completed and pending receipt scenarios retain every row variant through real removal commands.
 Each lifecycle checks observe-only removal and name reuse once, alongside its variant-specific removal checks.
 
