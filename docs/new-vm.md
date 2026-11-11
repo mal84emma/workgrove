@@ -154,9 +154,9 @@ This is the only Remote-SSH connection that the setup asks you to make. VS Code 
 port automatically, so `codex login` opens the Mac browser and completes on its own. Over plain ssh, `codex login` needs `ssh -L 1455:localhost:1455 <vm>` kept open in another Mac terminal, and
 some accounts refuse `codex login --device-auth`.
 
-> **Warning:** Do not run `cmux hooks codex install` on a VM. It is a Mac-only step. The VM keeps only the
-> portable hooks, which relay over the cmux socket. The handlers that cmux generates contain Mac-local paths and a
-> state protocol that cannot travel.
+> **Warning:** Do not run `cmux hooks codex install` on a VM. It is a Mac-only step.
+> On the VM, cmux-tui installs the agent lifecycle hooks.
+> The handlers that cmux generates contain Mac-local paths and a state protocol that cannot travel.
 
 ```bash
 # 3. agents and logins (interactive, in a VS Code terminal on the machine)

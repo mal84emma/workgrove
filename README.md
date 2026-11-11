@@ -887,7 +887,7 @@ All hotkeys use ⌃⌥⌘. The action type sets how a change to a hotkey takes e
 ### Notifications
 
 This subsection tells how cmux, the agent hooks, and the Mac hook show each agent's status in its row.
-It also tells when a desktop banner appears instead, and what else the Mac hook handles.
+It also describes the requests that the Mac hook handles.
 
 **On the Mac:**
 
