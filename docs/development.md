@@ -305,9 +305,9 @@ ruff check --select F,E9 lib test
 GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash test/run.sh
 ```
 
-By default, the runner selects one to eight workers across suites and discovered tasks.
-On macOS, it caps the physical core count at eight.
-On Linux, it caps the visible CPU allocation at eight, including affinity, CPU quotas, and CPU sets.
+By default, the runner selects one to four workers across suites and discovered tasks.
+On macOS, it caps the physical core count at four.
+On Linux, it caps the visible CPU allocation at four, including affinity, CPU quotas, and CPU sets.
 An allocation below one CPU selects one worker.
 If Linux allocation detection fails, the runner caps process affinity at four workers.
 If neither allocation nor affinity is available, the runner selects one worker.
