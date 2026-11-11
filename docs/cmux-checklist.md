@@ -29,11 +29,14 @@ The VM checks require a reachable VM and a task with a running agent.
    Choose an unused disposable row name, such as `step5-shell`.
    On the Mac, run `cmux ssh <vm> --name step5-shell --json --id-format uuids`.
    Record `.workspace_id` from the creation response as `<shell-row-uuid>`.
-   Before the request, record the `cmux-check` row UUID from `cmux workspace list --json` on the Mac.
-   Record the row count in each window that contains test rows.
+   On the Mac, run `cmux --json list-windows`.
+   Use each window's `.id` with `cmux workspace list --json --window <window-uuid>`.
+   Record the `cmux-check` row UUID and its window UUID.
+   Record each window's `.workspace_count`.
    In the new shell row, run `wt attach cmux-check -r <repo>`.
-   Confirm that cmux selects the recorded UUID and creates no additional row.
-   Check the row count again in each test window.
+   On the Mac, run `cmux --json list-windows` again.
+   For the recorded task window, confirm that `.selected_workspace_id` matches the recorded task UUID.
+   Confirm that the window UUIDs and every `.workspace_count` remain unchanged.
    On the Mac, run `cmux workspace close <shell-row-uuid>`.
    Confirm that only that disposable shell row closes.
 6. Send the agent a brief that requires a tool call.

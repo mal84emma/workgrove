@@ -96,6 +96,7 @@ Before notification, `wt` queries `cmux-tui --socket <socket> --json client list
 The [0.65.2 CLI](https://github.com/manaflow-ai/cmux/blob/v0.65.2/cmux-tui/crates/cmux-tui/src/cli/command.rs) uses the resource API for this command.
 Its [client snapshots](https://github.com/manaflow-ai/cmux/blob/v0.65.2/cmux-tui/crates/cmux-tui-core/src/server.rs) expose `client_kind` and `attached_terminal_ids`.
 The [Mac mirror handshake](https://github.com/manaflow-ai/cmux/blob/v0.65.2/Sources/Cloud/CloudTuiManualMirrorHandshake.swift) registers the kind `native-mirror`.
+Client kind is client-supplied metadata.
 `wt` requires that kind with the caller's terminal in `attached_terminal_ids`.
 Environment variables, a socket, and a registered terminal cannot establish that a Mac client mirrors the terminal.
 
