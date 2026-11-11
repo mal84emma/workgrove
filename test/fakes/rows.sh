@@ -105,7 +105,8 @@ fake_row() {
   jq -c --arg ref "$ref" --arg id "$1" --arg title "$2" --arg description "$3" \
     --arg host "${4:-}" --arg state "${5:-connected}" --arg backend "${6:-cmux-tui}" \
     --argjson slot "${7:-null}" '
-    [.workspaces[] | select(.remote.enabled == ($host != ""))][0]
+    [.workspaces[] | select(.remote.enabled == ($host != ""))]
+    | if length == 0 then error("capture has no requested local/remote row template") else .[0] end
     | .id=$id | .ref=$ref | .title=$title | .description=$description
     | .current_directory="" | .has_custom_title=true
     | .remote.enabled=($host != "") | .remote.destination=(if $host == "" then null else $host end)
@@ -140,7 +141,9 @@ fake_ssh_response() {
 fake_windows() {
   jq -cn --slurpfile template "$FAKE_CMUX_FIXTURES/windows.json" \
     --argjson ids "$(printf '%s\n' "$@" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
-    '$ids | to_entries | map(. as $entry | $template[0][0] | .id=$entry.value | .index=$entry.key
+    '$ids | to_entries | map(. as $entry
+      | if ($template[0] | length) == 0 then error("capture has no window template") else $template[0][0] end
+      | .id=$entry.value | .index=$entry.key
       | .key=($entry.key == 0) | .workspace_count=0 | .selected_workspace_id=null)'
 }
 
@@ -165,7 +168,9 @@ fake_queue() {
 
 fake_top() {
   jq -c --arg caller "$1" --arg owner "${CMUX_STUB_OWNER_ROW:-$1}" --argjson pid "$$" --argjson count "$2" '
-    .caller.workspace_id=$caller
+    if (.coding_agents | length) == 0 then error("capture has no coding agent template") else . end
+    | .caller.workspace_id=$caller
+    | del(.caller.workspace_ref, .caller.window_ref)
     | .coding_agents=[.coding_agents[0] | .resources.process_count=$count | .resources.pids=(if $count > 0 then [$pid] else [] end)]
     | .windows=[{workspaces:[{id:$owner,resources:{pids:[$pid],process_count:1}}]}]' "$FAKE_CMUX_FIXTURES/top.json"
 }
