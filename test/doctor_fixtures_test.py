@@ -55,7 +55,7 @@ class FixtureTests(unittest.TestCase):
                 'enabled', 'destination', 'state', 'terminal_transport',
                 'active_terminal_sessions')
         ] + [
-            ('rows', 'workspaces', remote_index, 'remote', key) for key in ('backend', 'remote_workspace_id')
+            ('rows', 'workspaces', remote_index, 'remote', key) for key in ('backend', 'remote_workspace_id', 'machine')
         ] + [
             ('windows', 0, key) for key in fixtures.WINDOW
         ] + [
@@ -142,9 +142,10 @@ class FixtureTests(unittest.TestCase):
 
     def test_unrelated_rows_and_windows_are_not_retained(self):
         changed = copy.deepcopy(self.bundle)
-        window = changed['windows'][0]
-        document = changed['rows_by_window'][window['id']]
         top_window = changed['top']['windows'][0]
+        window = next(w for w in changed['windows']
+                      if changed['rows_by_window'][w['id']].get('window_ref') == top_window.get('ref'))
+        document = changed['rows_by_window'][window['id']]
         for number in range(100, 120):
             current = copy.deepcopy(changed['rows']['workspaces'][0])
             current.update(id=f'00000000-0000-4000-8000-{number:012d}', ref=f'workspace:{number}')

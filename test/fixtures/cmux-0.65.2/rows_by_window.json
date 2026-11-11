@@ -1,41 +1,9 @@
 {
-  "00000000-0000-4000-8000-000000000006": {
+  "00000000-0000-4000-8000-000000000008": {
     "workspaces": [
       {
-        "id": "00000000-0000-4000-8000-000000000005",
-        "ref": "workspace:1",
-        "title": "<title>",
-        "description": "@<test-vm> · <repo>",
-        "current_directory": "<path>",
-        "has_custom_title": true,
-        "remote": {
-          "enabled": false,
-          "destination": null,
-          "state": "disconnected",
-          "persistent_daemon_slot": null,
-          "terminal_transport": null,
-          "active_terminal_sessions": 0
-        }
-      },
-      {
-        "id": "00000000-0000-4000-8000-000000000001",
-        "ref": "workspace:4",
-        "title": "<title>",
-        "description": "@<test-vm> · <repo>",
-        "current_directory": "<path>",
-        "has_custom_title": true,
-        "remote": {
-          "enabled": false,
-          "destination": null,
-          "state": "disconnected",
-          "persistent_daemon_slot": null,
-          "terminal_transport": null,
-          "active_terminal_sessions": 0
-        }
-      },
-      {
-        "id": "00000000-0000-4000-8000-000000000003",
-        "ref": "workspace:3",
+        "id": "00000000-0000-4000-8000-000000000006",
+        "ref": "workspace:2",
         "title": "<title>",
         "description": "@<test-vm> · <repo>",
         "current_directory": "<path>",
@@ -51,7 +19,44 @@
       },
       {
         "id": "00000000-0000-4000-8000-000000000004",
-        "ref": "workspace:2",
+        "ref": "workspace:3",
+        "title": "<title>",
+        "description": "@<test-vm> · <repo>",
+        "current_directory": "<path>",
+        "has_custom_title": true,
+        "remote": {
+          "enabled": false,
+          "destination": null,
+          "state": "disconnected",
+          "persistent_daemon_slot": null,
+          "terminal_transport": null,
+          "active_terminal_sessions": 0
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000005",
+        "ref": "workspace:4",
+        "title": "<title>",
+        "description": "@<test-vm> · <repo>",
+        "current_directory": "<path>",
+        "has_custom_title": true,
+        "remote": {
+          "enabled": false,
+          "destination": null,
+          "state": "disconnected",
+          "persistent_daemon_slot": null,
+          "terminal_transport": null,
+          "active_terminal_sessions": 0
+        }
+      }
+    ],
+    "window_ref": "window:2"
+  },
+  "00000000-0000-4000-8000-000000000010": {
+    "workspaces": [
+      {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "ref": "workspace:5",
         "title": "<title>",
         "description": "@<test-vm> · <repo>",
         "current_directory": "<path>",
@@ -63,7 +68,40 @@
           "backend": "cmux-tui",
           "terminal_transport": "<redacted>",
           "remote_workspace_id": "<redacted>",
-          "active_terminal_sessions": 1
+          "active_terminal_sessions": 1,
+          "machine": "<redacted>"
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000007",
+        "ref": "workspace:6",
+        "title": "<title>",
+        "description": "@<test-vm> · <repo>",
+        "current_directory": "<path>",
+        "has_custom_title": true,
+        "remote": {
+          "enabled": false,
+          "destination": null,
+          "state": "disconnected",
+          "persistent_daemon_slot": null,
+          "terminal_transport": null,
+          "active_terminal_sessions": 0
+        }
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000009",
+        "ref": "workspace:1",
+        "title": "<title>",
+        "description": "@<test-vm> · <repo>",
+        "current_directory": "<path>",
+        "has_custom_title": true,
+        "remote": {
+          "enabled": false,
+          "destination": null,
+          "state": "disconnected",
+          "persistent_daemon_slot": null,
+          "terminal_transport": null,
+          "active_terminal_sessions": 0
         }
       }
     ],

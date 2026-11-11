@@ -9,7 +9,7 @@ def public_keys: [
   "rate_limit","interval_seconds","maximum","methods","access_mode","redacted_fields",
   "body_length","title_length","subtitle_length","delivery","replaced_notification_ids",
   "ref","window_ref","workspace_ref","has_custom_title","terminal_transport","selected_workspace_id","workspace_count",
-  "pids","missing_pids","remote_workspace_id","active_terminal_sessions"
+  "pids","missing_pids","remote_workspace_id","active_terminal_sessions","machine"
 ];
 def public_value($key; $value):
   {backend:["cmux-tui"], state:["connected","disconnected","suspended","connecting","reconnecting"],

@@ -1,16 +1,18 @@
 {
   "caller": {
-    "workspace_id": "00000000-0000-4000-8000-000000000003",
-    "workspace_ref": "workspace:3",
-    "window_ref": "window:1"
+    "workspace_id": "00000000-0000-4000-8000-000000000005",
+    "workspace_ref": "workspace:4",
+    "window_ref": "window:2"
   },
   "coding_agents": [
     {
       "resources": {
-        "process_count": 2,
+        "process_count": 4,
         "pids": [
-          7,
-          21
+          8,
+          11,
+          14,
+          26
         ],
         "missing_pids": []
       }
@@ -21,10 +23,34 @@
       "ref": "window:1",
       "workspaces": [
         {
-          "id": "00000000-0000-4000-8000-000000000005",
+          "id": "00000000-0000-4000-8000-000000000001",
+          "ref": "workspace:5",
+          "resources": {
+            "process_count": 0,
+            "pids": [],
+            "missing_pids": []
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000007",
+          "ref": "workspace:6",
+          "resources": {
+            "process_count": 5,
+            "pids": [
+              10,
+              12,
+              13,
+              14,
+              27
+            ],
+            "missing_pids": []
+          }
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000009",
           "ref": "workspace:1",
           "resources": {
-            "process_count": 22,
+            "process_count": 18,
             "pids": [
               2,
               3,
@@ -32,70 +58,19 @@
               5,
               6,
               7,
-              8,
               9,
-              10,
-              11,
-              12,
-              13,
-              14,
               15,
               16,
               17,
               18,
               19,
               20,
+              21,
               22,
               23,
-              42
-            ],
-            "missing_pids": []
-          }
-        },
-        {
-          "id": "00000000-0000-4000-8000-000000000001",
-          "ref": "workspace:4",
-          "resources": {
-            "process_count": 9,
-            "pids": [
-              32,
-              33,
-              34,
-              35,
-              36,
-              37,
-              38,
-              39,
-              41
-            ],
-            "missing_pids": []
-          }
-        },
-        {
-          "id": "00000000-0000-4000-8000-000000000003",
-          "ref": "workspace:3",
-          "resources": {
-            "process_count": 9,
-            "pids": [
               24,
-              25,
-              26,
-              27,
-              28,
-              29,
-              30,
-              31,
-              40
+              25
             ],
-            "missing_pids": []
-          }
-        },
-        {
-          "id": "00000000-0000-4000-8000-000000000004",
-          "ref": "workspace:2",
-          "resources": {
-            "process_count": 0,
-            "pids": [],
             "missing_pids": []
           }
         }

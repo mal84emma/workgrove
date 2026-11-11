@@ -215,7 +215,7 @@ These fields form the recorded contract inventory:
 | Object | Retained fields and types | Consumers |
 |---|---|---|
 | Row | UUID `id`; workspace `ref`; string `title` and `current_directory`; nullable string `description`; boolean `has_custom_title`; object `remote` | Adapter lookup, title repair, hook, removal, and `fake_row` |
-| Row remote data | Boolean `enabled`; nullable string `destination` and `terminal_transport`; optional nullable string `remote_workspace_id`; integer `active_terminal_sessions`; string `state`; optional nullable string `backend`; optional nullable integer `persistent_daemon_slot` | Remote adapter, title repair, hook, and `fake_row`; enabled rows require string destination and backend; connected remote rows require `remote_workspace_id` |
+| Row remote data | Boolean `enabled`; nullable string `destination` and `terminal_transport`; optional nullable string `remote_workspace_id` and `machine`; integer `active_terminal_sessions`; string `state`; optional nullable string `backend`; optional nullable integer `persistent_daemon_slot` | Remote adapter, title repair, hook, and `fake_row`; enabled rows require string destination and backend; connected remote rows require `remote_workspace_id` and `machine` |
 | Window | UUID `id`; integer `index` and `workspace_count`; boolean `key`; nullable UUID `selected_workspace_id` | Window enumeration and fake window state |
 | Scoped row response | Array `workspaces`; optional window `window_ref`; UUID map key | Adapter enumeration and fake replay |
 | Top caller | Nullable UUID `workspace_id`; optional nullable workspace `workspace_ref` and window `window_ref` | Doctor and `fake_top`; caller hints do not prove ownership |
@@ -225,6 +225,7 @@ These fields form the recorded contract inventory:
 | Event | String `name` equal to `notification.created`; UUID `workspace_id`; object `payload` with UUID `notification_id` | Recorder and Mac hook |
 | Capabilities | String array `methods`, with each required method retained | Doctor; see `METHODS` in `doctor_fixtures.py` |
 | Automation | Complete rule, including unknown structure with private text replaced | Doctor compares `home/.cmuxterm/automations.json` |
+| Separate surface catalog capture | Array `cloud_states`; string `machine`, `freshness`, and `sync_mode`; object `cursor` with string `generation` and numeric-string `revision`; array `workspaces` with string `id` and `name` | Title repair and `fake_surface_catalog`; the helper explicitly binds machine and row identities from each synthetic scenario |
 
 The top capture uses `top --json`, which does not request native process trees.
 It drops panes, surfaces, process trees, tags, memory statistics, and commands.
@@ -232,6 +233,9 @@ Ownership and teardown tests construct these additional inputs explicitly.
 They cover process ancestry, missing samples, terminal attribution, monitor tags, and relay failure paths.
 Those synthetic cases do not certify a recorded native process-tree contract.
 Keep the separate 0.65.1 SSH creation capture until a verified creation capture replaces it.
+The existing `surface-catalog.json` is a separate live title-publication capture; the doctor recorder does not replace it.
+The relay client-list cases are synthetic resource API examples, separate from the Mac recording contract.
+They retain nullable string `client_kind` and string array `attached_terminal_ids`, with positive, malformed, absent, deadline, and race cases.
 When a consumer changes, update this inventory, the projection, and mutation coverage together.
 
 `fake_row <id> <title> <description> [host state backend slot ref]` builds a row with a stable, unique workspace ref.

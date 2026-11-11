@@ -382,7 +382,7 @@ scenario_committed_fixtures() {
   local supported dir version file search_status
   supported=$(sed -n 's/^WG_CMUX_SUPPORTED=//p' "$REPO/lib/workgrove/cmux.sh")
   assert_eq 'the fake serves the verified release' "$REPO/test/fixtures/cmux-$supported" "$FAKE_CMUX_FIXTURES"
-  for file in rows windows top notifications automation capabilities event rows_by_window; do
+  for file in rows windows top notifications automation capabilities event rows_by_window surface-catalog; do
     assert_regular "$FAKE_CMUX_FIXTURES" "$file.json"
   done
   assert_regular "$(dirname "$FAKE_CMUX_SSH_FIXTURE")" ssh.json

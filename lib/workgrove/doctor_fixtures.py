@@ -11,7 +11,7 @@ METHODS = (
 )
 ROW = ('id', 'ref', 'title', 'description', 'current_directory', 'has_custom_title', 'remote')
 REMOTE = ('enabled', 'destination', 'state', 'backend', 'persistent_daemon_slot', 'terminal_transport',
-          'remote_workspace_id', 'active_terminal_sessions')
+          'remote_workspace_id', 'active_terminal_sessions', 'machine')
 WINDOW = ('id', 'index', 'key', 'selected_workspace_id', 'workspace_count')
 RESOURCES = ('process_count', 'pids', 'missing_pids')
 
@@ -76,7 +76,7 @@ def row(value):
     require(type(value['has_custom_title']) is bool)
     remote = object_(value['remote'])
     require(type(remote['enabled']) is bool)
-    for field in ('destination', 'backend', 'terminal_transport', 'remote_workspace_id'):
+    for field in ('destination', 'backend', 'terminal_transport', 'remote_workspace_id', 'machine'):
         if field in remote:
             require(remote[field] is None or type(remote[field]) is str)
     string(remote['state'])
@@ -86,7 +86,7 @@ def row(value):
         string(remote['destination'])
         string(remote['backend'])
         if remote['state'] == 'connected':
-            require('remote_workspace_id' in remote)
+            require('remote_workspace_id' in remote and 'machine' in remote)
     if 'persistent_daemon_slot' in remote and remote['persistent_daemon_slot'] is not None:
         integer(remote['persistent_daemon_slot'])
     result = keep(value, ROW)
