@@ -1,36 +1,7 @@
 {
-  "boot_id": "00000000-0000-4000-8000-000000000009",
-  "<field-1>": "<redacted>",
-  "id": "<redacted>",
   "name": "notification.created",
-  "occurred_at": "<redacted>",
-  "pane_id": null,
+  "workspace_id": "00000000-0000-4000-8000-000000000009",
   "payload": {
-    "body": null,
-    "body_length": 200,
-    "created_at": "<redacted>",
-    "delivery": "store",
-    "is_read": false,
-    "notification_id": "00000000-0000-4000-8000-000000000002",
-    "redacted_fields": [
-      "title",
-      "subtitle",
-      "body"
-    ],
-    "replaced_notification_ids": [],
-    "subtitle": null,
-    "subtitle_length": 18,
-    "surface_id": "00000000-0000-4000-8000-000000000003",
-    "title": null,
-    "title_length": 11,
-    "workspace_id": "00000000-0000-4000-8000-000000000007"
-  },
-  "protocol": "<redacted>",
-  "seq": 606973,
-  "source": "<redacted>",
-  "surface_id": "00000000-0000-4000-8000-000000000003",
-  "type": "event",
-  "version": 1,
-  "window_id": null,
-  "workspace_id": "00000000-0000-4000-8000-000000000007"
+    "notification_id": "00000000-0000-4000-8000-000000000002"
+  }
 }

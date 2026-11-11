@@ -33,6 +33,7 @@ workgrove/
 │       ├── install-files.sh   installer file replacement and JSON merge helpers
 │       ├── agent-config-policy.json shared agent settings edits for both installers
 │       ├── doctor.sh          Mac and VM contract checks and fixture recording
+│       ├── doctor_fixtures.py validates complete captures and selects contract examples
 │       ├── doctor-sanitize.jq redacts recorded cmux responses
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
@@ -115,6 +116,7 @@ workgrove/
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── bash5-smoke.sh         all bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
 │   ├── doctor-smoke.sh        cmux contracts, VM hooks, and redacted fixture recording
+│   ├── doctor_fixtures_test.py projection, mutation, selection, and identity checks
 │   ├── fakes/
 │   │   ├── cmux              the shared cmux and cmux-tui fake
 │   │   ├── pgrep             supplies the fake VM's pane process status
@@ -192,6 +194,51 @@ The fake reads the responses recorded from the release that `WG_CMUX_SUPPORTED` 
 It also checks that each fixture folder has `REDACTED.txt`, names its version, and contains no personal paths.
 `wt doctor --record test/fixtures` captures these responses and removes private values.
 Sanitization keeps workspace and window refs consistent while replacing their original numbers.
+It also replaces process identifiers consistently within the capture.
+
+The recorder validates every captured object before it selects examples.
+Missing required fields, changed field names, invalid types, and missing required methods fail recording.
+Unknown fields disappear, including their nested contents.
+The complete automation remains because doctor compares its full structure.
+Unknown automation keys receive placeholders so differences remain observable without disclosing private text.
+
+The recorder selects the first local row, first remote row, and first coding agent when those samples exist.
+It prefers the retained event's notification, or selects the first notification when that record is absent.
+Caller, event, notification, and selected-window references retain additional observed rows when available.
+The recorder retains the windows that contain those rows, or the first window when no row matches.
+Window counts describe retained members; selected row identities keep their observed values.
+Stale event and notification identities remain distinct; the recorder does not invent a matching record.
+An observed notification ID cannot name different rows in its records or retained event.
+The recorder rejects conflicting bindings before selection.
+Empty arrays remain empty, and missing local, remote, or agent examples cause explicit fake-template errors when requested.
+
+These fields form the recorded contract inventory:
+
+| Object | Retained fields and types | Consumers |
+|---|---|---|
+| Row | UUID `id`; workspace `ref`; string `title` and `current_directory`; nullable string `description`; boolean `has_custom_title`; object `remote` | Adapter lookup, title repair, hook, removal, and `fake_row` |
+| Row remote data | Boolean `enabled`; nullable string `destination` and `terminal_transport`; optional nullable string `remote_workspace_id` and `machine`; integer `active_terminal_sessions`; string `state`; optional nullable string `backend`; optional nullable integer `persistent_daemon_slot` | Remote adapter, title repair, hook, and `fake_row`; enabled rows require string destination and backend; connected remote rows require `remote_workspace_id` and `machine` |
+| Window | UUID `id`; integer `index` and `workspace_count`; boolean `key`; nullable UUID `selected_workspace_id` | Window enumeration and fake window state |
+| Scoped row response | Array `workspaces`; optional window `window_ref`; UUID map key | Adapter enumeration and fake replay |
+| Top caller | Nullable UUID `workspace_id`; optional nullable workspace `workspace_ref` and window `window_ref` | Doctor and `fake_top`; caller hints do not prove ownership |
+| Top agent | Object `resources` with integer `process_count`, integer array `pids`, and optional integer array `missing_pids` | Doctor, ownership checks, and `fake_top` |
+| Top window and row | Window `ref` when present; row UUID `id`, workspace `ref` when present, and `resources` | Row ownership and fake replay; resource fields match the agent resource contract |
+| Notification | UUID `id` and `workspace_id`; string `title` and `body` | Doctor, Mac hook, and notification fake |
+| Event | String `name` equal to `notification.created`; UUID `workspace_id`; object `payload` with UUID `notification_id` | Recorder and Mac hook |
+| Capabilities | String array `methods`, with each required method retained | Doctor; see `METHODS` in `doctor_fixtures.py` |
+| Automation | Complete rule, including unknown structure with private text replaced | Doctor compares `home/.cmuxterm/automations.json` |
+| Separate surface catalog capture | Array `cloud_states`; string `machine`, `freshness`, and `sync_mode`; object `cursor` with string `generation` and numeric-string `revision`; array `workspaces` with string `id` and `name` | Title repair and `fake_surface_catalog`; the helper explicitly binds machine and row identities from each synthetic scenario |
+
+The top capture uses `top --json`, which does not request native process trees.
+It drops panes, surfaces, process trees, tags, memory statistics, and commands.
+Ownership and teardown tests construct these additional inputs explicitly.
+They cover process ancestry, missing samples, terminal attribution, monitor tags, and relay failure paths.
+Those synthetic cases do not certify a recorded native process-tree contract.
+Keep the separate 0.65.1 SSH creation capture until a verified creation capture replaces it.
+The existing `surface-catalog.json` is a separate live title-publication capture; the doctor recorder does not replace it.
+The relay client-list cases are synthetic resource API examples, separate from the Mac recording contract.
+They retain nullable string `client_kind` and string array `attached_terminal_ids`, with positive, malformed, absent, deadline, and race cases.
+When a consumer changes, update this inventory, the projection, and mutation coverage together.
 
 `fake_row <id> <title> <description> [host state backend slot ref]` builds a row with a stable, unique workspace ref.
 The optional eighth argument supplies an explicit unused `workspace:N` ref.
