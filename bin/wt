@@ -319,7 +319,9 @@ cmd_new() {
     "$name" "$p" "$b" "$base" "$REPO" "$(wt_session "$name" "$REPO")"
   wt_result new created "$name" "$REPO" "$(wt_session "$name" "$REPO")"
   [[ $workspace -eq 1 ]] || return 0
-  if is_remote; then request_row "$name"; else cmux_require open_workspace "$name"; fi   # a VM never starts an agent
+  if is_remote; then
+    request_row "$name" || { warn 'the task was created; resolve the reported error and use attach to request its row'; return 1; }
+  else cmux_require open_workspace "$name"; fi   # a VM never starts an agent
   return 0
 }
 

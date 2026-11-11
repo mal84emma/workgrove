@@ -633,23 +633,60 @@ from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifyin
   printf '%s' "$WS_JSON" \
     | jq -e --arg w "$1" --arg h "$2" 'any((.workspaces? // .)[]; .id == $w and .remote.enabled and (.remote.destination // "") == $h)' >/dev/null 2>&1; }
 
+cmux_tui_call() {
+  local limit=$(( $(date +%s) + 5 ))
+  if [[ -n ${DEADLINE:-} ]] && ((DEADLINE < limit)); then limit=$DEADLINE; fi
+  local DEADLINE=$limit
+  cmux_capped "$@" </dev/null 2>/dev/null
+}
+
 cmux_notify() {
-  local title=$1 body=$2 c request_id
+  local title=$1 body=$2 c request_id clients rc=0
   local relay_tui_socket relay_tui_terminal relay_ident=()
-  relay_env relay_ident relay_tui_socket relay_tui_terminal || { cmux_error "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
-  if [[ $relay_tui_socket == /* && $relay_tui_terminal =~ ^term_[a-f0-9]{32}$ ]]; then
-    c=$(command -v cmux-tui || true)
-    [[ -x $c ]] || { cmux_error "cmux-tui CLI not found here; run the line below on the Mac"; return 1; }
-    # cmux suppresses identical terminal/title/body content for five seconds, regardless of notification ID.
-    request_id=$(LC_ALL=C od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
-    [[ $request_id =~ ^[a-f0-9]{32}$ ]] || { cmux_error "cannot create a native request ID; run the line below on the Mac"; return 1; }
-    body=$(printf '%s' "$body" | jq -c --arg id "$request_id" '. + {request_id:$id}') \
-      || { cmux_error "cannot encode a native request; run the line below on the Mac"; return 1; }
-    # Native terminal IDs differ from the Mac's workspace UUIDs. Do not pass --workspace.
-    env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" notify --surface "$relay_tui_terminal" --title "$title" --body "$body" >/dev/null 2>&1 \
-      || { cmux_error "cmux-tui notify failed; run the line below on the Mac"; return 1; }
-    return 0
+  CMUX_ERROR=''
+  if ! relay_env relay_ident relay_tui_socket relay_tui_terminal; then
+    if [[ -n $relay_tui_socket || -n $relay_tui_terminal ]]; then
+      cmux_error 'malformed cmux relay socket or terminal ID; request not sent'
+    else
+      cmux_error 'no cmux relay identity in this session; request not sent'
+    fi
+    return 1
   fi
+  if [[ $relay_tui_socket != /* || ! $relay_tui_terminal =~ ^term_[a-f0-9]{32}$ || $relay_tui_socket == *[[:cntrl:]]* ]]; then
+    cmux_error 'malformed cmux relay socket or terminal ID; request not sent'; return 1
+  fi
+  c=$(command -v cmux-tui || true)
+  [[ -x $c ]] || { cmux_error "cmux-tui CLI not found here; run the line below on the Mac"; return 1; }
+  have perl || { cmux_error "Perl is required to bound cmux-tui requests; request not sent"; return 1; }
+  clients=$(cmux_tui_call env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" --json client list) || rc=$?
+  if ((rc != 0)); then
+    cmux_error "cannot query Mac mirror clients (exit $rc; deadline is 142); request not sent"; return 1
+  fi
+  # Require one complete resource API response. Raw protocol client lists use different fields.
+  if ! jq -e -s 'length == 1 and (.[0] | type == "array" and all(.[];
+    type == "object" and has("client_kind") and
+    (.client_kind == null or (.client_kind | type == "string")) and
+    (.attached_terminal_ids | type == "array" and all(.[]; type == "string" and test("^term_[a-f0-9]{32}$")))))' \
+    <<<"$clients" >/dev/null 2>&1; then
+    cmux_error 'malformed cmux-tui client list; cannot verify a Mac mirror; request not sent'; return 1
+  fi
+  if ! jq -e --arg terminal "$relay_tui_terminal" \
+    'any(.[]; .client_kind == "native-mirror" and (.attached_terminal_ids | index($terminal)) != null)' \
+    <<<"$clients" >/dev/null; then
+    cmux_error 'no Mac native-mirror client is attached to this terminal; request not sent'; return 1
+  fi
+  # cmux suppresses identical terminal/title/body content for five seconds, regardless of notification ID.
+  request_id=$(LC_ALL=C od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  [[ $request_id =~ ^[a-f0-9]{32}$ ]] || { cmux_error "cannot create a native request ID; run the line below on the Mac"; return 1; }
+  body=$(printf '%s' "$body" | jq -c --arg id "$request_id" '. + {request_id:$id}') \
+    || { cmux_error "cannot encode a native request; run the line below on the Mac"; return 1; }
+  # Native terminal IDs differ from the Mac's workspace UUIDs. Do not pass --workspace.
+  rc=0
+  cmux_tui_call env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" notify --surface "$relay_tui_terminal" --title "$title" --body "$body" >/dev/null || rc=$?
+  if ((rc != 0)); then
+    cmux_error "cmux-tui notify failed (exit $rc; deadline is 142); Mac delivery is unverified"; return 1
+  fi
+  return 0
 }
 
 # Bound CLI calls by the caller's absolute deadline, including their child processes.

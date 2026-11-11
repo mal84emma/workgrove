@@ -56,7 +56,7 @@ hook_ok_repo() { # both relayed bodies carry $REPO (wt-open sends a path inside 
 notify_mac() { # notify_mac <title> <key> <value> …  — JSON body, so paths with spaces survive
   local title="$1" args=() body; shift
   while [[ $# -gt 1 ]]; do args+=(--arg "$1" "$2"); shift 2; done
-  body=$(jq -cn "${args[@]}" '$ARGS.named')
+  body=$(jq -cn "${args[@]}" '$ARGS.named') || { warn 'cannot encode a Mac request'; return 1; }
   cmux_notify "$title" "$body" || { warn "$CMUX_ERROR"; return 1; }
 }
 
@@ -355,23 +355,31 @@ open_code() { # open_code <folder uri> <label>   (no --new-window: a repeat call
 open_worktree() { # open_worktree <name> <path> — VS Code here; from a VM ask the Mac to do it
   local path="$2"
   if ! is_remote; then open_code "file://$path" "$path"; return 0; fi
-  local h manual; h=$(wt_host)
-  manual="wt -H $h open -r $(shell_join "$REPO") $1"
+  local h manual; h=$(wt_host) || return 1
+  manual=$(shell_join wt -H "$h" open -r "$REPO" "$1")
   if ! hook_ok_repo || ! notify_mac wt-open host "$h" path "$path"; then
     printf 'VS Code request to the Mac failed. Run on the Mac: %s\n' "$manual"
     return 1
   fi
   printf 'requested VS Code on the Mac: %s:%s\n' "$h" "$path"
+  printf 'The local relay accepted the request; Mac delivery is unverified.\n'
   printf 'if no window appears, run on the Mac: %s\n' "$manual"
 }
 
-request_row() { # request_row <name> — VM side: ask the Mac for a cmux row, and always print the recovery line
-  local h
+request_row() { # request_row <name> — report relay acceptance and retain the Mac recovery command.
+  local h manual rc=0
   meta_require "$1"
   h=${WT_META[row_host]:-}
   valid_host "$h" || die 'task row host is unverified; kept the task without requesting a row'
-  if hook_ok_repo; then notify_mac wt-attach host "$h" repo "$REPO" task "$1" || true; fi
-  printf 'on the Mac: wt -H %s attach -r %s %s\n' "$h" "$(shell_join "$REPO")" "$1"
+  manual=$(shell_join wt -H "$h" attach -r "$REPO" "$1")
+  if ! hook_ok_repo || ! notify_mac wt-attach host "$h" repo "$REPO" task "$1"; then
+    printf 'Task row request to the Mac failed.\n'
+    rc=1
+  else
+    printf 'The local relay accepted the task row request; Mac delivery is unverified.\n'
+  fi
+  printf 'on the Mac: %s\n' "$manual"
+  return "$rc"
 }
 
 session_state() { # session_state <name> <associative output> — the VM's session display and boolean facts.

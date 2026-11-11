@@ -188,7 +188,12 @@ case "$1 ${2:-}" in
   'diff --branch')
     [[ $# == 12 && $3 == --repo && -n $4 && $5 == --base && -n $6 && $7 == --layout && $8 == split && $9 == --title && ${11} == --focus && ${12} == true ]] || unexpected_command "$@"
     key='diff'; file=diff.txt ;;
-  'notify '*) key=notify; file=notify.json ;;
+  'notify '*)
+    [[ ${0##*/} == cmux-tui && $# == 7 && $2 == --surface && $3 =~ ^term_[a-f0-9]{32}$ && $4 == --title && $6 == --body ]] || unexpected_command "$@"
+    key=notify; file=notify.json ;;
+  '--json client')
+    [[ ${0##*/} == cmux-tui && $# == 3 && $3 == list ]] || unexpected_command "$@"
+    key=client-list; file=clients.json ;;
   *) unexpected_command "$@" ;;
 esac
 if [[ -n $state ]]; then
@@ -311,8 +316,10 @@ case "$key" in
     jq -cn --arg title "$title" --argjson body "$body" '{title:$title,body:$body}' >>"$state/notify.requests.jsonl"
     if [[ -f $state/notify-dedupe && -f $state/last-content && $(cat "$state/last-content") == "$title|$body" ]]; then exit 0; fi
     printf '%s' "$title|$body" >"$state/last-content"
+    if [[ -f $state/notify-unmirrored ]]; then exit 0; fi
     tail -n 1 "$state/notify.requests.jsonl" >>"$state/notify.delivered.jsonl"
     if [[ -x $state/notify-callback ]]; then "$state/notify-callback"; fi ;;
+  client-list) printf '[]\n' ;;
   ping|diff|workspace-close|workspace-select|workspace-action|workspace-rename|send|send-key|dismiss-notification) ;;
   ssh)
     if ((ssh_uuids)); then
