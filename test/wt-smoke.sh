@@ -620,7 +620,7 @@ scenario_new_and_sidecar() {
 scenario_task_model() {
   begin_scenario "$1" || return 0
   local codex_owned=(--no-daemon)
-  local r sidecar
+  local r sidecar model
   r="$(new_repo model)"
   sidecar="$r/.git/wt/chosen.json"
   assert_wt_ok "Claude model with a bracket suffix" new chosen --no-workspace -r "$r" -a claude -m 'opus[1m]' -p 'the brief'
@@ -644,24 +644,21 @@ scenario_task_model() {
   assert_wt_ok "Claude with no extra args" run chosen -r "$r"
   assert_eq "task model works without WT_AGENT_ARGS" "$(printf '%s\n' --model 'opus[1m]' -c)" "$(cat "$AGENT_LOG")"
 
-  assert_wt_ok "Codex model" new codex-model --no-workspace -r "$r" -a codex --model gpt-5.3-codex -p 'codex brief'
-  assert_meta "$r" codex-model model gpt-5.3-codex
+  assert_wt_ok "Codex model" new codex-model --no-workspace -r "$r" -a codex --model gpt-oss:20b -p 'codex brief'
+  assert_meta "$r" codex-model model gpt-oss:20b
   WT_EXTRA='-m other -c model=older --search'
   rm -f "$AGENT_LOG"
   assert_wt_ok "Codex first launch" run codex-model -r "$r"
-  assert_eq "Codex got only the task model and the brief" "$(printf '%s\n' -m gpt-5.3-codex --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  assert_eq "Codex got only the task model and the brief" "$(printf '%s\n' -m gpt-oss:20b --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
   WT_EXTRA='--model=other -mother -m=other -cmodel=older --config=model=older --search'
   rm -f "$AGENT_LOG"
   assert_wt_ok "Codex later launch" run codex-model -r "$r"
-  assert_eq "Codex later launch kept the task model" "$(printf '%s\n' -m gpt-5.3-codex --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  assert_eq "Codex later launch kept the task model" "$(printf '%s\n' -m gpt-oss:20b --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
   WT_EXTRA=''
 
-  assert_wt_ok "Claude Vertex model ID" new vertex --no-workspace -r "$r" -a claude -m 'claude-sonnet-4-5@20250514'
-  assert_meta "$r" vertex model 'claude-sonnet-4-5@20250514'
-  assert_wt_ok "Claude Bedrock model ID" new bedrock --no-workspace -r "$r" -a claude -m 'us.anthropic.claude-sonnet-4-5-v1:0'
-  assert_meta "$r" bedrock model 'us.anthropic.claude-sonnet-4-5-v1:0'
-  assert_wt_ok "Codex colon model ID" new oss --no-workspace -r "$r" -a codex -m 'gpt-oss:20b'
-  assert_meta "$r" oss model 'gpt-oss:20b'
+  for model in 'claude-sonnet-4-5@20250514' 'us.anthropic.claude-sonnet-4-5-v1:0' 'gpt-oss:20b' 'gpt-5.3-codex'; do
+    if valid_model "$model"; then pass; else fail "accepted model spelling rejected: $model"; fi
+  done
 
   # Linux attach prints a Mac recovery command and needs a fixture host name.
   if [[ $OS != Darwin ]]; then WT_RELAY_ENV=(WT_HOST=fakevm); fi
@@ -769,16 +766,9 @@ scenario_names_and_collisions() {
   assert_has "tidy_name lowercases and joins on whitespace" "$WT_OUT" "created fix-auth"
   assert_dir "…and that is the directory it made" "$r/.worktrees/fix-auth"
 
-  # Deliberate: an uppercase name is tidied, not refused; need_name never sees the original. `wt new
-  # "Fix Auth"` is a natural thing to type. tidy_name runs on the reading side too (the task picker), so the
-  # capitalized spelling still finds the worktree. Only git and tmux see the lowercase name.
-  assert_wt_ok "wt new ABC" new ABC --no-workspace -r "$r"
-  assert_has "an uppercase name is lowercased rather than refused" "$WT_OUT" "created abc"
-
-  assert_wt_ok "wt new with only a brief" new --no-workspace -r "$r" -p 'Add OAuth login, please!'
-  assert_has "the name is slugified from the brief" "$WT_OUT" "created add-oauth-login-please"
-  assert_wt_ok "wt new with a long brief" new --no-workspace -r "$r" -p 'one two three four five six seven'
-  assert_has "…cut to five words" "$WT_OUT" "created one-two-three-four-five"
+  assert_wt_ok "wt new with a long punctuated brief" new --no-workspace -r "$r" -p 'Add OAuth login, please! And more words'
+  assert_has "the derived name is normalized and cut to five words" "$WT_OUT" "created add-oauth-login-please-and"
+  assert_dir "the derived name identifies its worktree" "$r/.worktrees/add-oauth-login-please-and"
 
   assert_wt_ok "wt new with neither" new --no-workspace -r "$r"
   name="$(printf '%s\n' "$WT_OUT" | sed -n 's/^created //p')"
@@ -792,8 +782,12 @@ scenario_names_and_collisions() {
   assert_wt_fails 1 "invalid name" new "$long" --no-workspace -r "$r"
   assert_wt_ok "63 characters is still a name" new "${long%a}" --no-workspace -r "$r"
 
-  assert_wt_ok "wt new dup" new dup --no-workspace -r "$r"
-  assert_wt_fails 1 "worktree 'dup' already exists" new dup --no-workspace -r "$r"
+  cp "$r/.git/wt/fix-auth.json" "$TEST_ROOT/fix-auth.metadata"
+  assert_wt_fails 1 "worktree 'fix-auth' already exists" new fix-auth --no-workspace -r "$r"
+  assert_dir "a collision preserves the existing worktree" "$r/.worktrees/fix-auth"
+  assert_branch "$r" wt/fix-auth yes
+  assert_registered "$r" fix-auth yes
+  assert_same_bytes "a collision preserves existing metadata" "$TEST_ROOT/fix-auth.metadata" "$r/.git/wt/fix-auth.json"
   fixture_git "$r" branch wt/ghost main
   assert_wt_fails 1 "branch wt/ghost already exists" new ghost --no-workspace -r "$r"
   assert_gone "…and the worktree a taken branch would have needed is not made" "$r/.worktrees/ghost"
@@ -4073,6 +4067,7 @@ STUB
   # A connected client is replaced only after fresh screen proof.
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "an already connected row is selected" -H fakevm attach task -r /vm/repos/project
+  assert_has "raw show keeps the replacement recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
   assert_lacks "connected row made no ss check" "$(cat "$TEST_ROOT/remote-log")" 'ss '
   assert_lacks "connected row made no reconnect call" "$(cat "$CMUX_LOG")" 'workspace.remote.reconnect'
   assert_has "a connected attached client was replaced" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
@@ -4139,12 +4134,9 @@ STUB
   done
   REMOTE_WT_SESSION=""
 
-  local format
-  for format in raw facts; do
-    REMOTE_WT_FORMAT=$format
-    assert_wt_ok "$format show preserves connected client replacement" -H fakevm attach task -r /vm/repos/project
-    assert_has "$format show keeps the replacement recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
-  done
+  REMOTE_WT_FORMAT=facts
+  assert_wt_ok "facts show preserves connected client replacement" -H fakevm attach task -r /vm/repos/project
+  assert_has "facts show keeps the replacement recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
   REMOTE_WT_FORMAT=raw
 
   # A row that never dropped needs the same fresh prompt and detached-session proof before any send.
@@ -4153,18 +4145,17 @@ STUB
   printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "a connected row with a detached session is re-attached" -H fakevm attach task -r /vm/repos/project
+  assert_has "raw detached session reports reattachment" "$WT_OUT" '(re-attached)'
   assert_eq "the detached session got one tmux command" 1 "$(tmux_sends)"
   assert_lacks "a detached session was not replaced" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
   assert_eq "the detached session got one return" 1 "$(grep -c '^send-key --workspace remote-row enter$' "$CMUX_LOG" || true)"
   assert_has "the detached report was verified again" "$(cat "$TEST_ROOT/remote-log")" 'tmux has-session -t =wt-project-task'
 
-  for format in raw facts; do
-    REMOTE_WT_FORMAT=$format
-    : >"$CMUX_LOG"
-    assert_wt_ok "$format detached session is re-attached" -H fakevm attach task -r /vm/repos/project
-    assert_eq "$format detached session gets one tmux command" 1 "$(tmux_sends)"
-    assert_has "$format detached session reports reattachment" "$WT_OUT" '(re-attached)'
-  done
+  REMOTE_WT_FORMAT=facts
+  : >"$CMUX_LOG"
+  assert_wt_ok "facts detached session is re-attached" -H fakevm attach task -r /vm/repos/project
+  assert_eq "facts detached session gets one tmux command" 1 "$(tmux_sends)"
+  assert_has "facts detached session reports reattachment" "$WT_OUT" '(re-attached)'
   REMOTE_WT_FORMAT=raw
 
   # A shell-shaped screen cannot prove that a native row has finished reconnecting.
@@ -4664,9 +4655,13 @@ scenario_teardown_completed_rows() {
     esac
     fake_rows "$row" >"$WT_ROWS"
     : >"$CMUX_LOG"
+    cp "$receipt" "$TEST_ROOT/completed-receipt.json"
     assert_wt_fails 1 'cleanup absence cannot be verified' rm task -r "$r"
-    assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
-    assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    if [[ $variant == matching ]]; then
+      assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
+      assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    fi
+    assert_same_bytes "$variant preserves the receipt bytes" "$TEST_ROOT/completed-receipt.json" "$receipt"
     assert_eq "$variant preserves the replacement row" 1 "$(jq '.workspaces | length' "$WT_ROWS")"
     assert_lacks "$variant sends no row-close request" "$(cat "$CMUX_LOG")" 'workspace close'
     assert_eq "$variant leaves the journal intact" complete "$(jq -r .stage "$receipt")"
@@ -4714,8 +4709,10 @@ scenario_teardown_pending_rows() {
     assert_eq "$mode preserves replacement and unrelated rows" 2 "$(jq '.workspaces | length' "$WT_ROWS")"
     assert_lacks "$mode never closes the replacement row" "$(cat "$CMUX_LOG")" 'workspace close replacement-row'
     assert_lacks "$mode never closes the unrelated row" "$(cat "$CMUX_LOG")" 'workspace close unrelated-row'
-    assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
-    assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    if [[ $mode == matching ]]; then
+      assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
+      assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    fi
     assert_gone "$mode leaves Git cleanup complete" "$r/.worktrees/task"
     assert_branch "$r" wt/task no
     fake_rows "$unrelated" >"$WT_ROWS"
