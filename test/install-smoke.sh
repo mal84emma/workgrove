@@ -556,7 +556,7 @@ assert_unchanged() {
 #    never runs it.
 scenario_default_empty() {
   begin_scenario "1. default install into an empty HOME" || return 0
-  local h log
+  local h log before after
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -597,6 +597,12 @@ scenario_default_empty() {
       assert_grep "install.sh output names $f as skipped" "$log" "$f"
     done
     assert_grep "install.sh output names $UI_FLAG as skipped" "$log" "$UI_FLAG"
+    before="$h.manifest.1"; after="$h.manifest.2"
+    manifest "$h" >"$before"
+    if assert_install_ok "$h" "$log.2"; then
+      manifest "$h" >"$after"
+      assert_unchanged "default install, second run" "$before" "$after"
+    fi
   fi
   end_scenario
 }
@@ -609,6 +615,7 @@ scenario_default_over_existing() {
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
+  seed_oh_my_zsh "$h"
   seed_opinionated_originals "$h"
   zsum_before="$(cksum <"$h/.zshrc")"
   gsum_before="$(cksum <"$h/.gitconfig")"
@@ -619,6 +626,7 @@ scenario_default_over_existing() {
     assert_regular "$h" .zshrc
     assert_eq "the ~/.zshrc checksum" "$zsum_before" "$(cksum <"$h/.zshrc")"
     assert_absent "$h" "$THEME_DST"
+    assert_grep "--with-zshrc listed as skipped" "$log" "--with-zshrc"
     # `git config` edits ~/.gitconfig in place, so its checksum correctly changes. But it stays a real file,
     # and every section that the user wrote survives.
     assert_regular "$h" .gitconfig
@@ -649,7 +657,7 @@ scenario_default_over_existing() {
 # 3. --opinionated-config: all five linked, the theme too, and the five originals kept.
 scenario_opinionated() {
   begin_scenario "3. --opinionated-config links all five and stashes the originals" || return 0
-  local h log i bk d n
+  local h log i bk d n before after
   h="$(new_home)"
   guard_scratch_home "$h"
   log="$h.log"
@@ -683,6 +691,12 @@ scenario_opinionated() {
       "STRANGER STATUSLINE"
     # Nothing was left to skip, so report_skipped must stay quiet.
     assert_eq "'left alone' lines in the output" 0 "$(count_matches "$log" "left alone")"
+    before="$h.manifest.1"; after="$h.manifest.2"
+    manifest "$h" >"$before"
+    if assert_install_ok "$h" "$log.2" --opinionated-config; then
+      manifest "$h" >"$after"
+      assert_unchanged "--opinionated-config, second run" "$before" "$after"
+    fi
   fi
   end_scenario
 }
@@ -704,65 +718,6 @@ scenario_sticky_link() {
     # that proves that opted_in said yes because of the existing link alone.
     assert_link "$h" "$THEME_DST" "$THEME_SRC"
     assert_eq "--with-zshrc listed as skipped" 0 "$(count_matches "$log" "--with-zshrc")"
-  fi
-  end_scenario
-}
-
-scenario_regular_not_opted_in() {
-  begin_scenario "4b. an existing regular file is not an opt-in" || return 0
-  local h log
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  seed_oh_my_zsh "$h"
-  printf '%s\n' '# STRANGER ZSHRC' >"$h/.zshrc"
-  if assert_install_ok "$h" "$log"; then
-    assert_regular "$h" .zshrc
-    assert_grep "the ~/.zshrc is untouched" "$h/.zshrc" "# STRANGER ZSHRC"
-    assert_absent "$h" "$THEME_DST"
-    assert_grep "--with-zshrc listed as skipped" "$log" "--with-zshrc"
-  fi
-  end_scenario
-}
-
-# 5. Idempotence. install.sh promises that a rerun is safe, and `wt update` reruns it constantly. So a
-#    second run over an already-installed HOME must change nothing at all.
-scenario_default_idempotent() {
-  begin_scenario "5a. a second default run changes nothing" || return 0
-  local h log before after
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  before="$h.manifest.1"
-  after="$h.manifest.2"
-  if assert_install_ok "$h" "$log"; then
-    manifest "$h" >"$before"
-    if assert_install_ok "$h" "$log.2"; then
-      manifest "$h" >"$after"
-      assert_unchanged "default install, second run" "$before" "$after"
-    fi
-  fi
-  end_scenario
-}
-
-scenario_opinionated_idempotent() {
-  begin_scenario "5b. a second --opinionated-config run changes nothing" || return 0
-  local h log before after
-  h="$(new_home)"
-  guard_scratch_home "$h"
-  log="$h.log"
-  before="$h.manifest.1"
-  after="$h.manifest.2"
-  seed_oh_my_zsh "$h"
-  seed_opinionated_originals "$h"
-  if assert_install_ok "$h" "$log" --opinionated-config; then
-    manifest "$h" >"$before"
-    if assert_install_ok "$h" "$log.2" --opinionated-config; then
-      manifest "$h" >"$after"
-      # The backup dir from the first run is in both manifests. So if a second run stashed anything, its
-      # stash would show up here as a new directory beside that dir.
-      assert_unchanged "--opinionated-config, second run" "$before" "$after"
-    fi
   fi
   end_scenario
 }
@@ -1989,9 +1944,6 @@ main() {
   scenario_default_over_existing
   scenario_opinionated
   scenario_sticky_link
-  scenario_regular_not_opted_in
-  scenario_default_idempotent
-  scenario_opinionated_idempotent
   scenario_individual_flags
   scenario_unknown_flag
   scenario_claude_ui_keys

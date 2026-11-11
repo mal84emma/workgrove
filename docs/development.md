@@ -342,6 +342,26 @@ The runner shares a temporary standard-library bytecode cache across Python test
 Each process still starts separately. Isolated Python invocations ignore the cache environment setting.
 Portable tests pack their source template's Git objects once and keep a separate source copy and durable root for each test.
 
+The cmux query and tmux probe refusal cases reuse an unchanged task within each scenario.
+Each refusal still invokes the real `wt rm` command.
+After each refusal, the tests check the branch, worktree registration, unchanged sidecar bytes, and absence of a teardown receipt.
+Successful removals keep separate tasks because they change Git and receipt state.
+Each SSH title-repair case resets row-list completeness alongside its private fake state.
+
+Test input matrices belong at the narrowest boundary that owns their behavior.
+The native-hook status matrix calls the parser directly without installing a portable home.
+Doctor integration checks still verify status changes, selected agent roots, and the inventory deadline.
+Every corrupt metadata input still blocks forced removal.
+One corrupt input also checks ordinary removal, human output, and JSON output through their command entry points.
+
+Completed and pending receipt scenarios retain every row variant through real removal commands.
+Each lifecycle checks observe-only removal and name reuse once, alongside its variant-specific removal checks.
+
+Installer scenarios check idempotence after their first-run assertions, using the same private home.
+Select `ONLY='1. default install'` or `ONLY='3. --opinionated-config'` to include these second-run checks.
+The separate second-run and regular-file opt-in scenarios are consolidated into the corresponding first-run scenarios.
+Native-hook parser tests use `ONLY='NativeHookTests'`; doctor status integration uses `ONLY='test_doctor_reports_native_hook_status_changes'`.
+
 Set `ONLY` to select scenario names with a shell glob pattern. The filter matches substrings too.
 For example, `ONLY='11.*' bash test/wt-smoke.sh` runs scenario 11.
 For a filtered runner invocation, select one suite: `ONLY='11.*' bash test/run.sh test/wt-smoke.sh`.

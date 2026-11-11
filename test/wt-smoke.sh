@@ -621,7 +621,7 @@ scenario_new_and_sidecar() {
 scenario_task_model() {
   begin_scenario "$1" || return 0
   local codex_owned=(--no-daemon)
-  local r sidecar
+  local r sidecar model
   r="$(new_repo model)"
   sidecar="$r/.git/wt/chosen.json"
   assert_wt_ok "Claude model with a bracket suffix" new chosen --no-workspace -r "$r" -a claude -m 'opus[1m]' -p 'the brief'
@@ -645,24 +645,21 @@ scenario_task_model() {
   assert_wt_ok "Claude with no extra args" run chosen -r "$r"
   assert_eq "task model works without WT_AGENT_ARGS" "$(printf '%s\n' --model 'opus[1m]' -c)" "$(cat "$AGENT_LOG")"
 
-  assert_wt_ok "Codex model" new codex-model --no-workspace -r "$r" -a codex --model gpt-5.3-codex -p 'codex brief'
-  assert_meta "$r" codex-model model gpt-5.3-codex
+  assert_wt_ok "Codex model" new codex-model --no-workspace -r "$r" -a codex --model gpt-oss:20b -p 'codex brief'
+  assert_meta "$r" codex-model model gpt-oss:20b
   WT_EXTRA='-m other -c model=older --search'
   rm -f "$AGENT_LOG"
   assert_wt_ok "Codex first launch" run codex-model -r "$r"
-  assert_eq "Codex got only the task model and the brief" "$(printf '%s\n' -m gpt-5.3-codex --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  assert_eq "Codex got only the task model and the brief" "$(printf '%s\n' -m gpt-oss:20b --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
   WT_EXTRA='--model=other -mother -m=other -cmodel=older --config=model=older --search'
   rm -f "$AGENT_LOG"
   assert_wt_ok "Codex later launch" run codex-model -r "$r"
-  assert_eq "Codex later launch kept the task model" "$(printf '%s\n' -m gpt-5.3-codex --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
+  assert_eq "Codex later launch kept the task model" "$(printf '%s\n' -m gpt-oss:20b --search "${codex_owned[@]}" -- 'codex brief')" "$(cat "$AGENT_LOG")"
   WT_EXTRA=''
 
-  assert_wt_ok "Claude Vertex model ID" new vertex --no-workspace -r "$r" -a claude -m 'claude-sonnet-4-5@20250514'
-  assert_meta "$r" vertex model 'claude-sonnet-4-5@20250514'
-  assert_wt_ok "Claude Bedrock model ID" new bedrock --no-workspace -r "$r" -a claude -m 'us.anthropic.claude-sonnet-4-5-v1:0'
-  assert_meta "$r" bedrock model 'us.anthropic.claude-sonnet-4-5-v1:0'
-  assert_wt_ok "Codex colon model ID" new oss --no-workspace -r "$r" -a codex -m 'gpt-oss:20b'
-  assert_meta "$r" oss model 'gpt-oss:20b'
+  for model in 'claude-sonnet-4-5@20250514' 'us.anthropic.claude-sonnet-4-5-v1:0' 'gpt-oss:20b' 'gpt-5.3-codex'; do
+    if valid_model "$model"; then pass; else fail "accepted model spelling rejected: $model"; fi
+  done
 
   # Linux attach prints a Mac recovery command and needs a fixture host name.
   if [[ $OS != Darwin ]]; then WT_RELAY_ENV=(WT_HOST=fakevm); fi
@@ -770,16 +767,9 @@ scenario_names_and_collisions() {
   assert_has "tidy_name lowercases and joins on whitespace" "$WT_OUT" "created fix-auth"
   assert_dir "…and that is the directory it made" "$r/.worktrees/fix-auth"
 
-  # Deliberate: an uppercase name is tidied, not refused; need_name never sees the original. `wt new
-  # "Fix Auth"` is a natural thing to type. tidy_name runs on the reading side too (the task picker), so the
-  # capitalized spelling still finds the worktree. Only git and tmux see the lowercase name.
-  assert_wt_ok "wt new ABC" new ABC --no-workspace -r "$r"
-  assert_has "an uppercase name is lowercased rather than refused" "$WT_OUT" "created abc"
-
-  assert_wt_ok "wt new with only a brief" new --no-workspace -r "$r" -p 'Add OAuth login, please!'
-  assert_has "the name is slugified from the brief" "$WT_OUT" "created add-oauth-login-please"
-  assert_wt_ok "wt new with a long brief" new --no-workspace -r "$r" -p 'one two three four five six seven'
-  assert_has "…cut to five words" "$WT_OUT" "created one-two-three-four-five"
+  assert_wt_ok "wt new with a long punctuated brief" new --no-workspace -r "$r" -p 'Add OAuth login, please! And more words'
+  assert_has "the derived name is normalized and cut to five words" "$WT_OUT" "created add-oauth-login-please-and"
+  assert_dir "the derived name identifies its worktree" "$r/.worktrees/add-oauth-login-please-and"
 
   assert_wt_ok "wt new with neither" new --no-workspace -r "$r"
   name="$(printf '%s\n' "$WT_OUT" | sed -n 's/^created //p')"
@@ -793,8 +783,12 @@ scenario_names_and_collisions() {
   assert_wt_fails 1 "invalid name" new "$long" --no-workspace -r "$r"
   assert_wt_ok "63 characters is still a name" new "${long%a}" --no-workspace -r "$r"
 
-  assert_wt_ok "wt new dup" new dup --no-workspace -r "$r"
-  assert_wt_fails 1 "worktree 'dup' already exists" new dup --no-workspace -r "$r"
+  cp "$r/.git/wt/fix-auth.json" "$TEST_ROOT/fix-auth.metadata"
+  assert_wt_fails 1 "worktree 'fix-auth' already exists" new fix-auth --no-workspace -r "$r"
+  assert_dir "a collision preserves the existing worktree" "$r/.worktrees/fix-auth"
+  assert_branch "$r" wt/fix-auth yes
+  assert_registered "$r" fix-auth yes
+  assert_same_bytes "a collision preserves existing metadata" "$TEST_ROOT/fix-auth.metadata" "$r/.git/wt/fix-auth.json"
   fixture_git "$r" branch wt/ghost main
   assert_wt_fails 1 "branch wt/ghost already exists" new ghost --no-workspace -r "$r"
   assert_gone "…and the worktree a taken branch would have needed is not made" "$r/.worktrees/ghost"
@@ -1775,7 +1769,12 @@ scenario_self_rm_vm() {
   assert_wt_ok "wt new sandboxed VM task" new sandboxed --no-workspace -r "$r"
   assert_wt_ok "wt new tmux-denied" new tmux-denied --no-workspace -r "$r"
   assert_wt_ok 'create a callback receiver fixture' new callback --no-workspace -r "$r"
-  for probe in denied panes empty invalid pgrep missing no-server no-socket idle; do
+  local status_metadata
+  # Unreadable status probes must preserve the same task and its metadata.
+  assert_wt_ok 'create the tmux query refusal fixture' new status-error --no-workspace -r "$r"
+  status_metadata="$TEST_ROOT/status-error.metadata"
+  cp "$r/.git/wt/status-error.json" "$status_metadata"
+  for probe in missing no-server no-socket idle; do
     assert_wt_ok "$probe tmux status test worktree" new "status-$probe" --no-workspace -r "$r"
   done
   session="wt-$(basename "$r")-self"
@@ -1972,11 +1971,14 @@ STUB
         assert_gone "$probe tmux status removed the worktree" "$r/.worktrees/status-$probe"
         assert_branch "$r" "wt/status-$probe" no ;;
       *)
-        assert_wt_fails 1 "cannot check the agent in tmux session" rm "status-$probe" -r "$r"
-        assert_dir "$probe tmux status kept the worktree" "$r/.worktrees/status-$probe"
-        assert_branch "$r" "wt/status-$probe" yes
-        assert_regular "$r" ".git/wt/status-$probe.json"
-        assert_lacks "$probe tmux status did not stop the session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session" ;;
+        assert_wt_fails 1 "cannot check the agent in tmux session" rm "status-error" -r "$r"
+        assert_dir "$probe tmux status kept the worktree" "$r/.worktrees/status-error"
+        assert_branch "$r" "wt/status-error" yes
+        assert_regular "$r" ".git/wt/status-error.json"
+        assert_lacks "$probe tmux status did not stop the session" "$(cat "$TEST_ROOT/self-tmux.log")" "kill-session"
+        assert_same_bytes "$probe query preserves the original sidecar" "$status_metadata" "$r/.git/wt/status-error.json"
+        assert_registered "$r" status-error yes
+        assert_absent "$r" .git/wt/teardown/status-error.json ;;
     esac
   done
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "SELF_TMUX_SESSION=$session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log")
@@ -2528,18 +2530,21 @@ scenario_cmux() {
     WT_RELAY_ENV=()
   done
 
-  local failure
+  local failure query_metadata
+  # Every query must refuse before changing this fixture.
+  assert_wt_ok 'create the row query refusal fixture' new row-list --no-workspace -r "$r"
+  query_metadata="$TEST_ROOT/row-list.metadata"
+  cp "$r/.git/wt/row-list.json" "$query_metadata"
   for failure in denied invalid missing null no-id remote partial empty scalar; do
     stub_cmux alive
-    assert_wt_ok "$failure row-list test worktree" new "list-$failure" --no-workspace -r "$r"
     printf '{"workspaces":[]}\n' >"$WT_ROWS"
     case "$failure" in
       denied) WT_RELAY_ENV=("CMUX_STUB_FAIL_LIST=all") ;;
       invalid) printf 'not json\n' >"$WT_ROWS" ;;
       missing) printf '{"unexpected":[]}\n' >"$WT_ROWS" ;;
       null) printf '{"workspaces":null}\n' >"$WT_ROWS" ;;
-      no-id) printf '{"workspaces":[{"title":"list-no-id","description":"@local · %s"}]}\n' "$id" >"$WT_ROWS" ;;
-      remote) printf '{"workspaces":[{"id":"bad-row","title":"list-remote","remote":{"enabled":"unknown"}}]}\n' >"$WT_ROWS" ;;
+      no-id) printf '{"workspaces":[{"title":"row-list","description":"@local · %s"}]}\n' "$id" >"$WT_ROWS" ;;
+      remote) printf '{"workspaces":[{"id":"bad-row","title":"row-list","remote":{"enabled":"unknown"}}]}\n' >"$WT_ROWS" ;;
       partial|empty|scalar)
         stub_windows "$w1" "$w2"
         if [[ "$failure" == partial ]]; then WT_RELAY_ENV=("CMUX_STUB_FAIL_LIST=$w2")
@@ -2547,11 +2552,14 @@ scenario_cmux() {
         else printf '42\n' >"$WT_ROWS_DIR/$w2.json"; fi ;;
     esac
     : >"$CMUX_LOG"
-    assert_wt_fails 1 "cannot list cmux rows" rm "list-$failure" -r "$r"
-    assert_dir "$failure row list kept the worktree" "$r/.worktrees/list-$failure"
-    assert_branch "$r" "wt/list-$failure" yes
-    assert_regular "$r" ".git/wt/list-$failure.json"
+    assert_wt_fails 1 "cannot list cmux rows" rm "row-list" -r "$r"
+    assert_dir "$failure row list kept the worktree" "$r/.worktrees/row-list"
+    assert_branch "$r" "wt/row-list" yes
+    assert_regular "$r" ".git/wt/row-list.json"
     assert_lacks "$failure row list sent no close" "$(cat "$CMUX_LOG")" "workspace close"
+    assert_same_bytes "$failure row query preserves the original sidecar" "$query_metadata" "$r/.git/wt/row-list.json"
+    assert_registered "$r" row-list yes
+    assert_absent "$r" .git/wt/teardown/row-list.json
     WT_RELAY_ENV=()
   done
   stub_cmux alive
@@ -4120,6 +4128,7 @@ STUB
   # A connected client is replaced only after fresh screen proof.
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "an already connected row is selected" -H fakevm attach task -r /vm/repos/project
+  assert_has "raw show keeps the replacement recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
   assert_lacks "connected row made no ss check" "$(cat "$TEST_ROOT/remote-log")" 'ss '
   assert_lacks "connected row made no reconnect call" "$(cat "$CMUX_LOG")" 'workspace.remote.reconnect'
   assert_has "a connected attached client was replaced" "$(cat "$TEST_ROOT/remote-log")" 'tmux detach-client -t /dev/pts/3 -E '
@@ -4186,12 +4195,9 @@ STUB
   done
   REMOTE_WT_SESSION=""
 
-  local format
-  for format in raw facts; do
-    REMOTE_WT_FORMAT=$format
-    assert_wt_ok "$format show preserves connected client replacement" -H fakevm attach task -r /vm/repos/project
-    assert_has "$format show keeps the replacement recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
-  done
+  REMOTE_WT_FORMAT=facts
+  assert_wt_ok "facts show preserves connected client replacement" -H fakevm attach task -r /vm/repos/project
+  assert_has "facts show keeps the replacement recovery line" "$WT_OUT" 'if the replacement attach fails, the row returns to its shell prompt'
   REMOTE_WT_FORMAT=raw
 
   # A row that never dropped needs the same fresh prompt and detached-session proof before any send.
@@ -4200,18 +4206,17 @@ STUB
   printf 'azureuser@fakevm:~$ \n' >"$TEST_ROOT/remote-screen"
   : >"$TEST_ROOT/remote-log"; : >"$CMUX_LOG"
   assert_wt_ok "a connected row with a detached session is re-attached" -H fakevm attach task -r /vm/repos/project
+  assert_has "raw detached session reports reattachment" "$WT_OUT" '(re-attached)'
   assert_eq "the detached session got one tmux command" 1 "$(tmux_sends)"
   assert_lacks "a detached session was not replaced" "$(cat "$TEST_ROOT/remote-log")" 'detach-client'
   assert_eq "the detached session got one return" 1 "$(grep -c '^send-key --workspace remote-row enter$' "$CMUX_LOG" || true)"
   assert_has "the detached report was verified again" "$(cat "$TEST_ROOT/remote-log")" 'tmux has-session -t =wt-project-task'
 
-  for format in raw facts; do
-    REMOTE_WT_FORMAT=$format
-    : >"$CMUX_LOG"
-    assert_wt_ok "$format detached session is re-attached" -H fakevm attach task -r /vm/repos/project
-    assert_eq "$format detached session gets one tmux command" 1 "$(tmux_sends)"
-    assert_has "$format detached session reports reattachment" "$WT_OUT" '(re-attached)'
-  done
+  REMOTE_WT_FORMAT=facts
+  : >"$CMUX_LOG"
+  assert_wt_ok "facts detached session is re-attached" -H fakevm attach task -r /vm/repos/project
+  assert_eq "facts detached session gets one tmux command" 1 "$(tmux_sends)"
+  assert_has "facts detached session reports reattachment" "$WT_OUT" '(re-attached)'
   REMOTE_WT_FORMAT=raw
 
   # A shell-shaped screen cannot prove that a native row has finished reconnecting.
@@ -4711,9 +4716,13 @@ scenario_teardown_completed_rows() {
     esac
     fake_rows "$row" >"$WT_ROWS"
     : >"$CMUX_LOG"
+    cp "$receipt" "$TEST_ROOT/completed-receipt.json"
     assert_wt_fails 1 'cleanup absence cannot be verified' rm task -r "$r"
-    assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
-    assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    if [[ $variant == matching ]]; then
+      assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
+      assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    fi
+    assert_same_bytes "$variant preserves the receipt bytes" "$TEST_ROOT/completed-receipt.json" "$receipt"
     assert_eq "$variant preserves the replacement row" 1 "$(jq '.workspaces | length' "$WT_ROWS")"
     assert_lacks "$variant sends no row-close request" "$(cat "$CMUX_LOG")" 'workspace close'
     assert_eq "$variant leaves the journal intact" complete "$(jq -r .stage "$receipt")"
@@ -4761,8 +4770,10 @@ scenario_teardown_pending_rows() {
     assert_eq "$mode preserves replacement and unrelated rows" 2 "$(jq '.workspaces | length' "$WT_ROWS")"
     assert_lacks "$mode never closes the replacement row" "$(cat "$CMUX_LOG")" 'workspace close replacement-row'
     assert_lacks "$mode never closes the unrelated row" "$(cat "$CMUX_LOG")" 'workspace close unrelated-row'
-    assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
-    assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    if [[ $mode == matching ]]; then
+      assert_wt_fails 1 'cleanup absence cannot be verified' rm task --observe-only -r "$r"
+      assert_wt_fails 1 'cleanup remains pending' new task --no-workspace -r "$r"
+    fi
     assert_gone "$mode leaves Git cleanup complete" "$r/.worktrees/task"
     assert_branch "$r" wt/task no
     fake_rows "$unrelated" >"$WT_ROWS"

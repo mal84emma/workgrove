@@ -38,7 +38,7 @@ max_workers() {
 
 scenario_scheduling() {
   begin_scenario 'runner bounds workers and executes each task once' || return 0
-  local jobs name
+  local jobs name priority_order
   for jobs in 1 2 8 999999999999999999999999; do
     : >"$TEST_ROOT/events"
     RUNNER_JOBS=$jobs capture_runner "$TEST_ROOT/suites with spaces/first.sh" \
@@ -55,19 +55,16 @@ scenario_scheduling() {
     done
     check_contains 'the runner reports task time' "$RUNNER_OUT" 'task time:'
     check_contains 'the runner reports suite span' "$RUNNER_OUT" 'suite time:'
-    local wall_report=$RUNNER_OUT priority_order
-    cp "$TEST_ROOT/suites with spaces/worker.sh" "$TEST_ROOT/suites with spaces/install-smoke.sh"
-    cp "$TEST_ROOT/suites with spaces/worker.sh" "$TEST_ROOT/suites with spaces/github-guard-smoke.sh"
-    : >"$TEST_ROOT/events"
-    RUNNER_JOBS=1 capture_runner "$TEST_ROOT/suites with spaces/github-guard-smoke.sh" \
-      "$TEST_ROOT/suites with spaces/install-smoke.sh"
-    priority_order=$(awk '$1 == "start" {print $2}' "$TEST_ROOT/events")
-    if [[ $priority_order == $'install-smoke.sh\ngithub-guard-smoke.sh' && $RUNNER_RC == 0 ]]; then
-      check_contains 'the runner reports wall time and starts larger estimates first' "$wall_report" 'total wall time:'
-    else
-      fail "runner task priority order: $priority_order (exit $RUNNER_RC)"
-    fi
+    check_contains 'the runner reports wall time' "$RUNNER_OUT" 'total wall time:'
   done
+  cp "$TEST_ROOT/suites with spaces/worker.sh" "$TEST_ROOT/suites with spaces/install-smoke.sh"
+  cp "$TEST_ROOT/suites with spaces/worker.sh" "$TEST_ROOT/suites with spaces/github-guard-smoke.sh"
+  : >"$TEST_ROOT/events"
+  RUNNER_JOBS=1 capture_runner "$TEST_ROOT/suites with spaces/github-guard-smoke.sh" \
+    "$TEST_ROOT/suites with spaces/install-smoke.sh"
+  priority_order=$(awk '$1 == "start" {print $2}' "$TEST_ROOT/events")
+  assert_eq 'the priority run succeeds' 0 "$RUNNER_RC"
+  assert_eq 'larger estimates start first' $'install-smoke.sh\ngithub-guard-smoke.sh' "$priority_order"
   end_scenario
 }
 scenario_scheduling

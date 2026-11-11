@@ -164,18 +164,28 @@ begin_scenario 'corrupt sidecars fail safely without partial JSON'
 invoke new second --no-workspace -a none
 for corrupt in '{' '' '[]' '{} {}' '{"row_host":false}' '{"row_host":"bad host"}' '{"base":"main\u0000suffix"}' '{"key\u0000suffix":"value"}' '{"includes":["a\u0000b"]}' '{"":"value"}'; do
   printf '%s' "$corrupt" >"$REPO/.git/wt/second.json"
+  cp "$REPO/.git/wt/second.json" "$TEST_ROOT/corrupt-before.json"
   WT_META_FILE=''; local_status=0
   meta_load second values || local_status=$?
   assert_eq 'an unreadable sidecar returns two' 2 "$local_status"
-  for command in 'show second' 'show second --json' 'rm second' 'rm second --force' 'list --json'; do
+  # Every invalid value must block forced removal. One value also checks each read and ordinary removal entry point.
+  commands=('rm second --force')
+  if [[ $corrupt == '{' ]]; then commands+=('show second' 'show second --json' 'rm second' 'list --json'); fi
+  for command in "${commands[@]}"; do
     read -r -a args <<<"$command"
     invoke "${args[@]}"
     assert_eq "$command stops on corrupt metadata" 1 "$(cat "$TEST_ROOT/status")"
     assert_eq "$command names the sidecar" "wt: could not read $REPO/.git/wt/second.json" "$(cat "$TEST_ROOT/err")"
     assert_eq "$command emits no partial output" '' "$(cat "$TEST_ROOT/out")"
+    if [[ -d $REPO/.worktrees/second ]]; then pass; else fail "$command allowed removal"; fi
+    if cmp -s "$TEST_ROOT/corrupt-before.json" "$REPO/.git/wt/second.json"; then
+      pass
+    else
+      fail "$command changed corrupt metadata"
+    fi
+    if git -C "$REPO" show-ref --verify --quiet refs/heads/wt/second; then pass; else fail "$command removed the branch"; fi
   done
 done
-if [[ -d $REPO/.worktrees/second ]]; then pass; else fail 'corrupt metadata allowed removal'; fi
 rm "$REPO/.git/wt/second.json"
 invoke show second --json
 assert_eq 'a missing sidecar uses defaults' 0 "$(cat "$TEST_ROOT/status")"

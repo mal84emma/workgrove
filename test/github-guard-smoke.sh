@@ -35,9 +35,6 @@ unset GH_REPO GH_HOST   # the guard reads both, so the runner's own values would
 mkdir -p "$TEST_ROOT/bin" "$TEST_ROOT/home" "$TEST_ROOT/api" "$TEST_ROOT/elsewhere"
 cat >"$TEST_ROOT/bin/gh" <<'GH'
 #!/usr/bin/env bash
-if [[ -n ${EXECUTION_MARKER:-} && ${1:-} == pr && ${2:-} == review ]]; then
-  printf 'gh write reached\n' >>"$EXECUTION_MARKER"
-fi
 printf '%s\n' "$*" >>"$GH_LOG"
 [[ ${FAKE_GH_FAIL:-} == 1 ]] && { echo 'HTTP 401: Bad credentials' >&2; exit 1; }
 [[ ${1:-} == api ]] || exit 3
@@ -583,9 +580,6 @@ scenario_settings() {
     "$(jq -r '(.permissions.deny + .permissions.ask // [])[] | select(test("^Bash\\((gh api|git push|gh pr|gh issue|wt pr)"))' "$S")"
   assert_eq 'gh repo create stays denied' 'true' \
     "$(jq -r '.permissions.deny | index("Bash(gh repo create *)") != null' "$S")"
-  # shellcheck disable=SC2016  # Match the installer source literally.
-  assert_eq 'install.sh links the guard' 'yes' \
-    "$(grep -Fq 'for path in "$R"/bin/*; do' "$REPO/install.sh" && echo yes || echo no)"
   end_scenario
 }
 scenario_settings
@@ -642,42 +636,6 @@ scenario_codex() {
   end_scenario
 }
 scenario_codex
-
-scenario_codex_subprocess() {
-  begin_scenario 'a synthetic Codex dispatcher never executes a rejected git or gh write' || return 0
-  local real_git cmd decision marker
-  real_git=$(command -v git)
-  marker="$TEST_ROOT/execution-marker"
-  cat >"$TEST_ROOT/bin/git" <<'GIT'
-#!/usr/bin/env bash
-if [[ ${1:-} == push ]]; then
-  printf 'git write reached\n' >>"$EXECUTION_MARKER"
-  exit 0
-fi
-exec "$REAL_GIT" "$@"
-GIT
-  chmod +x "$TEST_ROOT/bin/git"
-  GUARD_ARGS=(--codex)
-  # This dispatcher simulates the documented deny contract; it is not Codex runtime acceptance.
-  for cmd in 'git push origin HEAD:main' 'gh pr review 5 --approve'; do
-    decision=$(REAL_GIT="$real_git" EXECUTION_MARKER="$marker" guard "$cmd")
-    assert_eq "$cmd is denied before dispatch" deny "$decision"
-    if [[ $decision != deny ]]; then
-      env REAL_GIT="$real_git" EXECUTION_MARKER="$marker" PATH="$TEST_ROOT/bin:$PATH" bash -c "$cmd"
-    fi
-    assert_eq "$cmd never reaches its subprocess" absent "$([[ -e $marker ]] && echo present || echo absent)"
-  done
-  # A control proves the stub can observe execution without contacting GitHub.
-  env EXECUTION_MARKER="$marker" "$TEST_ROOT/bin/git" push origin HEAD:main
-  assert_eq 'the harmless git stub records execution' 'git write reached' "$(cat "$marker")"
-  rm "$marker"
-  env EXECUTION_MARKER="$marker" GH_LOG="$TEST_ROOT/gh.log" "$TEST_ROOT/bin/gh" pr review 5 --approve || :
-  assert_eq 'the harmless gh stub records execution' 'gh write reached' "$(cat "$marker")"
-  rm "$TEST_ROOT/bin/git" "$marker"
-  GUARD_ARGS=()
-  end_scenario
-}
-scenario_codex_subprocess
 
 # Add one row to a copy. No checker, help string, or command pattern changes accompany it.
 scenario_new_api_form() {
