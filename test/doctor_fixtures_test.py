@@ -171,6 +171,30 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(result['event']['workspace_id'], result['notifications'][0]['workspace_id'])
         self.assertEqual(result['event']['payload']['notification_id'], result['notifications'][0]['id'])
 
+    def test_conflicting_later_notification_binding_cannot_hide(self):
+        changed = copy.deepcopy(self.bundle)
+        event = changed['event']
+        first = dict(changed['notifications'][0], id='00000000-0000-4000-8000-000000001001')
+        conflict = dict(first, id=event['payload']['notification_id'],
+                        workspace_id='00000000-0000-4000-8000-000000001002')
+        self.assertNotEqual(conflict['workspace_id'], event['workspace_id'])
+        for notifications in ([first, conflict], [conflict, first]):
+            changed['notifications'] = notifications
+            self.reject(changed)
+        conflict['workspace_id'] = event['workspace_id']
+        changed['notifications'] = [first, conflict]
+        result = fixtures.project(changed)
+        self.assertEqual(result['notifications'][0]['id'], event['payload']['notification_id'])
+        self.assertEqual(result['notifications'][0]['workspace_id'], event['workspace_id'])
+
+    def test_duplicate_notification_ids_cannot_bind_different_rows(self):
+        changed = copy.deepcopy(self.bundle)
+        first = dict(changed['notifications'][0], id='00000000-0000-4000-8000-000000001001')
+        conflict = dict(first, workspace_id='00000000-0000-4000-8000-000000001002')
+        self.assertNotEqual(first['workspace_id'], conflict['workspace_id'])
+        changed['notifications'] = [first, conflict]
+        self.reject(changed)
+
     def test_absent_samples_and_empty_arrays(self):
         for remote in (False, True, None):
             changed = copy.deepcopy(self.bundle)

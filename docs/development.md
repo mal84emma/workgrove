@@ -208,6 +208,8 @@ Caller, event, notification, and selected-window references retain additional ob
 The recorder retains the windows that contain those rows, or the first window when no row matches.
 Window counts describe retained members; selected row identities keep their observed values.
 Stale event and notification identities remain distinct; the recorder does not invent a matching record.
+An observed notification ID cannot name different rows in its records or retained event.
+The recorder rejects conflicting bindings before selection.
 Empty arrays remain empty, and missing local, remote, or agent examples cause explicit fake-template errors when requested.
 
 These fields form the recorded contract inventory:

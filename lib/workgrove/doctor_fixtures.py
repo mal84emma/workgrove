@@ -175,15 +175,19 @@ def project(bundle):
         top_windows.append(dict(keep(window, ('ref',)), workspaces=members))
     require(len(set(top_ids)) == len(top_ids))
     notifications = array(bundle['notifications'])
+    notification_rows = {}
     for notification in notifications:
         identifier(notification['id'])
         identifier(notification['workspace_id'])
         string(notification['title'])
         string(notification['body'])
+        require(notification_rows.get(notification['id'], notification['workspace_id']) == notification['workspace_id'])
+        notification_rows[notification['id']] = notification['workspace_id']
     event = object_(bundle['event'])
     require(event['name'] == 'notification.created')
     identifier(event['workspace_id'])
     identifier(event['payload']['notification_id'])
+    require(notification_rows.get(event['payload']['notification_id'], event['workspace_id']) == event['workspace_id'])
     methods = array(bundle['capabilities']['methods'])
     for method in methods:
         string(method)
