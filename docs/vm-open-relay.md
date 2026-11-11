@@ -105,7 +105,8 @@ Older raw client-list responses use different fields and fail this check.
 `cmux-tui` reports its own version rather than the Mac app release.
 The preflight validates response fields instead of comparing version strings.
 Each client query and notification has a five-second wait limit.
-The diagnostic reports exit status 124 for a timeout and preserves other command statuses.
+The diagnostic reports exit status 142 for a deadline and preserves other command statuses.
+The shared deadline runner requires Perl and bounds child processes too.
 Attach and open return nonzero for these failures and print the quoted Mac fallback command.
 If task creation succeeded before its row request failed, the task remains created.
 Use its printed attach command; do not create the task again.

@@ -634,25 +634,10 @@ from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifyin
     | jq -e --arg w "$1" --arg h "$2" 'any((.workspaces? // .)[]; .id == $w and .remote.enabled and (.remote.destination // "") == $h)' >/dev/null 2>&1; }
 
 cmux_tui_call() {
-  local output pid tick rc=0
-  output=$(mktemp "${TMPDIR:-/tmp}/wt-relay.XXXXXX") || return 1
-  wt_register_tmpfile "$output"
-  # Files prevent a stalled child from holding the caller's output pipe open.
-  "$@" >"$output" 2>/dev/null </dev/null &
-  pid=$!
-  for ((tick=0; tick<50; tick++)); do
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 0.1
-  done
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -KILL "$pid" 2>/dev/null || true
-    rc=124
-  else
-    wait "$pid" || rc=$?
-  fi
-  cat "$output"
-  rm -f "$output"
-  return "$rc"
+  local limit=$(( $(date +%s) + 5 ))
+  if [[ -n ${DEADLINE:-} ]] && ((DEADLINE < limit)); then limit=$DEADLINE; fi
+  local DEADLINE=$limit
+  cmux_capped "$@" </dev/null 2>/dev/null
 }
 
 cmux_notify() {
@@ -672,9 +657,10 @@ cmux_notify() {
   fi
   c=$(command -v cmux-tui || true)
   [[ -x $c ]] || { cmux_error "cmux-tui CLI not found here; run the line below on the Mac"; return 1; }
+  have perl || { cmux_error "Perl is required to bound cmux-tui requests; request not sent"; return 1; }
   clients=$(cmux_tui_call env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" --json client list) || rc=$?
   if ((rc != 0)); then
-    cmux_error "cannot query Mac mirror clients (exit $rc; timeout is 124); request not sent"; return 1
+    cmux_error "cannot query Mac mirror clients (exit $rc; deadline is 142); request not sent"; return 1
   fi
   # Require one complete resource API response. Raw protocol client lists use different fields.
   if ! jq -e -s 'length == 1 and (.[0] | type == "array" and all(.[];
@@ -698,7 +684,7 @@ cmux_notify() {
   rc=0
   cmux_tui_call env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" notify --surface "$relay_tui_terminal" --title "$title" --body "$body" >/dev/null || rc=$?
   if ((rc != 0)); then
-    cmux_error "cmux-tui notify failed (exit $rc; timeout is 124); Mac delivery is unverified"; return 1
+    cmux_error "cmux-tui notify failed (exit $rc; deadline is 142); Mac delivery is unverified"; return 1
   fi
   return 0
 }

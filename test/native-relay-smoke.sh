@@ -168,13 +168,16 @@ scenario_reattachment
 
 scenario_relay_diagnostics() {
   begin_scenario 'open and attach distinguish local acceptance, preflight failures, and notification failures' || return 0
-  local REPO='/vm/repos/repo space' WT_HOST=test-vm TMUX='' CMUX_SSH_ATTEMPT_ID=test
+  local REPO="$TEST_ROOT/relay repo" WT_HOST=test-vm TMUX='' CMUX_SSH_ATTEMPT_ID=test
   local CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   local operation sample rc output manual failure
+  mkdir -p "$REPO/.git/wt"
+  printf '%s\n' '{"row_host":"test-vm"}' >"$REPO/.git/wt/task.json"
+  meta_require task
   ln -s "$FAKE_CMUX_FIXTURES/../../fakes/cmux" "$TEST_ROOT/bin/cmux-tui"
   # The test repository path shadows REPO, so resolve the fake through its fixture location.
   for operation in open attach; do
-    manual="wt -H test-vm $operation -r /vm/repos/repo\\ space task"
+    manual="wt -H test-vm $operation -r $TEST_ROOT/relay\\ repo task"
     relay_attempt() {
       rc=0
       if [[ $operation == open ]]; then
@@ -217,7 +220,7 @@ scenario_relay_diagnostics() {
       has <(printf '%s' "$output") 'cannot verify a Mac mirror'
       lacks <(printf '%s' "$output") 'local relay accepted'
     done
-    for failure in 23 124; do
+    for failure in 23 142; do
       fake_failure client-list "$failure" 'query failed'
       relay_attempt
       assert_eq "$operation propagates query failure $failure" 1 "$rc"
@@ -225,7 +228,7 @@ scenario_relay_diagnostics() {
     done
     rm "$FAKE_CMUX_STATE/fail/client-list"
     fake_native_clients "$CMUX_TUI_TERMINAL_ID" >"$FAKE_CMUX_STATE/clients.json"
-    for failure in 17 124; do
+    for failure in 17 142; do
       fake_failure notify "$failure" 'notify failed'
       relay_attempt
       assert_eq "$operation propagates notify failure $failure" 1 "$rc"
@@ -248,13 +251,24 @@ scenario_relay_diagnostics() {
     PATH="$TEST_ROOT/no-tui" relay_attempt
     assert_eq "$operation rejects absent tooling" 1 "$rc"
     has <(printf '%s' "$output") 'cmux-tui CLI not found'
+    ln -sf "$TEST_ROOT/bin/cmux-tui" "$TEST_ROOT/no-tui/cmux-tui"
+    PATH="$TEST_ROOT/no-tui" relay_attempt
+    assert_eq "$operation refuses an unbounded request without Perl" 1 "$rc"
+    has <(printf '%s' "$output") 'Perl is required to bound cmux-tui requests'
+    rm "$TEST_ROOT/no-tui/cmux-tui"
     rc=0
     if [[ $operation == open ]]; then
       output=$(WT_HOST='' open_worktree task "$REPO/.worktrees/task" 2>&1) || rc=$?
     else output=$(WT_HOST='' request_row task 2>&1) || rc=$?; fi
-    assert_eq "$operation stops when its host is unknown" 1 "$rc"
-    has <(printf '%s' "$output") 'WT_HOST is not set'
-    lacks <(printf '%s' "$output") 'local relay accepted'
+    if [[ $operation == open ]]; then
+      assert_eq 'open stops when its configured host is unknown' 1 "$rc"
+      has <(printf '%s' "$output") 'WT_HOST is not set'
+      lacks <(printf '%s' "$output") 'local relay accepted'
+    else
+      assert_eq 'attach uses its recorded host when WT_HOST is unset' 0 "$rc"
+      has <(printf '%s' "$output") "$manual"
+      has <(printf '%s' "$output") 'local relay accepted'
+    fi
   done
   unset -f relay_attempt
   rm "$TEST_ROOT/bin/cmux-tui"
@@ -266,24 +280,37 @@ scenario_relay_deadlines() {
   begin_scenario 'client queries and notifications have bounded waits' || return 0
   # shellcheck disable=SC2034  # relay_env reads the caller's identity.
   local TMUX='' CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  local stage rc output started
+  local stage rc output started child state
   mkdir -p "$TEST_ROOT/unstalled"
   ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/unstalled/cmux-tui"
   export RELAY_FAKE="$TEST_ROOT/unstalled/cmux-tui"
   fake_native_clients "$CMUX_TUI_TERMINAL_ID" >"$FAKE_CMUX_STATE/clients.json"
   cat >"$TEST_ROOT/bin/cmux-tui" <<'TUI'
 #!/usr/bin/env bash
-if [[ $* == *" $RELAY_STALL "* ]]; then exec sleep 30; fi
+if [[ $* == *" $RELAY_STALL "* ]]; then
+  sleep 30 &
+  printf '%s\n' "$!" >"$RELAY_STALLED_PID"
+  wait
+  exit
+fi
 exec "$RELAY_FAKE" "$@"
 TUI
   chmod +x "$TEST_ROOT/bin/cmux-tui"
   for stage in client notify; do
     rc=0; started=$SECONDS
-    output=$(RELAY_STALL=$stage notify_mac wt-close host test-vm repo /vm/repos/repo task task 2>&1) || rc=$?
+    output=$(RELAY_STALL=$stage RELAY_STALLED_PID="$TEST_ROOT/stalled-$stage" notify_mac wt-close host test-vm repo /vm/repos/repo task task 2>&1) || rc=$?
     assert_eq "$stage timeout fails shared close notification" 1 "$rc"
-    has <(printf '%s' "$output") 'exit 124'
+    has <(printf '%s' "$output") 'exit 142'
     assert_eq "$stage timeout returns within ten seconds" 1 "$((SECONDS - started < 10))"
+    child=$(cat "$TEST_ROOT/stalled-$stage")
+    state=$(ps -p "$child" -o stat= 2>/dev/null) || state=''
+    state=${state//[[:space:]]/}
+    case $state in ''|Z*) pass ;; *) fail "$stage deadline left its disposable child running" ;; esac
   done
+  rc=0
+  output=$(DEADLINE=1 notify_mac wt-close host test-vm repo /vm/repos/repo task task 2>&1) || rc=$?
+  assert_eq 'an exhausted caller deadline refuses the request' 1 "$rc"
+  has <(printf '%s' "$output") 'exit 142'
   rm "$TEST_ROOT/bin/cmux-tui"
   end_scenario
 }
