@@ -23,6 +23,7 @@ unset XDG_DATA_HOME   # the cmux-tui hook wrapper must find its default helper i
 source "$REPO/test/fakes/rows.sh"
 fake_cmux_init "$TEST_ROOT/cmux-state"
 : >"$FAKE_CMUX_STATE/native-log"
+touch "$FAKE_CMUX_STATE/materialize-ssh"
 ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/bin/cmux"
 CMUX_LOG="$FAKE_CMUX_STATE/calls.log"
 cat > "$TEST_ROOT/bin/code" <<'CODE'
@@ -48,7 +49,7 @@ case "$*" in
     printf 'WT_RESULT\t%s\n' '{"version":1,"command":"path","status":"missing","name":"task","repo":"/vm/repos/repo","session":"","state":""}' >&2
     echo "wt: no worktree named 'task' in /vm/repos/repo (see: wt list)" >&2
     exit 1 ;;
-  *' rm task -r /vm/repos/repo --defer-close')
+  *' rm task -r /vm/repos/repo --defer-close --row-host test-vm')
     if [ "${REMOTE_RETARGET:-0}" = 1 ]; then
       jq '.workspaces[0].remote.destination="other-vm"' "$FAKE_CMUX_STATE/rows.json" >"$FAKE_CMUX_STATE/retarget.json"
       mv "$FAKE_CMUX_STATE/retarget.json" "$FAKE_CMUX_STATE/rows.json"
@@ -145,6 +146,7 @@ TMUX
   assert_eq 'native reattachment clears the obsolete Mac row' '' "$(cat "$RELAY_STATE/CMUX_WORKSPACE_ID")"
   assert_eq 'native reattachment saves its current terminal' term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$(cat "$RELAY_STATE/CMUX_TUI_TERMINAL_ID")"
   : > "$RELAY_REQUESTS"; : > "$RELAY_DELIVERED"; : > "$CMUX_LOG"
+  fake_native_clients term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >"$FAKE_CMUX_STATE/clients.json"
   for title in wt-open wt-attach wt-close; do
     for _ in 1 2; do
       TMUX=/tmp/fake CMUX_SOCKET_PATH=127.0.0.1:9999 CMUX_WORKSPACE_ID=AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA \
@@ -163,6 +165,156 @@ TMUX
   end_scenario
 }
 scenario_reattachment
+
+scenario_relay_diagnostics() {
+  begin_scenario 'open and attach distinguish local acceptance, preflight failures, and notification failures' || return 0
+  local REPO="$TEST_ROOT/relay repo" WT_HOST=test-vm TMUX='' CMUX_SSH_ATTEMPT_ID=test
+  local CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local operation sample rc output manual failure
+  mkdir -p "$REPO/.git/wt"
+  printf '%s\n' '{"row_host":"test-vm"}' >"$REPO/.git/wt/task.json"
+  meta_require task
+  ln -s "$FAKE_CMUX_FIXTURES/../../fakes/cmux" "$TEST_ROOT/bin/cmux-tui"
+  # The test repository path shadows REPO, so resolve the fake through its fixture location.
+  for operation in open attach; do
+    manual="wt -H test-vm $operation -r $TEST_ROOT/relay\\ repo task"
+    relay_attempt() {
+      rc=0
+      if [[ $operation == open ]]; then
+        output=$(open_worktree task "$REPO/.worktrees/task" 2>&1) || rc=$?
+      else output=$(request_row task 2>&1) || rc=$?; fi
+      has <(printf '%s' "$output") "$manual"
+    }
+    fake_native_clients "$CMUX_TUI_TERMINAL_ID" >"$FAKE_CMUX_STATE/clients.json"
+    relay_attempt
+    assert_eq "$operation accepts a mirrored terminal" 0 "$rc"
+    has <(printf '%s' "$output") 'local relay accepted'
+    has <(printf '%s' "$output") 'Mac delivery is unverified'
+    mkdir -p "$FAKE_CMUX_STATE/after/client-list"
+    : >"$FAKE_CMUX_STATE/after/client-list/notify-unmirrored"
+    : >"$FAKE_CMUX_STATE/notify.delivered.jsonl"
+    relay_attempt
+    assert_eq "$operation accepts a request despite a later mirror disconnect" 0 "$rc"
+    assert_eq "$operation does not require actual delivery for local acceptance" '' "$(cat "$FAKE_CMUX_STATE/notify.delivered.jsonl")"
+    has <(printf '%s' "$output") 'Mac delivery is unverified'
+    rm -r "$FAKE_CMUX_STATE/after/client-list"
+    rm "$FAKE_CMUX_STATE/notify-unmirrored"
+    for sample in '[]' \
+      "$(fake_native_clients term_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb)" \
+      "$(fake_native_clients "$CMUX_TUI_TERMINAL_ID" | jq '.[1].client_kind="tui"')" \
+      "$(fake_native_clients | jq '.[0].known_terminal_ids=["term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]')"; do
+      printf '%s\n' "$sample" >"$FAKE_CMUX_STATE/clients.json"
+      : >"$FAKE_CMUX_STATE/native-calls.log"
+      relay_attempt
+      assert_eq "$operation rejects an unmirrored terminal" 1 "$rc"
+      has <(printf '%s' "$output") 'no Mac native-mirror client is attached'
+      lacks "$FAKE_CMUX_STATE/native-calls.log" ' notify '
+    done
+    for sample in '' 'not-json' '{}' '[{}]' '[{"client_kind":"native-mirror","attached_terminal_ids":null}]' \
+      '[{"client_kind":"native-mirror","attached_terminal_ids":[42]}]' \
+      '[{"kind":"native-mirror","attached":[{"terminal_id":"term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}]' \
+      $'[]\n[]'; do
+      printf '%s\n' "$sample" >"$FAKE_CMUX_STATE/clients.json"
+      relay_attempt
+      assert_eq "$operation rejects a malformed client query" 1 "$rc"
+      has <(printf '%s' "$output") 'cannot verify a Mac mirror'
+      lacks <(printf '%s' "$output") 'local relay accepted'
+    done
+    for failure in 23 142; do
+      fake_failure client-list "$failure" 'query failed'
+      relay_attempt
+      assert_eq "$operation propagates query failure $failure" 1 "$rc"
+      has <(printf '%s' "$output") "cannot query Mac mirror clients (exit $failure"
+    done
+    rm "$FAKE_CMUX_STATE/fail/client-list"
+    fake_native_clients "$CMUX_TUI_TERMINAL_ID" >"$FAKE_CMUX_STATE/clients.json"
+    for failure in 17 142; do
+      fake_failure notify "$failure" 'notify failed'
+      relay_attempt
+      assert_eq "$operation propagates notify failure $failure" 1 "$rc"
+      has <(printf '%s' "$output") "cmux-tui notify failed (exit $failure"
+    done
+    rm "$FAKE_CMUX_STATE/fail/notify"
+    for sample in relative.sock '' $'/tmp/socket\nother'; do
+      CMUX_TUI_SOCKET=$sample relay_attempt
+      assert_eq "$operation rejects a malformed socket" 1 "$rc"
+      has <(printf '%s' "$output") 'malformed cmux relay'
+    done
+    for sample in term_bad '' term_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA; do
+      CMUX_TUI_TERMINAL_ID=$sample relay_attempt
+      assert_eq "$operation rejects a malformed terminal" 1 "$rc"
+      has <(printf '%s' "$output") 'malformed cmux relay'
+    done
+    mkdir -p "$TEST_ROOT/no-tui"
+    ln -sf "$(command -v jq)" "$TEST_ROOT/no-tui/jq"
+    ln -sf "$(command -v grep)" "$TEST_ROOT/no-tui/grep"
+    PATH="$TEST_ROOT/no-tui" relay_attempt
+    assert_eq "$operation rejects absent tooling" 1 "$rc"
+    has <(printf '%s' "$output") 'cmux-tui CLI not found'
+    ln -sf "$TEST_ROOT/bin/cmux-tui" "$TEST_ROOT/no-tui/cmux-tui"
+    PATH="$TEST_ROOT/no-tui" relay_attempt
+    assert_eq "$operation refuses an unbounded request without Perl" 1 "$rc"
+    has <(printf '%s' "$output") 'Perl is required to bound cmux-tui requests'
+    rm "$TEST_ROOT/no-tui/cmux-tui"
+    rc=0
+    if [[ $operation == open ]]; then
+      output=$(WT_HOST='' open_worktree task "$REPO/.worktrees/task" 2>&1) || rc=$?
+    else output=$(WT_HOST='' request_row task 2>&1) || rc=$?; fi
+    if [[ $operation == open ]]; then
+      assert_eq 'open stops when its configured host is unknown' 1 "$rc"
+      has <(printf '%s' "$output") 'WT_HOST is not set'
+      lacks <(printf '%s' "$output") 'local relay accepted'
+    else
+      assert_eq 'attach uses its recorded host when WT_HOST is unset' 0 "$rc"
+      has <(printf '%s' "$output") "$manual"
+      has <(printf '%s' "$output") 'local relay accepted'
+    fi
+  done
+  unset -f relay_attempt
+  rm "$TEST_ROOT/bin/cmux-tui"
+  end_scenario
+}
+scenario_relay_diagnostics
+
+scenario_relay_deadlines() {
+  begin_scenario 'client queries and notifications have bounded waits' || return 0
+  # shellcheck disable=SC2034  # relay_env reads the caller's identity.
+  local TMUX='' CMUX_TUI_SOCKET=/tmp/native CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local stage rc output started child state
+  mkdir -p "$TEST_ROOT/unstalled"
+  ln -s "$REPO/test/fakes/cmux" "$TEST_ROOT/unstalled/cmux-tui"
+  export RELAY_FAKE="$TEST_ROOT/unstalled/cmux-tui"
+  fake_native_clients "$CMUX_TUI_TERMINAL_ID" >"$FAKE_CMUX_STATE/clients.json"
+  cat >"$TEST_ROOT/bin/cmux-tui" <<'TUI'
+#!/usr/bin/env bash
+if [[ $* == *" $RELAY_STALL "* ]]; then
+  sleep 30 &
+  printf '%s\n' "$!" >"$RELAY_STALLED_PID"
+  wait
+  exit
+fi
+exec "$RELAY_FAKE" "$@"
+TUI
+  chmod +x "$TEST_ROOT/bin/cmux-tui"
+  for stage in client notify; do
+    rc=0; started=$SECONDS
+    output=$(RELAY_STALL=$stage RELAY_STALLED_PID="$TEST_ROOT/stalled-$stage" notify_mac wt-close host test-vm repo /vm/repos/repo task task 2>&1) || rc=$?
+    assert_eq "$stage timeout fails shared close notification" 1 "$rc"
+    has <(printf '%s' "$output") 'exit 142'
+    assert_eq "$stage timeout returns within ten seconds" 1 "$((SECONDS - started < 10))"
+    child=$(cat "$TEST_ROOT/stalled-$stage")
+    state=$(ps -p "$child" -o stat= 2>/dev/null) || state=''
+    state=${state//[[:space:]]/}
+    case $state in ''|Z*) pass ;; *) fail "$stage deadline left its disposable child running" ;; esac
+  done
+  rc=0
+  output=$(DEADLINE=1 notify_mac wt-close host test-vm repo /vm/repos/repo task task 2>&1) || rc=$?
+  assert_eq 'an exhausted caller deadline refuses the request' 1 "$rc"
+  has <(printf '%s' "$output") 'exit 142'
+  rm "$TEST_ROOT/bin/cmux-tui"
+  end_scenario
+}
+scenario_relay_deadlines
 
 scenario_shared_creation() {
   begin_scenario 'native attach uses shared SSH creation and description failure policy' || return 0
@@ -184,6 +336,122 @@ scenario_shared_creation() {
   end_scenario
 }
 scenario_shared_creation
+
+scenario_title_repair() {
+  begin_scenario 'the Mac hook repairs burst titles by UUID without changing focus' || return 0
+  record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"burst1"}'
+  touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-burst"
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  printf 6 >"$FAKE_CMUX_STATE/ssh-publish-after"
+  printf 2 >"$FAKE_CMUX_STATE/rename-publish-after"
+  local n id out original
+  original=$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")
+  for n in 1 2 3 4 5; do
+    jq --arg task "burst$n" '.[0].body=({host:"test-vm",repo:"/vm/repos/repo",task:$task} | tojson)' \
+      "$RECORD_FILE" >"$FAKE_CMUX_STATE/notifications.json"
+    out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+    assert_eq "burst$n quiets its successful request" true "$(jq '.effects.desktop == false' <<<"$out")"
+    assert_eq "burst$n keeps its requested title" 1 "$(jq --arg title "burst$n" '[.workspaces[] | select(.title == $title and .description == "@test-vm · repo")] | length' "$FAKE_CMUX_STATE/rows.json")"
+  done
+  assert_eq 'the hook repairs only the affected burst rows' 3 "$(grep -c -- '--action rename' "$CMUX_LOG")"
+  lacks "$CMUX_LOG" 'workspace select'
+  lacks "$CMUX_LOG" 'workspace close'
+  assert_eq 'the hook preserves its sending row' "$original" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")"
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  lacks "$CMUX_LOG" 'ssh test-vm'
+  id=$(jq -r '.workspaces[] | select(.title == "burst5") | .id' "$FAKE_CMUX_STATE/rows.json")
+  has "$CMUX_LOG" "workspace select $id"
+  assert_eq 'later hook attach creates no duplicate' 6 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+  touch "$FAKE_CMUX_STATE/ssh-reset-title"
+  fake_failure workspace-rename 1 'rename refused'
+  jq '.[0].body="{\"host\":\"test-vm\",\"repo\":\"/vm/repos/repo\",\"task\":\"failed\"}"' \
+    "$RECORD_FILE" >"$FAKE_CMUX_STATE/notifications.json"
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'a failed repair keeps its notification' '' "$out"
+  id=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows.json")
+  has "$XDG_STATE_HOME/cmux-hook.log" "cmux workspace-action --workspace $id --action rename --title failed"
+  lacks "$CMUX_LOG" 'workspace close'
+  lacks "$CMUX_LOG" 'dismiss-notification'
+  rm "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-burst" "$FAKE_CMUX_STATE/ssh-reset-title" "$FAKE_CMUX_STATE/ssh-connect-after" "$FAKE_CMUX_STATE/fail/workspace-rename" "$FAKE_CMUX_STATE/ssh-publish-after" "$FAKE_CMUX_STATE/rename-publish-after"
+  end_scenario
+}
+scenario_title_repair
+
+scenario_hook_reattachment() {
+  begin_scenario 'the Mac hook repairs the first reattachment after original row closure' || return 0
+  record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"reattach"}'
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  local original first repaired out had_close=0
+  [[ ! -f $FAKE_CMUX_STATE/mutate-close ]] || had_close=1
+  touch "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/mutate-close"
+  printf 2 >"$FAKE_CMUX_STATE/ssh-connect-after"
+  printf 6 >"$FAKE_CMUX_STATE/ssh-publish-after"
+  printf 2 >"$FAKE_CMUX_STATE/rename-publish-after"
+  original=$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'the original hook row opens successfully' true "$(jq '.effects.desktop == false' <<<"$out")"
+  first=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows.json")
+  lacks "$CMUX_LOG" '--action rename'
+  "$REPO/test/fakes/cmux" workspace close "$first"
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'the hook reattaches after closure' true "$(jq '.effects.desktop == false' <<<"$out")"
+  repaired=$(jq -r '.workspaces[-1].id' "$FAKE_CMUX_STATE/rows.json")
+  for _ in {1..10}; do "$REPO/test/fakes/cmux" workspace list --json >/dev/null; done
+  assert_eq 'the hook receives a new row UUID' true "$([[ $repaired != "$first" ]] && echo true || echo false)"
+  has "$CMUX_LOG" "workspace-action --workspace $repaired --action rename --title reattach"
+  assert_eq 'the hook restores the requested title and description' 'reattach|@test-vm · repo' "$(jq -r '.workspaces[-1] | [.title,.description] | join("|")' "$FAKE_CMUX_STATE/rows.json")"
+  lacks "$CMUX_LOG" 'workspace select'
+  lacks "$CMUX_LOG" 'workspace close'
+  : >"$CMUX_LOG"
+  out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+  assert_eq 'later hook attach succeeds' true "$(jq '.effects.desktop == false' <<<"$out")"
+  lacks "$CMUX_LOG" 'ssh test-vm'
+  has "$CMUX_LOG" "workspace select $repaired"
+  assert_eq 'later hook attach creates no duplicate' 2 "$(jq '.workspaces | length' "$FAKE_CMUX_STATE/rows.json")"
+  assert_eq 'reattachment preserves the sending row' "$original" "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")"
+  rm "$FAKE_CMUX_STATE/ssh-allocate" "$FAKE_CMUX_STATE/ssh-reset-first-reattach" "$FAKE_CMUX_STATE/ssh-connect-after" "$FAKE_CMUX_STATE/ssh-publish-after" "$FAKE_CMUX_STATE/rename-publish-after"
+  if [[ $had_close == 0 ]]; then rm "$FAKE_CMUX_STATE/mutate-close"; fi
+  end_scenario
+}
+scenario_hook_reattachment
+
+scenario_title_budget() {
+  begin_scenario 'title verification reserves the Mac hook budget for remaining operations' || return 0
+  fake_cmux_clock
+  local -x PATH="$FAKE_CMUX_STATE/clock-bin:$PATH"
+  local mode out expected
+  mkdir -p "$FAKE_CMUX_STATE/after/ssh"
+  for mode in remaining exhausted; do
+    record wt-attach '{"host":"test-vm","repo":"/vm/repos/repo","task":"budget"}'
+    printf 100 >"$FAKE_CMUX_STATE/clock-now"
+    expected=110
+    [[ $mode != exhausted ]] || expected=113
+    printf '%s' "$expected" >"$FAKE_CMUX_STATE/after/ssh/clock-now"
+    out=$(bash "$REPO/bin/cmux-hook" --event </dev/null)
+    if [[ $mode == remaining ]]; then
+      assert_eq 'a late successful check leaves dismissal time' true "$(jq '.effects.desktop == false' <<<"$out")"
+      has "$CMUX_LOG" 'dismiss-notification'
+      assert_eq 'verification finishes before its reserved deadline' 110 "$(cat "$FAKE_CMUX_STATE/clock-now")"
+    else
+      assert_eq 'an exhausted check keeps the notification' '' "$out"
+      lacks "$CMUX_LOG" 'dismiss-notification'
+      lacks "$CMUX_LOG" '--action rename'
+      has "$XDG_STATE_HOME/cmux-hook.log" 'cmux workspace-action --workspace 00000000-0000-4000-8000-000000000099 --action rename --title budget'
+      assert_eq 'an exhausted check never extends the hook deadline' 113 "$(cat "$FAKE_CMUX_STATE/clock-now")"
+    fi
+    lacks "$CMUX_LOG" 'workspace close'
+    lacks "$CMUX_LOG" 'workspace select'
+  done
+  rm -r "$FAKE_CMUX_STATE/after/ssh"
+  end_scenario
+}
+scenario_title_budget
 
 scenario_lookup_race() {
   begin_scenario 'native attach selects a row that arrived after event validation' || return 0
@@ -383,6 +651,7 @@ scenario_native_attach_close() {
   hook >/dev/null
   has "$CMUX_LOG" "workspace close $ROW_ID --force"
   has "$SSH_CALL_LOG" '--row-closed'
+  has "$SSH_CALL_LOG" '--row-host test-vm'
   lacks "$CMUX_LOG" "dismiss-notification --id $NOTIFICATION_ID"
   rm "$FAKE_CMUX_STATE/mutate-close"
   record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
@@ -391,6 +660,22 @@ scenario_native_attach_close() {
   has "$CMUX_LOG" "workspace close $ROW_ID --force"
   lacks "$SSH_CALL_LOG" '--row-closed'
   has "$XDG_STATE_HOME/cmux-hook.log" 'row absence is unverified'
+  for sample in matching unclaimed; do
+    record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
+    local replacement description='@test-vm · repo'
+    [[ $sample != unclaimed ]] || description='custom description'
+    replacement=$(fake_row replacement-row task "$description" test-vm)
+    fake_rows "$(jq -c '.workspaces[0]' "$FAKE_CMUX_STATE/rows.json")" "$replacement" >"$TEST_ROOT/duplicate-rows"
+    cp "$TEST_ROOT/duplicate-rows" "$FAKE_CMUX_STATE/rows.json"
+    touch "$FAKE_CMUX_STATE/mutate-close"
+    : >"$SSH_CALL_LOG"
+    bash "$REPO/bin/cmux-hook" --event </dev/null >/dev/null
+    has "$CMUX_LOG" "workspace close $ROW_ID --force"
+    lacks "$SSH_CALL_LOG" '--row-closed'
+    assert_eq "$sample replacement row survives the callback" replacement-row "$(jq -r '.workspaces[0].id' "$FAKE_CMUX_STATE/rows.json")"
+    has "$XDG_STATE_HOME/cmux-hook.log" 'row absence is unverified'
+    rm "$FAKE_CMUX_STATE/mutate-close"
+  done
   unset SSH_CALL_LOG
   record wt-close '{"host":"test-vm","repo":"/vm/repos/repo","task":"task"}'
   REMOTE_DEFER_FAIL=1 hook >/dev/null
@@ -719,7 +1004,7 @@ HELPER
   ln -s "$REPO/bin/wt" "$HOME/.local/bin/wt"
   git -C "$TEST_ROOT/repo" init -q -b main
   git -C "$TEST_ROOT/repo" -c user.name=Test -c user.email=test@example.invalid commit -q --allow-empty -m initial
-  bash "$HOME/.local/bin/wt" new task -a claude --no-workspace -r "$TEST_ROOT/repo" >/dev/null
+  CMUX_SSH_ATTEMPT_ID=fixture WT_HOST=test-vm bash "$HOME/.local/bin/wt" new task -a claude --no-workspace -r "$TEST_ROOT/repo" >/dev/null
   cat > "$TEST_ROOT/bin/claude" <<'AGENT'
 #!/bin/sh
 printf 'hook=%s\nhelper=%s\n' "${CMUX_TUI_HOOK:-}" "${WT_CMUX_TUI_HOOK:-}" > "$AGENT_ENV"

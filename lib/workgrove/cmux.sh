@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Reads globals: CMUX_BUNDLED_CLI_PATH, CMUX_ROWS, CMUX_ROWS_FULL, CMUX_ROWS_JSON, CMUX_RUN,
-#   CMUX_WORKSPACE_ID, CMUX_SAMPLE_RETRY, DEADLINE, HOME, REPO, ROW_AGENT, ROW_JQ, ROW_SEP, WS_JSON, WS_RC, WT_FS.
+#   CMUX_WORKSPACE_ID, CMUX_SAMPLE_RETRY, DEADLINE, HOME, REPO, ROW_AGENT, ROW_JQ, ROW_SEP, WS_JSON, WS_RC, WT_FS, WG_POLL_INTERVAL.
 # The shared adapter owns cmux commands and row identity queries.
 # CMUX_ERROR holds a diagnostic; callers choose whether to stop or log it.
 # Callers read the exported diagnostics and creation state.
@@ -65,6 +65,24 @@ cmux_row_field() {
   if [[ -n $2 ]]; then repo=$(repo_id "$2"); fi
   rows=$(rows_json "${5:-skip}") || return
   printf '%s' "$rows" | cmux_find_row "$1" "$repo" "$3" "${4:-}" || true
+}
+
+# A task row can reconnect even when ownership rules prevent its closure.
+# Failed publication can leave a same-repository row with a generated workspace-N title.
+# Return 0 for absence, 1 for a candidate row, and 2 for uncertain evidence.
+check_task_row_absence() {
+  local rows rc=0
+  rows=$(rows_json checked) || { CMUX_ERROR='cannot confirm task row absence'; return 2; }
+  jq -e --arg title "$1" --arg repo "$(repo_id "$2")" --arg host "$3" --arg row "${4:-}" --arg sep "$ROW_SEP" "$ROW_JQ"'
+    any(.workspaces[]; ($row != "" and .id == $row) or task_row($title; $repo; $host; $sep)
+      or unclaimed_row($title; $host; $sep)
+      or ($host != "" and on_host($host; $sep) and (desc($sep)[1:] | join($sep)) == $repo
+        and (.title | test("^workspace-[0-9]+$"))))' <<<"$rows" >/dev/null || rc=$?
+  case $rc in
+    1) return 0 ;;
+    0) cmux_error 'task row absence is unverified; a matching, ambiguous, or original row remains' ;;
+    *) CMUX_ERROR='cannot confirm task row absence'; return 2 ;;
+  esac
 }
 
 row_label() { # row_label <title> <repo> [host] — the matching row as the sidebar shows it. An older wt's row
@@ -500,7 +518,7 @@ cmux_rows_load() {
       [[ $policy == skip ]] || { CMUX_ERROR="cannot list cmux rows (exit $rc)"; return "$rc"; }
       continue
     }
-    if [[ -z ${out//[[:space:]]/} ]]; then
+    if [[ $out != *[![:space:]]* ]]; then
       CMUX_ROWS_FULL=0
       [[ $policy != checked ]] || { cmux_error "cannot list cmux windows"; return 1; }
     fi
@@ -615,23 +633,135 @@ from_row_on_host() { # from_row_on_host <workspace uuid> <host> — the notifyin
   printf '%s' "$WS_JSON" \
     | jq -e --arg w "$1" --arg h "$2" 'any((.workspaces? // .)[]; .id == $w and .remote.enabled and (.remote.destination // "") == $h)' >/dev/null 2>&1; }
 
+cmux_tui_call() {
+  local limit=$(( $(date +%s) + 5 ))
+  if [[ -n ${DEADLINE:-} ]] && ((DEADLINE < limit)); then limit=$DEADLINE; fi
+  local DEADLINE=$limit
+  cmux_capped "$@" </dev/null 2>/dev/null
+}
+
 cmux_notify() {
-  local title=$1 body=$2 c request_id
+  local title=$1 body=$2 c request_id clients rc=0
   local relay_tui_socket relay_tui_terminal relay_ident=()
-  relay_env relay_ident relay_tui_socket relay_tui_terminal || { cmux_error "no cmux relay socket in this session; run the line below on the Mac"; return 1; }
-  if [[ $relay_tui_socket == /* && $relay_tui_terminal =~ ^term_[a-f0-9]{32}$ ]]; then
-    c=$(command -v cmux-tui || true)
-    [[ -x $c ]] || { cmux_error "cmux-tui CLI not found here; run the line below on the Mac"; return 1; }
-    # cmux suppresses identical terminal/title/body content for five seconds, regardless of notification ID.
-    request_id=$(LC_ALL=C od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
-    [[ $request_id =~ ^[a-f0-9]{32}$ ]] || { cmux_error "cannot create a native request ID; run the line below on the Mac"; return 1; }
-    body=$(printf '%s' "$body" | jq -c --arg id "$request_id" '. + {request_id:$id}') \
-      || { cmux_error "cannot encode a native request; run the line below on the Mac"; return 1; }
-    # Native terminal IDs differ from the Mac's workspace UUIDs. Do not pass --workspace.
-    env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" notify --surface "$relay_tui_terminal" --title "$title" --body "$body" >/dev/null 2>&1 \
-      || { cmux_error "cmux-tui notify failed; run the line below on the Mac"; return 1; }
-    return 0
+  CMUX_ERROR=''
+  if ! relay_env relay_ident relay_tui_socket relay_tui_terminal; then
+    if [[ -n $relay_tui_socket || -n $relay_tui_terminal ]]; then
+      cmux_error 'malformed cmux relay socket or terminal ID; request not sent'
+    else
+      cmux_error 'no cmux relay identity in this session; request not sent'
+    fi
+    return 1
   fi
+  if [[ $relay_tui_socket != /* || ! $relay_tui_terminal =~ ^term_[a-f0-9]{32}$ || $relay_tui_socket == *[[:cntrl:]]* ]]; then
+    cmux_error 'malformed cmux relay socket or terminal ID; request not sent'; return 1
+  fi
+  c=$(command -v cmux-tui || true)
+  [[ -x $c ]] || { cmux_error "cmux-tui CLI not found here; run the line below on the Mac"; return 1; }
+  have perl || { cmux_error "Perl is required to bound cmux-tui requests; request not sent"; return 1; }
+  clients=$(cmux_tui_call env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" --json client list) || rc=$?
+  if ((rc != 0)); then
+    cmux_error "cannot query Mac mirror clients (exit $rc; deadline is 142); request not sent"; return 1
+  fi
+  # Require one complete resource API response. Raw protocol client lists use different fields.
+  if ! jq -e -s 'length == 1 and (.[0] | type == "array" and all(.[];
+    type == "object" and has("client_kind") and
+    (.client_kind == null or (.client_kind | type == "string")) and
+    (.attached_terminal_ids | type == "array" and all(.[]; type == "string" and test("^term_[a-f0-9]{32}$")))))' \
+    <<<"$clients" >/dev/null 2>&1; then
+    cmux_error 'malformed cmux-tui client list; cannot verify a Mac mirror; request not sent'; return 1
+  fi
+  if ! jq -e --arg terminal "$relay_tui_terminal" \
+    'any(.[]; .client_kind == "native-mirror" and (.attached_terminal_ids | index($terminal)) != null)' \
+    <<<"$clients" >/dev/null; then
+    cmux_error 'no Mac native-mirror client is attached to this terminal; request not sent'; return 1
+  fi
+  # cmux suppresses identical terminal/title/body content for five seconds, regardless of notification ID.
+  request_id=$(LC_ALL=C od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  [[ $request_id =~ ^[a-f0-9]{32}$ ]] || { cmux_error "cannot create a native request ID; run the line below on the Mac"; return 1; }
+  body=$(printf '%s' "$body" | jq -c --arg id "$request_id" '. + {request_id:$id}') \
+    || { cmux_error "cannot encode a native request; run the line below on the Mac"; return 1; }
+  # Native terminal IDs differ from the Mac's workspace UUIDs. Do not pass --workspace.
+  rc=0
+  cmux_tui_call env -u CMUX_SOCKET "${relay_ident[@]}" "$c" --socket "$relay_tui_socket" notify --surface "$relay_tui_terminal" --title "$title" --body "$body" >/dev/null || rc=$?
+  if ((rc != 0)); then
+    cmux_error "cmux-tui notify failed (exit $rc; deadline is 142); Mac delivery is unverified"; return 1
+  fi
+  return 0
+}
+
+# Bound CLI calls by the caller's absolute deadline, including their child processes.
+cmux_capped() {
+  local left=$(( DEADLINE - $(date +%s) )) perl
+  ((left > 0)) || return 142
+  perl=$(command -v perl) || return 127
+  # shellcheck disable=SC2016  # Perl expands its own variables.
+  "$perl" -e 'my $t = shift; my $p = fork; defined $p or exit 127;
+    unless ($p) { setpgrp(0, 0); exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill 9, -$p; waitpid $p, 0; exit 142 };
+    alarm $t; waitpid $p, 0; my $s = $?; exit(($s & 127) ? 128 + ($s & 127) : ($s >> 8))' "$left" "$@"
+}
+
+cmux_ssh_row() {
+  jq -ec --arg id "${1,,}" --arg host "$2" '
+    [.workspaces[] | select((.id | ascii_downcase) == $id)]
+    | select(length == 1) | .[0]
+    | select(.remote.enabled == true and .remote.destination == $host)
+    | select(.remote.state | type == "string")' <<<"$CMUX_ROWS_JSON"
+}
+
+# Check only the UUID returned by creation. Leave two seconds for selection and hook dismissal.
+cmux_row_check_ssh_title() {
+  local id=$1 host=$2 title=$3 now limit row state machine remote_id catalog remote_title renamed=0
+  now=$(date +%s); limit=$(( ${DEADLINE:-$((now + 30))} - 2 ))
+  local DEADLINE=$limit
+  # Resolve the direct CLI before wrapping it. The hook already supplies its capped runner.
+  if ((${#CMUX_RUN[@]} == 0)); then
+    local c; c=$(cmux_bin) || return 1
+    CMUX_RUN=(env CMUX_QUIET=1 "$c")
+  fi
+  if [[ ${CMUX_RUN[0]} != cmux_capped ]]; then
+    local CMUX_RUN=(cmux_capped "${CMUX_RUN[@]}")
+  fi
+  while (( $(date +%s) < DEADLINE )); do
+    cmux_rows_load checked || return 1
+    row=$(cmux_ssh_row "$id" "$host") || return 1
+    state=$(jq -r '.remote.state' <<<"$row")
+    case $state in
+      connected)
+        # The host link connects before this row binds its remote terminal.
+        if jq -e '.remote.remote_workspace_id | type == "string" and length > 0' <<<"$row" >/dev/null \
+            && jq -e '.remote.active_terminal_sessions | type == "number" and . > 0 and floor == .' <<<"$row" >/dev/null; then
+          machine=$(jq -er '.remote.machine | strings | select(length > 0)' <<<"$row") || return 1
+          remote_id=$(jq -r '.remote.remote_workspace_id' <<<"$row")
+          # Local titles stay optimistic while cmux queues publication. Read the accepted daemon name too.
+          catalog=$(cmux_call surface ls --json --refresh "$machine" 2>/dev/null) || return 1
+          remote_title=$(jq -er --arg machine "$machine" --arg id "$remote_id" '
+            [.cloud_states[] | select(.machine == $machine)] | select(length == 1) | .[0]
+            | select(.freshness == "current" and .sync_mode == "journaled")
+            | select(.cursor.generation | type == "string" and length > 0)
+            | select(.cursor.revision | type == "string" and test("^[0-9]+$"))
+            | [.workspaces[] | select(.id == $id)] | select(length == 1) | .[0].name
+            | strings | select(length > 0)' <<<"$catalog" 2>/dev/null) || return 1
+          # Refresh can update or close the local projection. Recheck its identity before acting.
+          cmux_rows_load checked || return 1
+          row=$(cmux_ssh_row "$id" "$host") || return 1
+          jq -e --arg machine "$machine" --arg id "$remote_id" '
+            .remote.state == "connected" and .remote.machine == $machine and .remote.remote_workspace_id == $id
+            and (.remote.active_terminal_sessions | type == "number" and . > 0 and floor == .)' <<<"$row" >/dev/null || return 1
+          (( $(date +%s) < DEADLINE )) || return 1
+          if [[ $remote_title == "$title" ]] && jq -e --arg title "$title" '.title == $title' <<<"$row" >/dev/null; then return 0; fi
+          if ((renamed == 0)) && ! jq -e --arg title "$title" '.title == $title' <<<"$row" >/dev/null; then
+            cmux_call workspace-action --workspace "$id" --action rename --title "$title" >/dev/null 2>&1 || return 1
+            renamed=1
+          fi
+        fi
+        ;;
+      connecting|reconnecting) ;;
+      *) return 1 ;;
+    esac
+    cmux_capped sleep "${WG_POLL_INTERVAL:-1}" || return 1
+  done
+  return 1
 }
 
 # cmux_row_create_ssh <host> <title> <description> <command> [--no-focus]
@@ -665,6 +795,10 @@ cmux_row_create_ssh() {
     return 1;
   }
   if cmux_call workspace-action --workspace "$ref" --action set-description --description "$description" >/dev/null 2>&1; then
+    if ! cmux_row_check_ssh_title "$ref" "$host" "$title"; then
+      cmux_error "could not verify the connected title for cmux row $ref; wt did not close it. Inspect it, then run on the Mac: $(shell_join cmux workspace-action --workspace "$ref" --action rename --title "$title")"
+      return 1
+    fi
     if ((focus)); then cmux_select "$ref" || return; fi
     return 0
   fi

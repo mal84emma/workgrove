@@ -14,6 +14,8 @@ trap lib_cleanup EXIT
 
 REPO="$TEST_ROOT/project" WT_DIRNAME=.worktrees
 mkdir -p "$REPO" "$TEST_ROOT/bin"
+# Metadata scenarios model local tasks; VM identity behavior has dedicated fixtures.
+printf '#!/bin/sh\necho Darwin\n' >"$TEST_ROOT/bin/uname"; chmod +x "$TEST_ROOT/bin/uname"
 git init -qb main "$REPO"
 git -C "$REPO" -c user.name=Test -c user.email=test@example.com commit -qm initial --allow-empty
 REAL_JQ=$(command -v jq)
@@ -160,7 +162,7 @@ end_scenario
 
 begin_scenario 'corrupt sidecars fail safely without partial JSON'
 invoke new second --no-workspace -a none
-for corrupt in '{' '' '[]' '{} {}' '{"base":"main\u0000suffix"}' '{"key\u0000suffix":"value"}' '{"includes":["a\u0000b"]}' '{"":"value"}'; do
+for corrupt in '{' '' '[]' '{} {}' '{"row_host":false}' '{"row_host":"bad host"}' '{"base":"main\u0000suffix"}' '{"key\u0000suffix":"value"}' '{"includes":["a\u0000b"]}' '{"":"value"}'; do
   printf '%s' "$corrupt" >"$REPO/.git/wt/second.json"
   WT_META_FILE=''; local_status=0
   meta_load second values || local_status=$?

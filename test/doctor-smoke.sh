@@ -34,6 +34,7 @@ JSON
 done
 cp "$FAKE_CMUX_FIXTURES/version.txt" "$FAKE_CMUX_FIXTURES/capabilities.json" "$CMUX_FIXTURES/"
 jq '[.[0] | .id="AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA" | .title="private-window"
+  | .workspace_count=1
   | .selected_workspace_id="BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"]' \
   "$FAKE_CMUX_FIXTURES/windows.json" >"$CMUX_FIXTURES/windows.json"
 fake_rows "$(fake_row BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB private-title '@secretvm · secret-repo' secretvm \
@@ -381,7 +382,7 @@ scenario_committed_fixtures() {
   local supported dir version file search_status
   supported=$(sed -n 's/^WG_CMUX_SUPPORTED=//p' "$REPO/lib/workgrove/cmux.sh")
   assert_eq 'the fake serves the verified release' "$REPO/test/fixtures/cmux-$supported" "$FAKE_CMUX_FIXTURES"
-  for file in rows windows top notifications automation capabilities event rows_by_window; do
+  for file in rows windows top notifications automation capabilities event rows_by_window surface-catalog; do
     assert_regular "$FAKE_CMUX_FIXTURES" "$file.json"
   done
   assert_regular "$(dirname "$FAKE_CMUX_SSH_FIXTURE")" ssh.json
@@ -400,14 +401,54 @@ scenario_committed_fixtures() {
   end_scenario
 }
 
+scenario_projection_contracts() {
+  begin_scenario 'projection preserves contracts before sampling' || return 0
+  local output rc=0
+  output=$(python3 -B "$REPO/test/doctor_fixtures_test.py" 2>&1) || rc=$?
+  if [[ $rc == 0 ]]; then pass; else fail "$output"; fi
+  end_scenario
+}
+
+scenario_absent_templates() {
+  begin_scenario 'missing real samples cannot become synthetic templates' || return 0
+  local original=$FAKE_CMUX_FIXTURES rc remote
+  local FAKE_CMUX_FIXTURES="$TEST_ROOT/absent-templates"
+  mkdir -p "$FAKE_CMUX_FIXTURES"
+  for remote in false true; do
+    jq --argjson remote "$remote" '.workspaces |= map(select(.remote.enabled != $remote))' \
+      "$original/rows.json" >"$FAKE_CMUX_FIXTURES/rows.json"
+    rc=0
+    if [[ $remote == true ]]; then
+      fake_row absent-remote task '' test-vm >"$TEST_ROOT/missing-template" 2>&1 || rc=$?
+    else
+      fake_row absent-local task '' >"$TEST_ROOT/missing-template" 2>&1 || rc=$?
+    fi
+    if [[ $rc != 0 ]]; then pass; else fail 'a missing row template became a valid row'; fi
+    assert_grep 'a missing sample has an explicit error' "$TEST_ROOT/missing-template" 'no requested local/remote row template'
+  done
+  printf '{"coding_agents":[]}\n' >"$FAKE_CMUX_FIXTURES/top.json"
+  rc=0
+  fake_top absent-agent 1 >"$TEST_ROOT/missing-template" 2>&1 || rc=$?
+  if [[ $rc != 0 ]]; then pass; else fail 'a missing agent template became a valid agent'; fi
+  assert_grep 'a missing agent has an explicit error' "$TEST_ROOT/missing-template" 'no coding agent template'
+  printf '[]\n' >"$FAKE_CMUX_FIXTURES/windows.json"
+  rc=0
+  fake_windows absent-window >"$TEST_ROOT/missing-template" 2>&1 || rc=$?
+  if [[ $rc != 0 ]]; then pass; else fail 'a missing window template became a valid window'; fi
+  assert_grep 'a missing window has an explicit error' "$TEST_ROOT/missing-template" 'no window template'
+  end_scenario
+}
+
 scenario_record() {
   begin_scenario 'recorded fixtures redact identities and replay through the fake cmux' || return 0
   cp "$CMUX_FIXTURES/windows.json" "$TEST_ROOT/saved-windows.json"
-  jq '. + [{id:"EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE",title:"private-window-two"}]' \
+  jq '. + [.[0] | .id="EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE" | .index=1
+    | .selected_workspace_id="DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD"]' \
     "$TEST_ROOT/saved-windows.json" >"$CMUX_FIXTURES/windows.json"
-  jq -n --slurpfile rows "$CMUX_FIXTURES/rows.json" '{
+  jq -n --slurpfile rows "$CMUX_FIXTURES/rows.json" \
+    --argjson other "$(fake_row DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD private-title-two '')" '{
     "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA":$rows[0],
-    "EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE":{workspaces:[{id:"DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD",title:"private-title-two"}]}
+    "EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE":{workspaces:[$other]}
   }' >"$CMUX_FIXTURES/rows_by_window.json"
   invoke doctor --record "$TEST_ROOT/recorded"
   assert_eq 'record succeeds' 0 "$STATUS"
@@ -630,6 +671,8 @@ scenario_shapes_and_hooks
 scenario_record
 scenario_recorded_contract
 scenario_committed_fixtures
+scenario_projection_contracts
+scenario_absent_templates
 scenario_reference_redaction
 scenario_retired_hooks
 scenario_vm

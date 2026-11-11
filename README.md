@@ -836,6 +836,11 @@ The adapter reads the JSON window list before it looks for an existing row.
 If any window fails, it stops before creating a row.
 SSH creation requests JSON with explicit UUID formatting.
 The adapter validates the new row's UUID and host before it tags, selects, or closes that row.
+It waits for the row's connection and checks its title by UUID against the accepted VM name.
+If cmux changed the title, the adapter renames the row and verifies both names.
+The check reserves two seconds of the caller's remaining deadline for other operations.
+Without a caller deadline, it uses a 30-second budget with the same reserve.
+If verification fails, the row stays open, and the diagnostic gives a manual rename command for its UUID.
 
 The second line identifies the row's host and repo.
 If the adapter cannot write it on a new row, it closes that row and reports the failure.

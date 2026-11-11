@@ -33,6 +33,7 @@ workgrove/
 │       ├── install-files.sh   installer file replacement and JSON merge helpers
 │       ├── agent-config-policy.json shared agent settings edits for both installers
 │       ├── doctor.sh          Mac and VM contract checks and fixture recording
+│       ├── doctor_fixtures.py validates complete captures and selects contract examples
 │       ├── doctor-sanitize.jq redacts recorded cmux responses
 │       ├── cmux.sh            shared cmux adapter, row queries, and SSH row creation
 │       ├── cmux-tui-hook.sh   gives cmux-tui's agent hooks the current row's terminal (wt run sets it)
@@ -97,6 +98,7 @@ workgrove/
 ├── test/
 │   ├── run.sh                 the shared local and CI runner with bounded workers and timings
 │   ├── runner-smoke.sh        runner scheduling, filters, failure logs, and interruption cleanup
+│   ├── runner-jobs.py         bounded worker defaults from the visible CPU allocation
 │   ├── runner-git.sh          optional resolution of Apple's Git launcher for test workers
 │   ├── runner-git-smoke.sh    Git selection, fallback, and fixture precedence
 │   ├── wt-scenarios.sh        the wt scenario IDs and names shared by discovery and execution
@@ -114,6 +116,7 @@ workgrove/
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
 │   ├── bash5-smoke.sh         all bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
 │   ├── doctor-smoke.sh        cmux contracts, VM hooks, and redacted fixture recording
+│   ├── doctor_fixtures_test.py projection, mutation, selection, and identity checks
 │   ├── fakes/
 │   │   ├── cmux              the shared cmux and cmux-tui fake
 │   │   ├── pgrep             supplies the fake VM's pane process status
@@ -133,6 +136,7 @@ workgrove/
 │   │       ├── notifications.json
 │   │       ├── rows.json
 │   │       ├── rows_by_window.json
+│   │       ├── surface-catalog.json  accepted VM title fields from a live capture
 │   │       ├── top.json
 │   │       ├── version.txt
 │   │       └── windows.json
@@ -190,6 +194,51 @@ The fake reads the responses recorded from the release that `WG_CMUX_SUPPORTED` 
 It also checks that each fixture folder has `REDACTED.txt`, names its version, and contains no personal paths.
 `wt doctor --record test/fixtures` captures these responses and removes private values.
 Sanitization keeps workspace and window refs consistent while replacing their original numbers.
+It also replaces process identifiers consistently within the capture.
+
+The recorder validates every captured object before it selects examples.
+Missing required fields, changed field names, invalid types, and missing required methods fail recording.
+Unknown fields disappear, including their nested contents.
+The complete automation remains because doctor compares its full structure.
+Unknown automation keys receive placeholders so differences remain observable without disclosing private text.
+
+The recorder selects the first local row, first remote row, and first coding agent when those samples exist.
+It prefers the retained event's notification, or selects the first notification when that record is absent.
+Caller, event, notification, and selected-window references retain additional observed rows when available.
+The recorder retains the windows that contain those rows, or the first window when no row matches.
+Window counts describe retained members; selected row identities keep their observed values.
+Stale event and notification identities remain distinct; the recorder does not invent a matching record.
+An observed notification ID cannot name different rows in its records or retained event.
+The recorder rejects conflicting bindings before selection.
+Empty arrays remain empty, and missing local, remote, or agent examples cause explicit fake-template errors when requested.
+
+These fields form the recorded contract inventory:
+
+| Object | Retained fields and types | Consumers |
+|---|---|---|
+| Row | UUID `id`; workspace `ref`; string `title` and `current_directory`; nullable string `description`; boolean `has_custom_title`; object `remote` | Adapter lookup, title repair, hook, removal, and `fake_row` |
+| Row remote data | Boolean `enabled`; nullable string `destination` and `terminal_transport`; optional nullable string `remote_workspace_id` and `machine`; integer `active_terminal_sessions`; string `state`; optional nullable string `backend`; optional nullable integer `persistent_daemon_slot` | Remote adapter, title repair, hook, and `fake_row`; enabled rows require string destination and backend; connected remote rows require `remote_workspace_id` and `machine` |
+| Window | UUID `id`; integer `index` and `workspace_count`; boolean `key`; nullable UUID `selected_workspace_id` | Window enumeration and fake window state |
+| Scoped row response | Array `workspaces`; optional window `window_ref`; UUID map key | Adapter enumeration and fake replay |
+| Top caller | Nullable UUID `workspace_id`; optional nullable workspace `workspace_ref` and window `window_ref` | Doctor and `fake_top`; caller hints do not prove ownership |
+| Top agent | Object `resources` with integer `process_count`, integer array `pids`, and optional integer array `missing_pids` | Doctor, ownership checks, and `fake_top` |
+| Top window and row | Window `ref` when present; row UUID `id`, workspace `ref` when present, and `resources` | Row ownership and fake replay; resource fields match the agent resource contract |
+| Notification | UUID `id` and `workspace_id`; string `title` and `body` | Doctor, Mac hook, and notification fake |
+| Event | String `name` equal to `notification.created`; UUID `workspace_id`; object `payload` with UUID `notification_id` | Recorder and Mac hook |
+| Capabilities | String array `methods`, with each required method retained | Doctor; see `METHODS` in `doctor_fixtures.py` |
+| Automation | Complete rule, including unknown structure with private text replaced | Doctor compares `home/.cmuxterm/automations.json` |
+| Separate surface catalog capture | Array `cloud_states`; string `machine`, `freshness`, and `sync_mode`; object `cursor` with string `generation` and numeric-string `revision`; array `workspaces` with string `id` and `name` | Title repair and `fake_surface_catalog`; the helper explicitly binds machine and row identities from each synthetic scenario |
+
+The top capture uses `top --json`, which does not request native process trees.
+It drops panes, surfaces, process trees, tags, memory statistics, and commands.
+Ownership and teardown tests construct these additional inputs explicitly.
+They cover process ancestry, missing samples, terminal attribution, monitor tags, and relay failure paths.
+Those synthetic cases do not certify a recorded native process-tree contract.
+Keep the separate 0.65.1 SSH creation capture until a verified creation capture replaces it.
+The existing `surface-catalog.json` is a separate live title-publication capture; the doctor recorder does not replace it.
+The relay client-list cases are synthetic resource API examples, separate from the Mac recording contract.
+They retain nullable string `client_kind` and string array `attached_terminal_ids`, with positive, malformed, absent, deadline, and race cases.
+When a consumer changes, update this inventory, the projection, and mutation coverage together.
 
 `fake_row <id> <title> <description> [host state backend slot ref]` builds a row with a stable, unique workspace ref.
 The optional eighth argument supplies an explicit unused `workspace:N` ref.
@@ -256,12 +305,25 @@ ruff check --select F,E9 lib test
 GIT_ALLOW_PROTOCOL=file INSTALL_BASH=/bin/bash bash test/run.sh
 ```
 
-By default, the runner limits execution to four workers across suites and discovered tasks.
+By default, the runner selects one to eight workers across suites and discovered tasks.
+On macOS, it caps the physical core count at eight.
+On Linux, it caps the visible CPU allocation at eight, including affinity, CPU quotas, and CPU sets.
+An allocation below one CPU selects one worker.
+If Linux allocation detection fails, the runner caps process affinity at four workers.
+If neither allocation nor affinity is available, the runner selects one worker.
+Explicit `JOBS` values must be positive decimal integers without leading zeros.
+An empty `JOBS` value is invalid. An unset `JOBS` selects the default.
 It splits `wt-smoke.sh` and `remote-new-smoke.sh` into one task per scenario.
 It splits the portable, SSH registration, and capacity Python suites into groups of at most eight tests.
 Python discovery includes new tests without changes to the runner.
 The runner starts tasks with the largest estimated durations first.
-After measuring a new long task, add its duration to `queue_task` in `test/run.sh`.
+Re-measure estimates with `JOBS=4 KEEP=1 GIT_ALLOW_PROTOCOL=file bash test/run.sh`.
+On macOS, also set `INSTALL_BASH=/bin/bash`.
+Record the commit, hardware, worker count, competing workload, and each run's total time in the pull request conversation.
+Coordinate expensive runs with other active tasks before measuring.
+Use several complete runs on the same environment to compare worker settings.
+Use the reported `task time` values to update estimates in `queue_task` in `test/run.sh`.
+Round estimates up to whole seconds, and re-measure Python groups after discovery changes their membership.
 The short Python checks within `hosts-smoke.sh` and `docs-smoke.sh` stay with their shell scenarios.
 Set `JOBS=1` for a serial run or `JOBS=8` to allow more workers.
 To select suites, pass their paths: `bash test/run.sh test/wt-smoke.sh`.
@@ -290,6 +352,24 @@ Direct suite invocations remain serial.
 `--list-scenarios` lists exact task IDs and names for each split suite.
 Use `bash test/wt-smoke.sh --scenario scenario_shared_helpers` to run an exact scenario.
 Set `KEEP=1` to keep scratch files for inspection.
+
+Use `bash test/run.sh --fast` for a local fast check.
+The runner prints its coverage and included suites before execution.
+The fast tier includes these suites:
+
+- `bash5`, `python-runtime`, and `hook-wiring` check interpreter startup and hook configuration.
+- `branch-config`, `cmux-monitor`, `cmux-ownership`, and `commands` check isolated helpers and disposable process state.
+- `capacity`, `lib`, `metadata`, `named-outputs`, and `options` check allocation, shared functions, records, and command parsing.
+- `docs`, `runner`, and `runner-git` check documentation, scheduling, failure reporting, interruption cleanup, and Git selection.
+
+These names refer to `test/<name>-smoke.sh`.
+The fast tier excludes the end-to-end teardown, installation, portable recovery, and remote creation suites.
+It also excludes the doctor, GitHub guard, hosts, native relay, SSH registration, task, tmux target, and update suites.
+New suites join full discovery automatically. They join the fast tier only after an explicit allowlist change.
+The fast tier rejects suite arguments and `ONLY` to keep its reported coverage accurate.
+GitHub Actions rejects `--fast`.
+Run the complete suite before merging: `GIT_ALLOW_PROTOCOL=file bash test/run.sh --full`.
+The full suite remains the default and the required continuous integration (CI) check.
 
 `wt-smoke.sh` and `remote-new-smoke.sh` set `WG_POLL_INTERVAL=0` to shorten production poll waits.
 Other suites keep the default one-second interval for checks that need real waits.

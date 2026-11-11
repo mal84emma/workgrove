@@ -15,6 +15,32 @@ fake_cmux_init() {
   fake_windows >"$FAKE_CMUX_STATE/windows.json"
 }
 
+# Match the resource API client snapshot, including nullable metadata and string durations.
+fake_native_clients() {
+  jq -cn --args '{id:"client_11111111111111111111111111111111",
+    session_id:"session_22222222222222222222222222222222",name:"cmux cloud terminal",
+    client_kind:"native-mirror",transport:"unix",connected_seconds:"12",
+    attached_terminal_ids:$ARGS.positional,sizes:[],self:false}
+    | [(. | .id="client_33333333333333333333333333333333" | .name=null
+        | .client_kind=null | .attached_terminal_ids=[] | .self=true), .]' "$@"
+}
+
+# Advance test time with each poll while keeping delayed row projections observable.
+fake_cmux_clock() {
+  mkdir -p "$FAKE_CMUX_STATE/clock-bin"
+  printf 100 >"$FAKE_CMUX_STATE/clock-now"
+  cat >"$FAKE_CMUX_STATE/clock-bin/date" <<'CLOCK'
+#!/bin/sh
+if [ "$*" = +%s ]; then cat "$FAKE_CMUX_STATE/clock-now"; else exec /bin/date "$@"; fi
+CLOCK
+  cat >"$FAKE_CMUX_STATE/clock-bin/sleep" <<'CLOCK'
+#!/bin/sh
+now=$(cat "$FAKE_CMUX_STATE/clock-now")
+printf '%s' "$((now + 1))" >"$FAKE_CMUX_STATE/clock-now"
+CLOCK
+  chmod +x "$FAKE_CMUX_STATE/clock-bin/"*
+}
+
 fake_identity_root() {
   if [[ -n ${FAKE_CMUX_STATE:-} ]]; then printf '%s' "$FAKE_CMUX_STATE"
   elif [[ -n ${TEST_ROOT:-} ]]; then printf '%s/cmux-identities' "$TEST_ROOT"
@@ -79,13 +105,26 @@ fake_row() {
   jq -c --arg ref "$ref" --arg id "$1" --arg title "$2" --arg description "$3" \
     --arg host "${4:-}" --arg state "${5:-connected}" --arg backend "${6:-cmux-tui}" \
     --argjson slot "${7:-null}" '
-    [.workspaces[] | select(.remote.enabled == ($host != ""))][0]
+    [.workspaces[] | select(.remote.enabled == ($host != ""))]
+    | if length == 0 then error("capture has no requested local/remote row template") else .[0] end
     | .id=$id | .ref=$ref | .title=$title | .description=$description
     | .current_directory="" | .has_custom_title=true
     | .remote.enabled=($host != "") | .remote.destination=(if $host == "" then null else $host end)
     | .remote.state=(if $host == "" then "disconnected" else $state end)
+    | .remote.remote_workspace_id=(if $host == "" then null else "remote-" + $id end)
+    | .remote.machine=(if $host == "" then null else "ssh:" + $host end)
+    | .remote.active_terminal_sessions=(if $host == "" then 0 else 1 end)
     | .remote.backend=(if $host == "" then null else $backend end)
     | .remote.persistent_daemon_slot=$slot' "$FAKE_CMUX_FIXTURES/rows.json"
+}
+
+fake_surface_catalog() {
+  jq --arg machine "$1" --slurpfile shape "$FAKE_CMUX_FIXTURES/surface-catalog.json" '
+    $shape[0] | .cloud_states[0].machine=$machine
+    | .cloud_states[0].workspaces=($rows[0].workspaces
+      | map(select(.remote.machine == $machine and .remote.remote_workspace_id != null)
+        | {id:.remote.remote_workspace_id,name:(.fake_remote_title // .title)}))' \
+    --slurpfile rows "$2" <<< '{}'
 }
 
 fake_rows() {
@@ -102,7 +141,9 @@ fake_ssh_response() {
 fake_windows() {
   jq -cn --slurpfile template "$FAKE_CMUX_FIXTURES/windows.json" \
     --argjson ids "$(printf '%s\n' "$@" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
-    '$ids | to_entries | map(. as $entry | $template[0][0] | .id=$entry.value | .index=$entry.key
+    '$ids | to_entries | map(. as $entry
+      | if ($template[0] | length) == 0 then error("capture has no window template") else $template[0][0] end
+      | .id=$entry.value | .index=$entry.key
       | .key=($entry.key == 0) | .workspace_count=0 | .selected_workspace_id=null)'
 }
 
@@ -127,7 +168,9 @@ fake_queue() {
 
 fake_top() {
   jq -c --arg caller "$1" --arg owner "${CMUX_STUB_OWNER_ROW:-$1}" --argjson pid "$$" --argjson count "$2" '
-    .caller.workspace_id=$caller
+    if (.coding_agents | length) == 0 then error("capture has no coding agent template") else . end
+    | .caller.workspace_id=$caller
+    | del(.caller.workspace_ref, .caller.window_ref)
     | .coding_agents=[.coding_agents[0] | .resources.process_count=$count | .resources.pids=(if $count > 0 then [$pid] else [] end)]
     | .windows=[{workspaces:[{id:$owner,resources:{pids:[$pid],process_count:1}}]}]' "$FAKE_CMUX_FIXTURES/top.json"
 }

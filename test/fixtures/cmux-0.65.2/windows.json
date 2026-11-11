@@ -2,8 +2,15 @@
   {
     "id": "00000000-0000-4000-8000-000000000008",
     "index": 0,
+    "key": false,
+    "selected_workspace_id": "00000000-0000-4000-8000-000000000006",
+    "workspace_count": 3
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000010",
+    "index": 1,
     "key": true,
     "selected_workspace_id": "00000000-0000-4000-8000-000000000007",
-    "workspace_count": 4
+    "workspace_count": 3
   }
 ]
