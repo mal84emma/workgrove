@@ -152,6 +152,14 @@ Additional fields in captured fixtures do not establish additional runtime requi
 | VM provider hooks | `.errors == []`; `.providers` is an array. Each requested `.provider` occurs once, with `.state == "installed"`. | `doctor.sh`: `doctor_vm`. |
 | Focused notification hook | `.context.appFocused` controls suppression of the desktop notification. | [cmux.json](../home/.config/cmux/cmux.json): the inline `quiet-when-focused` jq command in `.notifications.hooks`. |
 
+`row_agent_once` uses [cmux_ownership.jq](../lib/workgrove/cmux_ownership.jq) to assess one process snapshot.
+The parser returns validated PID sets, monitor candidates, and uncertainty reasons.
+Bash decodes the fixed result with one bounded `mapfile` call.
+
+The assessment reports whether the sampled parent graph is valid.
+Bash uses that result only after the operating system confirms a process has disappeared.
+Bash retains live ancestry checks, monitor proof, retries, and fresh checks before removal.
+
 Removal requires a complete process sample for the selected row.
 PID arrays require unique positive integers and matching counts, including when the row has no provider.
 Unattributed resource and terminal processes join the ownership check; unexplained processes refuse closure.

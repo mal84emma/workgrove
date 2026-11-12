@@ -409,4 +409,60 @@ while IFS=$'\t' read -r name MODE declared file expected; do
   assert_eq "$name" "$expected" "$actual"
 done <"$ROOT/manifest.tsv"
 end_scenario
+ROW_AGENT='' ROW_AGENT_PID='' ROW_AGENT_START='' ROW_AGENT_OBSERVERS='[]'
+begin_scenario 'malformed assessment output never grants ownership' || exit 0
+cmux_row_assessment() {
+  local fields=(1 idle '' 90 '' invalid end)
+  case $ADAPTER_CASE in
+    empty) return 0 ;;
+    failed) return 7 ;;
+    short) fields=(1 idle) ;;
+    extra) fields+=(unexpected) ;;
+    version) fields[0]=2 ;;
+    sentinel) fields[6]=unexpected ;;
+    reason) fields[1]=unknown ;;
+    provider) fields[1]=live; fields[2]=bad ;;
+    row) fields[3]='90,invalid' ;;
+    extras) fields[4]=bad ;;
+    graph) fields[5]='90:invalid' ;;
+    idle-provider) fields[2]=100 ;;
+    live-empty) fields[1]=live ;;
+    attribution-empty) fields[1]=attribution ;;
+    refusal-data) fields[1]=row ;;
+    newline) fields[6]=$'end\n' ;;
+  esac
+  printf '%s\0' "${fields[@]}"
+  [[ $ADAPTER_CASE != failed-after-output ]]
+}
+for ADAPTER_CASE in empty failed short extra version sentinel reason provider row extras graph \
+    idle-provider live-empty attribution-empty refusal-data newline failed-after-output; do
+  CMUX_ERROR='' CMUX_SAMPLE_RETRY=0
+  rc=0
+  row_agent_once target task || rc=$?
+  actual="$rc|$ROW_AGENT|$CMUX_ERROR|$CMUX_SAMPLE_RETRY|$ROW_AGENT_PID|$ROW_AGENT_START|$ROW_AGENT_OBSERVERS"
+  assert_eq "$ADAPTER_CASE" '1|busy|cannot check the agent in cmux row target; kept the worktree|0|||[]' "$actual"
+done
+end_scenario
+
+begin_scenario 'assessment uncertainty keeps the extraction diagnostic' || exit 0
+cmux_row_assessment() { printf '%s\0' 1 ownership '' '' '' invalid end; }
+CMUX_ERROR='' CMUX_SAMPLE_RETRY=0
+rc=0
+row_agent_once target task || rc=$?
+assert_eq 'the uncertainty refuses ownership' 1 "$rc"
+assert_eq 'the extraction diagnostic remains exact' \
+  'cannot verify ownership of the agent in cmux row target; kept the worktree (restart the task with updated wt run)' "$CMUX_ERROR"
+end_scenario
+
+begin_scenario 'a failed snapshot command never starts the assessment' || exit 0
+cmux_call() { return 37; }
+cmux_row_assessment() { touch "$ROOT/unexpected-assessment"; }
+CMUX_ERROR='' CMUX_SAMPLE_RETRY=0
+rc=0
+row_agent_once target task || rc=$?
+assert_eq 'the command failure remains unknown' 1 "$rc"
+assert_eq 'the failure keeps its diagnostic' 'cannot check the agent in cmux row target; kept the worktree' "$CMUX_ERROR"
+assert_eq 'the failure resets ownership evidence' 'busy|||[]' "$ROW_AGENT|$ROW_AGENT_PID|$ROW_AGENT_START|$ROW_AGENT_OBSERVERS"
+assert_eq 'the parser never starts without a snapshot' no "$([[ -e $ROOT/unexpected-assessment ]] && echo yes || echo no)"
+end_scenario
 lib_summary
