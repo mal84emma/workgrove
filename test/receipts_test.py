@@ -110,6 +110,22 @@ class ReceiptPolicy(unittest.TestCase):
         self.assertTrue(read(json.dumps(receipt(title='\U0001f680'))))
         self.assertTrue(read(json.dumps(receipt(head='a' * 40 + '\n'))))
 
+    def test_parser_limits_and_discarded_duplicate_values(self):
+        base = json.dumps(receipt())[:-1]
+        for opening, closing, accepted, refused in (('[', ']', 254, 255), ('{"n":', '}', 127, 128)):
+            for count in (accepted, refused):
+                raw = base + ',"extra":' + opening * count + '0' + closing * count + '}'
+                with self.subTest(opening=opening, count=count):
+                    self.assertEqual(count == accepted, old_read(raw) == 0)
+                    self.assertEqual(count == accepted, read(raw))
+            raw = base + ',"extra":' + opening * refused + '0' + closing * refused + ',"extra":0}'
+            self.assertNotEqual(0, old_read(raw))
+            self.assertFalse(read(raw))
+        raw = base + ',"extra":"\\ud800","extra":"ok"}'
+        self.assertNotEqual(0, old_read(raw))
+        self.assertFalse(read(raw))
+        self.assertTrue(read(json.dumps(receipt(title='[{"quoted": "["}]'))))
+
     def test_cli_validation_is_read_only(self):
         for data, status in ((receipt(), 0), (receipt(keep=1), 1)):
             raw = json.dumps(data)
