@@ -250,7 +250,7 @@ scenario_reuse() {
   chmod +x "$TEST_ROOT/count/other-python"
   for shell in /bin/sh "$(command -v dash || true)"; do
     [[ -n $shell ]] || continue
-    for mode in reuse path bare cwd-unavailable directory removed nonexecutable fresh inherited diagnostics; do
+    for mode in reuse path bare cwd-unavailable fresh-cwd-unavailable directory removed nonexecutable fresh inherited diagnostics; do
       : >"$TEST_ROOT/count/log"
       rc=0
       COUNT_LOG="$TEST_ROOT/count/log" COUNT_ARGS="$TEST_ROOT/count/args" \
@@ -272,9 +272,11 @@ scenario_reuse() {
           reuse) wg_run_selected_python -c first; wg_run_selected_python -c second ;;
           path) PATH="$root/next/bin:$PATH"; wg_run_selected_python -c run
             [ "$wg_python" = "$root/next/bin/python3" ] ;;
-          cwd-unavailable)
+          cwd-unavailable|fresh-cwd-unavailable)
             pwd() { printf "unavailable directory\n" >&2; return 1; }
-            wg_run_selected_python -c run 2>"$root/pwd-error" ;;
+            if [ "$mode" = fresh-cwd-unavailable ]; then
+              wg_run_python -c run
+            else wg_run_selected_python -c run; fi 2>"$root/pwd-error" ;;
           bare)
             mkdir -p "$root/earlier"
             rm -f "$root/earlier/python3"
@@ -309,7 +311,7 @@ scenario_reuse() {
         reuse) probes=1 runs=2 ;;
         directory) probes=3 ;;
         fresh) probes=3 runs=2 ;;
-        cwd-unavailable)
+        cwd-unavailable|fresh-cwd-unavailable)
           assert_eq 'an unavailable directory adds no diagnostic' '' "$(cat "$TEST_ROOT/count/pwd-error")" ;;
         inherited) probes=1
           assert_eq 'runtime state is not exported' '' "$(grep '^wg_\(python\|selected_\)' "$TEST_ROOT/count/environment" || true)" ;;

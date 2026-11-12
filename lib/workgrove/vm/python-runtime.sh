@@ -36,7 +36,8 @@ wg_readiness_error() {
 }
 
 wg_run_python() {
-  wg_select_python || return 1
+  # Fresh callers invalidate the previous selection before the shared runner selects.
+  wg_selected_python=''
   wg_run_selected_python "$@"
 }
 
