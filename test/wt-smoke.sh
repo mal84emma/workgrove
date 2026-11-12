@@ -2014,12 +2014,33 @@ STUB
   : >"$TEST_ROOT/self-tmux.log"
   assert_wt_fails 1 'identity changed' rm sandboxed --row-closed --row-host test-vm -r "$r"
   assert_lacks 'replacement idle session survives receipt recovery' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
-  local callback_session
+  local callback_session callback_deadline
   callback_session="wt-$(basename "$r")-callback"
   {
-    printf '#!/bin/sh\n'
-    printf 'exec env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_CONTROL_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed --row-host test-vm -r %s\n' \
+    printf '#!/usr/bin/env bash\nset -eu\n'
+    printf 'exec >%s 2>&1\n' "$(shell_join "$TEST_ROOT/callback-output")"
+    # The notification acknowledgment must not wait for Mac cleanup to finish.
+    # Probe the released lock while the requesting worker still waits for this acknowledgment.
+    printf 'python3 - %s %s <<%s\n' "$(shell_join "$r/.git/wt/teardown/callback.lock")" \
+      "$(shell_join "$TEST_ROOT/callback-lock-released")" "'PY'"
+    cat <<'PY'
+import fcntl, pathlib, sys
+with open(sys.argv[1], 'r+') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert not lock.read(), 'the requesting coordinator still records its owner'
+    pathlib.Path(sys.argv[2]).write_text('released\n')
+PY
+    printf 'PY\n'
+    printf '(\n  status=0\n'
+    # The callback starts cleanup only after the test observes the notification acknowledgment.
+    # shellcheck disable=SC2016  # The callback owns its bounded acknowledgment wait.
+    printf '  deadline=$((SECONDS + 30))\n  while [[ ! -f %s && $SECONDS -lt $deadline ]]; do sleep 0.01; done\n' \
+      "$(shell_join "$TEST_ROOT/callback-acknowledged")"
+    printf '  env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_CONTROL_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed --row-host test-vm -r %s || status=$?\n' \
       "$(shell_join "$WT_BASH")" "$(shell_join "$WT")" "$(shell_join "$r")"
+    # shellcheck disable=SC2016  # The callback writes its own exit status.
+    printf '  printf "%%s\\n" "$status" >%s\n' "$(shell_join "$TEST_ROOT/callback-status")"
+    printf ') >%s 2>&1 </dev/null &\n' "$(shell_join "$TEST_ROOT/callback-output")"
   } >"$FAKE_CMUX_STATE/notify-callback"
   chmod +x "$FAKE_CMUX_STATE/notify-callback"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0"
@@ -2027,6 +2048,14 @@ STUB
     "CMUX_TUI_SOCKET=/tmp/native" "CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "WT_CLOSE_WAIT_SECONDS=0")
   ln -s "$CMUX_ALIVE" "$fake/cmux-tui"
   assert_wt_fails 1 'unverified' rm callback -r "$r"
+  assert_regular "$TEST_ROOT" callback-lock-released
+  touch "$TEST_ROOT/callback-acknowledged"
+  callback_deadline=$((SECONDS + 30))
+  while [[ -f $TEST_ROOT/callback-lock-released && ! -f $TEST_ROOT/callback-status && $SECONDS -lt $callback_deadline ]]; do sleep 0.05; done
+  assert_regular "$TEST_ROOT" callback-status
+  if [[ -f $TEST_ROOT/callback-status ]]; then
+    assert_eq 'the independent callback succeeds' 0 "$(cat "$TEST_ROOT/callback-status")"
+  fi
   assert_eq 'an independent callback acquires the released lock and finishes the recorded live session' complete \
     "$(jq -r .stage "$r/.git/wt/teardown/callback.json")"
   rm "$FAKE_CMUX_STATE/notify-callback" "$fake/cmux-tui"
