@@ -1,11 +1,9 @@
 """Characterize receipt policy and atomic writes against the pre-extraction boundaries."""
 import importlib.util
-import io
 import itertools
 import json
 import os
 from pathlib import Path
-import re
 import stat
 import subprocess
 import sys
@@ -14,18 +12,14 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SHELL = (ROOT / 'lib/workgrove/teardown.sh').read_text()
-WT = (ROOT / 'bin/wt').read_text()
 HELPER = ROOT / 'lib/workgrove/receipts.py'
 STAGES = ('prepared', 'worktree_removed', 'branch_config_removing', 'sidecars_removing',
           'git_removed', 'close_requested', 'complete')
 # Freeze the original read boundary as an independent compatibility oracle.
 PREDICATE = '''.repo == $repo and .name == $name and .path == $path and .branch == ("wt/" + $name) and (.head | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and all(.keep,.native,.remote; IN("0","1")) and (.stage | IN("prepared","worktree_removed","branch_config_removing","sidecars_removing","git_removed","close_requested","complete"))'''
-MODULE = None
-if HELPER.exists():
-    spec = importlib.util.spec_from_file_location('receipts', HELPER)
-    MODULE = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(MODULE)
+spec = importlib.util.spec_from_file_location('receipts', HELPER)
+MODULE = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(MODULE)
 
 
 def receipt(**updates):
@@ -44,8 +38,6 @@ def old_read(raw):
 
 
 def read(raw):
-    if MODULE is None:
-        return old_read(raw) == 0
     try:
         MODULE.validate(MODULE.decode(raw), '/repo', 'task', '/repo/.worktrees/task')
         return True
@@ -54,13 +46,7 @@ def read(raw):
 
 
 def write(path, data):
-    raw = json.dumps(data)
-    if MODULE is not None:
-        MODULE.write(str(path), json.loads(raw))
-        return
-    source = re.search(r"teardown_interpreter -c '\n(import json, os, sys, tempfile.*?)\n' \"\$WT_TEARDOWN_FILE\"", SHELL, re.S)[1]
-    with patch.object(sys, 'argv', ['writer', str(path)]), patch.object(sys, 'stdin', io.StringIO(raw)):
-        exec(compile(source, '<original receipt writer>', 'exec'), {})
+    MODULE.write(str(path), json.loads(json.dumps(data)))
 
 
 class ReceiptPolicy(unittest.TestCase):
@@ -107,7 +93,7 @@ class ReceiptPolicy(unittest.TestCase):
         for raw, expected in cases:
             with self.subTest(raw=raw):
                 self.assertEqual(expected, old_read(raw))
-                if MODULE is not None and raw in (valid + '\n' + valid, '{}\n' + valid):
+                if raw in (valid + '\n' + valid, '{}\n' + valid):
                     self.assertFalse(read(raw))
                 else:
                     self.assertEqual(expected == 0, read(raw))

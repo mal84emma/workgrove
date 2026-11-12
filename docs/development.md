@@ -46,6 +46,7 @@ workgrove/
 │       ├── recovery.sh        VM row recovery and task attachment
 │       ├── remote.sh          remote commands and result parsing
 │       ├── commands.py       generation-bound task command cancellation
+│       ├── receipts.py        teardown receipt validation and atomic persistence
 │       ├── coordinator.py     finite teardown workers, locks, and signal forwarding
 │       ├── cmux_monitor.py   detached native Codex monitor identity checks
 │       ├── filtered_files.py  raw tracked-file preservation checks

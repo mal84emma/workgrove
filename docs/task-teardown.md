@@ -270,7 +270,10 @@ If group shutdown remains unverified, the lock file retains its owner record for
 
 The private `<name>.lock` file remains beside the receipt and can serve later generations.
 Before deletion, workgrove writes a private receipt under `<repo>/.git/wt/teardown/<name>.json`.
-Atomic replacement and filesystem synchronization preserve each recorded stage.
+`receipts.py` owns recovery validation, generation replacement rules, and atomic receipt writes.
+Bash retains checkpoint timing, coordinator calls, and live evidence checks.
+The writer preserves JSON encoding, file synchronization, directory synchronization, and temporary-file cleanup.
+The stage update stays in jq to preserve its number formatting before Python encoding.
 The receipt records object identities and component progress, without copying private file contents or task briefs.
 
 Before deleting sidecars, workgrove persists the `sidecars_removing` stage and their fingerprints.
@@ -314,6 +317,12 @@ A task-local executable path refuses removal even when its symlink target is out
 A surviving VM caller reports nonzero status until independent Mac confirmation, even when self-closure appears successful.
 Its pending output confirms Git cleanup and gives the Mac confirmation command.
 It does not claim that the row or tmux session remains open.
+
+Recovery validates receipt identity, head format, string flags, and the recorded stage before cleanup.
+Optional historical fields remain subject to their existing evidence checks.
+Reading a receipt does not rewrite it.
+Retries can save the same stage, including a `--keep-branch` update.
+The previous-receipt reader before `prepared` retains its narrower repository and task-name check.
 
 Repeat the original `wt rm` command to resume pending cleanup after the worktree registration is gone.
 For VM-side removal of another task, use the printed Mac retry instead.

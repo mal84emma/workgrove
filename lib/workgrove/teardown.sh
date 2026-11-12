@@ -2,6 +2,7 @@
 # Reads globals: CMUX_ERROR, REPO, WG_LIB_DIR, WG_MACHINE_RESULT, WG_TEARDOWN_CONTROL_FD, WG_TEARDOWN_WORKER_PID,
 #   WG_TEARDOWN_LOCK_PATH, WT_BASE_FETCH_NOTIFIED, WT_TEARDOWN_FILE, WT_TEARDOWN_JSON.
 # Receipts survive the task directory and distinguish Git removal from session cleanup.
+# receipts.py owns receipt policy and atomic writes; Bash owns checkpoint timing and live checks.
 WT_TEARDOWN_FILE='' WT_TEARDOWN_JSON='' WG_TEARDOWN_CLOSE_PHASE=0
 teardown_interpreter() {
   # shellcheck source=lib/workgrove/vm/python-runtime.sh
@@ -47,34 +48,7 @@ teardown_save() { # teardown_save <stage>; flush the receipt before the next des
   WT_TEARDOWN_JSON=$(jq -c --arg stage "$1" '.stage=$stage' <<<"$WT_TEARDOWN_JSON") || die 'cannot encode teardown receipt'
   if [[ ${WG_TEARDOWN_CLOSE_PHASE:-0} == 1 ]]; then teardown_control acquire; else teardown_control check; fi \
     || die 'teardown lock is unavailable'
-  teardown_interpreter -c '
-import json, os, sys, tempfile
-path = sys.argv[1]
-data = json.load(sys.stdin)
-if os.path.exists(path):
-    with open(path) as previous:
-        old = json.load(previous)
-    if old.get("generation") != data.get("generation") and not (old.get("stage") == "complete" and data["stage"] == "prepared"):
-        sys.exit("wt: cleanup generation changed; kept the newer receipt")
-parent = os.path.dirname(path)
-os.makedirs(parent, mode=0o700, exist_ok=True)
-fd, temporary = tempfile.mkstemp(dir=parent)
-try:
-    with os.fdopen(fd, "w") as stream:
-        json.dump(data, stream)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-    directory = os.open(parent, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-finally:
-    if os.path.exists(temporary):
-        os.unlink(temporary)
-' "$WT_TEARDOWN_FILE" <<<"$WT_TEARDOWN_JSON" || die "cannot persist teardown receipt $WT_TEARDOWN_FILE"
+  teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/receipts.py" write "$WT_TEARDOWN_FILE" <<<"$WT_TEARDOWN_JSON" || die "cannot persist teardown receipt $WT_TEARDOWN_FILE"
   if [[ ${WG_TEARDOWN_CLOSE_PHASE:-0} == 1 ]]; then teardown_control release || die 'cannot release receipt lock'; fi
 }
 

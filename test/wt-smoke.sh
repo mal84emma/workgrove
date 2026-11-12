@@ -3537,7 +3537,7 @@ SHIM
   cat >"$shim/python3" <<'SHIM'
 #!/usr/bin/env bash
 case "$*" in
-  *'data = json.load(sys.stdin)'*)
+  *'data = json.load(sys.stdin)'*|*'/lib/workgrove/receipts.py write '*)
     payload=$(cat)
     if jq -e '.stage == "git_removed"' <<<"$payload" >/dev/null; then exit 1; fi
     printf '%s\n' "$payload" | "$REAL_FIXTURE_PYTHON" "$@"
