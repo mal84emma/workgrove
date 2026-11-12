@@ -65,7 +65,7 @@ host_preflight_source() {
   cat <<'WG_PREFLIGHT_HEADER'
 wg_portable_preflight() {
 if wg_select_python; then
-wg_run_python - doctor --preflight <<'WG_PREFLIGHT_SOURCE'
+wg_run_selected_python - doctor --preflight <<'WG_PREFLIGHT_SOURCE'
 WG_PREFLIGHT_HEADER
   cat "$WG_LIB_DIR/portable.py"
   cat <<'WG_PREFLIGHT_END'

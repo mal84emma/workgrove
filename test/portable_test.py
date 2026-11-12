@@ -3639,6 +3639,17 @@ sys.exit(subprocess.run(["/bin/sh", "-c", sys.argv[-1]], env=environment, check=
             jq.write_text("#!/bin/sh\nprintf called >" + shlex.quote(str(jq_marker)) + "\nexit 127\n")
             jq.chmod(0o700)
         marker = self.base / "accepted"
+        runtime_log = self.base / "runtime-starts"
+        python = self.tools / "python3"
+        python.unlink()
+        python.write_text("#!/bin/sh\n"
+                          "if [ \"$*\" = '-I -B -c import sys; sys.exit(sys.version_info < (3, 9))' ]; then\n"
+                          f"  printf 'probe\\n' >>{shlex.quote(str(runtime_log))}\n"
+                          "else\n"
+                          f"  printf 'run\\n' >>{shlex.quote(str(runtime_log))}\n"
+                          "fi\n"
+                          f"exec {shlex.quote(sys.executable)} \"$@\"\n")
+        python.chmod(0o700)
         ssh = Path(environment["PATH"].split(":")[0]) / "ssh"
         request = ("trust-request\t" if tagged else "") + json.dumps(
             {"error": "personal-volume-trust-required", "root": str(self.root), "mount": str(self.root)},
@@ -3658,6 +3669,7 @@ sys.exit(1)
         self.assertNotIn("[y/N]", refusal.stderr)
         self.assertFalse(marker.exists())
         for answer, accepted in (("\n", False), ("y\n", True)):
+            runtime_log.write_text("")
             master, slave = pty.openpty()
             process = subprocess.Popen([str(self.tools / "bash"), str(REPO / "bin/wt"), "-H", "test-host", *arguments],
                                        env=environment, stdin=slave, stdout=slave, stderr=slave)
@@ -3683,6 +3695,9 @@ sys.exit(1)
                 self.assertTrue(sent, output.decode(errors="replace"))
                 self.assertEqual(process.wait(timeout=2) == 0, accepted, output.decode(errors="replace"))
                 self.assertEqual(marker.exists(), accepted)
+                starts = runtime_log.read_text().splitlines()
+                self.assertEqual(starts.count("probe"), 1)
+                self.assertEqual(starts.count("run"), 1 if tagged else 2)
                 if accepted:
                     self.assertIn("--mount", marker.read_text())
             finally:

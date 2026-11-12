@@ -41,4 +41,4 @@ if ! wg_select_python; then
   printf 'wt-ssh-host: needs Python 3; install Python and retry\n' >&2
   exit 1
 fi
-wg_run_python --exec "$wg_lib" "$@"
+wg_run_selected_python --exec "$wg_lib" "$@"
