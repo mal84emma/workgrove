@@ -654,8 +654,8 @@ cmd_rm() {
   teardown_rm_revalidate "$name" "$path" "$branch" "$force" "$discard_commits" verified
   teardown_rm_worktree "$name" "$path" verified
   teardown_save worktree_removed
-  # Continue through branch deletion, branch configuration, sidecars, session closure, and independent observation.
-  # teardown_finish uses the same named stages when a receipt resumes interrupted cleanup.
+  # teardown_finish resumes teardown_stage_branch, teardown_stage_config, teardown_stage_sidecars, then teardown_stage_close.
+  # Closure includes the final command stop and independent teardown_observe checks.
   teardown_finish "$observe_only" "$row_closed" "$defer_close" "$row_host"
 }
 

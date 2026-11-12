@@ -263,7 +263,7 @@ Phase headers state their inputs, outputs, mutations, and expected receipt stage
 Call each phase directly in its worker shell so Bash retains `errexit` and the coordinator's process identity.
 A conditional call can suppress `errexit` throughout a phase and its callees.
 
-The table lists each destructive action in execution order.
+The table follows the removal sequence and identifies recovery and controller variants.
 A checkpoint is the latest durable intent before that action; recovery repeats the applicable live checks.
 Command capture saves the current stage again before signaling.
 The preservation ref intentionally precedes the first prepared receipt.
@@ -281,11 +281,14 @@ The preservation ref intentionally precedes the first prepared receipt.
 | Delete the prompt sidecar. | `teardown_stage_sidecars` | `sidecars_removing` | Fresh check of all sidecar fingerprints, accepting recorded absence after intent; coordinator immediately before unlink. |
 | Delete the started sidecar. | `teardown_stage_sidecars` | `sidecars_removing` | Fresh check of all sidecar fingerprints, accepting recorded absence after intent; coordinator immediately before unlink. |
 | Stop task commands before session closure. | `teardown_stage_close`, through `teardown_commands_capture` | `close_requested`, including a repeated save after capture. | Directory and sidecar absence; exact session identity or saved row identity; fresh ownership; original shell or provider; process identities. |
+| Close the Mac row during VM confirmation. | `host_rm`, through `close_row` | `close_requested` after deferred VM cleanup. | Receiver identity and ownership checks; fresh Mac candidate-row ownership; comparison with the saved row ID. |
 | Kill the recorded tmux session. | `teardown_stage_close` | `close_requested` | Exact session identity; fresh recorded ownership after Mac acknowledgment, or caller pane ancestry and exclusive self-ownership with command capture. |
 | Close the recorded local row. | `teardown_stage_close`, through `close_row` | `close_requested` | Fresh candidate-row ownership; saved row ID; fresh saved-row enumeration; command capture when self-owned. |
 | Send the Mac close request. | `teardown_stage_close`, through `notify_mac` | `close_requested` | Exact tmux identity; current caller session and pane ancestry; fresh self-ownership; original owner; command capture; relay context. |
 | Stop remaining recorded commands. | `teardown_stage_close`, through `teardown_commands_stop all` | `close_requested` | No pending close result; pinned process identities. A closed local row or acknowledged tmux session receives a fresh absence check. |
 
+After closing a VM row, `host_rm` freshly checks all candidate rows before sending `--row-closed` to the receiver.
+The native Mac hook also verifies row identity and transport ownership before closure, then confirms absence before acknowledgment.
 The final command stop precedes command absence checks and independent `teardown_observe` checks.
 Observation saves `complete` only after Git, sidecar, command, and row or session absence checks succeed.
 Removal, pending cleanup, independent observation, and task-name reuse remain distinct outcomes.

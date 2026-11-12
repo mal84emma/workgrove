@@ -221,7 +221,7 @@ teardown_rm_evidence() {
   teardown_preflight "$__evidence_path"
   local __evidence_verified_head __evidence_verified_base='' __evidence_proof='' __evidence_generation
   __evidence_verified_head=$(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$__evidence_branch") || die 'cannot resolve task head'
-  local __evidence_here __evidence_there; __evidence_here=$(pwd -P); __evidence_there=$(cd "$__evidence_path" 2>/dev/null && pwd -P) || __evidence_there="$__evidence_path"   # a symlinked cwd is still inside
+  local __evidence_here __evidence_there; __evidence_here=$(pwd -P); __evidence_there=$(cd "$__evidence_path" 2>/dev/null && pwd -P) || __evidence_there="$__evidence_path"   # A symlinked working directory remains inside the task.
   [[ "$__evidence_here" == "$__evidence_there" || "$__evidence_here" == "$__evidence_there/"* ]] && die "you are inside $__evidence_name; cd out first (e.g. cd $REPO)"
   local __evidence_verified_metadata __evidence_verified_sidecars __evidence_verified_branch_config __evidence_metadata_path
   __evidence_metadata_path=$(wt_meta "$__evidence_name")
@@ -447,6 +447,8 @@ teardown_rm_worktree() {
   else teardown_remove_registration "$path" || die 'cannot remove the missing task registration'; fi
 }
 
+# Inputs: row-closed and row-host flags, plus the recorded receipt. Any supported receipt stage can enter.
+# Outputs: verified host context or refusal. Mutations: none.
 teardown_row_context() {
   local row_closed=$1 row_host=$2
   [[ $(jq -r .remote <<<"$WT_TEARDOWN_JSON") == 1 ]] || return 0
