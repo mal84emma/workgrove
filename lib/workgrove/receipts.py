@@ -7,16 +7,31 @@ import tempfile
 
 STAGES = ('prepared', 'worktree_removed', 'branch_config_removing', 'sidecars_removing',
           'git_removed', 'close_requested', 'complete')
+MAX_PARSING_DEPTH = 256
 
 
 def decode(raw):
     """Read one JSON record without changing its stored bytes."""
     def invalid_constant(value):
         raise ValueError('invalid JSON constant: ' + value)
-    data = json.loads(raw, parse_constant=invalid_constant)
-    # Python accepts unpaired surrogates that jq can reject, including in optional fields.
-    json.dumps(data, ensure_ascii=False).encode('utf-8')
-    return data
+    decoder = json.JSONDecoder(parse_constant=invalid_constant)
+    # Match jq's parser stack bound before duplicate keys discard earlier evidence.
+    # Objects reserve one extra stack entry for their current key.
+    depth = index = 0
+    while index < len(raw):
+        character = raw[index]
+        if character == '"':
+            value, index = decoder.raw_decode(raw, index)
+            value.encode('utf-8')
+            continue
+        if character in '{[':
+            if depth >= MAX_PARSING_DEPTH:
+                raise ValueError('receipt exceeds JSON parsing depth')
+            depth += 2 if character == '{' else 1
+        elif character in '}]':
+            depth -= 2 if character == '}' else 1
+        index += 1
+    return decoder.decode(raw)
 
 
 def validate(data, repo, name, path):

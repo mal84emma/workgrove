@@ -3984,7 +3984,7 @@ scenario_teardown_review_ownership() {
 
 scenario_receipt_stages() {
   begin_scenario "$1" || return 0
-  local r stage receipt original mac="$TEST_ROOT/receipt-stages-mac"
+  local r stage receipt original compact nested invalid i mac="$TEST_ROOT/receipt-stages-mac"
   mkdir -p "$mac"
   printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"
   chmod +x "$mac/uname"
@@ -4001,6 +4001,15 @@ scenario_receipt_stages() {
     assert_wt_ok "$stage recovery accepts legacy receipts" rm stages --keep-branch -r "$r"
     assert_eq "$stage recovery completes" complete "$(jq -r .stage "$receipt")"
     assert_eq "$stage recovery persists keep-branch" 1 "$(jq -r .keep "$receipt")"
+  done
+  compact=$(jq -c . <<<"$original")
+  nested=0
+  for ((i=0; i<255; i++)); do nested="[$nested]"; done
+  for invalid in '"extra":"\ud800","extra":"valid"' "\"extra\":$nested,\"extra\":0"; do
+    printf '%s\n' "${compact%?},$invalid}" >"$receipt"
+    cp "$receipt" "$TEST_ROOT/invalid-receipt.json"
+    assert_wt_fails 1 'invalid teardown receipt' rm stages -r "$r"
+    assert_same_bytes 'invalid raw input preserves the receipt' "$TEST_ROOT/invalid-receipt.json" "$receipt"
   done
   printf '%s\n' "$original" >"$receipt"
   printf '{}\n' >"$r/.git/wt/stages.json"
