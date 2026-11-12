@@ -82,4 +82,114 @@ scenario_hash() {
   end_scenario
 }
 scenario_hash
+# Count version probes separately from operation starts without running setup code.
+runtime_count_fixture() {
+  mkdir -p "$TEST_ROOT/count/bin" "$TEST_ROOT/count/home/.local/bin" "$TEST_ROOT/count/lib/vm"
+  cp "$REPO/lib/workgrove/vm/python-runtime.sh" "$TEST_ROOT/count/lib/vm/python-runtime.sh"
+  cp "$REPO/lib/workgrove/portable.py" "$TEST_ROOT/count/lib/portable.py"
+  # Replace only the system fallback in this scratch runtime.
+  sed "s|/usr/bin/python3|$TEST_ROOT/count/missing-python|g" \
+    "$REPO/lib/workgrove/vm/python-runtime.sh" >"$TEST_ROOT/count/lib/vm/python-runtime.sh"
+  cat >"$TEST_ROOT/count/bin/python3" <<'PYTHON'
+#!/bin/sh
+if [ "$*" = '-I -B -c import sys; sys.exit(sys.version_info < (3, 9))' ]; then
+  printf 'probe\n' >>"$COUNT_LOG"
+else
+  printf 'run\n' >>"$COUNT_LOG"
+  printf '%s\n' "$@" >>"$COUNT_ARGS"
+  [ "${3:-}" != - ] || cat >/dev/null
+fi
+PYTHON
+  printf '#!/bin/sh\nexit 0\n' >"$TEST_ROOT/count/home/.local/bin/wt"
+  chmod +x "$TEST_ROOT/count/bin/python3" "$TEST_ROOT/count/home/.local/bin/wt"
+}
+
+count_operation() (
+  export HOME="$TEST_ROOT/count/home" PATH="$TEST_ROOT/count/bin:$PATH"
+  export COUNT_LOG="$TEST_ROOT/count/log" COUNT_ARGS="$TEST_ROOT/count/args"
+  WG_LIB_DIR="$REPO/lib/workgrove"
+  # shellcheck source=lib/workgrove/hosts.sh
+  source "$REPO/lib/workgrove/hosts.sh"
+  # shellcheck source=lib/workgrove/remote.sh
+  source "$REPO/lib/workgrove/remote.sh"
+  # shellcheck source=lib/workgrove/options.sh
+  source "$REPO/lib/workgrove/options.sh"
+  # shellcheck source=lib/workgrove/setup.sh
+  source "$REPO/lib/workgrove/setup.sh"
+  # shellcheck source=lib/workgrove/common.sh
+  source "$REPO/lib/workgrove/common.sh"
+  wt_register_tmpfile() { :; }
+  vm_wt_failure() { return "$3"; }
+  remote_sh() { /bin/sh -c "$2"; }
+  remote_sh_raw() {
+    # Simulate Ubuntu and package installation only in the scratch bootstrap.
+    local script=${2//'. /etc/os-release'/'ID=ubuntu; VERSION_ID=24.04'}
+    /bin/sh -c "$script"
+  }
+  case $1 in
+    hosts) host_probe_source | /bin/sh ;;
+    preflight)
+      # Use the real preflight function without the separate installed-wt checks.
+      host_preflight_source | sed '/^#!\/usr\/bin\/env sh/,$d' >"$TEST_ROOT/count/preflight"
+      printf '\nwg_portable_preflight\n' >>"$TEST_ROOT/count/preflight"
+      /bin/sh "$TEST_ROOT/count/preflight" ;;
+    setup) host_setup test-host --root "$TEST_ROOT/count/root" --storage os-disk ;;
+    setup-install)
+      WG_LIB_DIR="$TEST_ROOT/count/lib"
+      printf '#!/bin/sh\nprintf "probe\\n" >>"$COUNT_LOG"\nexit 1\n' >"$TEST_ROOT/count/bin/python3"
+      printf '#!/bin/sh\nprintf "0\\n"\n' >"$TEST_ROOT/count/bin/id"
+      cat >"$TEST_ROOT/count/bin/apt-get" <<'APT'
+#!/bin/sh
+printf '%s\n' "$*" >>"$COUNT_ARGS"
+[ "$1" != install ] || cp "$COUNT_SAVED" "${COUNT_SAVED%/*}/bin/python3"
+APT
+      chmod +x "$TEST_ROOT/count/bin/id" "$TEST_ROOT/count/bin/apt-get"
+      export COUNT_SAVED="$TEST_ROOT/count/saved-python"
+      # Exclude all real Python candidates while retaining package fixture tools.
+      PATH="$TEST_ROOT/count/bin:/usr/bin:/bin"
+      host_setup test-host --root "$TEST_ROOT/count/root" --storage os-disk ;;
+    remote-doctor) host_environment_doctor test-host --json ;;
+    doctor) cmd_environment_doctor --json ;;
+    codex) check_codex ;;
+    install) bash "$REPO/install.sh" --remote-root "$TEST_ROOT/count/root" ;;
+    reinstall) WT_REMOTE_ROOT="$TEST_ROOT/count/root" bash "$REPO/install.sh" ;;
+    ssh-host) bash "$REPO/bin/wt-ssh-host" --help ;;
+    ssh-check)
+      mkdir -p "$HOME/.ssh"
+      printf '# wt-ssh-host\n' >"$HOME/.ssh/config"
+      WG_VERSION_ROOT=$REPO VM_SSH_CHECK_RUN=()
+      # shellcheck source=lib/workgrove/common.sh
+      source "$REPO/lib/workgrove/common.sh"
+      ssh_host_check test-host ;;
+  esac
+)
+
+scenario_counts() {
+  begin_scenario 'operation version probes and Python starts have separate counts' || return 0
+  local operation probes runs
+  runtime_count_fixture
+  cp "$TEST_ROOT/count/bin/python3" "$TEST_ROOT/count/saved-python"
+  while read -r operation probes runs; do
+    : >"$TEST_ROOT/count/log"
+    : >"$TEST_ROOT/count/args"
+    count_operation "$operation" >"$TEST_ROOT/count/output" 2>"$TEST_ROOT/count/error"
+    assert_eq "$operation version probes" "$probes" "$(grep -c '^probe$' "$TEST_ROOT/count/log" || true)"
+    assert_eq "$operation Python starts" "$runs" "$(grep -c '^run$' "$TEST_ROOT/count/log" || true)"
+    cp "$TEST_ROOT/count/saved-python" "$TEST_ROOT/count/bin/python3"
+  done <<'COUNTS'
+hosts 3 2
+preflight 2 1
+setup 2 1
+setup-install 3 1
+remote-doctor 2 1
+doctor 2 1
+codex 1 1
+install 2 1
+reinstall 2 1
+ssh-host 2 1
+ssh-check 2 1
+COUNTS
+  end_scenario
+}
+scenario_counts
 lib_summary
