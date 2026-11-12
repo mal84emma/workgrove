@@ -144,6 +144,7 @@ workgrove/
 │   ├── update-smoke.sh        version reporting and updates with scratch clones
 │   ├── tmux-target-smoke.sh  real Linux tmux parsing on a private server
 │   ├── cmux-ownership-smoke.sh  native parent snapshots and idle launch ownership
+│   ├── cmux-assessment-smoke.sh  direct snapshot results and diagnostic precedence
 │   ├── commands-smoke.sh    task command identity and owned-process cancellation checks
 │   ├── commands_test.py     fake process graphs and disposable detached children
 │   ├── coordinator_test.py  interrupted probes and signals in disposable command groups
