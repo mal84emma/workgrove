@@ -257,7 +257,7 @@ scenario_reuse() {
       PATH="$TEST_ROOT/count/bin:$TEST_ROOT/count/tools" \
       wg_python="$TEST_ROOT/count/other-python" \
       wg_selected_python="$TEST_ROOT/count/other-python" \
-      wg_selected_path="$TEST_ROOT/count/bin:$TEST_ROOT/count/tools" wg_selected_pwd="$(pwd -P)" \
+      wg_selected_path="$TEST_ROOT/count/bin:$TEST_ROOT/count/tools" wg_selected_pwd="$(pwd -P && printf '.')" \
       "$shell" -c '
         . "$1"
         root=$2 mode=$3
@@ -337,7 +337,8 @@ scenario_boundaries() {
     : >"$TEST_ROOT/count/log"
     # These values model an unrelated caller or host with a previously selected interpreter.
     export wg_python="$TEST_ROOT/count/foreign" wg_selected_python="$TEST_ROOT/count/foreign"
-    export wg_selected_path="$TEST_ROOT/count/bin:$PATH" wg_selected_pwd="$PWD"
+    wg_selected_pwd="$(pwd -P && printf '.')"
+    export wg_selected_path="$TEST_ROOT/count/bin:$PATH" wg_selected_pwd
     count_operation "$operation" >"$TEST_ROOT/count/output" 2>"$TEST_ROOT/count/error"
     count_operation "$operation" >"$TEST_ROOT/count/output" 2>"$TEST_ROOT/count/error"
     unset wg_python wg_selected_python wg_selected_path wg_selected_pwd
@@ -346,4 +347,37 @@ scenario_boundaries() {
   end_scenario
 }
 scenario_boundaries
+# shellcheck disable=SC2016  # The POSIX child expands its arguments.
+scenario_newline_directory() {
+  begin_scenario 'relative Python paths preserve directory names ending in newlines' || return 0
+  local shell method suffix directory rc real_python
+  real_python=$(command -v python3)
+  mkdir -p "$TEST_ROOT/newline/bin"
+  printf '#!/bin/sh\nprintf "unvalidated-sibling\\n"\nexit 88\n' >"$TEST_ROOT/newline/bin/python3"
+  chmod +x "$TEST_ROOT/newline/bin/python3"
+  for shell in /bin/sh "$(command -v dash || true)"; do
+    [[ -n $shell ]] || continue
+    for suffix in $'\n' $'\n\n'; do
+      directory="$TEST_ROOT/newline$suffix"
+      mkdir -p "$directory/bin"
+      ln -sf "$real_python" "$directory/bin/python3"
+      for method in wg_run_python wg_run_selected_python; do
+        rc=0
+        (
+          cd "$directory"
+          PATH=bin:/usr/bin:/bin "$shell" -c '
+            . "$1"
+            [ "$2" != wg_run_selected_python ] || wg_select_python || exit
+            "$2" -c "print(42)"
+          ' runtime "$REPO/lib/workgrove/vm/python-runtime.sh" "$method"
+        ) >"$TEST_ROOT/newline-output" 2>"$TEST_ROOT/newline-error" || rc=$?
+        assert_eq "$shell $method validates the executable it starts" 0 "$rc"
+        assert_eq 'the validated Python produces its output' 42 "$(cat "$TEST_ROOT/newline-output")"
+        assert_eq 'the directory name adds no diagnostic' '' "$(cat "$TEST_ROOT/newline-error")"
+      done
+    done
+  done
+  end_scenario
+}
+scenario_newline_directory
 lib_summary
