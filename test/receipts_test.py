@@ -249,7 +249,8 @@ teardown_commands_stop() { :; }
 die() { echo "$*" >&2; exit 1; }
 WT_TEARDOWN_FILE="$2/task.json"
 WT_TEARDOWN_JSON='{"generation":"g","stage":"git_removed","self":""}'
-WG_VERSION_ROOT=$1 WG_TEARDOWN_CLOSE_PHASE=1 WG_TEARDOWN_ORIGIN_PID=$$
+WG_VERSION_ROOT=$1 WG_TEARDOWN_CLOSE_PHASE=0 WG_TEARDOWN_ORIGIN_PID=$$
+teardown_release
 teardown_save close_requested
 teardown_save close_requested
 teardown_commands_capture 1 start
@@ -261,7 +262,7 @@ teardown_commands_capture 1 start
                                     env=dict(os.environ, PYTHON=sys.executable, LOG=str(log)),
                                     text=True, capture_output=True)
             self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual(['acquire', 'release'] * 3, log.read_text().splitlines())
+            self.assertEqual(['release'] + ['acquire', 'release'] * 3, log.read_text().splitlines())
 
 
 if __name__ == '__main__':
