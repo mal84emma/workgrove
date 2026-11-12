@@ -247,6 +247,52 @@ The exclusive-final-action requirement excludes that concurrent launch from the 
 Commands already orphaned before capture also lack ancestry proof and require separate inspection.
 No new daemon or service is added.
 
+## Removal phases and operation order
+
+`cmd_rm` owns recovery dispatch, preflight evidence, prepared intent, cancellation, live revalidation, worktree removal, and the continuation.
+`teardown_finish` dispatches that continuation from the recorded stage for both normal removal and recovery.
+Its named stages remove the branch, clean branch configuration, remove sidecars, and close the recorded session.
+Independent observation must then establish absence before completion.
+
+Each phase receives its inputs as arguments.
+Recovery returns a caller-named dispatch value; preflight returns a caller-named map of captured facts.
+The `verified` map stays separate from fresh observations during cancellation and revalidation.
+Existing metadata, ownership, coordinator, and receipt globals retain their documented mutations.
+Phase headers state their inputs, outputs, mutations, and expected receipt stage.
+
+Call each phase directly in its worker shell so Bash retains `errexit` and the coordinator's process identity.
+A conditional call can suppress `errexit` throughout a phase and its callees.
+
+The table follows the removal sequence and identifies recovery and controller variants.
+A checkpoint is the latest durable intent before that action; recovery repeats the applicable live checks.
+Command capture saves the current stage again before signaling.
+The preservation ref intentionally precedes the first prepared receipt.
+
+| Destructive action | Phase or continuation | Receipt checkpoint | Preceding live checks |
+| --- | --- | --- | --- |
+| Create the preservation ref when required. | `teardown_rm_evidence` | No new receipt yet. | Preservation reasons; current head and comparison base; direct anchor identity and current anchor object. |
+| Stop task commands before Git removal. | `teardown_rm_cancel`, through `teardown_commands_capture` or `teardown_commands_stop` | `prepared`, including a repeated save after capture. | Fresh row or tmux self-ownership; process birth identities and observer identity; prior manifest validation. |
+| Remove the worktree or its missing registration. | `teardown_rm_worktree` | `prepared` | Post-cancellation preservation reasons, raw files, head, base, tmux or row ownership; metadata, sidecars, private Git data, and coordinator. |
+| Remove an interrupted task's registration. | `teardown_finish`, through `teardown_remove_registration` | `prepared` | Python receipt policy; row host context; directory absence; private Git data; exact registration listing. |
+| Delete the branch with its expected old object. | `teardown_stage_branch` | `worktree_removed`, or `prepared` during interrupted-removal recovery. | Branch existence and tip; metadata; other registrations; fresh preservation evidence; metadata again; coordinator. |
+| Recover branch cleanup locks. | `teardown_stage_config` | `branch_config_removing` | Generation, process start, boot, lock anchor, and inode identities in `branch_config.py`. |
+| Remove branch configuration unless the branch stays. | `teardown_stage_config` | `branch_config_removing` | Git configuration and ref locks; branch absence; frozen configuration snapshot; unchanged configuration and lock identities. |
+| Delete the metadata sidecar. | `teardown_stage_sidecars` | `sidecars_removing` | Directory absence; branch absence unless kept; all sidecar fingerprints; coordinator immediately before unlink. |
+| Delete the prompt sidecar. | `teardown_stage_sidecars` | `sidecars_removing` | Fresh check of all sidecar fingerprints, accepting recorded absence after intent; coordinator immediately before unlink. |
+| Delete the started sidecar. | `teardown_stage_sidecars` | `sidecars_removing` | Fresh check of all sidecar fingerprints, accepting recorded absence after intent; coordinator immediately before unlink. |
+| Stop task commands before session closure. | `teardown_stage_close`, through `teardown_commands_capture` | `close_requested`, including a repeated save after capture. | Directory and sidecar absence; exact session identity or saved row identity; fresh ownership; original shell or provider; process identities. |
+| Close the Mac row during VM confirmation. | `host_rm`, through `close_row` | `close_requested` after deferred VM cleanup. | Receiver identity and ownership checks; fresh Mac candidate-row ownership; comparison with the saved row ID. |
+| Kill the recorded tmux session. | `teardown_stage_close` | `close_requested` | Exact session identity; fresh recorded ownership after Mac acknowledgment, or caller pane ancestry and exclusive self-ownership with command capture. |
+| Close the recorded local row. | `teardown_stage_close`, through `close_row` | `close_requested` | Fresh candidate-row ownership; saved row ID; fresh saved-row enumeration; command capture when self-owned. |
+| Send the Mac close request. | `teardown_stage_close`, through `notify_mac` | `close_requested` | Exact tmux identity; current caller session and pane ancestry; fresh self-ownership; original owner; command capture; relay context. |
+| Stop remaining recorded commands. | `teardown_stage_close`, through `teardown_commands_stop all` | `close_requested` | No pending close result; pinned process identities. A closed local row or acknowledged tmux session receives a fresh absence check. |
+
+After closing a VM row, `host_rm` freshly checks all candidate rows before sending `--row-closed` to the receiver.
+The native Mac hook also verifies row identity and transport ownership before closure, then confirms absence before acknowledgment.
+The final command stop precedes command absence checks and independent `teardown_observe` checks.
+Observation saves `complete` only after Git, sidecar, command, and row or session absence checks succeed.
+Removal, pending cleanup, independent observation, and task-name reuse remain distinct outcomes.
+
 ## Recover incomplete cleanup
 
 A per-task operating-system lock prevents cooperating removal commands from deleting the same generation concurrently.

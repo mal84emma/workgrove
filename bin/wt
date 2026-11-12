@@ -614,7 +614,7 @@ cmd_pr() {
 
 cmd_rm() {
   local discard_commits=0 defer_close=0 row_closed=0 observe_only=0 row_host=''
-  local name="" force=0 keep=0 repo="" self_remote=0 host="" session="" title="" native=0
+  local name="" force=0 keep=0 repo=""
   local -A opts=()
   wt_opts "$(wt_spec rm)" opts "$@"
   name=${opts[name]-$name}
@@ -638,205 +638,25 @@ cmd_rm() {
     [[ $(metadata_fingerprint "$WT_TEARDOWN_FILE") == "${opts[closed_receipt]}" ]] \
       || die 'cleanup receipt changed; repeat independent Mac confirmation'
   fi
-  if [[ ! -d $(wt_path "$name") && -f $WT_TEARDOWN_FILE ]]; then
-    WT_TEARDOWN_JSON=$(cat "$WT_TEARDOWN_FILE")
-    teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/receipts.py" validate "$REPO" "$name" "$(wt_path "$name")" \
-      <<<"$WT_TEARDOWN_JSON" \
-      || die 'invalid teardown receipt'
-    if [[ $(jq -r .stage <<<"$WT_TEARDOWN_JSON") != complete || ! -f $(wt_meta "$name") ]]; then
-      if [[ $keep == 1 ]]; then
-        WT_TEARDOWN_JSON=$(jq -c '.keep="1"' <<<"$WT_TEARDOWN_JSON")
-        teardown_save "$(jq -r .stage <<<"$WT_TEARDOWN_JSON")"
-      fi
-      teardown_finish; return
-    fi
+  local recovery
+  teardown_rm_recovery "$name" "$keep" recovery
+  if [[ $recovery == resume ]]; then
+    teardown_finish "$observe_only" "$row_closed" "$defer_close" "$row_host"
+    return
   fi
   [[ $observe_only == 0 && ( $row_closed == 0 || $defer_close == 1 ) ]] || die 'no pending cleanup receipt for this absent task'
   require_wt "$name" path branch "rm"
-  teardown_preflight "$path"
-  local verified_head verified_base='' proof='' generation
-  verified_head=$(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$branch") || die 'cannot resolve task head'
-  local here there; here=$(pwd -P); there=$(cd "$path" 2>/dev/null && pwd -P) || there="$path"   # a symlinked cwd is still inside
-  [[ "$here" == "$there" || "$here" == "$there/"* ]] && die "you are inside $name; cd out first (e.g. cd $REPO)"
-  local verified_metadata verified_sidecars verified_branch_config metadata_path
-  metadata_path=$(wt_meta "$name")
-  verified_sidecars=$(teardown_sidecars_snapshot "$name") || die 'cannot fingerprint task metadata or sidecars'
-  verified_metadata=$(jq -r .metadata <<<"$verified_sidecars")
-  verified_branch_config=$(teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/branch_config.py" snapshot "$REPO" "$branch") || die 'cannot snapshot local branch configuration'
-  meta_require "$name"
-  [[ $(metadata_fingerprint "$metadata_path") == "$verified_metadata" ]] || die 'task metadata changed while loading'
-  local base; base=${WT_META[base]-}; [[ -n "$base" ]] || base=$(default_base)
-  if [[ $force -eq 0 ]]; then
-    local reasons=()
-    rm_reasons "$name" "$path" "$branch" "$base" reasons "$discard_commits"
-    if [[ ${#reasons[@]} -gt 0 ]]; then
-      printf 'wt: refusing to remove %s: %s\n' "$name" "$(IFS=';'; echo "${reasons[*]}")" >&2
-      printf 'wt: inspect with: wt show %s — then push/merge, check the branch out again or copy the file back, or re-run with --force to discard.\n' "$name" >&2
-      case "${reasons[*]}" in *' not merged into '*) printf 'wt: --discard-commits waives only the commit reason (a squash merge the base later edited or reverted); the other checks stay.\n' >&2 ;; esac
-      exit 3
-    fi
-  fi
-  if [[ $force == 1 ]]; then proof=discard
-  else
-    base=${WT_RM_BASE:-$base}; proof=${WT_RM_PROOF:-}
-    if [[ -z $proof && $discard_commits == 1 ]]; then proof=discard; fi
-    [[ -n $proof ]] || die 'work preservation proof is missing; kept the worktree'
-  fi
-  verified_base=$(preservation_git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true)
-  if is_remote && [[ -n ${TMUX:-} ]]; then
-    local current
-    session=$(wt_session "$name" "$REPO")
-    [[ ${TMUX_PANE:-} =~ ^%[0-9]+$ ]] || die 'cannot identify the caller tmux pane; kept the worktree'
-    current=$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>&1) \
-      || die "cannot read the current tmux session: $current; rerun this command with escalation if a sandbox blocks the socket"
-    [[ -n "$current" ]] || die "cannot read the current tmux session: tmux returned no session name"
-    if [[ "$current" == "$session" ]]; then
-      local pane_pid
-      pane_pid=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_pid}') || die 'cannot identify tmux pane process'
-      process_descends "$BASHPID" "$pane_pid" || die 'cannot verify caller tmux ownership; kept the worktree'
-      local ownership_rc=0
-      tmux_self_ownership "$session" "$name" || ownership_rc=$?
-      case $ownership_rc in
-        0) self_remote=1 ;;
-        1) die 'another agent is running in this tmux session; kept the worktree' ;;
-        3) die "unowned process blocks this tmux session: $TMUX_BLOCKER; kept the worktree" ;;
-        *) die 'cannot verify exclusive agent ownership in this tmux session; kept the worktree' ;;
-      esac
-    fi
-  fi
-  local row="" self=""
-  title=$(task_title "$name")
-  if is_remote; then
-    [[ -n "$session" ]] || session=$(wt_session "$name" "$REPO")
-    if [[ $self_remote -eq 0 ]]; then
-      local agent_rc=0
-      tmux_agent "$session" || agent_rc=$?
-      case $agent_rc in
-        0) die "another agent is running in tmux session $session; kept the worktree" ;;
-        1) ;;
-        *) die "cannot check the agent in tmux session $session; kept the worktree" ;;
-      esac
-    fi
-    if [[ $self_remote -eq 1 && $(tmux show-environment -t "=$session" WT_CMUX_CLOSE_ON_EXIT 2>/dev/null) == WT_CMUX_CLOSE_ON_EXIT=1 ]]; then
-      native=1
-    fi
-  else
-    cmux_require check_row_removal "$title" "$REPO" row self "" "$(wt_path "$name")"
-  fi
-  if is_remote; then
-    host=${WT_META[row_host]:-}
-    valid_host "$host" || die 'task row host is unverified; kept the worktree'
-    [[ -z $row_host || $row_host == "$host" ]] \
-      || die 'Mac row host changed; use the original SSH alias for cleanup'
-  fi
-  if [[ $self_remote -eq 1 && $native -eq 0 ]]; then
-    # Check the relay setup only after the reasons above, while the worktree is still intact.
-    hook_ok_repo || die "cannot request Mac row cleanup for $REPO"
-    local _ident=() _tui_socket _tui_terminal
-    if ! relay_env _ident _tui_socket _tui_terminal; then
-      [[ -z ${CMUX_TUI_SOCKET:-} ]] \
-        || die "this row predates native teardown; close and reopen this row on the Mac: wt -H $host attach -r $(shell_join "$REPO") $name, then retry"
-      die "cannot find the Mac cmux relay in this session"
-    fi
-    have cmux-tui || die 'legacy self-cleanup requires cmux-tui outside the task worktree'
-  fi
-  host=${host:-${WT_HOST:-}}
-  local tmux_identity='null' tmux_owner='null'
-  if is_remote; then
-    local identity_rc=0
-    tmux_identity=$(task_tmux_identity "$session") || identity_rc=$?
-    [[ $identity_rc != 2 ]] || die 'cannot identify the task tmux session'
-    [[ $identity_rc == 0 ]] || tmux_identity=null
-    if [[ $identity_rc == 0 ]]; then
-      if [[ $self_remote == 1 ]]; then tmux_owner=$WT_TMUX_OWNER
-      else tmux_owner=$(tmux_idle_owner "$session") || die 'cannot record idle task pane processes'; fi
-    fi
-  fi
-  local final_reasons=()
-  [[ $(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed during teardown'
-  [[ $(preservation_git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed during teardown'
-  generation=${WT_META[generation]:-$verified_head}
-  if [[ $proof == published || $base =~ ^[0-9a-f]{40,64}$ ]]; then
-    local retained=''
-    local anchor_rc=0
-    git -C "$REPO" symbolic-ref -q "refs/wt/preserved/$generation" >/dev/null 2>&1 || anchor_rc=$?
-    [[ $anchor_rc == 1 ]] || die 'preservation anchor must be a direct ref; kept the worktree'
-    retained=$(preservation_git -C "$REPO" rev-parse -q --verify "refs/wt/preserved/$generation" 2>/dev/null || true)
-    if [[ $retained != "$verified_head" ]]; then
-      git -C "$REPO" update-ref --no-deref "refs/wt/preserved/$generation" "$verified_head" '' || die 'cannot retain preserved work'
-    fi
-    warn "retained published commits at refs/wt/preserved/$generation"
-  fi
-  if [[ $self_remote == 1 ]]; then self=remote; fi
-  local remote=0; is_remote && remote=1
-  local previous_commands=null
-  if [[ -f $WT_TEARDOWN_FILE ]]; then
-    local previous_record previous_generation
-    previous_record=$(jq -ec --arg repo "$REPO" --arg name "$name" 'select(.repo == $repo and .name == $name)' "$WT_TEARDOWN_FILE") \
-      || die 'previous cleanup identity is unverified; kept its command evidence'
-    previous_generation=$(jq -r .generation <<<"$previous_record")
-    if [[ $previous_generation == "$generation" ]]; then
-      previous_commands=$(jq -c 'if has("commands") then .commands else null end' <<<"$previous_record") || die 'invalid previous command evidence'
-    elif [[ $(jq -r .stage <<<"$previous_record") == complete ]]; then
-      (WT_TEARDOWN_JSON=$previous_record; teardown_commands_observe) \
-        || die 'previous generation has unverified task commands; kept its receipt'
-    else die 'previous cleanup generation changed; kept its command evidence'; fi
-  fi
-  if [[ $previous_commands != null ]]; then
-    teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/commands.py" validate "$generation" <<<"$previous_commands" \
-      || die 'previous task command evidence is invalid; kept the worktree'
-  fi
-  WT_TEARDOWN_JSON=$(jq -cn --arg name "$name" --arg repo "$REPO" --arg path "$path" --arg branch "$branch" \
-    --arg head "$verified_head" --arg metadata_hash "$verified_metadata" --arg base "$base" --arg base_object "$verified_base" --arg proof "$proof" \
-    --argjson branch_config "$verified_branch_config" --argjson sidecars "$verified_sidecars" --arg generation "$generation" --arg agent "${WT_META[agent]-}" --argjson runtime "${WT_META[runtime]:-null}" --arg row "$row" --arg self "$self" --arg session "$session" \
-    --argjson commands "$previous_commands" --argjson tmux_identity "$tmux_identity" --argjson tmux_owner "$tmux_owner" --arg title "$title" --arg host "$host" --arg workspace "${WT_META[workspace]:-1}" --arg keep "$keep" --arg native "$native" --arg remote "$remote" '$ARGS.named')
+  # shellcheck disable=SC2034  # The phases fill and read this caller-named evidence map.
+  local -A verified=()
+  teardown_rm_evidence "$name" "$path" "$branch" "$force" "$discard_commits" "$keep" "$row_host" verified
   teardown_save prepared
-  if [[ $self == self ]]; then
-    local capture_row='' capture_self=''
-    cmux_require check_row_removal "$title" "$REPO" capture_row capture_self '' "$path"
-    [[ $capture_row == "$row" && $capture_self == self ]] || die 'self ownership changed before command cancellation'
-    teardown_commands_capture "$ROW_AGENT_PID" "$ROW_AGENT_START" "$ROW_AGENT_OBSERVERS" || die 'task command cancellation is incomplete; kept the worktree'
-  elif [[ $self_remote == 1 ]]; then
-    tmux_self_ownership "$session" "$name" || die 'self ownership changed before command cancellation'
-    teardown_commands_capture "$(jq -r .pid <<<"$WT_TMUX_OWNER")" "$(jq -r .start <<<"$WT_TMUX_OWNER")" \
-      || die 'task command cancellation is incomplete; kept the worktree'
-  elif [[ $previous_commands != null ]]; then
-    teardown_commands_stop commands || die 'recorded task command cancellation is incomplete; kept the worktree'
-  fi
-  if [[ $force == 0 ]]; then
-    forget_base "$base" || die 'comparison base is no longer valid'
-    rm_reasons "$name" "$path" "$branch" "$base" final_reasons "$discard_commits"
-    ((${#final_reasons[@]} == 0)) || die "work changed after preflight: ${final_reasons[*]}"
-  fi
-  [[ $(preservation_git -C "$REPO" rev-parse --verify "refs/heads/$branch") == "$verified_head" ]] || die 'task head changed after preflight'
-  [[ $(preservation_git -C "$REPO" rev-parse -q --verify "$base^{commit}" 2>/dev/null || true) == "$verified_base" ]] || die 'comparison base changed after preflight'
-  if is_remote; then
-    local final_identity='' final_identity_rc=0
-    final_identity=$(task_tmux_identity "$session") || final_identity_rc=$?
-    [[ $final_identity_rc != 2 ]] || die 'cannot verify tmux identity after preflight'
-    [[ $final_identity_rc == 0 ]] || final_identity=null
-    [[ $(jq -cS . <<<"$final_identity") == $(jq -cS . <<<"$tmux_identity") ]] \
-      || die 'tmux session identity changed after preflight'
-    if [[ $self_remote == 1 ]]; then
-      tmux_self_ownership "$session" "$name" || die 'tmux ownership changed after preflight'
-    elif [[ $final_identity_rc == 0 ]]; then
-      tmux_recorded_owner "$session" "$name" "$tmux_owner" || die 'idle tmux ownership changed after preflight'
-    fi
-  fi
-  if ! is_remote; then
-    local final_row='' final_self=''
-    cmux_require check_row_removal "$title" "$REPO" final_row final_self '' "$path"
-    [[ $final_row == "$row" && $final_self == "$self" ]] || die 'row ownership changed after preflight'
-  fi
-  [[ $(metadata_fingerprint "$metadata_path") == "$verified_metadata" ]] || die 'task metadata changed before worktree removal; kept the worktree'
-  teardown_sidecars_check "$name" "$verified_sidecars" || die 'sidecars changed before worktree removal; kept the worktree'
-  task_admin_preserved "$path" || die 'private submodule Git data prevents worktree removal'
-  teardown_control check || die 'teardown coordinator exited before worktree removal'
-  if [[ -d $path ]]; then
-    git -C "$REPO" worktree remove --force "$path" || die "git worktree remove failed; receipt: $WT_TEARDOWN_FILE"
-  else teardown_remove_registration "$path" || die 'cannot remove the missing task registration'; fi
+  teardown_rm_cancel "$name" "$path" verified
+  teardown_rm_revalidate "$name" "$path" "$branch" "$force" "$discard_commits" verified
+  teardown_rm_worktree "$name" "$path" verified
   teardown_save worktree_removed
-  teardown_finish
+  # teardown_finish resumes teardown_stage_branch, teardown_stage_config, teardown_stage_sidecars, then teardown_stage_close.
+  # Closure includes the final command stop and independent teardown_observe checks.
+  teardown_finish "$observe_only" "$row_closed" "$defer_close" "$row_host"
 }
 
 cmd_prune() {
