@@ -337,7 +337,8 @@ scenario_boundaries() {
     : >"$TEST_ROOT/count/log"
     # These values model an unrelated caller or host with a previously selected interpreter.
     export wg_python="$TEST_ROOT/count/foreign" wg_selected_python="$TEST_ROOT/count/foreign"
-    export wg_selected_path="$TEST_ROOT/count/bin:$PATH" wg_selected_pwd="$(pwd -P && printf '.')"
+    wg_selected_pwd="$(pwd -P && printf '.')"
+    export wg_selected_path="$TEST_ROOT/count/bin:$PATH" wg_selected_pwd
     count_operation "$operation" >"$TEST_ROOT/count/output" 2>"$TEST_ROOT/count/error"
     count_operation "$operation" >"$TEST_ROOT/count/output" 2>"$TEST_ROOT/count/error"
     unset wg_python wg_selected_python wg_selected_path wg_selected_pwd
