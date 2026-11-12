@@ -47,6 +47,7 @@ wt_scenarios() {
   "$@" scenario_teardown_completed_rows "8y. completed receipts reject replacement and ambiguous local rows"
   "$@" scenario_teardown_pending_rows "8z. pending local cleanup verifies every candidate row before completion"
   "$@" scenario_receipt_stages "8za. receipt recovery preserves all stages and keep-branch retries"
+  "$@" scenario_cmux_assessment_recheck "8zb. removal rechecks ownership after a successful snapshot assessment"
   "$@" scenario_host_args "9. wt -H: the checks that happen before any ssh"
   "$@" scenario_connected_attach "10. wt -H attach checks connected clients and shell prompts"
   "$@" scenario_shared_helpers "11. bash startup, shared library loading, and tmux launch behavior"
