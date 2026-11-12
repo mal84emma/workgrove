@@ -3696,7 +3696,7 @@ sys.exit(1)
                 self.assertEqual(process.wait(timeout=2) == 0, accepted, output.decode(errors="replace"))
                 self.assertEqual(marker.exists(), accepted)
                 starts = runtime_log.read_text().splitlines()
-                self.assertEqual(starts.count("probe"), 1 if tagged else 2)
+                self.assertEqual(starts.count("probe"), 1)
                 self.assertEqual(starts.count("run"), 1 if tagged else 2)
                 if accepted:
                     self.assertIn("--mount", marker.read_text())
