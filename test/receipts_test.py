@@ -93,6 +93,11 @@ class ReceiptPolicy(unittest.TestCase):
                  ('{}\n' + valid, 0)]
         for raw, expected in cases:
             with self.subTest(raw=raw):
+                if raw == '':
+                    # jq 1.6 accepts an empty stream; Apple jq returns four.
+                    self.assertIn(old_read(raw), (0, 4))
+                    self.assertFalse(read(raw))
+                    continue
                 self.assertEqual(expected == 0, old_read(raw) == 0)
                 if raw in (valid + '\n' + valid, '{}\n' + valid):
                     self.assertFalse(read(raw))
