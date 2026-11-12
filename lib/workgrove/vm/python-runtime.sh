@@ -16,10 +16,11 @@ wg_select_python() {
       wg_python=$wg_candidate
       wg_selected_python=$wg_python
       wg_selected_path=${PATH-}
-      wg_selected_pwd=$(pwd -P 2>/dev/null) || wg_selected_pwd=''
+      # The suffix preserves trailing newlines; %?? removes the output terminator and suffix.
+      wg_selected_pwd=$(pwd -P 2>/dev/null && printf '.') || wg_selected_pwd=''
       case $wg_selected_python in
         /*) ;;
-        *) [ -z "$wg_selected_pwd" ] || wg_selected_python=$wg_selected_pwd/$wg_selected_python ;;
+        *) [ -z "$wg_selected_pwd" ] || wg_selected_python=${wg_selected_pwd%??}/$wg_selected_python ;;
       esac
       return 0
     fi
@@ -45,7 +46,7 @@ wg_run_python() {
 wg_run_selected_python() {
   if [ -z "$wg_selected_python" ] || [ ! -x "$wg_selected_python" ] ||
      [ "$wg_selected_path" != "${PATH-}" ] || [ -z "$wg_selected_pwd" ] ||
-     [ "$wg_selected_pwd" != "$(pwd -P 2>/dev/null)" ]; then
+     [ "$wg_selected_pwd" != "$(pwd -P 2>/dev/null && printf '.')" ]; then
     wg_select_python || return 1
   fi
   if [ "${1:-}" = --exec ]; then
