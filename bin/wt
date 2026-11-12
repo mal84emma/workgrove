@@ -640,7 +640,8 @@ cmd_rm() {
   fi
   if [[ ! -d $(wt_path "$name") && -f $WT_TEARDOWN_FILE ]]; then
     WT_TEARDOWN_JSON=$(cat "$WT_TEARDOWN_FILE")
-    jq -e --arg repo "$REPO" --arg name "$name" --arg path "$(wt_path "$name")" '.repo == $repo and .name == $name and .path == $path and .branch == ("wt/" + $name) and (.head | test("^[0-9a-f]{40}([0-9a-f]{24})?$")) and all(.keep,.native,.remote; IN("0","1")) and (.stage | IN("prepared","worktree_removed","branch_config_removing","sidecars_removing","git_removed","close_requested","complete"))' <<<"$WT_TEARDOWN_JSON" >/dev/null \
+    teardown_interpreter "$WG_VERSION_ROOT/lib/workgrove/receipts.py" validate "$REPO" "$name" "$(wt_path "$name")" \
+      <<<"$WT_TEARDOWN_JSON" \
       || die 'invalid teardown receipt'
     if [[ $(jq -r .stage <<<"$WT_TEARDOWN_JSON") != complete || ! -f $(wt_meta "$name") ]]; then
       if [[ $keep == 1 ]]; then

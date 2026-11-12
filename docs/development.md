@@ -46,6 +46,7 @@ workgrove/
 │       ├── recovery.sh        VM row recovery and task attachment
 │       ├── remote.sh          remote commands and result parsing
 │       ├── commands.py       generation-bound task command cancellation
+│       ├── receipts.py        teardown receipt validation and atomic persistence
 │       ├── coordinator.py     finite teardown workers, locks, and signal forwarding
 │       ├── cmux_monitor.py   detached native Codex monitor identity checks
 │       ├── filtered_files.py  raw tracked-file preservation checks
@@ -149,6 +150,8 @@ workgrove/
 │   ├── cmux-monitor-smoke.sh  detached native monitor proof checks
 │   ├── cmux_monitor_test.py  native-shaped samples, observer binding, and kernel arguments
 │   ├── branch-config-smoke.sh  hard-interruption recovery for owned Git locks
+│   ├── receipts-smoke.sh     receipt policy and atomic-write tests
+│   ├── receipts_test.py      legacy receipt shapes, retries, and persistence failures
 │   ├── branch_config_test.py  disposable branch configuration and lock fixtures
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── hosts_records_test.py  host fallback records and inventory validation

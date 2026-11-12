@@ -2014,19 +2014,36 @@ STUB
   : >"$TEST_ROOT/self-tmux.log"
   assert_wt_fails 1 'identity changed' rm sandboxed --row-closed --row-host test-vm -r "$r"
   assert_lacks 'replacement idle session survives receipt recovery' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
-  local callback_session
+  local callback_session receiver="$TEST_ROOT/callback-receiver" callback_status="$TEST_ROOT/callback-status"
+  local callback_owner="$TEST_ROOT/callback-owner" callback_log="$TEST_ROOT/callback-log"
   callback_session="wt-$(basename "$r")-callback"
+  # Mac confirmation runs independently of the notification request's five-second deadline.
+  # Keep the requesting worker alive while the delayed receiver proves lock release.
+  {
+    printf '#!/bin/sh\nsleep 6\nstatus=0\n'
+    printf 'env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_CONTROL_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed --row-host test-vm -r %s >%s 2>&1 || status=$?\n' \
+      "$(shell_join "$WT_BASH")" "$(shell_join "$WT")" "$(shell_join "$r")" "$(shell_join "$callback_log")"
+    # shellcheck disable=SC2016  # The receiver checks the requesting worker after confirmation.
+    printf 'state=$(ps -p "$WG_TEARDOWN_WORKER_PID" -o stat= 2>/dev/null); case "$state" in ""|*Z*) owner=gone ;; *) owner=alive ;; esac\n'
+    # shellcheck disable=SC2016  # The receiver writes its observed result.
+    printf 'printf "%%s\\n" "$owner" >%s; printf "%%s\\n" "$status" >%s\n' \
+      "$(shell_join "$callback_owner")" "$(shell_join "$callback_status")"
+  } >"$receiver"
+  chmod +x "$receiver"
   {
     printf '#!/bin/sh\n'
-    printf 'exec env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_CONTROL_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed --row-host test-vm -r %s\n' \
-      "$(shell_join "$WT_BASH")" "$(shell_join "$WT")" "$(shell_join "$r")"
+    printf 'exec %s -I -B -c %s %s\n' "$(shell_join "$REAL_COMMANDS_PYTHON")" \
+      "$(shell_join 'import subprocess,sys; subprocess.Popen([sys.argv[1]], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)')" \
+      "$(shell_join "$receiver")"
   } >"$FAKE_CMUX_STATE/notify-callback"
   chmod +x "$FAKE_CMUX_STATE/notify-callback"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0"
     "SELF_TMUX_SESSION=$callback_session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_NATIVE=0"
-    "CMUX_TUI_SOCKET=/tmp/native" "CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "WT_CLOSE_WAIT_SECONDS=0")
+    "CMUX_TUI_SOCKET=/tmp/native" "CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "WT_CLOSE_WAIT_SECONDS=22")
   ln -s "$CMUX_ALIVE" "$fake/cmux-tui"
   assert_wt_fails 1 'unverified' rm callback -r "$r"
+  assert_eq 'the independent receiver finishes successfully' 0 "$(cat "$callback_status" 2>/dev/null || true)"
+  assert_eq 'confirmation finishes while the requesting worker remains alive' alive "$(cat "$callback_owner" 2>/dev/null || true)"
   assert_eq 'an independent callback acquires the released lock and finishes the recorded live session' complete \
     "$(jq -r .stage "$r/.git/wt/teardown/callback.json")"
   rm "$FAKE_CMUX_STATE/notify-callback" "$fake/cmux-tui"
@@ -3537,7 +3554,7 @@ SHIM
   cat >"$shim/python3" <<'SHIM'
 #!/usr/bin/env bash
 case "$*" in
-  *'data = json.load(sys.stdin)'*)
+  *'data = json.load(sys.stdin)'*|*'/lib/workgrove/receipts.py write '*)
     payload=$(cat)
     if jq -e '.stage == "git_removed"' <<<"$payload" >/dev/null; then exit 1; fi
     printf '%s\n' "$payload" | "$REAL_FIXTURE_PYTHON" "$@"
@@ -3954,6 +3971,45 @@ scenario_teardown_review_ownership() {
   assert_has 'the refusal identifies missing task-owned context' "$result" 'task-owned Codex launch'
   assert_has 'another agent in another window prevents session shutdown' "$result" 'other-window agent rc=1'
   assert_has 'an independent command in another window prevents session shutdown' "$result" 'other-window command rc=3'
+  end_scenario
+}
+
+scenario_receipt_stages() {
+  begin_scenario "$1" || return 0
+  local r stage receipt original compact nested invalid i mac="$TEST_ROOT/receipt-stages-mac"
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"
+  chmod +x "$mac/uname"
+  local WT_PATH_PREFIX=$mac
+  r=$(new_repo receipt-stages)
+  stub_cmux dead
+  assert_wt_ok 'create receipt fixture' new stages --no-workspace -r "$r"
+  assert_wt_ok 'complete receipt fixture' rm stages -r "$r"
+  receipt="$r/.git/wt/teardown/stages.json"
+  original=$(cat "$receipt")
+  for stage in prepared worktree_removed branch_config_removing sidecars_removing git_removed close_requested complete; do
+    jq --arg stage "$stage" '.stage=$stage | .metadata_hash="absent" | .sidecars={metadata:"absent",prompt:"absent",started:"absent"} | del(.generation,.commands,.runtime,.tmux_identity,.tmux_owner,.title,.host)' \
+      <<<"$original" >"$receipt"
+    assert_wt_ok "$stage recovery accepts legacy receipts" rm stages --keep-branch -r "$r"
+    assert_eq "$stage recovery completes" complete "$(jq -r .stage "$receipt")"
+    assert_eq "$stage recovery persists keep-branch" 1 "$(jq -r .keep "$receipt")"
+  done
+  compact=$(jq -c . <<<"$original")
+  nested=0
+  for ((i=0; i<255; i++)); do nested="[$nested]"; done
+  for invalid in '"extra":"\ud800","extra":"valid"' "\"extra\":$nested,\"extra\":0"; do
+    printf '%s\n' "${compact%?},$invalid}" >"$receipt"
+    cp "$receipt" "$TEST_ROOT/invalid-receipt.json"
+    assert_wt_fails 1 'invalid teardown receipt' rm stages -r "$r"
+    assert_same_bytes 'invalid raw input preserves the receipt' "$TEST_ROOT/invalid-receipt.json" "$receipt"
+  done
+  printf '%s\n' "$original" >"$receipt"
+  printf '{}\n' >"$r/.git/wt/stages.json"
+  wt_run rm stages -r "$r"
+  assert_eq 'complete receipts with metadata use normal removal checks' 1 "$WT_RC"
+  assert_regular "$r" .git/wt/stages.json
+  printf '%s\n' "$original" >"$TEST_ROOT/original-receipt.json"
+  assert_same_bytes 'normal removal checks retain the receipt' "$TEST_ROOT/original-receipt.json" "$receipt"
   end_scenario
 }
 
