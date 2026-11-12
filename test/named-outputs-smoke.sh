@@ -188,4 +188,78 @@ test_agent_outputs() {
 }
 test_agent_outputs
 
+# shellcheck source=lib/workgrove/teardown.sh
+source "$REPO/lib/workgrove/teardown.sh"
+
+test_teardown_recovery_outputs() {
+  local REPO="$TEST_ROOT/project" WT_TEARDOWN_FILE="$TEST_ROOT/recovery.json" fixture_output fixture_head
+  begin_scenario 'recovery dispatch outputs survive internal local names' || return 0
+  fixture_head=$(git -C "$REPO" rev-parse HEAD)
+  for fixture_output in name keep path stage current dispatch; do
+    local "$fixture_output=old"
+    rm -f "$WT_TEARDOWN_FILE"
+    teardown_rm_recovery missing 0 "$fixture_output"
+    assert_eq "$fixture_output receives the new-removal decision" new "${!fixture_output}"
+    jq -cn --arg repo "$REPO" --arg path "$(wt_path missing)" --arg head "$fixture_head" \
+      '{repo:$repo,name:"missing",path:$path,branch:"wt/missing",head:$head,keep:"0",native:"0",remote:"0",stage:"close_requested"}' \
+      >"$WT_TEARDOWN_FILE"
+    teardown_rm_recovery missing 0 "$fixture_output"
+    assert_eq "$fixture_output receives the recovery decision" resume "${!fixture_output}"
+  done
+  end_scenario
+}
+test_teardown_recovery_outputs
+
+test_teardown_evidence_outputs() {
+  local REPO="$TEST_ROOT/project" WT_TEARDOWN_FILE="$TEST_ROOT/no-receipt.json" fixture_output fixture_head
+  begin_scenario 'preflight evidence maps survive internal local names' || return 0
+  fixture_head=$(git -C "$REPO" rev-parse refs/heads/wt/task)
+  # The contract checks output assignment; integration scenarios own executable and kernel probes.
+  teardown_preflight() { return 0; }
+  is_remote() { return 1; }
+  for fixture_output in name path base row self verified_head previous_commands evidence; do
+    local -A "$fixture_output"
+    teardown_rm_evidence task "$(wt_path task)" wt/task 1 0 0 '' "$fixture_output"
+    local -n fixture_facts=$fixture_output
+    assert_eq "$fixture_output receives every captured field" 14 "${#fixture_facts[@]}"
+    assert_eq "$fixture_output receives the frozen head" "$fixture_head" "${fixture_facts[verified_head]}"
+    assert_eq "$fixture_output receives the base" main "${fixture_facts[base]}"
+    assert_eq "$fixture_output receives the row" row-1 "${fixture_facts[row]}"
+    assert_eq "$fixture_output receives self ownership" self "${fixture_facts[self]}"
+    assert_eq "$fixture_output receives the previous command state" null "${fixture_facts[previous_commands]}"
+    assert_eq 'evidence capture does not write prepared intent' '' "$(jq -r '.stage // ""' <<<"$WT_TEARDOWN_JSON")"
+    assert_absent "$TEST_ROOT" no-receipt.json
+  done
+  end_scenario
+}
+test_teardown_evidence_outputs
+
+# A conditional phase call suppresses errexit in its entire body, including a failed title assignment.
+test_teardown_evidence_errexit() {
+  local fixture_status=0
+  begin_scenario 'preflight evidence retains errexit for fallible assignments' || return 0
+  if bash -euo pipefail -c '
+    source "$1/lib/workgrove/common.sh"
+    source "$1/lib/workgrove/safety.sh"
+    source "$1/lib/workgrove/teardown.sh"
+    eval "$(sed -n "/^cmd_rm() {/,/^}/p" "$1/bin/wt")"
+    REPO=$2
+    teardown_lock() { return 0; }
+    teardown_preflight() { return 0; }
+    is_remote() { return 1; }
+    task_title() { return 73; }
+    CODEX_SANDBOX="" cmd_rm task --force -r "$REPO"
+    touch "$3/continued-after-failure"
+  ' _ "$REPO" "$TEST_ROOT/project" "$TEST_ROOT" >"$TEST_ROOT/errexit.log" 2>&1; then
+    fail 'a failed title lookup did not stop its plain phase call'
+  else
+    fixture_status=$?
+    assert_eq 'the phase keeps the failed assignment status' 73 "$fixture_status"
+  fi
+  assert_absent "$TEST_ROOT" continued-after-failure
+  assert_absent "$TEST_ROOT/project" .git/wt/teardown/task.json
+  end_scenario
+}
+test_teardown_evidence_errexit
+
 lib_summary

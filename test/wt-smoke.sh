@@ -3090,6 +3090,31 @@ SHIM
   assert_eq 'the unreadable replacement remains' original "$(jq -r .generation "$r/.git/wt/generation.json")"
   WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
 
+  rm "$shim/shasum"
+  r=$(new_repo branch-metadata-race)
+  assert_wt_ok 'create a branch-boundary metadata fixture' new target --no-workspace -r "$r"
+  cat >"$shim/git" <<'SHIM'
+#!/usr/bin/env bash
+case "$*" in
+  *'rev-parse -q --verify refs/heads/main^{commit}'*)
+    if [[ ! -d $RACE_REPO/.worktrees/target && -f $RACE_REPO/.git/wt/target.json ]]; then
+      jq '.generation="replacement-generation"' "$RACE_REPO/.git/wt/target.json" >"$RACE_REPO/new-metadata"
+      mv "$RACE_REPO/new-metadata" "$RACE_REPO/.git/wt/target.json"
+    fi ;;
+esac
+exec "$REAL_FIXTURE_GIT" "$@"
+SHIM
+  chmod +x "$shim/git"
+  WT_PATH_PREFIX="$shim:$mac" WT_RELAY_ENV=("REAL_FIXTURE_GIT=$real_git" "RACE_REPO=$r")
+  assert_wt_fails 1 'task metadata changed before branch removal' rm target -r "$r"
+  assert_gone 'the metadata race occurs after directory removal' "$r/.worktrees/target"
+  assert_branch "$r" wt/target yes
+  assert_eq 'the second metadata check preserves the replacement' replacement-generation \
+    "$(jq -r .generation "$r/.git/wt/target.json")"
+  assert_eq 'the metadata race retains branch cleanup intent' worktree_removed \
+    "$(jq -r .stage "$r/.git/wt/teardown/target.json")"
+  WT_PATH_PREFIX=$mac WT_RELAY_ENV=()
+
   # shellcheck disable=SC2329,SC2030,SC2031  # host_rm invokes these isolated controller replacements.
   controller_output=$(
     # shellcheck source=lib/workgrove/remote.sh
