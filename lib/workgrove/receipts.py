@@ -13,7 +13,10 @@ def decode(raw):
     """Read one JSON record without changing its stored bytes."""
     def invalid_constant(value):
         raise ValueError('invalid JSON constant: ' + value)
-    return json.loads(raw, parse_constant=invalid_constant)
+    data = json.loads(raw, parse_constant=invalid_constant)
+    # Python accepts unpaired surrogates that jq can reject, including in optional fields.
+    json.dumps(data, ensure_ascii=False).encode('utf-8')
+    return data
 
 
 def validate(data, repo, name, path):

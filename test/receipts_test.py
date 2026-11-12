@@ -58,6 +58,7 @@ class ReceiptPolicy(unittest.TestCase):
             for generation in ({}, {'generation': 'generation'}):
                 data.update(generation)
                 with self.subTest(present=present, generation=generation):
+                    self.assertEqual(0, old_read(json.dumps(data)))
                     self.assertTrue(read(json.dumps(data)))
                     with tempfile.TemporaryDirectory() as directory:
                         target = Path(directory) / 'receipts/task.json'
@@ -97,6 +98,25 @@ class ReceiptPolicy(unittest.TestCase):
                     self.assertFalse(read(raw))
                 else:
                     self.assertEqual(expected == 0, read(raw))
+
+    def test_degenerate_json_never_broadens_jq_acceptance(self):
+        valid = json.dumps(receipt())
+        for raw in (valid[:-1] + ',"extra":NaN}', valid[:-1] + ',"extra":Infinity}',
+                    '\ufeff' + valid, json.dumps(receipt(host='\ud800')),
+                    json.dumps(receipt(host='\udfff'))):
+            with self.subTest(raw=raw):
+                # jq versions differ on degenerate JSON; the new boundary always refuses it.
+                self.assertFalse(read(raw))
+        self.assertTrue(read(json.dumps(receipt(title='\U0001f680'))))
+        self.assertTrue(read(json.dumps(receipt(head='a' * 40 + '\n'))))
+
+    def test_cli_validation_is_read_only(self):
+        for data, status in ((receipt(), 0), (receipt(keep=1), 1)):
+            raw = json.dumps(data)
+            result = subprocess.run([sys.executable, str(HELPER), 'validate', '/repo', 'task',
+                                     '/repo/.worktrees/task'], input=raw, text=True, capture_output=True)
+            self.assertEqual(status, result.returncode, result.stderr)
+            self.assertEqual('', result.stdout)
 
     def test_generation_matrix_and_retry_stages(self):
         for old_generation, new_generation, old_stage, new_stage in itertools.product(
@@ -151,6 +171,28 @@ class AtomicReceipt(unittest.TestCase):
             self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode))
             self.assertEqual(0o700, stat.S_IMODE(path.parent.stat().st_mode))
             self.assertEqual([path], list(path.parent.iterdir()))
+
+    def test_existing_directory_mode_and_jq_number_encoding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'task.json'
+            os.chmod(directory, 0o750)
+            raw = '{"stage":"old","runtime":{"n":1.0,"big":9007199254740993,"small":1e-20}}'
+            normalized = subprocess.check_output(['jq', '-c', '--arg', 'stage', 'prepared',
+                                                   '.stage=$stage'], input=raw, text=True)
+            script = r'''source "$1/lib/workgrove/teardown.sh"
+WG_VERSION_ROOT=$1
+WT_TEARDOWN_FILE=$2
+WT_TEARDOWN_JSON=$3
+teardown_control() { :; }
+teardown_interpreter() { "$PYTHON" "$@"; }
+die() { echo "$*" >&2; exit 1; }
+teardown_save prepared
+'''
+            result = subprocess.run(['bash', '-c', script, 'test', str(ROOT), str(path), raw],
+                                    env=dict(os.environ, PYTHON=sys.executable), capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual((json.dumps(json.loads(normalized)) + '\n').encode(), path.read_bytes())
+            self.assertEqual(0o750, stat.S_IMODE(path.parent.stat().st_mode))
 
     def test_failure_removes_temporary_and_preserves_previous(self):
         for point in ('dump', 'file-sync', 'replace', 'directory-sync'):
