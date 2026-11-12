@@ -15,7 +15,7 @@ def decode(raw):
     def invalid_constant(value):
         raise ValueError('invalid JSON constant: ' + value)
     decoder = json.JSONDecoder(parse_constant=invalid_constant)
-    # Match jq's parser stack bound before duplicate keys discard earlier evidence.
+    # Match legacy jq's parser stack bound before duplicate keys discard earlier evidence.
     # Objects reserve one extra stack entry for their current key.
     depth = index = 0
     while index < len(raw):
