@@ -1,13 +1,26 @@
 # shellcheck shell=sh
 # shellcheck disable=SC2034
+# Each operation sources the runtime. Discard inherited values and their export attributes.
+unset wg_python wg_python_issue wg_candidate wg_selected_python wg_selected_path wg_selected_pwd
+wg_python='' wg_python_issue=missing-python
+wg_selected_python='' wg_selected_path='' wg_selected_pwd=''
+
 # Use the same isolated interpreter on the Mac and the VM.
 wg_select_python() {
   wg_python='' wg_python_issue=missing-python
+  wg_selected_python='' wg_selected_path='' wg_selected_pwd=''
   for wg_candidate in "$(command -v python3 || true)" /usr/bin/python3; do
     [ -n "$wg_candidate" ] && [ -x "$wg_candidate" ] || continue
     wg_python_issue=python-3.9-required
     if "$wg_candidate" -I -B -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
       wg_python=$wg_candidate
+      wg_selected_python=$wg_python
+      wg_selected_path=${PATH-}
+      wg_selected_pwd=$(pwd -P) || wg_selected_pwd=''
+      case $wg_selected_python in
+        /*) ;;
+        *) [ -z "$wg_selected_pwd" ] || wg_selected_python=$wg_selected_pwd/$wg_selected_python ;;
+      esac
       return 0
     fi
   done
@@ -24,11 +37,21 @@ wg_readiness_error() {
 
 wg_run_python() {
   wg_select_python || return 1
+  wg_run_selected_python "$@"
+}
+
+# Reuse this operation's explicit selection only while its execution environment is unchanged.
+wg_run_selected_python() {
+  if [ -z "$wg_selected_python" ] || [ ! -x "$wg_selected_python" ] ||
+     [ "$wg_selected_path" != "${PATH-}" ] || [ -z "$wg_selected_pwd" ] ||
+     [ "$wg_selected_pwd" != "$(pwd -P)" ]; then
+    wg_select_python || return 1
+  fi
   if [ "${1:-}" = --exec ]; then
     shift
-    exec "$wg_python" -I -B "$@"
+    exec "$wg_selected_python" -I -B "$@"
   fi
-  "$wg_python" -I -B "$@"
+  "$wg_selected_python" -I -B "$@"
 }
 
 wg_python_readiness_error() {

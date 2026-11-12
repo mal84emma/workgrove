@@ -457,7 +457,7 @@ ssh_host_check() {
   "${VM_SSH_CHECK_RUN[@]}" /bin/sh -c '
     . "$1/vm/python-runtime.sh"
     wg_select_python || { printf "%s: managed SSH registration needs Python 3 for validation\n" "$3" >&2; exit 1; }
-    wg_run_python --exec "$1/ssh_host.py" check "$2"
+    wg_run_selected_python --exec "$1/ssh_host.py" check "$2"
   ' wt-ssh-check "$WG_VERSION_ROOT/lib/workgrove" "$1" "${WG_PREFIX:-wt}"
 }
 # known_host <alias> — the alias is one that ssh_hosts prints. grep reads all its input (no -q),

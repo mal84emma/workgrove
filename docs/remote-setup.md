@@ -34,6 +34,13 @@ Setup, installer reruns, doctor, inventory, and task preflight check PATH Python
 If Python is absent, full setup can install the minimal Python runtime through the Ubuntu adapter before persistent setup begins.
 Restore-only never installs that runtime.
 
+Each operation sources `vm/python-runtime.sh` and selects Python with `wg_select_python`.
+It can reuse that selection with `wg_run_selected_python`, including its `--exec` option.
+The runtime discards inherited selection variables when sourced and never exports its selection.
+A changed `PATH`, changed directory, or unavailable executable forces a fresh selection before reuse.
+Independent commands and each remote script select Python separately.
+`wg_run_python` always selects fresh, even after an earlier selection.
+
 ## Install
 
 For a new public checkout, run this command from the Mac:
