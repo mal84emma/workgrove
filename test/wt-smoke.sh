@@ -3957,6 +3957,36 @@ scenario_teardown_review_ownership() {
   end_scenario
 }
 
+scenario_receipt_stages() {
+  begin_scenario "$1" || return 0
+  local r stage receipt original mac="$TEST_ROOT/receipt-stages-mac"
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"
+  chmod +x "$mac/uname"
+  local WT_PATH_PREFIX=$mac
+  r=$(new_repo receipt-stages)
+  stub_cmux dead
+  assert_wt_ok 'create receipt fixture' new stages --no-workspace -r "$r"
+  assert_wt_ok 'complete receipt fixture' rm stages -r "$r"
+  receipt="$r/.git/wt/teardown/stages.json"
+  original=$(cat "$receipt")
+  for stage in prepared worktree_removed branch_config_removing sidecars_removing git_removed close_requested complete; do
+    jq --arg stage "$stage" '.stage=$stage | .metadata_hash="absent" | .sidecars={metadata:"absent",prompt:"absent",started:"absent"} | del(.generation,.commands,.runtime,.tmux_identity,.tmux_owner,.title,.host)' \
+      <<<"$original" >"$receipt"
+    assert_wt_ok "$stage recovery accepts legacy receipts" rm stages --keep-branch -r "$r"
+    assert_eq "$stage recovery completes" complete "$(jq -r .stage "$receipt")"
+    assert_eq "$stage recovery persists keep-branch" 1 "$(jq -r .keep "$receipt")"
+  done
+  printf '%s\n' "$original" >"$receipt"
+  printf '{}\n' >"$r/.git/wt/stages.json"
+  wt_run rm stages -r "$r"
+  assert_eq 'complete receipts with metadata use normal removal checks' 1 "$WT_RC"
+  assert_regular "$r" .git/wt/stages.json
+  printf '%s\n' "$original" >"$TEST_ROOT/original-receipt.json"
+  assert_same_bytes 'normal removal checks retain the receipt' "$TEST_ROOT/original-receipt.json" "$receipt"
+  end_scenario
+}
+
 # 9. `wt -H <host>`: the argument handling, and only that. Every case below returns from cmd_host or need_r
 # BEFORE it reaches remote_sh. So no host has to exist, and nothing is sent anywhere. The host name is a
 # .invalid one, so that a case that ever did reach ssh would fail this suite instead of dialing out.

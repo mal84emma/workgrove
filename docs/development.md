@@ -149,6 +149,8 @@ workgrove/
 │   ├── cmux-monitor-smoke.sh  detached native monitor proof checks
 │   ├── cmux_monitor_test.py  native-shaped samples, observer binding, and kernel arguments
 │   ├── branch-config-smoke.sh  hard-interruption recovery for owned Git locks
+│   ├── receipts-smoke.sh     receipt policy and atomic-write tests
+│   ├── receipts_test.py      legacy receipt shapes, retries, and persistence failures
 │   ├── branch_config_test.py  disposable branch configuration and lock fixtures
 │   ├── hosts-smoke.sh         SSH inventory with scratch aliases and a fake ssh
 │   ├── hosts_records_test.py  host fallback records and inventory validation
