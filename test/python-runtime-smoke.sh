@@ -23,6 +23,7 @@ scenario_starts() {
 }
 scenario_starts
 
+# shellcheck disable=SC2016  # The POSIX child expands its arguments.
 scenario_isolation() {
   begin_scenario 'POSIX runtime isolates imports and preserves arguments and status' || return 0
   mkdir -p "$TEST_ROOT/login" "$TEST_ROOT/modules"
@@ -59,6 +60,7 @@ PYTHON
 }
 scenario_isolation
 
+# shellcheck disable=SC2016  # The POSIX child expands its arguments.
 scenario_exec() {
   begin_scenario 'runtime exec replaces the POSIX shell' || return 0
   local shell method rc
@@ -142,7 +144,7 @@ count_operation() (
   remote_sh_raw() {
     # Simulate Ubuntu and package installation only in the scratch bootstrap.
     local script=${2//'. /etc/os-release'/'ID=ubuntu; VERSION_ID=24.04'}
-    /bin/sh -c "$script"
+    PATH="${COUNT_REMOTE_PATH:-$PATH}" /bin/sh -c "$script"
   }
   case $1 in
     hosts) host_probe_source | /bin/sh ;;
@@ -152,7 +154,7 @@ count_operation() (
       printf '\nwg_portable_preflight\n' >>"$TEST_ROOT/count/preflight"
       /bin/sh "$TEST_ROOT/count/preflight" ;;
     setup) host_setup test-host --root "$TEST_ROOT/count/root" --storage os-disk ;;
-    setup-install)
+    setup-install|setup-missing)
       WG_LIB_DIR="$TEST_ROOT/count/lib"
       printf '#!/bin/sh\nprintf "probe\\n" >>"$COUNT_LOG"\nexit 1\n' >"$TEST_ROOT/count/bin/python3"
       printf '#!/bin/sh\nprintf "0\\n"\n' >"$TEST_ROOT/count/bin/id"
@@ -162,6 +164,12 @@ printf '%s\n' "$*" >>"$COUNT_ARGS"
 [ "$1" != install ] || cp "$COUNT_SAVED" "${COUNT_SAVED%/*}/bin/python3"
 APT
       chmod +x "$TEST_ROOT/count/bin/id" "$TEST_ROOT/count/bin/apt-get"
+      if [[ $1 == setup-missing ]]; then
+        rm -f "$TEST_ROOT/count/bin/python3"
+        export COUNT_REMOTE_PATH="$TEST_ROOT/count/bin"
+        local tool
+        for tool in env cp cat; do ln -sf "$(command -v "$tool")" "$TEST_ROOT/count/bin/$tool"; done
+      fi
       export COUNT_SAVED="$TEST_ROOT/count/saved-python"
       # Exclude all real Python candidates while retaining package fixture tools.
       PATH="$TEST_ROOT/count/bin:/usr/bin:/bin"
@@ -212,6 +220,7 @@ hosts 1 2
 preflight 1 1
 setup 1 1
 setup-install 2 1
+setup-missing 1 1
 remote-doctor 1 1
 doctor 1 1
 wt-doctor 1 1
