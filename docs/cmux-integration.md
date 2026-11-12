@@ -29,7 +29,9 @@ Retired hook commands produce warnings without changing the exit status.
 Doctor names `install.sh --refresh-config` on the Mac and `wt update --refresh-config` on the VM.
 The Mac tells readers to run VM repairs on the VM.
 Classic refreshes manage only the default roots.
-For custom classic roots, doctor names the file to edit and the replacement command to keep.
+For custom classic roots, doctor names the file to edit.
+An empty policy replacement means remove the reported command without a replacement.
+For a nonempty policy replacement, doctor names the command to keep once per event.
 
 Doctor reads the installed policy beside `doctor.sh` and uses the configured agent roots.
 Missing policy files and missing or invalid hook files fail the cleanup check.
@@ -203,7 +205,7 @@ Adapter state such as `CMUX_ROWS_JSON` and `CMUX_RUN` is internal shell state, n
 | `CMUX_QUIET` | `cmux.sh`: `cmux_call` writes it. | Normal CLI calls receive `1`; the Mac hook supplies its own runner. |
 | `CMUX_WORKSPACE_ID` | `cmux.sh`: `check_row_removal`. `common.sh`: `tmux_cmd` clears it. | A caller row makes an absent CLI or socket a removal failure. |
 | `CMUX_SSH_ATTEMPT_ID` | `task.sh`: `is_remote`. | A nonempty value selects VM behavior, as does any operating system other than Darwin. |
-| `CMUX_SURFACE_ID` | [bin/agent-notify](../bin/agent-notify): the top-level Mac banner condition. `common.sh`: `tmux_cmd`. | A nonempty value suppresses the outside-cmux Mac banner. Native task attachments clear it. |
+| `CMUX_SURFACE_ID` | `common.sh`: `tmux_cmd`. | Native task attachments clear the inherited local surface identity. |
 | `CMUX_SOCKET_PATH`, `CMUX_PANEL_ID`, `CMUX_TAB_ID`, `CMUX_TERMINAL_LIFECYCLE_ID` | `common.sh`: `tmux_cmd`. | Native task attachments clear these legacy identity values in the shell and tmux session. |
 | `CMUX_TUI_SOCKET`, `CMUX_TUI_TERMINAL_ID`, `CMUX_TUI_SESSION_ID` | `common.sh`: `relay_env`, `tmux_cmd`. [cmux-tui-hook.sh](../lib/workgrove/cmux-tui-hook.sh): top level. | The tmux session supplies current native identity. The socket must be absolute; the terminal must match `term_[a-f0-9]{32}` for requests. |
 | `CMUX_TUI_SOCKET` | `bin/wt`: `cmd_rm`. | An inherited native socket without usable session identity produces the older-row teardown diagnostic. |

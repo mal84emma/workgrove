@@ -1813,8 +1813,8 @@ scenario_refresh_foreign_hooks() {
         .localSetting = true
         | .hooks.Stop += [
             {matcher: "foreign-only", hooks: [{type: "command", command: "foreign-helper", timeout: 7}]},
-            {matcher: "mixed", hooks: [.hooks.Stop[0].hooks[0], {type: "command", command: "mixed-helper"}]},
-            {matcher: "different-base-matcher", hooks: [.hooks.Stop[0].hooks[0]]}]
+            {matcher: "mixed", hooks: [.hooks.PreToolUse[0].hooks[0], {type: "command", command: "mixed-helper"}]},
+            {matcher: "different-base-matcher", hooks: [.hooks.PreToolUse[0].hooks[0]]}]
         | .hooks.ForeignEvent = [{matcher: "new-event", hooks: [{type: "command", command: "event-helper"}]}]
         | .hooks.PreToolUse = [{matcher: "foreign-tool", timeout: 42, hooks: [
             .hooks.PreToolUse[0].hooks[0], {type: "command", command: "foreign-policy"}]}]
@@ -1863,10 +1863,10 @@ scenario_refresh_foreign_hooks() {
   end_scenario
 }
 
-# Refreshes repair old commands and files that already contain both command forms.
+# Refresh removes all four exact notify commands and retains foreign group settings.
 scenario_refresh_hook_upgrade() {
-  begin_scenario "refresh replaces retired notify commands and repairs duplicate groups" || return 0
-  local platform kind h log rel base attempt old
+  begin_scenario "refresh removes retired notify commands and repairs duplicate groups" || return 0
+  local platform kind h log rel base attempt
   for platform in Darwin Linux; do
     for kind in old duplicated; do
       h="$(new_home)"
@@ -1874,23 +1874,16 @@ scenario_refresh_hook_upgrade() {
       log="$h.log"
       mkdir -p "$h/.claude" "$h/.codex"
       for rel in .claude/settings .codex/hooks; do
-        if [[ $rel == .claude/settings ]]; then
-          old="AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
-        else
-          old='AGENT_NOTIFY_SOURCE=Codex agent-notify'
-        fi
-        jq --arg old "$old" --arg kind "$kind" '
-          .hooks |= with_entries(.value |= (
-            if $kind == "duplicated" then . + map(.hooks |= map(
-              if .command | endswith(" ~/.local/bin/agent-notify") then .command = $old else . end))
-            else map(.hooks |= map(
-              if .command | endswith(" ~/.local/bin/agent-notify") then .command = $old else . end)) end))
-          | .hooks.Stop += [{matcher: "mixed", timeout: 42, hooks: [
-              {type: "command", command: $old},
-              {type: "command", command: "foreign-helper", timeout: 7},
-              {type: "command", command: "AGENT_NOTIFY_SOURCE=Personal agent-notify"},
-              {type: "command", command: ($old + " --custom")},
-              {type: "command", command: ("echo " + $old)}]}]
+        jq --slurpfile policy "$REPO/lib/workgrove/agent-config-policy.json" --arg kind "$kind" '
+          ($policy[0].retired_hook_commands | keys) as $old
+          | .hooks |= with_entries(.value |= (if $kind == "duplicated" then . + . else . end))
+          | .hooks.Stop = [{matcher: "mixed", timeout: 42, hooks:
+              ([$old[] | {type: "command", command: .}] +
+               [{type: "command", command: "foreign-helper", timeout: 7},
+                {type: "command", command: "AGENT_NOTIFY_SOURCE=Personal agent-notify"}] +
+               [$old[] | . as $command | ($command + " --custom"), ("env " + $command),
+                 ("EXTRA=1 " + $command) | {type: "command", command: .}])}]
+          | .hooks.SessionEnd = [{hooks: [$old[] | {type: "command", command: .}]}]
         ' "$REPO/home/$rel.base.json" >"$h/$rel.json"
       done
       for attempt in 1 2; do
@@ -1898,17 +1891,14 @@ scenario_refresh_hook_upgrade() {
         if assert_install_ok "$h" "$log.$attempt" --refresh-config; then
           for rel in .claude/settings .codex/hooks; do
             base="$REPO/home/$rel.base.json"
-            if [[ $rel == .claude/settings ]]; then
-              old="AGENT_NOTIFY_SOURCE='Claude Code' agent-notify"
-            else
-              old='AGENT_NOTIFY_SOURCE=Codex agent-notify'
-            fi
-            if jq -e --slurpfile base "$base" --arg old "$old" '
-              .hooks == ($base[0].hooks | .Stop += [{matcher: "mixed", timeout: 42, hooks: [
-                {type: "command", command: "foreign-helper", timeout: 7},
-                {type: "command", command: "AGENT_NOTIFY_SOURCE=Personal agent-notify"},
-                {type: "command", command: ($old + " --custom")},
-                {type: "command", command: ("echo " + $old)}]}])
+            if jq -e --slurpfile base "$base" \
+                --slurpfile policy "$REPO/lib/workgrove/agent-config-policy.json" '
+              ($policy[0].retired_hook_commands | keys) as $old
+              | .hooks == ($base[0].hooks | .Stop = [{matcher: "mixed", timeout: 42, hooks:
+                  ([{type: "command", command: "foreign-helper", timeout: 7},
+                    {type: "command", command: "AGENT_NOTIFY_SOURCE=Personal agent-notify"}] +
+                   [$old[] | . as $command | ($command + " --custom"), ("env " + $command),
+                     ("EXTRA=1 " + $command) | {type: "command", command: .}])}])
             ' "$h/$rel.json" >/dev/null; then
               pass
             else

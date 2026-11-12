@@ -19,7 +19,7 @@ workgrove/
 │   └── workflows/tests.yml    GitHub Actions: shellcheck and every suite in test/, on macOS and Ubuntu
 ├── bin/
 │   ├── wt                     the task tool: worktrees, cmux rows, the picker, the driver, VMs
-│   ├── agent-notify           agent lifecycle hook for Mac banners outside cmux
+│   ├── agent-notify           silent compatibility stub for retired agent hooks
 │   ├── cmux-hook              Mac event handler for native VM row requests
 │   ├── github-guard           Claude and Codex PreToolUse hook for GitHub commands
 │   ├── azml-ssh-host          Azure ML compute instance -> a Host block in ~/.ssh/config
@@ -111,10 +111,10 @@ workgrove/
 │   ├── metadata-smoke.sh      sidecar compatibility, read counts, and the JSON status contract
 │   ├── lib-smoke.sh           unit tests for every shared shell function
 │   ├── named-outputs-smoke.sh caller-named outputs that match internal local names
-│   ├── hook-wiring-smoke.sh   portable hook events match agent-notify
+│   ├── hook-wiring-smoke.sh   guard wiring and retired hook compatibility
 │   ├── install-smoke.sh       the install smoke test: the default install, the flags, stickiness
 │   ├── wt-smoke.sh            the wt smoke test: sidecars, base pinning, every rm refusal
-│   ├── bash5-smoke.sh         all bin/ scripts under bash 5, and the /bin/bash 3.2 handoff
+│   ├── bash5-smoke.sh         Bash scripts under Bash 5, and the /bin/bash 3.2 handoff
 │   ├── doctor-smoke.sh        cmux contracts, VM hooks, and redacted fixture recording
 │   ├── doctor_fixtures_test.py projection, mutation, selection, and identity checks
 │   ├── fakes/
@@ -517,10 +517,12 @@ Leading zeros are invalid. `hosts-smoke.sh` sets `WG_HOST_PROBE_TIMEOUT=1` for i
 - **`bash test/capacity-smoke.sh`** checks cgroup limits and GPU visibility using synthetic kernel views.
 - **`bash test/ssh-host-smoke.sh`** checks generic SSH registration with temporary files and an offline SSH wrapper.
   See [the registration guide](ssh-hosts.md) for validation, trust, and failure behavior.
-- **`bash test/bash5-smoke.sh`** checks all bin scripts under bash 5.
-  On the Mac, it also starts each script with `/bin/bash` 3.2 and checks the final interpreter.
+- **`bash test/bash5-smoke.sh`** checks the five Bash scripts in `bin/` under Bash 5.
+  On the Mac, it also starts each Bash script with `/bin/bash` 3.2 and checks the final interpreter.
   Script copies use scratch paths to test missing candidates, older candidates, and candidate order.
   With no bash 5 or no `lib/`, `wt` and `wt-ssh-host` stop and the hooks exit 0 without an answer.
-  `agent-notify` drains its payload.
   `cmux-hook` reads its event from the environment and leaves standard input unread.
   Through a relative link to an absolute link, the suite checks that each script finds `lib/` from another folder.
+- **`bash test/hook-wiring-smoke.sh`** checks both base guard groups and the retired `agent-notify` stub.
+  The stub drains redirected input under `/bin/sh` and `/bin/bash` without output, notification calls, or state writes.
+  The suite checks the stub source before execution so older notification code cannot run.

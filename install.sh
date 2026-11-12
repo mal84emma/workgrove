@@ -441,7 +441,7 @@ copy_config() {
       $base[0]
       | [.hooks[][]?.hooks[]?.command | select(type == "string")] as $commands
       | ($commands + [$policy[0].retired_hook_commands | to_entries[]
-          | select(.value as $replacement | $commands | index($replacement)) | .key]) as $commands
+          | select(.value == "" or (.value as $replacement | $commands | index($replacement))) | .key]) as $commands
       | reduce (($existing[0].hooks // {}) | to_entries[]) as $event (.;
           reduce ($event.value[]
             | .hooks |= map(select(.command as $command | $commands | index($command) | not))
