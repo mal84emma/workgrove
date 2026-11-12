@@ -2718,6 +2718,42 @@ scenario_codex_caller_context() {
   end_scenario
 }
 
+# A successful assessment cannot replace the fresh check before worktree removal.
+scenario_cmux_assessment_recheck() {
+  begin_scenario "$1" || return 0
+  local r mode task row saved tip mac="$TEST_ROOT/assessment-recheck-mac"
+  mkdir -p "$mac"
+  printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"$mac/uname"
+  chmod +x "$mac/uname"
+  local WT_PATH_PREFIX=$mac
+  r=$(new_repo assessment-recheck)
+  for mode in incomplete failed; do
+    stub_cmux dead
+    task="late-$mode"; row="row-$mode"
+    assert_wt_ok 'create a fresh ownership fixture' new "$task" --no-workspace -r "$r"
+    stub_cmux alive
+    fake_rows "$(fake_row "$row" "$task" "@local · $(basename "$r")")" >"$WT_ROWS"
+    saved=$(cat "$r/.git/wt/$task.json")
+    tip=$(fixture_git "$r" rev-parse "wt/$task")
+    fake_queue top "$(jq -cn --arg row "$row" '{coding_agents:[],windows:[{workspaces:[{id:$row,resources:{pids:[],process_count:0}}]}]}')"
+    if [[ $mode == incomplete ]]; then
+      fake_queue top '{"coding_agents":[],"windows":[]}'
+      assert_wt_fails 1 'incomplete process sample' rm "$task" -r "$r"
+    else
+      fake_queue top '' 37 'late adapter failure'
+      assert_wt_fails 1 'cannot check the agent' rm "$task" -r "$r"
+    fi
+    assert_dir 'a late refusal preserves the worktree' "$r/.worktrees/$task"
+    assert_registered "$r" "$task" yes
+    assert_eq 'a late refusal preserves the branch' "$tip" "$(fixture_git "$r" rev-parse "wt/$task")"
+    assert_eq 'a late refusal preserves the sidecar' "$saved" "$(cat "$r/.git/wt/$task.json")"
+    assert_eq 'the receipt keeps the unfinished removal prepared' prepared "$(jq -r .stage "$r/.git/wt/teardown/$task.json")"
+    assert_lacks 'a late refusal never closes the row' "$(cat "$CMUX_LOG")" 'workspace close'
+    assert_eq 'the operation sampled ownership twice' 2 "$(grep -c '^top --workspace ' "$CMUX_LOG")"
+  done
+  end_scenario
+}
+
 # Agent discovery and terminal-close confirmation use different observations.
 scenario_close_confirmation_failure() {
   begin_scenario "$1" || return 0
