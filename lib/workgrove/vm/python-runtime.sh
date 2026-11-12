@@ -16,7 +16,7 @@ wg_select_python() {
       wg_python=$wg_candidate
       wg_selected_python=$wg_python
       wg_selected_path=${PATH-}
-      wg_selected_pwd=$(pwd -P) || wg_selected_pwd=''
+      wg_selected_pwd=$(pwd -P 2>/dev/null) || wg_selected_pwd=''
       case $wg_selected_python in
         /*) ;;
         *) [ -z "$wg_selected_pwd" ] || wg_selected_python=$wg_selected_pwd/$wg_selected_python ;;
@@ -44,7 +44,7 @@ wg_run_python() {
 wg_run_selected_python() {
   if [ -z "$wg_selected_python" ] || [ ! -x "$wg_selected_python" ] ||
      [ "$wg_selected_path" != "${PATH-}" ] || [ -z "$wg_selected_pwd" ] ||
-     [ "$wg_selected_pwd" != "$(pwd -P)" ]; then
+     [ "$wg_selected_pwd" != "$(pwd -P 2>/dev/null)" ]; then
     wg_select_python || return 1
   fi
   if [ "${1:-}" = --exec ]; then
