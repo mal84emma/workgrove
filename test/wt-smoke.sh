@@ -2014,19 +2014,36 @@ STUB
   : >"$TEST_ROOT/self-tmux.log"
   assert_wt_fails 1 'identity changed' rm sandboxed --row-closed --row-host test-vm -r "$r"
   assert_lacks 'replacement idle session survives receipt recovery' "$(cat "$TEST_ROOT/self-tmux.log")" kill-session
-  local callback_session
+  local callback_session receiver="$TEST_ROOT/callback-receiver" callback_status="$TEST_ROOT/callback-status"
+  local callback_owner="$TEST_ROOT/callback-owner" callback_log="$TEST_ROOT/callback-log"
   callback_session="wt-$(basename "$r")-callback"
+  # Mac confirmation runs independently of the notification request's five-second deadline.
+  # Keep the requesting worker alive while the delayed receiver proves lock release.
+  {
+    printf '#!/bin/sh\nsleep 6\nstatus=0\n'
+    printf 'env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_CONTROL_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed --row-host test-vm -r %s >%s 2>&1 || status=$?\n' \
+      "$(shell_join "$WT_BASH")" "$(shell_join "$WT")" "$(shell_join "$r")" "$(shell_join "$callback_log")"
+    # shellcheck disable=SC2016  # The receiver checks the requesting worker after confirmation.
+    printf 'state=$(ps -p "$WG_TEARDOWN_WORKER_PID" -o stat= 2>/dev/null); case "$state" in ""|*Z*) owner=gone ;; *) owner=alive ;; esac\n'
+    # shellcheck disable=SC2016  # The receiver writes its observed result.
+    printf 'printf "%%s\\n" "$owner" >%s; printf "%%s\\n" "$status" >%s\n' \
+      "$(shell_join "$callback_owner")" "$(shell_join "$callback_status")"
+  } >"$receiver"
+  chmod +x "$receiver"
   {
     printf '#!/bin/sh\n'
-    printf 'exec env -u TMUX -u TMUX_PANE -u WG_TEARDOWN_CONTROL_FD -u WG_TEARDOWN_LOCK_PATH %s %s rm callback --row-closed --row-host test-vm -r %s\n' \
-      "$(shell_join "$WT_BASH")" "$(shell_join "$WT")" "$(shell_join "$r")"
+    printf 'exec %s -I -B -c %s %s\n' "$(shell_join "$REAL_COMMANDS_PYTHON")" \
+      "$(shell_join 'import subprocess,sys; subprocess.Popen([sys.argv[1]], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)')" \
+      "$(shell_join "$receiver")"
   } >"$FAKE_CMUX_STATE/notify-callback"
   chmod +x "$FAKE_CMUX_STATE/notify-callback"
   WT_RELAY_ENV=("WT_HOST=test-vm" "CMUX_SSH_ATTEMPT_ID=native" "TMUX=/tmp/fake,1,0"
     "SELF_TMUX_SESSION=$callback_session" "SELF_TMUX_LOG=$TEST_ROOT/self-tmux.log" "SELF_TMUX_NATIVE=0"
-    "CMUX_TUI_SOCKET=/tmp/native" "CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "WT_CLOSE_WAIT_SECONDS=0")
+    "CMUX_TUI_SOCKET=/tmp/native" "CMUX_TUI_TERMINAL_ID=term_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "WT_CLOSE_WAIT_SECONDS=22")
   ln -s "$CMUX_ALIVE" "$fake/cmux-tui"
   assert_wt_fails 1 'unverified' rm callback -r "$r"
+  assert_eq 'the independent receiver finishes successfully' 0 "$(cat "$callback_status" 2>/dev/null || true)"
+  assert_eq 'confirmation finishes while the requesting worker remains alive' alive "$(cat "$callback_owner" 2>/dev/null || true)"
   assert_eq 'an independent callback acquires the released lock and finishes the recorded live session' complete \
     "$(jq -r .stage "$r/.git/wt/teardown/callback.json")"
   rm "$FAKE_CMUX_STATE/notify-callback" "$fake/cmux-tui"
